@@ -46,10 +46,10 @@ show_msgbox() {
     if [[ -n "$cmd" ]]; then
         "$cmd" --title "$title" --msgbox "$message" 10 50
     else
-        echo ""
-        echo "=== $title ==="
-        echo "$message"
-        echo ""
+        echo "" >&2
+        echo "=== $title ===" >&2
+        echo "$message" >&2
+        echo "" >&2
         read -p "Press Enter to continue..."
     fi
 }
@@ -67,9 +67,9 @@ show_yesno() {
         "$cmd" --title "$title" --yesno "$question" 10 50
         return $?
     else
-        echo ""
-        echo "=== $title ==="
-        echo "$question"
+        echo "" >&2
+        echo "=== $title ===" >&2
+        echo "$question" >&2
         read -p "[y/N]: " answer
         [[ "$answer" =~ ^[Yy] ]] && return 0
         return 1
@@ -93,8 +93,8 @@ show_inputbox() {
         echo "$result"
         return $status
     else
-        echo ""
-        echo "=== $title ==="
+        echo "" >&2
+        echo "=== $title ===" >&2
         read -p "$prompt [$default]: " answer
         echo "${answer:-$default}"
         return 0
@@ -118,19 +118,19 @@ show_menu() {
         echo "$result"
         return $status
     else
-        echo ""
-        echo "=== $title ==="
-        echo "$prompt"
-        echo ""
+        echo "" >&2
+        echo "=== $title ===" >&2
+        echo "$prompt" >&2
+        echo "" >&2
         local i=1
         local -a tags=()
         while [[ $# -gt 0 ]]; do
             tags+=("$1")
-            echo "  $i. $1 - $2"
+            echo "  $i. $1 - $2" >&2
             shift 2
             ((++i))
         done
-        echo ""
+        echo "" >&2
         read -p "Choice [1-$((i-1))]: " choice
         if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le "${#tags[@]}" ]]; then
             echo "${tags[$((choice-1))]}"
@@ -157,10 +157,10 @@ show_checklist() {
         echo "$result"
         return $status
     else
-        echo ""
-        echo "=== $title ==="
-        echo "$prompt"
-        echo ""
+        echo "" >&2
+        echo "=== $title ===" >&2
+        echo "$prompt" >&2
+        echo "" >&2
         local i=1
         local -a tags=()
         local -a states=()
@@ -170,12 +170,12 @@ show_checklist() {
             states+=("$state")
             local marker="[ ]"
             [[ "$state" == "on" ]] && marker="[*]"
-            echo "  $i. $marker $1 - $2"
+            echo "  $i. $marker $1 - $2" >&2
             shift 3
             ((++i))
         done
-        echo ""
-        echo "Enter numbers to toggle (space-separated), then press Enter:"
+        echo "" >&2
+        echo "Enter numbers to toggle (space-separated), then press Enter:" >&2
         read -p "> " toggles
 
         # Build result from selected items
