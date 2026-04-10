@@ -120,8 +120,23 @@ start_container() {
     )
 
     # Add kubeconfig mount if it exists
+    # On WSL, ~/.kube/config is often a symlink to a Windows path - Docker cannot
+    # follow the symlink inside the container, so we resolve it and mount the file directly.
+    # On Linux/Mac where config is a real file, behavior is unchanged.
     if [ -d "$KUBECONFIG_DIR" ]; then
-        VOLUME_ARGS+=(-v "$KUBECONFIG_DIR:/home/ansible/.kube:ro")
+        local kubeconfig_file="$KUBECONFIG_DIR/config"
+        if [ -L "$kubeconfig_file" ]; then
+            local resolved
+            resolved="$(readlink -f "$kubeconfig_file" 2>/dev/null)"
+            if [ -f "$resolved" ]; then
+                log_info "Resolved kubeconfig symlink to: $resolved"
+                VOLUME_ARGS+=(-v "$resolved:/home/ansible/.kube/config:ro")
+            else
+                VOLUME_ARGS+=(-v "$KUBECONFIG_DIR:/home/ansible/.kube:ro")
+            fi
+        else
+            VOLUME_ARGS+=(-v "$KUBECONFIG_DIR:/home/ansible/.kube:ro")
+        fi
     else
         log_warn "Kubeconfig directory not found: $KUBECONFIG_DIR"
         log_warn "Kubernetes commands will not work until kubeconfig is configured"
