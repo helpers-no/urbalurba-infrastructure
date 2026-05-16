@@ -2,6 +2,7 @@
 
 **Status:** Investigation needed
 **Created:** 2026-05-14
+**Updated:** 2026-05-16 — added "Prior art: DCT conventions" subsection answering the question "can UIS help be auto-generated from source like DCT?"
 **Surfaced by:** In-session question after the Tailscale CLI port (PRs #169–#181) — "do we have a command that lists all services and their status?" → realisation that the answer requires reading three separate doc sections, and the reference doc itself is stale.
 **Related to:** [INVESTIGATE-tailscale-architecture-cleanup](../completed/INVESTIGATE-tailscale-architecture-cleanup.md) (the work that surfaced the drift; now completed), [PLAN-003 Tailscale docs lift-up](../completed/PLAN-003-tailscale-docs-lift-up.md) (shipped), the Cloudflare port (PRs #169–#172).
 **Concrete slices already shipped:**
@@ -72,6 +73,53 @@ The CLI's own help is substantial:
 ### Existing precedent: `./uis docs generate`
 
 UIS already has a doc-generation pipeline: `./uis docs generate` runs `uis-docs.sh` which produces JSON data files for the website. Services pages are partially generated from `services.json`, not hand-edited per service. **Generation-from-source is an established pattern in this repo, just not applied to CLI examples yet.**
+
+### Prior art: DCT conventions
+
+DCT (`devcontainer-toolbox/.devcontainer/additions/`) is the sibling repo whose command-script pattern we'd be borrowing from. Looking at it directly:
+
+- **Filename convention**: `cmd-*.sh` (interactive commands), `config-*.sh` (one-shot config), `install-*.sh` (installers). 40 files in `additions/` follow this.
+- **Inline metadata block** at the top of each file, after a usage comment:
+  ```bash
+  #-----------------------------
+  # SCRIPT METADATA - For dev-setup.sh discovery
+  #-----------------------------
+  SCRIPT_ID="cmd-logs"
+  SCRIPT_NAME="Log Management"
+  SCRIPT_VER="1.0.0"
+  SCRIPT_DESCRIPTION="View, monitor, and clean devcontainer logs"
+  SCRIPT_CATEGORY="INFRA_CONFIG"
+  SCRIPT_PREREQUISITES=""
+  ```
+- **Usage comment block** above the metadata documents `--help`, `--status`, `--clean`, `--tail <source>`, etc. — one line per subcommand. This is what a generator would scrape.
+
+**Where UIS already matches DCT:** every UIS **service script** and **tool script** under `provision-host/uis/services/` and `provision-host/uis/tools/` already carries `SCRIPT_ID` / `SCRIPT_NAME` / `SCRIPT_DESCRIPTION` / `SCRIPT_CATEGORY`. The `services-table` generator (`uis-docs-services.sh`) walks these and produces the services page. **Same pattern, same field names.**
+
+**Where UIS does NOT match DCT:** `provision-host/uis/manage/uis-cli.sh` is the top-level CLI entry point — ~60 `cmd_*` bash functions in one file (no per-file split, no metadata):
+
+```bash
+cmd_list() { … }
+cmd_deploy() { … }
+cmd_platform_init() { … }
+cmd_network_expose() { … }
+# … ~60 more
+```
+
+`cmd_help()` is a hand-written 144-line `cat <<EOF` block. **No SCRIPT_* metadata exists on these verbs**, so today there's nothing for a generator to scrape.
+
+**What this means for the "auto-generate help" question:**
+
+- The metadata-driven approach **already works** in UIS for service/tool surfaces. The services table is regenerated on every PR.
+- For the top-level CLI verbs, two paths:
+
+  | Path | Shape | Cost | Comment |
+  |---|---|---|---|
+  | **Inline metadata on each `cmd_*` function** | Add a `# DOC:` header block above each function with `VERB:`, `USAGE:`, `SUMMARY:`, `EXAMPLES:` keys. Generator parses the function-by-function block. | Medium — ~60 functions × ~10 min header each ≈ 1 day | Minimal disruption; functions stay in one file; matches DCT's "metadata-inside-script" pattern. |
+  | **One file per verb** (DCT-style split) | Move each `cmd_*` to its own `manage/cmd-*.sh` file with full SCRIPT_* metadata block. Top-level dispatcher becomes a thin router. | High — major refactor, touches every CLI surface | Strongest separation but probably overkill for a CLI that's already coherent in one file. |
+
+  Strategy C (above) leans on path 1 — generate from the function-level metadata, not from a file split.
+
+**Direct answer to the question**: yes, UIS already uses the DCT-style metadata pattern for **service/tool scripts**, and yes, a similar pattern is feasible for the **top-level CLI verbs** — but the metadata layer doesn't exist on the `cmd_*` functions yet. Adding it is roughly a 1-day refactor that strategy C depends on.
 
 ---
 
