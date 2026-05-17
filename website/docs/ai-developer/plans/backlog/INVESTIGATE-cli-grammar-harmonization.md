@@ -160,6 +160,8 @@ Verbs unique to one noun (and why):
 
 ## Script structure — the developer-facing reflection of the grammar
 
+**The script split is a required outcome of this investigation, not an option.** Best practice is to keep scripts in manageable units organised by responsibility; a 2731-line monolith with ~60 functions spanning 8+ command families is the anti-pattern this investigation closes. D-8 below decides *when* the split lands relative to the verb migrations; it does not decide *whether* the split happens.
+
 The user-facing grammar restructure has a natural mirror in the code: today `provision-host/uis/manage/uis-cli.sh` is **2731 lines** and carries ~60 `cmd_*` functions for every command family in one file. It's the only file in the repo that's genuinely too large; most other lib/manage files sit at 250–550 lines, and service-metadata scripts are 35–60 lines by design. Data:
 
 | File | Lines | Notes |
@@ -214,9 +216,9 @@ And each `cmd_<noun>_<verb>` function inside the file carries a `# DOC:` block (
 - **Cross-cutting helpers must move to `lib/`.** Functions like `_uis_cluster_banner` (currently nestled in `uis-cli.sh`) are used by multiple noun-handlers. The split forces them into a shared `lib/cli-helpers.sh` — a healthy consequence, not a cost.
 - **One refactor of ~2700 lines.** The split itself is a single mechanical PR (extract function blocks; verify dispatcher still routes correctly; tests still pass). Not zero cost; not large either.
 
-### Sequencing options
+### Sequencing options (when, not whether)
 
-The script split could land at any of three points relative to the user-facing grammar migration:
+The script split **will** land; D-8 picks one of three points relative to the user-facing grammar migration:
 
 - **Before any verb migration** — split first along the existing CLI shape (the file split mirrors the verb names as they exist today, e.g. `cmd-deploy.sh` for the top-level `cmd_deploy`). Subsequent grammar migrations move functions between files as verbs are renamed. **Most "structural plumbing first" approach.**
 - **With each verb migration** — every grammar migration PR also pulls its functions into the right `cmd-<noun>.sh` file. Migration PRs grow slightly but the split happens organically. **Most incremental approach.**
@@ -401,6 +403,7 @@ Specifically:
 - The first migration's noun (`service` for `service connect`) must be the right umbrella.
 - The Migration scope section (6 surfaces per PR + no-verb behavior) must be agreed; G-1 through G-9 are the contracts.
 - D-1's per-verb default must be agreed (the hard-cutover-for-low-traffic / aliased-for-high-traffic split, with `connect` already locked as hard-cutover).
+- **The script split is a committed outcome** (not an option). D-8 governs only its timing relative to the verb migrations; the monolith does not persist past the grammar restructure.
 
 Everything else (D-3, D-4, D-5, D-6, D-7, D-8, D-9, D-10, D-11, D-12) can be refined during individual PLAN drafting.
 
@@ -424,7 +427,7 @@ Before any migration PLAN can be written:
 - [ ] D-5 (argocd umbrella): fold or keep.
 - [ ] D-6 (help-gen sequencing): gate first migration on help-gen, or parallel.
 - [ ] D-7 (doc-sweep policy per PR): big-bang, lazy, or linter-gated.
-- [ ] D-8 (script-split sequencing): before any verb migration (structural plumbing first) / with each verb migration (organic) / after all verb migrations (least disruption to in-flight work).
+- [ ] D-8 (script-split sequencing — *when*, not whether): before any verb migration (structural plumbing first) / with each verb migration (organic) / after all verb migrations (least disruption to in-flight work). The split itself is a locked outcome per the Script structure section.
 - [ ] D-9 (TUI extension sequencing): before / in-parallel-with / after the grammar migrations. Also: scope question — does the TUI cover all 9 nouns or only a subset (services + networking + platforms as the first slice)?
 - [ ] D-10 (top-level `uis init` vs per-noun `init`): keep both with doc-distinction / rename top-level to `uis bootstrap` / promote to `uis self init`.
 - [ ] D-11 (`uis catalog` and `uis cluster` fate): defer to a usage-survey PLAN; most likely outcome is absorb-or-delete.
@@ -437,7 +440,7 @@ Before any migration PLAN can be written:
 - **G-3: Doc-sweep scope is declared.** Each migration PLAN lists which markdown files it touches and whether the sweep is big-bang or deferred.
 - **G-4: Help text reflects the new shape.** Wherever help text lives — today's hand-written `cmd_help()`, tomorrow's auto-generated reference doc from `# DOC:` blocks, or both during transition — gets updated on every migration PR. Implementation-agnostic.
 - **G-5: Tests for both forms during alias window.** If a verb is aliased, the test suite covers both forms until the alias is removed. For hard-cutover migrations, legacy-form tests are deleted in the same PR.
-- **G-6: New `cmd_*` functions land in the right `cmd-<noun>.sh` file.** Once the script split happens (per D-8), every migration PLAN places new or moved functions in the correct file. The file boundary mirrors the noun.
+- **G-6: New `cmd_*` functions land in the right `cmd-<noun>.sh` file.** The script split is committed (per Script structure section); D-8 only governs timing. Every migration PLAN that lands after the split places new or moved functions in the correct file. Migration PLANs landing before the split note in their summary that follow-up extraction is owed once D-8's chosen split-PR ships.
 - **G-7: TUI labels match the CLI shape.** Once the TUI extension lands (per D-9), every grammar migration PR updates both the CLI verb and the TUI menu label so the two surfaces never drift.
 - **G-8: Migration scope is exhaustive.** Each migration PLAN's "Files to Modify" section lists every hit from a `grep -rn` for the legacy verb across `provision-host/`, `ansible/`, `platforms/`, `.github/`, and `website/docs/` — not just the CLI files. Internal callers (per the Migration scope section above) are first-class scope.
 - **G-9: Rollback path is named.** Each migration PLAN's summary states the rollback strategy (live with alias / `git revert <commit>` for hard-cutovers) and the trigger conditions for invoking it.
