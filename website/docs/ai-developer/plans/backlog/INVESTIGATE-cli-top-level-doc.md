@@ -10,6 +10,7 @@
 - [PLAN-tool-installer-error-handling](../completed/PLAN-tool-installer-error-handling.md) — hardening the `install-*.sh` scripts whose output `reference/tools.md` describes; shipped via PR #152 and closed 2026-05-15.
 
 **Related (open):**
+- [INVESTIGATE-cli-grammar-harmonization](./INVESTIGATE-cli-grammar-harmonization.md) — locks the target CLI grammar (8-noun table, verb sets, migration sequence). Once that grammar is stable, this investigation's strategy C (auto-generate help from source) has a fixed target to render. The two investigations feed each other.
 - [INVESTIGATE-system-provision-host-tools-and-auth](INVESTIGATE-system-provision-host-tools-and-auth.md) — the broader "what tools should the provision-host carry, how do they persist + auth" investigation. The user-facing `./uis tools` surface this CLI doc covers is the same surface that investigation re-designs from a system/persistence angle.
 
 ---
@@ -123,6 +124,101 @@ cmd_network_expose() { … }
 
 ---
 
+## Cross-cutting principle: metadata-in-script as the doc contract
+
+The unifying frame across every strategy in this investigation: **the doc lives in the script as structured metadata; every public-facing rendering (`--help` text, reference doc, services index, per-service walkthrough) is generated from the same source.** Edit the script, every surface that references it updates atomically. Drift becomes impossible — there's only one place to change.
+
+UIS already does this for **structured fields** on service/tool scripts. The extension this investigation proposes is:
+
+1. **Add the pattern to top-level CLI verbs** (`cmd_*` in `uis-cli.sh`) so `--help` text and the reference doc both render from per-verb metadata. This is strategy C.
+
+2. **Extend the pattern from structured fields to multi-line prose**, so per-service walkthrough pages on the website can be generated alongside the structured services-table. The metadata block grows from short scalar fields (`SCRIPT_NAME`, `SCRIPT_CATEGORY`) into heredoc-style prose fields (`SCRIPT_QUICKSTART`, `SCRIPT_TROUBLESHOOTING`, `SCRIPT_EXAMPLES`).
+
+### Two surfaces that follow the same contract
+
+**Surface 1 — top-level CLI verbs.** Today: hand-written `cat <<EOF` in `cmd_help()` (144 lines). Tomorrow: per-`cmd_*` metadata block, parsed at runtime for `--help` and at build time for the reference doc:
+
+```bash
+cmd_deploy() {
+    # DOC-BEGIN
+    # USAGE:    uis service deploy <service> [--namespace <ns>]
+    # SUMMARY:  Deploy a service into the active cluster.
+    # GROUP:    service
+    # EXAMPLES:
+    #   uis service deploy postgresql
+    #   uis service deploy gravitee --namespace gateway
+    # DOC-END
+    ...
+}
+```
+
+Same source feeds:
+- `uis service deploy --help` (parse the block at runtime; format for terminal)
+- `reference/uis-cli-reference.md` deploy section (parse at build time; emit markdown)
+
+**Surface 2 — per-service walkthrough pages.** Today: hand-written `website/docs/services/<id>.md` per service. Drifts every time the service script changes. Tomorrow: extend the existing `SCRIPT_*` block with prose fields:
+
+```bash
+SCRIPT_ID="postgresql"
+SCRIPT_NAME="PostgreSQL"
+SCRIPT_DESCRIPTION="Open-source relational database"
+SCRIPT_CATEGORY="DATABASES"
+SCRIPT_NAMESPACE="default"
+
+SCRIPT_QUICKSTART=$(cat <<'EOF'
+## Quick start
+
+1. Deploy: `uis service deploy postgresql`
+2. Verify: `uis service status postgresql`
+3. Connect: `uis service connect postgresql`
+
+The default admin password is `DEFAULT_DATABASE_PASSWORD`, configured in
+your `.uis.secrets/secrets-config/00-common-values.env.template`.
+EOF
+)
+
+SCRIPT_TROUBLESHOOTING=$(cat <<'EOF'
+### Pod stuck in CrashLoopBackOff
+
+Check the logs: `kubectl logs -n default -l app.kubernetes.io/name=postgresql --tail=50`.
+Most common cause: missing `urbalurba-secrets` — run `uis secrets apply`.
+EOF
+)
+```
+
+A new generator (`provision-host/uis/manage/uis-docs-service-pages.sh`, mirror of the existing `uis-docs-services.sh`) walks all service scripts and emits `website/docs/services/<id>.md` from the SCRIPT_* fields, with a banner at the top of each generated file:
+
+```markdown
+<!-- AUTO-GENERATED from provision-host/uis/services/databases/service-postgresql.sh -->
+<!-- Edit the SCRIPT_* fields in that script. This file is overwritten on every build. -->
+```
+
+### Why this scales
+
+- **One discipline to teach contributors**: keep the metadata block current. Same discipline DCT contributors already follow for 40 files.
+- **The generators are small**: `uis-docs-services.sh` is already ~150 lines and produces the structured services-table. Adding multi-line prose-field emission is incremental (~50 more lines for the page generator).
+- **The website becomes thin**: most of `website/docs/services/` becomes generated. Hand-written pages survive for cross-cutting topics (how Authentik integrates with all services, etc.).
+- **Drift becomes a CI lint**: a CI check verifies no hand-edited content exists in a generated file (e.g., the auto-generated banner must be the first line; the file's mtime matches the source script's).
+
+### Cost of the extension
+
+The cost is not in the generator — it's in the **content migration**. Today's hand-written `services/postgresql.md` (and ~25 other service pages) has to be split into the prose-field blocks in each service script. Roughly:
+
+- ~15 min per service script for the migration (read existing doc → split into QUICKSTART / TROUBLESHOOTING / EXAMPLES / FAQ blocks → paste into the script with heredocs).
+- ~25 services × 15 min ≈ 6 contributor hours, batchable.
+- Plus the page generator: ~half day.
+- Plus the linter (no hand-edits in generated files): ~hour.
+
+Total: ~1 contributor day for the full per-service surface; the CLI-reference surface is independent (strategy C, ~1 day on its own).
+
+### Relation to the other CLI investigations
+
+- [INVESTIGATE-cli-grammar-harmonization](./INVESTIGATE-cli-grammar-harmonization.md) locks the **grammar** (which verbs go under which nouns). Once that's stable, the metadata blocks have a fixed set of slots to fill.
+- [INVESTIGATE-cli-connect-add](./INVESTIGATE-cli-connect-add.md) is the **first concrete migration** of the grammar. Its `service connect` work doesn't depend on this doc-generation infrastructure, but it benefits from it once shipped.
+- This investigation owns the **doc-generation layer**. Strategy C (CLI reference) and the new "per-service walkthroughs" extension are the two artifacts.
+
+---
+
 ## The drift problem — concrete recent examples
 
 1. **PR #169 (Cloudflare CLI port)** — moved `./uis deploy cloudflare-tunnel` → `./uis network up cloudflare`. The reference doc still has the old "Cloudflare verify/teardown" section.
@@ -158,12 +254,22 @@ Pick one doc page per topic and make every other page link to it instead of dupl
 
 ### C. Generate the CLI reference from `uis-cli.sh` help text
 
-Build `./uis docs cli-reference` (extending the existing `cmd_docs`) that walks every `cmd_*` function, calls its `--help`, and emits markdown. Commit-time hook or CI runs it; reference doc becomes a generated artifact like services.json.
+Build `./uis docs cli-reference` (extending the existing `cmd_docs`) that walks every `cmd_*` function, calls its `--help`, and emits markdown. Commit-time hook or CI runs it; reference doc becomes a generated artifact like services.json. Direct application of the "metadata-in-script as the doc contract" principle (see above).
 
 - **Pro**: reference doc literally can't drift from the code — they're regenerated together. Matches the existing `services.json` precedent. The help text already exists.
 - **Con**: requires every `cmd_*` to have a `--help` that emits markdown-friendly text. Today many cmd_* error paths don't have structured help. Refactor cost.
 - **Con**: only fixes the reference doc, not the 87 other files with command examples.
 - **Verdict**: high-leverage for the reference doc. Should combine with another strategy for the broader drift.
+
+### C2. Generate per-service walkthrough pages from `SCRIPT_*` prose fields
+
+Same principle as C, but applied to the **service docs** rather than the CLI reference. Extend the existing `SCRIPT_*` metadata blocks in service scripts with multi-line prose fields (`SCRIPT_QUICKSTART`, `SCRIPT_TROUBLESHOOTING`, `SCRIPT_EXAMPLES`) and build `uis-docs-service-pages.sh` to emit `website/docs/services/<id>.md` from them. See "Cross-cutting principle: metadata-in-script as the doc contract" above for the contract details.
+
+- **Pro**: closes drift for the ~25 per-service pages — same mechanism, same discipline as C.
+- **Pro**: the script-author and doc-author are the same person, in the same file. No "I edited the script, now I have to remember to update the docs" round-trip.
+- **Con**: one-time migration cost (~6 hours) to split today's hand-written pages into prose-field blocks.
+- **Con**: heredoc blocks make service scripts larger. Readability of the script-as-code is reduced for the script-as-doc-source benefit.
+- **Verdict**: high-leverage for per-service docs. Pairs naturally with C — same generator framework, two output targets.
 
 ### D. Code-block testing — execute the docs in CI
 
@@ -188,7 +294,7 @@ Consolidate where reasonable (B), generate the reference doc (C), and run a lint
 
 - **Pro**: each piece is independently small; together they cover most drift
 - **Con**: three pieces to build instead of one. But each is small.
-- **Verdict**: most likely target. Sequence: E first (cheapest, biggest catch), then B (no tooling), then C (last and most work).
+- **Verdict**: most likely target. Sequence: E first (cheapest, biggest catch), then B (no tooling), then C + C2 (the metadata-in-script principle applied to both surfaces; sequence them by which has more drift pain today).
 
 ---
 
@@ -269,6 +375,16 @@ Audit the top 15 files (by `./uis ` count) and move duplicated walkthroughs into
 
 **Status**: First slice already shipped via PLAN-tools-docs (tools surface: `reference/tools.md` is now the canonical inventory; 5 cross-refs retargeted; the old contributor page pivoted to architecture-only). Remaining surfaces to consolidate: services (esp. integration-services like postgrest/gravitee), networking (partially done by PLAN-003 — `tailscale.md` is now canonical), platforms (azure-aks.md heavy duplication with the AKS manual-setup runbook). Tools is the proof point; the remaining surfaces follow the same pattern.
 
+### 5. A per-service walkthrough page generator (strategy C2)
+
+`provision-host/uis/manage/uis-docs-service-pages.sh` (mirror of the existing `uis-docs-services.sh` services-table generator) that:
+- Walks every service script under `provision-host/uis/services/`
+- Reads the multi-line prose fields (`SCRIPT_QUICKSTART`, `SCRIPT_TROUBLESHOOTING`, `SCRIPT_EXAMPLES`, etc. — final field set to be locked in the PLAN)
+- Emits `website/docs/services/<id>.md` per service with an auto-generated banner at the top
+- Invoked by `./uis docs generate service-pages` (new subcommand) and from `npm run build`'s prehook
+
+Pairs with a CI lint that fails the build if a generated file has been hand-edited (banner missing or mtime mismatch).
+
 ---
 
 ## Open questions for the PLAN
@@ -278,6 +394,8 @@ Audit the top 15 files (by `./uis ` count) and move duplicated walkthroughs into
 3. **How aggressive is the linter?** Hard-fail on unknown verbs (catches drift, but blocks PRs on minor doc typos)? Or warn-only with a periodic sweep? Mirrors the `onBrokenLinks: warn` choice Docusaurus already made.
 4. **Migration sequence.** Do we start by writing the new doc by hand (one-time effort, then drift starts again), or invest in generation first (slower start, durable result)? Cheap-first vs durable-first.
 5. **What's the right granularity for the linter?** Verb-level only? Verb + first flag? Full string match against a regex of known patterns?
+6. **Prose-field schema for service scripts (C2).** Which multi-line fields does the per-service generator consume? Candidate set: `SCRIPT_QUICKSTART`, `SCRIPT_OVERVIEW`, `SCRIPT_TROUBLESHOOTING`, `SCRIPT_EXAMPLES`, `SCRIPT_FAQ`. Locking the schema before the migration starts saves rework when ~25 service scripts are touched in one batch.
+7. **C and C2 sequencing.** Ship the CLI reference generator (C) first, then per-service pages (C2)? Or vice versa? Or in parallel? The per-service pages have ~25× the migration content but ~the same generator cost; CLI reference has ~60 functions to refactor for `--help` but generator + targets are smaller.
 
 ---
 
@@ -285,12 +403,14 @@ Audit the top 15 files (by `./uis ` count) and move duplicated walkthroughs into
 
 Before a PLAN can be written:
 
-- [ ] Decision on which strategy combination to pursue (A/B/C/D/E/F or some subset)
+- [ ] Decision on which strategy combination to pursue (A/B/C/C2/D/E/F or some subset)
 - [ ] Decision on sidebar placement of the top-level doc
 - [ ] Decision on linter aggressiveness (hard-fail vs warn)
-- [ ] Decision on migration sequence (hand-write first vs generate first)
+- [ ] Decision on migration sequence (hand-write first vs generate first; C-then-C2 or in parallel)
 - [ ] Survey of which existing `cmd_*` functions have decent `--help` today and which need refactoring (the work of (C))
+- [ ] Lock the prose-field schema for service scripts (the work of (C2))
 - [ ] Decision on whether the existing `reference/uis-cli-reference.md` is rewritten in place or replaced + redirected
+- [ ] Decision on whether existing hand-written per-service pages are migrated all at once or service-by-service
 
 ---
 
@@ -301,6 +421,7 @@ If/when a PLAN is written from this investigation, it must define:
 - **C-1: Top-level CLI doc shape.** What sections, what order, who maintains. Source-of-truth question answered.
 - **C-2: Help-text shape per `cmd_*`.** Required format so generation works. Migration steps for cmd_* functions that don't conform today.
 - **C-3: Generation script contract.** Inputs (which files to read), outputs (which doc paths to write), invocation point (npm run build prehook? Static Tests step?).
+- **C-3b: Per-service page generator contract.** Same shape as C-3 but for the per-service walkthrough surface — prose-field schema, output path convention, auto-generated banner format, regen invocation point. The PLAN must declare which prose fields the generator consumes and what happens to any field a service script omits.
 - **C-4: Linter contract.** What it catches, what it ignores, where it runs, how it surfaces failures.
 - **C-5: Consolidation map.** Which of the 87 sprinkle-files lose their command examples in favor of links, and where the canonical example lives for each command family.
 - **C-6: Legacy-command redirect inventory.** All commands that were deleted/renamed in PRs #169–#181 + earlier, with a single doc location mapping each to its replacement.

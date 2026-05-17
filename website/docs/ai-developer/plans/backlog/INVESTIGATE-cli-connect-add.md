@@ -8,7 +8,9 @@
 
 **Goal**: Build a generic `uis service connect <service> [arg]` surface that opens an interactive client into any deployed service. Replaces the per-service-verb framing (`uis connect postgresql …`) with a single umbrella verb under `uis service <verb>` (alongside future `uis service logs`, `uis service describe`, etc.).
 
-**Direction (2026-05-16)** — promote the `uis service <verb>` namespace as the lock-in shape from the start. The 4 existing connects (`uis connect postgresql/mysql/redis/mongodb` from PLAN-002) move under the umbrella; the legacy form stays as an alias for one release cycle. The per-service interactive surface ("what each service can offer") is what needs investigation — see "Per-service client surface" section below.
+**Direction (2026-05-16)** — promote the `uis service <verb>` namespace as the lock-in shape from the start. The 4 existing connects (`uis connect postgresql/mysql/redis/mongodb` from PLAN-002) move under the umbrella; no alias, clean cutover. The per-service interactive surface ("what each service can offer") is what needs investigation — see "Per-service client surface" section below.
+
+This investigation is the **first concrete migration** under the umbrella grammar restructure tracked in [INVESTIGATE-cli-grammar-harmonization](./INVESTIGATE-cli-grammar-harmonization.md). That document owns the target grammar (the 8-noun table) and the migration sequence; this one owns the per-service-client design that `service connect` needs in particular.
 
 **Priority**: Low — the pod-exec fallback works; shell commands are a convenience.
 
