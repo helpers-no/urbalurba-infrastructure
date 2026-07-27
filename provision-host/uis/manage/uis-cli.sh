@@ -142,6 +142,9 @@ ArgoCD:
 Enonic XP:
   enonic verify                  Run E2E health checks on Enonic XP
 
+MinIO:
+  minio verify                   Run E2E health checks on MinIO object storage
+
 OpenMetadata:
   openmetadata verify            Run E2E health checks on OpenMetadata
 
@@ -2005,6 +2008,7 @@ cmd_verify() {
         echo "  argocd          Run E2E health checks on ArgoCD server"
         echo "  backstage       Run E2E health checks on Backstage (RHDH)"
         echo "  enonic          Run E2E health checks on Enonic XP"
+        echo "  minio           Run E2E health checks on MinIO object storage"
         echo "  nextcloud       Run E2E health checks on Nextcloud + OnlyOffice"
         echo "  openmetadata    Run E2E health checks on OpenMetadata"
         exit "$EXIT_GENERAL_ERROR"
@@ -2026,6 +2030,9 @@ cmd_verify() {
         enonic)
             cmd_enonic_verify
             ;;
+        minio)
+            cmd_minio_verify
+            ;;
         nextcloud)
             cmd_nextcloud_verify
             ;;
@@ -2041,6 +2048,7 @@ cmd_verify() {
             echo "  argocd          Run E2E health checks on ArgoCD server"
             echo "  backstage       Run E2E health checks on Backstage (RHDH)"
             echo "  enonic          Run E2E health checks on Enonic XP"
+            echo "  minio           Run E2E health checks on MinIO object storage"
             echo "  nextcloud       Run E2E health checks on Nextcloud + OnlyOffice"
             echo "  openmetadata    Run E2E health checks on OpenMetadata"
             exit "$EXIT_GENERAL_ERROR"
@@ -2334,6 +2342,15 @@ cmd_backstage_verify() {
 cmd_openmetadata_verify() {
     print_section "Verifying OpenMetadata Deployment"
     ansible-playbook "$ANSIBLE_DIR/340-test-openmetadata.yml"
+}
+
+# ============================================================
+# MinIO Commands
+# ============================================================
+
+cmd_minio_verify() {
+    print_section "Verifying MinIO Deployment"
+    ansible-playbook "$ANSIBLE_DIR/045-test-minio.yml"
 }
 
 # ============================================================
@@ -2661,6 +2678,22 @@ main() {
                     echo ""
                     echo "Commands:"
                     echo "  enonic verify    Run E2E health checks on Enonic XP"
+                    exit "$EXIT_GENERAL_ERROR"
+                    ;;
+            esac
+            ;;
+        minio)
+            local subcmd="${1:-}"
+            shift 2>/dev/null || true
+            case "$subcmd" in
+                verify)
+                    cmd_minio_verify
+                    ;;
+                *)
+                    log_error "Unknown minio command: $subcmd"
+                    echo ""
+                    echo "Commands:"
+                    echo "  minio verify    Run E2E health checks on MinIO object storage"
                     exit "$EXIT_GENERAL_ERROR"
                     ;;
             esac

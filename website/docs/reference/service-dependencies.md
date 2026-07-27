@@ -62,6 +62,7 @@ These can be deployed in any order:
 | mongodb | Databases | `./uis deploy mongodb` |
 | qdrant | Databases | `./uis deploy qdrant` |
 | elasticsearch | Databases | `./uis deploy elasticsearch` |
+| minio | Databases | `./uis deploy minio` |
 | prometheus | Observability | `./uis deploy prometheus` |
 | loki | Observability | `./uis deploy loki` |
 | tempo | Observability | `./uis deploy tempo` |

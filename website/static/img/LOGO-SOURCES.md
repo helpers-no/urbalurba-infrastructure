@@ -27,7 +27,7 @@ Service logos sourced from official project websites and icon repositories. SVG 
 - **CNCF Artwork**: prometheus, argocd, otel-collector
 - **Simple Icons**: grafana, postgresql, mysql, mongodb, redis, rabbitmq, elasticsearch, nginx, spark, jupyterhub, cloudflare, tailscale, traefik, ollama
 - **Official GitHub**: authentik, litellm, qdrant, loki (PNG), openwebui (PNG), pgadmin (PNG), unity-catalog (PNG)
-- **Created (Heroicons style)**: gravitee, redisinsight, tempo, tika
+- **Created (Heroicons style)**: gravitee, redisinsight, tempo, tika, minio
 
 ### Core Infrastructure
 | Logo ID | Service | Source | License |
@@ -42,6 +42,7 @@ Service logos sourced from official project websites and icon repositories. SVG 
 | `mysql-logo` | MySQL | [mysql.com](https://www.mysql.com/) | Oracle |
 | `mongodb-logo` | MongoDB | [mongodb.com](https://www.mongodb.com/) | MongoDB |
 | `qdrant-logo` | Qdrant | [qdrant.tech](https://qdrant.tech/) | Apache 2.0 |
+| `minio-logo` | MinIO | Created (Heroicons style, MinIO red #C72E29) | Heroicons MIT |
 
 ### Message Queues & Caching
 | Logo ID | Service | Source | License |

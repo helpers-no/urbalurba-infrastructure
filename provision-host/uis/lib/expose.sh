@@ -22,6 +22,9 @@ EXPOSE_CONFIG=(
     ["elasticsearch"]="elasticsearch-master default 9200"
     ["qdrant"]="qdrant default 6333"
     ["authentik"]="authentik-server authentik 9000"
+    # MinIO S3 API. The console is reached through Traefik (http://minio.localhost),
+    # so only the API port is port-forwarded.
+    ["minio"]="minio default 9000"
 )
 
 # Base path — inside container it's /mnt/urbalurbadisk, outside it's the repo root

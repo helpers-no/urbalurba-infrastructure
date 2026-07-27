@@ -1,0 +1,209 @@
+---
+# file: ansible/playbooks/045-remove-minio.yml
+# Description:
+# Remove MinIO object storage from the Kubernetes cluster.
+#
+#   Default mode (no extra-var), set by `./uis undeploy minio`:
+#     - Uninstall the Helm release
+#     - Remove the Traefik IngressRoutes (console + S3 API)
+#     - Wait for pods to terminate
+#     KEEPS: the PVC (all buckets and objects) and urbalurba-secrets.
+#     A subsequent ./uis deploy minio re-attaches the same data.
+#
+#   Purge mode (-e _purge=true, set by `./uis undeploy minio --purge`):
+#     - Everything default mode does, plus:
+#     - Delete the MinIO PVC — PERMANENTLY DELETES ALL BUCKETS AND OBJECTS
+#     User-level confirmation is enforced by uis-cli.sh before this playbook runs.
+#
+# Prerequisites:
+# - Kubernetes cluster with MinIO deployed
+# - kubectl and Helm 3.x available
+#
+# Usage:
+# ansible-playbook playbooks/045-remove-minio.yml -e target_host="rancher-desktop"
+# ansible-playbook playbooks/045-remove-minio.yml -e _purge=true
+
+- name: Remove MinIO Object Storage from Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    minio_namespace: "default"
+    minio_release_name: "minio"
+    removal_timeout: 180       # 3 minutes timeout for helm uninstall
+    cleanup_wait_timeout: 120  # 2 minutes timeout for pod termination
+    purge_mode: "{{ _purge | default(false) | bool }}"
+
+  tasks:
+    - name: 1. Display removal information
+      ansible.builtin.debug:
+        msg:
+          - "======================================"
+          - "MinIO Object Storage Removal"
+          - "File: ansible/playbooks/045-remove-minio.yml"
+          - "======================================"
+          - "Target Host: {{ _target }}"
+          - "Namespace: {{ minio_namespace }}"
+          - "Release: {{ minio_release_name }}"
+          - "Mode: {{ 'PURGE - deletes the PVC and all stored objects' if purge_mode else 'default - keeps the PVC and all stored objects' }}"
+
+    - name: 2. Check if MinIO Helm release exists
+      ansible.builtin.shell: |
+        helm list -n {{ minio_namespace }} -q | grep -x {{ minio_release_name }} | wc -l
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_release_check
+      changed_when: false
+      failed_when: false
+
+    - name: 3. Display MinIO release status
+      ansible.builtin.debug:
+        msg: >
+          MinIO Helm release: {{ 'found - will be removed'
+          if (minio_release_check.stdout | int) > 0
+          else 'not found - nothing to uninstall' }}
+
+    - name: 4. Get current MinIO resources before removal
+      ansible.builtin.shell: |
+        echo "=== PODS ==="
+        kubectl get pods -n {{ minio_namespace }} -l app=minio --no-headers 2>/dev/null || echo "No MinIO pods found"
+        echo "=== SERVICES ==="
+        kubectl get svc -n {{ minio_namespace }} -l app=minio --no-headers 2>/dev/null || echo "No MinIO services found"
+        echo "=== PVCs ==="
+        kubectl get pvc -n {{ minio_namespace }} -l app=minio --no-headers 2>/dev/null || echo "No MinIO PVCs found"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_resources_before
+      changed_when: false
+      failed_when: false
+
+    - name: 5. Display resources before removal
+      ansible.builtin.debug:
+        msg: |
+          Current MinIO resources:
+          {{ minio_resources_before.stdout }}
+
+    - name: 6. Remove MinIO IngressRoutes
+      kubernetes.core.k8s:
+        state: absent
+        api_version: traefik.io/v1alpha1
+        kind: IngressRoute
+        name: "{{ item }}"
+        namespace: "{{ minio_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      loop:
+        - minio-console
+        - minio-api
+      failed_when: false
+
+    - name: 7. Remove MinIO Helm release
+      ansible.builtin.shell: |
+        helm uninstall {{ minio_release_name }} -n {{ minio_namespace }} --timeout {{ removal_timeout }}s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_uninstall_result
+      when: (minio_release_check.stdout | int) > 0
+      changed_when: true
+      failed_when: false
+
+    - name: 8. Wait for MinIO pods to terminate
+      ansible.builtin.shell: |
+        timeout {{ cleanup_wait_timeout }} bash -c 'while kubectl get pods -n {{ minio_namespace }} -l app=minio --no-headers 2>/dev/null | grep -q .; do echo "Waiting for pods to terminate..."; sleep 5; done'
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_pod_termination
+      changed_when: false
+      failed_when: false
+
+    - name: 9. Count remaining MinIO pods
+      ansible.builtin.shell: |
+        kubectl get pods -n {{ minio_namespace }} -l app=minio --no-headers 2>/dev/null | wc -l
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_remaining_pods
+      changed_when: false
+      failed_when: false
+
+    - name: 10. Count remaining MinIO services
+      ansible.builtin.shell: |
+        kubectl get svc -n {{ minio_namespace }} -l app=minio --no-headers 2>/dev/null | wc -l
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_remaining_services
+      changed_when: false
+      failed_when: false
+
+    # ============= PURGE ONLY: DESTROYS ALL STORED OBJECTS =============
+
+    - name: 11. PURGE - delete MinIO PVC (all buckets and objects)
+      ansible.builtin.shell: |
+        kubectl delete pvc -n {{ minio_namespace }} -l app=minio --ignore-not-found=true
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_pvc_delete
+      when: purge_mode
+      changed_when: true
+      failed_when: false
+
+    - name: 12. Check remaining PVCs
+      ansible.builtin.shell: |
+        kubectl get pvc -n {{ minio_namespace }} -l app=minio --no-headers 2>/dev/null
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_preserved_pvcs
+      changed_when: false
+      failed_when: false
+
+    - name: 13. Set removal status facts
+      ansible.builtin.set_fact:
+        helm_removed: "{{ (minio_release_check.stdout | int) == 0 or (minio_uninstall_result.rc is defined and minio_uninstall_result.rc == 0) }}"
+        pods_terminated: "{{ (minio_remaining_pods.stdout | int) == 0 }}"
+        services_removed: "{{ (minio_remaining_services.stdout | int) == 0 }}"
+        pvcs_preserved: "{{ minio_preserved_pvcs.stdout | trim | length > 0 }}"
+
+    - name: 14. Display final removal status
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          MinIO Object Storage Removal Status
+          ===============================================
+
+          Removal status:
+          - Helm release:  {{ 'Removed' if helm_removed else 'Still present' }}
+          - Pods:          {{ 'All terminated' if pods_terminated else 'Still running' }}
+          - Services:      {{ 'Removed' if services_removed else 'Still present' }}
+          - IngressRoutes: Removed (minio-console, minio-api)
+
+          Data:
+          {% if purge_mode %}
+          - PVC: DELETED - all buckets and objects are gone permanently
+          {% else %}
+          - PVC: {{ 'Preserved - buckets and objects survive' if pvcs_preserved else 'No PVC found' }}
+          - Secrets: urbalurba-secrets preserved (MINIO_ROOT_USER / MINIO_ROOT_PASSWORD)
+          {% endif %}
+
+          {% if pvcs_preserved %}
+          Preserved PVCs:
+          {{ minio_preserved_pvcs.stdout }}
+          {% endif %}
+
+          Re-deployment:
+          - ./uis deploy minio
+          {% if not purge_mode %}
+          - Existing buckets and objects are re-attached from the preserved PVC
+          {% endif %}
+
+          {% if not purge_mode %}
+          Complete cleanup (DESTRUCTIVE):
+          - ./uis undeploy minio --purge
+          - WARNING: this permanently deletes all buckets and objects
+          {% endif %}
+
+          Verification commands:
+          - kubectl get all -n {{ minio_namespace }} -l app=minio
+          - kubectl get pvc -n {{ minio_namespace }} -l app=minio
+          - helm list -n {{ minio_namespace }}
+
+          {{ 'MINIO REMOVED' if helm_removed and pods_terminated and services_removed else 'CHECK REMOVAL STATUS' }}
+          ===============================================

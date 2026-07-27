@@ -15,6 +15,7 @@ Complete list of services available in UIS compared to their cloud equivalents.
 | **Cache & Session Store** | Azure Cache for Redis | Redis | `./uis deploy redis` |
 | **Search Engine** | Azure AI Search | Elasticsearch | `./uis deploy elasticsearch` |
 | **Vector Database** | Azure AI Search | Qdrant | `./uis deploy qdrant` |
+| **Object Storage** | Azure Blob Storage, AWS S3 | MinIO | `./uis deploy minio` |
 | **Authentication & SSO** | Azure AD, AWS IAM | Authentik | `./uis deploy authentik` |
 | **AI Chat Interface** | Azure OpenAI Service | OpenWebUI | `./uis deploy openwebui` |
 | **LLM Proxy & Router** | Azure OpenAI, AWS Bedrock | LiteLLM | `./uis deploy litellm` |
@@ -68,6 +69,7 @@ Deploy as a package: `./uis stack install observability`
 - **MongoDB** — Document database
 - **Redis** — Cache and session store
 - **Elasticsearch** — Full-text search engine
+- **MinIO** — S3-compatible object storage
 
 ### Management
 - **ArgoCD** — GitOps continuous delivery

@@ -140,6 +140,7 @@ const sidebars: SidebarsConfig = {
             'services/databases/qdrant',
             'services/databases/redis',
             'services/databases/elasticsearch',
+            'services/databases/minio',
           ],
         },
         {

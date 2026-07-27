@@ -1,0 +1,271 @@
+---
+# file: ansible/playbooks/045-test-minio.yml
+# Description:
+# End-to-end tests for the MinIO object storage deployment.
+# Validates health, S3 authentication, bucket round-trip, and Traefik routing.
+#
+# Tests (all CRITICAL):
+#   A. Liveness  - S3 API :9000 /minio/health/live must return 200
+#   B. Auth      - unsigned request to a bucket path must be rejected (403), not open
+#   C. Console   - console service :9001 must serve the web UI
+#   D. Round-trip - mc creates a bucket, uploads an object, reads it back, cleans up
+#   E. Routing   - s3.<domain> and minio.<domain> must resolve through Traefik
+#
+# Usage:
+# ansible-playbook ansible/playbooks/045-test-minio.yml
+
+- name: End-to-End MinIO Tests
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    minio_namespace: "default"
+    minio_service: "minio.default.svc.cluster.local"
+    minio_console_service: "minio-console.default.svc.cluster.local"
+    test_bucket: "uis-verify-bucket"
+
+  tasks:
+    - name: "0. Display test suite initiation"
+      ansible.builtin.debug:
+        msg: |
+          End-to-End MinIO Tests
+          ===============================================
+          Running 5 test groups (all CRITICAL)
+
+    - name: "0.1. Get Traefik ClusterIP for in-cluster hostname routing"
+      ansible.builtin.command: kubectl get svc traefik -n kube-system -o jsonpath={.spec.clusterIP}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: traefik_ip_result
+      changed_when: false
+
+    - name: "0.2. Store Traefik IP"
+      ansible.builtin.set_fact:
+        traefik_ip: "{{ traefik_ip_result.stdout }}"
+
+    - name: "0.3. Get MinIO root user from urbalurba-secrets"
+      ansible.builtin.shell: |
+        kubectl get secret urbalurba-secrets -n {{ minio_namespace }} \
+        -o jsonpath='{.data.MINIO_ROOT_USER}' | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: root_user_result
+      changed_when: false
+
+    - name: "0.4. Get MinIO root password from urbalurba-secrets"
+      ansible.builtin.shell: |
+        kubectl get secret urbalurba-secrets -n {{ minio_namespace }} \
+        -o jsonpath='{.data.MINIO_ROOT_PASSWORD}' | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: root_password_result
+      changed_when: false
+      no_log: true
+
+    - name: "0.5. Store credentials"
+      ansible.builtin.set_fact:
+        minio_user: "{{ root_user_result.stdout }}"
+        minio_password: "{{ root_password_result.stdout }}"
+      no_log: true
+
+    # ===== Test A: Liveness (CRITICAL) =====
+    - name: "A1. Check MinIO liveness endpoint (port 9000)"
+      ansible.builtin.shell: |
+        kubectl run minio-test-live-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ minio_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" http://{{ minio_service }}:9000/minio/health/live
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: live_test
+      retries: 5
+      delay: 10
+      until: "'HTTP_CODE:200' in live_test.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: "A2. Verify liveness returns 200"
+      ansible.builtin.assert:
+        that:
+          - "'HTTP_CODE:200' in live_test.stdout"
+        fail_msg: |
+          CRITICAL: MinIO liveness check failed!
+          Expected HTTP 200 from :9000/minio/health/live.
+          Got: {{ live_test.stdout[:500] | default('No output') }}
+
+          Troubleshooting:
+          - Check pod status: kubectl get pods -n {{ minio_namespace }} -l app=minio
+          - Check pod logs:   kubectl logs -n {{ minio_namespace }} -l app=minio --tail=50
+        success_msg: "Test A PASSED: MinIO liveness OK"
+
+    - name: "A3. Display liveness test success"
+      ansible.builtin.debug:
+        msg: "Test A: Liveness - PASSED (CRITICAL)"
+
+    # ===== Test B: Unauthenticated access rejected (CRITICAL) =====
+    - name: "B1. Request a bucket listing without credentials"
+      ansible.builtin.shell: |
+        kubectl run minio-test-auth-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ minio_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" http://{{ minio_service }}:9000/
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: auth_test
+      retries: 3
+      delay: 5
+      until: auth_test.rc == 0
+      failed_when: false
+      changed_when: false
+
+    - name: "B2. Verify unsigned requests are rejected (403)"
+      ansible.builtin.assert:
+        that:
+          - "'HTTP_CODE:403' in auth_test.stdout"
+        fail_msg: |
+          CRITICAL: MinIO did not reject an unsigned S3 request!
+          Expected HTTP 403 (AccessDenied) from :9000/ without credentials.
+          Got: {{ auth_test.stdout[:500] | default('No output') }}
+
+          An open MinIO means anonymous clients can list and read buckets.
+          Check that rootUser/rootPassword were applied:
+            helm get values minio -n {{ minio_namespace }}
+        success_msg: "Test B PASSED: unauthenticated S3 access is rejected"
+
+    - name: "B3. Display auth test success"
+      ansible.builtin.debug:
+        msg: "Test B: Unauthenticated access rejected - PASSED (CRITICAL)"
+
+    # ===== Test C: Console reachable (CRITICAL) =====
+    - name: "C1. Request the MinIO console (port 9001)"
+      ansible.builtin.shell: |
+        kubectl run minio-test-console-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ minio_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" http://{{ minio_console_service }}:9001/
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: console_test
+      retries: 5
+      delay: 10
+      until: "'HTTP_CODE:200' in console_test.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: "C2. Verify console returns 200"
+      ansible.builtin.assert:
+        that:
+          - "'HTTP_CODE:200' in console_test.stdout"
+        fail_msg: |
+          CRITICAL: MinIO console is not responding!
+          Expected HTTP 200 from :9001/.
+          Got: {{ console_test.stdout[:500] | default('No output') }}
+
+          Troubleshooting:
+          - Check the console service: kubectl get svc minio-console -n {{ minio_namespace }}
+        success_msg: "Test C PASSED: MinIO console responding"
+
+    - name: "C3. Display console test success"
+      ansible.builtin.debug:
+        msg: "Test C: Console reachable - PASSED (CRITICAL)"
+
+    # ===== Test D: Bucket round-trip with mc (CRITICAL) =====
+    - name: "D1. Create bucket, write an object, read it back, clean up"
+      ansible.builtin.shell: |
+        kubectl run minio-test-mc-{{ 99999 | random }} --image=quay.io/minio/mc --rm -i --restart=Never -n {{ minio_namespace }} \
+          --env=MC_USER={{ minio_user | quote }} \
+          --env=MC_PASS={{ minio_password | quote }} \
+          --command -- sh -c '
+            set -e
+            mc alias set uistest http://{{ minio_service }}:9000 "$MC_USER" "$MC_PASS" > /dev/null
+            mc mb --ignore-existing uistest/{{ test_bucket }} > /dev/null
+            echo "urbalurba-minio-roundtrip" > /tmp/probe.txt
+            mc cp /tmp/probe.txt uistest/{{ test_bucket }}/probe.txt > /dev/null
+            mc cat uistest/{{ test_bucket }}/probe.txt
+            mc rm uistest/{{ test_bucket }}/probe.txt > /dev/null
+            mc rb uistest/{{ test_bucket }} > /dev/null
+          '
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: roundtrip_test
+      retries: 3
+      delay: 10
+      until: "'urbalurba-minio-roundtrip' in roundtrip_test.stdout"
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: "D2. Verify the object round-tripped"
+      ansible.builtin.assert:
+        that:
+          - "'urbalurba-minio-roundtrip' in roundtrip_test.stdout"
+        fail_msg: |
+          CRITICAL: MinIO bucket round-trip failed!
+          Expected to create a bucket, upload an object and read it back.
+          Output (truncated): {{ roundtrip_test.stdout[:500] | default('No output') }}
+
+          Troubleshooting:
+          - Credentials come from urbalurba-secrets (MINIO_ROOT_USER / MINIO_ROOT_PASSWORD)
+          - Check storage:  kubectl get pvc -n {{ minio_namespace }} -l app=minio
+          - Check logs:     kubectl logs -n {{ minio_namespace }} -l app=minio --tail=50
+        success_msg: "Test D PASSED: bucket create/write/read/delete round-trip OK"
+
+    - name: "D3. Display round-trip test success"
+      ansible.builtin.debug:
+        msg: "Test D: S3 bucket round-trip - PASSED (CRITICAL)"
+
+    # ===== Test E: Traefik routing (CRITICAL) =====
+    - name: "E1. Reach the S3 API through Traefik (Host: s3.localhost)"
+      ansible.builtin.shell: |
+        kubectl run minio-test-route-api-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ minio_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" -H "Host: s3.localhost" http://{{ traefik_ip }}/minio/health/live
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: route_api_test
+      retries: 5
+      delay: 10
+      until: "'HTTP_CODE:200' in route_api_test.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: "E2. Reach the console through Traefik (Host: minio.localhost)"
+      ansible.builtin.shell: |
+        kubectl run minio-test-route-ui-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ minio_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" -H "Host: minio.localhost" http://{{ traefik_ip }}/
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: route_ui_test
+      retries: 5
+      delay: 10
+      until: "'HTTP_CODE:200' in route_ui_test.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: "E3. Verify both IngressRoutes resolve"
+      ansible.builtin.assert:
+        that:
+          - "'HTTP_CODE:200' in route_api_test.stdout"
+          - "'HTTP_CODE:200' in route_ui_test.stdout"
+        fail_msg: |
+          CRITICAL: MinIO Traefik routing failed!
+          s3.localhost   -> {{ route_api_test.stdout | default('No output') }}
+          minio.localhost -> {{ route_ui_test.stdout | default('No output') }}
+
+          Troubleshooting:
+          - Check routes: kubectl get ingressroute -n {{ minio_namespace }} -l app=minio
+          - Re-apply:     kubectl apply -f /mnt/urbalurbadisk/manifests/046-minio-ingressroute.yaml
+        success_msg: "Test E PASSED: both MinIO IngressRoutes resolve through Traefik"
+
+    - name: "E4. Display routing test success"
+      ansible.builtin.debug:
+        msg: "Test E: Traefik routing - PASSED (CRITICAL)"
+
+    # ===== Summary =====
+    - name: "SUMMARY - Display all test results"
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          MinIO E2E Test Results
+          ===============================================
+          A. Liveness (:9000/minio/health/live):     PASS
+          B. Unauthenticated S3 access rejected:     PASS
+          C. Console reachable (:9001):              PASS
+          D. Bucket create/write/read/delete:        PASS
+          E. Traefik routing (s3.* and minio.*):     PASS
+
+          ALL TESTS PASSED - MinIO is healthy
+          ===============================================

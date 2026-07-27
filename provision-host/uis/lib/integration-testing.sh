@@ -82,6 +82,7 @@ VERIFY_SERVICES="
 argocd:argocd verify
 backstage:backstage verify
 enonic:enonic verify
+minio:minio verify
 nextcloud:nextcloud verify
 openmetadata:openmetadata verify
 "
