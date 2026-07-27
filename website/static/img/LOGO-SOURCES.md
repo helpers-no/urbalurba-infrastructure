@@ -25,9 +25,9 @@ Service logos sourced from official project websites and icon repositories. SVG 
 
 **Actual Sources Used:**
 - **CNCF Artwork**: prometheus, argocd, otel-collector
-- **Simple Icons**: grafana, postgresql, mysql, mongodb, redis, rabbitmq, elasticsearch, nginx, spark, jupyterhub, cloudflare, tailscale, traefik, ollama
+- **Simple Icons**: grafana, postgresql, mysql, mongodb, redis, rabbitmq, elasticsearch, nginx, spark, jupyterhub, cloudflare, tailscale, traefik, ollama, minio
 - **Official GitHub**: authentik, litellm, qdrant, loki (PNG), openwebui (PNG), pgadmin (PNG), unity-catalog (PNG)
-- **Created (Heroicons style)**: gravitee, redisinsight, tempo, tika, minio
+- **Created (Heroicons style)**: gravitee, redisinsight, tempo, tika
 
 ### Core Infrastructure
 | Logo ID | Service | Source | License |
@@ -42,7 +42,11 @@ Service logos sourced from official project websites and icon repositories. SVG 
 | `mysql-logo` | MySQL | [mysql.com](https://www.mysql.com/) | Oracle |
 | `mongodb-logo` | MongoDB | [mongodb.com](https://www.mongodb.com/) | MongoDB |
 | `qdrant-logo` | Qdrant | [qdrant.tech](https://qdrant.tech/) | Apache 2.0 |
-| `minio-logo` | MinIO | Created (Heroicons style, MinIO red #C72E29) | Heroicons MIT |
+
+### Storage
+| Logo ID | Service | Source | License |
+|---------|---------|--------|---------|
+| `minio-logo` | MinIO | [min.io](https://min.io/) via [Simple Icons](https://simpleicons.org/) (brand red #C72E49) | MinIO (mark); SVG CC0-1.0 |
 
 ### Message Queues & Caching
 | Logo ID | Service | Source | License |

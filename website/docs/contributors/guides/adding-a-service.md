@@ -38,10 +38,10 @@ Services are organized into categories. Pick the one that fits:
 | `AI` | 200-229 | OpenWebUI, LiteLLM |
 | `ANALYTICS` | 300-399 | Spark, JupyterHub |
 | `IDENTITY` | 070-079 | Authentik |
-| `DATABASES` | 040-099 | PostgreSQL, MongoDB, Redis |
+| `DATABASES` | 040-044, 050-069 | PostgreSQL, MongoDB, Redis |
 | `MANAGEMENT` | 600-799 | pgAdmin, ArgoCD |
 | `NETWORKING` | 800-820 | Tailscale, Cloudflare tunnels |
-| `STORAGE` | 000-009 | Storage classes |
+| `STORAGE` | 000-009, 045-046 | Storage classes, MinIO |
 | `INTEGRATION` | 080-091 | RabbitMQ, Gravitee |
 
 Pick an unused number within your category's range for the manifest prefix.

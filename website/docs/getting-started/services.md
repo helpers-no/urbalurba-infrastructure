@@ -69,6 +69,8 @@ Deploy as a package: `./uis stack install observability`
 - **MongoDB** — Document database
 - **Redis** — Cache and session store
 - **Elasticsearch** — Full-text search engine
+
+### Storage
 - **MinIO** — S3-compatible object storage
 
 ### Management

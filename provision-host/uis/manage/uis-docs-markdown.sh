@@ -530,8 +530,6 @@ main() {
         log_info "Generating category index pages..."
         local cat_id
         for cat_id in "${CATEGORY_ORDER[@]}"; do
-            # Skip STORAGE — doc-only, no service scripts
-            [[ "$cat_id" == "STORAGE" ]] && continue
             generate_category_index "$cat_id" "$OUTPUT_DIR"
         done
     fi

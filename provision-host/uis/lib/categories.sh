@@ -6,13 +6,13 @@
 #
 # Categories align with cloud provider terminology (Azure/AWS/GCP):
 #   OBSERVABILITY: Metrics, logs, tracing (030-039)
-#   DATABASES: Data storage and caching (040-099)
+#   DATABASES: Data storage and caching (040-044, 050-069)
 #   AI: AI and machine learning (200-229)
 #   IDENTITY: Authentication and SSO (070-079)
 #   ANALYTICS: Data science and analytics (300-399)
 #   MANAGEMENT: Admin tools, GitOps, test services (600-799)
 #   NETWORKING: VPN tunnels and network access
-#   STORAGE: Platform storage (000-009)
+#   STORAGE: Platform storage and object storage (000-009, 045-046)
 #   INTEGRATION: Messaging and API gateways
 #
 # Usage:

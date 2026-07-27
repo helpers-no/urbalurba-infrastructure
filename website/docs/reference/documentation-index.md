@@ -96,7 +96,15 @@ Welcome to the complete documentation for **Urbalurba Infrastructure** — a zer
 | [Redis](../services/databases/redis.md) | In-memory cache and message broker |
 | [Elasticsearch](../services/databases/elasticsearch.md) | Search and analytics engine |
 | [Qdrant](../services/databases/qdrant.md) | Vector database |
-| [MinIO](../services/databases/minio.md) | S3-compatible object storage |
+
+### Services — Storage
+
+*Platform storage infrastructure*
+
+| Document | Purpose |
+|----------|---------|
+| [Storage Overview](../services/storage/index.md) | Storage services overview |
+| [MinIO](../services/storage/minio.md) | S3-compatible object storage |
 
 ### Services — Management
 

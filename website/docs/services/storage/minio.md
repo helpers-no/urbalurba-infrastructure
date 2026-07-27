@@ -9,7 +9,7 @@ S3-compatible object storage
 
 | | |
 |---|---|
-| **Category** | Databases |
+| **Category** | Storage |
 | **Deploy** | `./uis deploy minio` |
 | **Undeploy** | `./uis undeploy minio` |
 | **Depends on** | None |

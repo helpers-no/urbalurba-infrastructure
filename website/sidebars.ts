@@ -140,7 +140,6 @@ const sidebars: SidebarsConfig = {
             'services/databases/qdrant',
             'services/databases/redis',
             'services/databases/elasticsearch',
-            'services/databases/minio',
           ],
         },
         {
@@ -185,10 +184,12 @@ const sidebars: SidebarsConfig = {
           type: 'category',
           label: 'Storage',
           link: {
-            type: 'generated-index',
-            description: 'Platform storage infrastructure.',
+            type: 'doc',
+            id: 'services/storage/index',
           },
-          items: [],
+          items: [
+            'services/storage/minio',
+          ],
         },
         {
           type: 'category',
