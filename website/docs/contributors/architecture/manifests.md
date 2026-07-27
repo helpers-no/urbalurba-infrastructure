@@ -60,10 +60,19 @@ Files are numbered by category. The number in the manifest filename matches the 
 | `042-database-postgresql-config.yaml` | PostgreSQL Helm values |
 | `043-database-mysql-config.yaml` | MySQL Helm values |
 | `044-qdrant-config.yaml` | Qdrant vector database Helm values |
-| `045-minio-config.yaml` | MinIO object storage Helm values |
-| `046-minio-ingressroute.yaml` | MinIO console + S3 API Traefik routes |
 | `050-redis-config.yaml` | Redis Helm values |
 | `060-elasticsearch-config.yaml` | Elasticsearch Helm values |
+
+`045`/`046` sit inside this range but belong to the `STORAGE` category — see below.
+
+### 045-046: Object Storage (MinIO)
+
+| File | Purpose |
+|------|---------|
+| `045-minio-config.yaml` | MinIO object storage Helm values |
+| `046-minio-ingressroute.yaml` | MinIO console + S3 API Traefik routes |
+
+MinIO was originally added under `DATABASES` and later reclassified to `STORAGE`. The numbers were kept — a manifest number is stable for the life of the service, so links, playbook names, and existing deployments are not invalidated by a category change.
 
 ### 070-079: Identity (Whoami + Authentik)
 

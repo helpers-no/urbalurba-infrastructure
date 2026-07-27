@@ -194,7 +194,7 @@ SCRIPT_DOCS="/docs/services/databases/postgresql"
 
 ### Categories
 
-Services are organized into 9 categories (defined in `provision-host/uis/lib/categories.sh`):
+Services are organized into 10 categories (defined in `provision-host/uis/lib/categories.sh`):
 
 | Category ID | Display Name | Description | Manifest Range |
 |------------|--------------|-------------|----------------|
@@ -202,13 +202,16 @@ Services are organized into 9 categories (defined in `provision-host/uis/lib/cat
 | `AI` | AI & ML | AI and machine learning services | 200-229 |
 | `ANALYTICS` | Analytics | Data science and analytics platforms | 300-399 |
 | `IDENTITY` | Identity | Identity and access management | 070-079 |
-| `DATABASES` | Databases | Data storage and caching services | 040-099 |
+| `DATABASES` | Databases | Data storage and caching services | 040-044, 050-069 |
 | `MANAGEMENT` | Management | Admin tools, GitOps, and test services | 600-799 |
+| `APPLICATIONS` | Applications | End-user applications and collaboration platforms | 620-629 |
 | `NETWORKING` | Networking | VPN tunnels and network access | — |
-| `STORAGE` | Storage | Platform storage infrastructure | 000-009 |
-| `INTEGRATION` | Integration | Messaging, API gateways, and event streams | — |
+| `STORAGE` | Storage | Platform storage infrastructure | 000-009, 045-046 |
+| `INTEGRATION` | Integration | Messaging, API gateways, and event streams | 080-091 |
 
-**Note**: `STORAGE` and `NETWORKING` are platform-dependent — Traefik and storage provisioners are managed by Rancher Desktop, not by `./uis deploy`.
+**Note**: The manifest range is a convention, not a constraint. A service keeps the number it was created with — reclassifying a service into another category does not renumber its playbooks and manifests. MinIO is the current example: it is a `STORAGE` service that keeps its original `045`/`046` numbers.
+
+**Note**: Parts of `STORAGE` and `NETWORKING` are platform-dependent — Traefik and the storage provisioners/storage classes are managed by Rancher Desktop, not by `./uis deploy`. Deployable services in those categories (MinIO) work like any other service.
 
 ### Service Discovery
 

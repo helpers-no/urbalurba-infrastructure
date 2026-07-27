@@ -9,7 +9,7 @@
 SCRIPT_ID="minio"
 SCRIPT_NAME="MinIO"
 SCRIPT_DESCRIPTION="S3-compatible object storage"
-SCRIPT_CATEGORY="DATABASES"
+SCRIPT_CATEGORY="STORAGE"
 
 # === UIS-Specific (Optional) ===
 SCRIPT_PLAYBOOK="045-setup-minio.yml"
@@ -34,7 +34,7 @@ SCRIPT_LOGO="minio-logo.svg"
 SCRIPT_WEBSITE="https://min.io"
 SCRIPT_TAGS="object-storage,s3,buckets,files,images,blob-storage"
 SCRIPT_SUMMARY="MinIO is a high-performance, S3-compatible object storage server. Applications talk to it with any AWS S3 SDK, so code written against MinIO in UIS runs unchanged against AWS S3, Azure Blob (via S3 gateway), or a production MinIO cluster. Deployed in standalone mode with a persistent volume, an S3 API on port 9000, and a web console on port 9001."
-SCRIPT_DOCS="/docs/services/databases/minio"
+SCRIPT_DOCS="/docs/services/storage/minio"
 
 # === Template Integration (Optional) ===
 # The S3 API port is what applications need on the host machine

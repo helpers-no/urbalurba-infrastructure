@@ -1,7 +1,7 @@
 ---
 title: Databases
 sidebar_label: Databases
-description: PostgreSQL, MySQL, MongoDB, Redis, Elasticsearch, Qdrant, and MinIO
+description: PostgreSQL, MySQL, MongoDB, Redis, Elasticsearch, and Qdrant
 ---
 
 # Databases
@@ -18,7 +18,8 @@ UIS provides multiple database options for different data models and use cases. 
 | [MongoDB](./mongodb.md) | Document (NoSQL) | — | `./uis deploy mongodb` |
 | [Qdrant](./qdrant.md) | Vector search | — | `./uis deploy qdrant` |
 | [Elasticsearch](./elasticsearch.md) | Search & analytics | — | `./uis deploy elasticsearch` |
-| [MinIO](./minio.md) | Object storage (S3) | — | `./uis deploy minio` |
+
+For S3-compatible object storage, see [MinIO](../storage/minio.md) under [Storage](../storage/index.md).
 
 ## Quick Start
 
