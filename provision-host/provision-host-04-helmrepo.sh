@@ -52,6 +52,7 @@ install_helm_and_repos() {
         helm repo add bitnami https://charts.bitnami.com/bitnami
         helm repo add runix https://helm.runix.net
         helm repo add graviteeio https://helm.gravitee.io
+        helm repo add minio https://charts.min.io/
         helm repo update
         
         echo "Helm $(helm version --short) installed successfully"

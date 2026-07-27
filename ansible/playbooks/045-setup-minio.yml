@@ -1,0 +1,302 @@
+---
+# file: ansible/playbooks/045-setup-minio.yml
+# Description:
+# Set up MinIO S3-compatible object storage on the Kubernetes cluster.
+# Applications use it for buckets of files: images, uploads, exports, backups.
+#
+# Part of: Database Services - Object Storage Component
+#
+# Prerequisites:
+# - Kubernetes cluster with a default StorageClass
+# - kubectl configured for target cluster
+# - Helm 3.x installed
+# - urbalurba-secrets applied to the default namespace
+#   (contains MINIO_ROOT_USER and MINIO_ROOT_PASSWORD)
+# - Required manifests: 045-minio-config.yaml, 046-minio-ingressroute.yaml
+#
+# Architecture:
+# - Official MinIO Helm chart (minio/minio) in standalone (single node) mode
+# - Root credentials are read from urbalurba-secrets and passed with --set,
+#   never stored in the manifest (see rules/secrets-management.md)
+# - S3 API on service "minio" port 9000, console on "minio-console" port 9001
+# - Traefik IngressRoutes: minio.<domain> = console, s3.<domain> = S3 API
+# - Persistent volume keeps buckets across pod restarts and re-deploys
+#
+# Usage:
+# ansible-playbook playbooks/045-setup-minio.yml -e target_host="rancher-desktop"
+
+- name: Set up MinIO Object Storage on Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    manifests_folder: "/mnt/urbalurbadisk/manifests"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    minio_namespace: "default"
+    component_name: "minio"
+    installation_timeout: 300   # 5 minutes timeout for helm install
+    pod_readiness_timeout: 180  # 3 minutes timeout for pod readiness
+
+    # Helm chart references
+    minio_release_name: "minio"
+    minio_chart: "minio/minio"
+    minio_repo_url: "https://charts.min.io/"
+
+    # Config files
+    minio_config_file: "{{ manifests_folder }}/045-minio-config.yaml"
+    minio_ingressroute_file: "{{ manifests_folder }}/046-minio-ingressroute.yaml"
+
+  tasks:
+    - name: 1. Display deployment information
+      ansible.builtin.debug:
+        msg:
+          - "======================================"
+          - "MinIO Object Storage Deployment"
+          - "File: ansible/playbooks/045-setup-minio.yml"
+          - "======================================"
+          - "Target Host: {{ _target }}"
+          - "Namespace: {{ minio_namespace }}"
+          - "Component: {{ component_name }}"
+          - "Chart: {{ minio_chart }}"
+          - "Credentials: MINIO_ROOT_USER / MINIO_ROOT_PASSWORD from urbalurba-secrets"
+
+    - name: 2. Check existing Helm repositories
+      ansible.builtin.command: helm repo list
+      register: helm_repo_list
+      changed_when: false
+
+    - name: 3. Add MinIO Helm repository if needed
+      kubernetes.core.helm_repository:
+        name: "minio"
+        repo_url: "{{ minio_repo_url }}"
+      when: "'charts.min.io' not in helm_repo_list.stdout"
+
+    - name: 4. Update Helm repositories
+      ansible.builtin.command: helm repo update
+      changed_when: false
+
+    - name: 5. Get MinIO root user from urbalurba-secrets
+      ansible.builtin.shell: |
+        kubectl get secret urbalurba-secrets -n {{ minio_namespace }} \
+        -o jsonpath='{.data.MINIO_ROOT_USER}' 2>/dev/null | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_root_user
+      changed_when: false
+      failed_when: false
+
+    - name: 6. Get MinIO root password from urbalurba-secrets
+      ansible.builtin.shell: |
+        kubectl get secret urbalurba-secrets -n {{ minio_namespace }} \
+        -o jsonpath='{.data.MINIO_ROOT_PASSWORD}' 2>/dev/null | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_root_password
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: 7. Fail early when credentials are missing
+      ansible.builtin.fail:
+        msg: |
+          MINIO_ROOT_USER / MINIO_ROOT_PASSWORD not found in urbalurba-secrets
+          (namespace {{ minio_namespace }}).
+
+          MinIO refuses to start without root credentials, so deployment stops here.
+
+          Fix:
+            ./uis secrets generate
+            ./uis secrets apply
+            ./uis deploy minio
+      when: >
+        minio_root_user.stdout | default('') | length == 0 or
+        minio_root_password.stdout | default('') | length == 0
+
+    - name: 8. Set MinIO credential facts
+      ansible.builtin.set_fact:
+        minio_root_user_fact: "{{ minio_root_user.stdout }}"
+        minio_root_password_fact: "{{ minio_root_password.stdout }}"
+      no_log: true
+
+    - name: 9. Display MinIO credential status (masked)
+      ansible.builtin.debug:
+        msg:
+          - "MinIO root user: {{ minio_root_user_fact }}"
+          - "MinIO root password: {{ minio_root_password_fact | regex_replace('.', '*') }}"
+
+    - name: 10. Create the MinIO data PVC (owned by UIS, not by Helm)
+      # Kept outside the Helm release on purpose: a chart-owned PVC is deleted by
+      # `helm uninstall`, which would make `./uis undeploy minio` destructive.
+      # storageClassName is omitted so the cluster's default provisioner is used.
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "minio-data"
+            namespace: "{{ minio_namespace }}"
+            labels:
+              app: minio
+              app.kubernetes.io/name: minio
+              app.kubernetes.io/component: storage
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: "20Gi"
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: 11. Deploy MinIO with Helm using centralized credentials
+      ansible.builtin.command: >
+        helm upgrade --install {{ minio_release_name }} {{ minio_chart }}
+        -f {{ minio_config_file }}
+        --set rootUser={{ minio_root_user_fact | quote }}
+        --set rootPassword={{ minio_root_password_fact | quote }}
+        --namespace {{ minio_namespace }}
+        --timeout {{ installation_timeout }}s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_helm_result
+      changed_when: true
+      no_log: true
+
+    - name: 12. Display Helm deployment result
+      ansible.builtin.debug:
+        msg: "MinIO Helm release installed/upgraded. Waiting for readiness..."
+
+    - name: 13. Wait for MinIO pod to be running
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ minio_namespace }}"
+        label_selectors:
+          - "app=minio"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: minio_pods
+      retries: 20
+      delay: 15
+      until: >
+        minio_pods.resources | length > 0 and
+        minio_pods.resources[0].status.phase == "Running"
+
+    - name: 14. Wait for MinIO pod to be fully ready (1/1)
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ minio_namespace }}"
+        label_selectors:
+          - "app=minio"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: minio_pods_ready
+      retries: 30
+      delay: 10
+      until: >
+        minio_pods_ready.resources | length > 0 and
+        minio_pods_ready.resources[0].status.containerStatuses[0].ready == true
+
+    - name: 15. Test MinIO S3 API health from within the cluster
+      ansible.builtin.shell: |
+        kubectl run minio-curl-test-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ minio_namespace }} -- \
+        curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" http://{{ component_name }}:9000/minio/health/live
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_health_test
+      retries: 15
+      delay: 15
+      until: minio_health_test.rc == 0 and minio_health_test.stdout.find('HTTP_CODE:200') != -1
+      changed_when: false
+
+    - name: 16. Apply MinIO IngressRoutes (console + S3 API)
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ minio_ingressroute_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: 17. Verify IngressRoutes are created
+      kubernetes.core.k8s_info:
+        api_version: traefik.io/v1alpha1
+        kind: IngressRoute
+        namespace: "{{ minio_namespace }}"
+        label_selectors:
+          - "app=minio"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: minio_ingress_check
+      retries: 5
+      delay: 2
+      until: minio_ingress_check.resources | length > 1
+
+    - name: 18. Get MinIO pods
+      ansible.builtin.command: kubectl get pods -n {{ minio_namespace }} -l app=minio
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_pods_out
+      changed_when: false
+
+    - name: 19. Get MinIO services
+      ansible.builtin.command: kubectl get svc -n {{ minio_namespace }} -l app=minio
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_svc_out
+      changed_when: false
+
+    - name: 20. Get MinIO PVC
+      ansible.builtin.command: kubectl get pvc -n {{ minio_namespace }} -l app=minio
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: minio_pvc_out
+      changed_when: false
+
+    - name: 21. Display final deployment status
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          MinIO Object Storage Deployment Status
+          ===============================================
+
+          SUCCESS - MinIO deployed and ready
+
+          Status:
+          - Object storage: {{ 'Running' if minio_pods_out.stdout.find('Running') != -1 else 'Not running' }}
+          - S3 API health:  {{ 'Responding (HTTP 200)' if minio_health_test.stdout.find('HTTP_CODE:200') != -1 else 'Not responding' }}
+          - Storage:        Persistent volume configured
+          - IngressRoutes:  {{ minio_ingress_check.resources | length }} created
+
+          Deployment details:
+          - Namespace:  {{ minio_namespace }}
+          - Chart:      {{ minio_chart }}
+          - S3 API:     http://minio.{{ minio_namespace }}.svc.cluster.local:9000 (cluster internal)
+          - Console:    http://minio-console.{{ minio_namespace }}.svc.cluster.local:9001 (cluster internal)
+
+          MinIO pods:
+          {{ minio_pods_out.stdout }}
+
+          MinIO services:
+          {{ minio_svc_out.stdout }}
+
+          Storage (PVC):
+          {{ minio_pvc_out.stdout }}
+
+          Access instructions:
+          - Console (browser):   http://minio.localhost
+          - S3 API (browser/app) http://s3.localhost
+          - S3 API from host:    ./uis expose minio   then use http://localhost:39900
+          - Credentials:         MINIO_ROOT_USER / MINIO_ROOT_PASSWORD in urbalurba-secrets
+              kubectl get secret urbalurba-secrets -n {{ minio_namespace }} \
+                -o jsonpath='{.data.MINIO_ROOT_USER}' | base64 -d
+              kubectl get secret urbalurba-secrets -n {{ minio_namespace }} \
+                -o jsonpath='{.data.MINIO_ROOT_PASSWORD}' | base64 -d
+
+          Usage examples (from an application pod, any AWS S3 SDK):
+          - Endpoint:          http://minio.default.svc.cluster.local:9000
+          - Region:            us-east-1 (MinIO ignores the region, SDKs require one)
+          - Path-style access: required (MinIO does not do virtual-host buckets by default)
+
+          Troubleshooting:
+          - Check pods:   kubectl get pods -n {{ minio_namespace }} -l app=minio
+          - View logs:    kubectl logs -n {{ minio_namespace }} -l app=minio
+          - Check PVC:    kubectl get pvc -n {{ minio_namespace }} -l app=minio
+          - Check routes: kubectl get ingressroute -n {{ minio_namespace }} -l app=minio
+          - Verify E2E:   ./uis verify minio
+
+          MINIO READY - OBJECT STORAGE DEPLOYED
+          ===============================================

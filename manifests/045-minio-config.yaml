@@ -1,0 +1,134 @@
+# File: 045-minio-config.yaml
+#
+# Description:
+# Helm values for the official MinIO chart (minio/minio from https://charts.min.io/).
+# Deploys a single-node ("standalone") S3-compatible object storage server suitable
+# for a laptop-sized development cluster.
+#
+# Requirements:
+# - Helm repo: minio -> https://charts.min.io/ (added by 045-setup-minio.yml)
+# - urbalurba-secrets in the default namespace with MINIO_ROOT_USER / MINIO_ROOT_PASSWORD
+#
+# Credentials:
+# - rootUser/rootPassword are deliberately NOT set here. The setup playbook reads them
+#   from urbalurba-secrets and passes them with --set, so no credential ever lives in git.
+#   See docs/contributors/rules/secrets-management.md ("No Helm Chart Defaults for Security Values").
+#
+# Usage:
+# installing:   helm install minio minio/minio -f 045-minio-config.yaml -n default \
+#                 --set rootUser=... --set rootPassword=...
+# upgrading:    helm upgrade minio minio/minio -f 045-minio-config.yaml -n default ...
+# uninstalling: helm uninstall minio -n default
+#
+# Debugging commands:
+# check pod status: kubectl get pods -n default -l app=minio
+# view logs:        kubectl logs -n default -l app=minio
+# port-forward S3:  kubectl port-forward svc/minio 9000:9000 -n default
+# port-forward UI:  kubectl port-forward svc/minio-console 9001:9001 -n default
+# health check:     curl http://localhost:9000/minio/health/live
+#
+# Notes:
+# - Two ClusterIP services are created: "minio" (S3 API, 9000) and "minio-console" (UI, 9001).
+# - Ingress is handled by 046-minio-ingressroute.yaml (Traefik IngressRoute), not by the
+#   chart's own ingress objects — hence ingress/consoleIngress are disabled below.
+# - MINIO_BROWSER_REDIRECT_URL is intentionally not set: the console must work on
+#   minio.localhost, on Tailscale and on Cloudflare domains from the same deployment.
+# - Buckets are NOT pre-created here. Applications create their own buckets through the
+#   S3 API, which keeps this file application-agnostic.
+
+# Single node, single drive - the right shape for a dev cluster.
+# (Chart default is "distributed" with 16 replicas.)
+mode: standalone
+replicas: 1
+drivesPerNode: 1
+pools: 1
+
+image:
+  pullPolicy: IfNotPresent
+  # Empty tag uses the chart's appVersion
+
+# Persistent storage for buckets and objects.
+#
+# The PVC is created by the setup playbook, NOT by Helm, and referenced here as an
+# existingClaim. This is the same pattern Qdrant uses, and it is what makes
+# `./uis undeploy minio` non-destructive: a chart-owned PVC is deleted by
+# `helm uninstall`, an externally-owned one survives and is re-attached on the next
+# deploy. `./uis undeploy minio --purge` deletes it explicitly.
+#
+# The playbook creates the claim without a storageClassName, so the cluster's default
+# provisioner is used (local-path on Rancher Desktop, managed-csi on AKS, etc).
+persistence:
+  enabled: true
+  accessMode: ReadWriteOnce
+  existingClaim: "minio-data"
+  size: 20Gi
+
+# Resource requests and limits sized for a laptop.
+# (Chart default requests 16Gi of memory, which will not schedule.)
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 100m
+  limits:
+    memory: 2Gi
+    cpu: 1000m
+
+# S3 API service
+service:
+  type: ClusterIP
+  port: "9000"
+
+# Web console service
+consoleService:
+  type: ClusterIP
+  port: "9001"
+
+# Routing is done with Traefik IngressRoute CRDs (046-minio-ingressroute.yaml)
+ingress:
+  enabled: false
+
+consoleIngress:
+  enabled: false
+
+# Run as non-root with a writable data volume
+securityContext:
+  enabled: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  fsGroupChangePolicy: "OnRootMismatch"
+
+# Post-install jobs (bucket/user/policy creation) - kept empty on purpose,
+# but the job pods still need laptop-sized resource requests.
+buckets: []
+users: []
+policies: []
+svcaccts: []
+
+makeBucketJob:
+  resources:
+    requests:
+      memory: 128Mi
+
+makeUserJob:
+  resources:
+    requests:
+      memory: 128Mi
+
+makePolicyJob:
+  resources:
+    requests:
+      memory: 128Mi
+
+postJob:
+  podAnnotations:
+    app.kubernetes.io/part-of: "storage-stack"
+
+podAnnotations:
+  app.kubernetes.io/part-of: "storage-stack"
+
+# Prometheus metrics are exposed on the API port at /minio/v2/metrics/cluster.
+# Set enabled: true after deploying the observability stack.
+metrics:
+  serviceMonitor:
+    enabled: false

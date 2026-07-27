@@ -148,6 +148,27 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "minio",
+    "name": "MinIO",
+    "description": "S3-compatible object storage",
+    "category": "DATABASES",
+    "tags": ["object-storage", "s3", "buckets", "files", "images", "blob-storage"],
+    "abstract": "S3-compatible object storage for files, images, and backups",
+    "logo": "minio-logo.svg",
+    "website": "https://min.io"
+    ,"summary": "MinIO is a high-performance, S3-compatible object storage server. Applications talk to it with any AWS S3 SDK, so code written against MinIO in UIS runs unchanged against AWS S3, Azure Blob (via S3 gateway), or a production MinIO cluster. Deployed in standalone mode with a persistent volume, an S3 API on port 9000, and a web console on port 9001."
+    ,"docs": "/docs/services/databases/minio"
+    ,"playbook": "045-setup-minio.yml"
+    ,"priority": 34
+    ,"checkCommand": "kubectl get pods -n default -l app=minio --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "045-remove-minio.yml"
+    ,"helmChart": "minio/minio"
+    ,"namespace": "default"
+    ,"exposePort": 39900
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "mongodb",
     "name": "MongoDB",
     "description": "Document-oriented NoSQL database",

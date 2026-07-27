@@ -60,6 +60,8 @@ Files are numbered by category. The number in the manifest filename matches the 
 | `042-database-postgresql-config.yaml` | PostgreSQL Helm values |
 | `043-database-mysql-config.yaml` | MySQL Helm values |
 | `044-qdrant-config.yaml` | Qdrant vector database Helm values |
+| `045-minio-config.yaml` | MinIO object storage Helm values |
+| `046-minio-ingressroute.yaml` | MinIO console + S3 API Traefik routes |
 | `050-redis-config.yaml` | Redis Helm values |
 | `060-elasticsearch-config.yaml` | Elasticsearch Helm values |
 

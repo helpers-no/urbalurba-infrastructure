@@ -17,6 +17,7 @@
         - { name: 'runix', url: 'https://helm.runix.net' }
         - { name: 'graviteeio', url: 'https://helm.gravitee.io' }
         - { name: 'rhdh-chart', url: 'https://redhat-developer.github.io/rhdh-chart' }
+        - { name: 'minio', url: 'https://charts.min.io/' }
       register: helm_repo_result
 
     - name: 01. Print playbook description

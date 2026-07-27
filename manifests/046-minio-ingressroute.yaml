@@ -1,0 +1,81 @@
+---
+# File: manifests/046-minio-ingressroute.yaml
+#
+# Description:
+# Traefik IngressRoutes for MinIO. Two routes are needed because MinIO serves the
+# web console and the S3 API on two different ports:
+#
+#   minio.<domain>  -> minio-console:9001  (browser UI for humans)
+#   s3.<domain>     -> minio:9000          (S3 API for applications and SDKs)
+#
+# HostRegexp Routing:
+# Both routes use HostRegexp so the same manifest works on every domain the cluster
+# is reachable on, without edits:
+# - minio.localhost / s3.localhost              (local development)
+# - minio.<tailnet>.ts.net / s3.<tailnet>.ts.net (Tailscale)
+# - minio.example.com / s3.example.com           (Cloudflare tunnel)
+#
+# Usage:
+# kubectl apply -f 046-minio-ingressroute.yaml
+#
+# Dependencies:
+# - 045-minio-config.yaml (MinIO Helm deployment)
+# - services "minio" and "minio-console" must exist in the default namespace
+#
+# Testing:
+# Console:  curl -I http://minio.localhost
+# S3 API:   curl http://s3.localhost/minio/health/live   (expects HTTP 200)
+#
+# Security Considerations:
+# - The console gives full administrative access to every bucket. It is public here
+#   (dev-cluster convention, same as the RabbitMQ management UI); add the
+#   authentik-forward-auth middleware if the cluster is exposed to the internet.
+# - The S3 API route is public at the network level but every request is still
+#   signed with AWS SigV4 credentials, so unauthenticated callers get 403.
+#
+# Cluster Standards Compliance:
+# - traefik.io/v1alpha1 API version (current working version in Traefik 3.3.6)
+# - HostRegexp pattern for unified routing (recommended approach)
+# - Descriptive labels matching cluster conventions
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: minio-console
+  namespace: default
+  labels:
+    app: minio
+    component: console-ui
+    type: public
+    routing: unified
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: HostRegexp(`minio\..+`)
+      kind: Rule
+      services:
+        - name: minio-console
+          port: 9001
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: minio-api
+  namespace: default
+  labels:
+    app: minio
+    component: s3-api
+    type: public
+    routing: unified
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: HostRegexp(`s3\..+`)
+      kind: Rule
+      services:
+        - name: minio
+          port: 9000
