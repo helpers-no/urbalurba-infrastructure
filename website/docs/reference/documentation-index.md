@@ -129,6 +129,7 @@ Welcome to the complete documentation for **Urbalurba Infrastructure** — a zer
 | [Integration Overview](../services/integration/index.md) | Integration services overview |
 | [RabbitMQ](../services/integration/rabbitmq.md) | Message broker |
 | [Gravitee](../services/integration/gravitee.md) | API management platform |
+| [Temporal](../services/integration/temporal.md) | Durable workflow orchestration engine |
 
 ### Services — Networking
 

@@ -53,6 +53,7 @@ install_helm_and_repos() {
         helm repo add runix https://helm.runix.net
         helm repo add graviteeio https://helm.gravitee.io
         helm repo add minio https://charts.min.io/
+        helm repo add temporal https://go.temporal.io/helm-charts
         helm repo update
         
         echo "Helm $(helm version --short) installed successfully"

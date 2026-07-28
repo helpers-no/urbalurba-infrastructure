@@ -25,6 +25,9 @@ EXPOSE_CONFIG=(
     # MinIO S3 API. The console is reached through Traefik (http://minio.localhost),
     # so only the API port is port-forwarded.
     ["minio"]="minio default 9000"
+    # Temporal gRPC frontend — what SDK clients and workers connect to. The Web UI
+    # is reached through Traefik (http://temporal.localhost) instead.
+    ["temporal"]="temporal-frontend temporal 7233"
 )
 
 # Base path — inside container it's /mnt/urbalurbadisk, outside it's the repo root

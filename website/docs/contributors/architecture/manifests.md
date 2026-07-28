@@ -98,6 +98,8 @@ MinIO was originally added under `DATABASES` and later reclassified to `STORAGE`
 |------|---------|
 | `080-rabbitmq-config.yaml` | RabbitMQ Helm values |
 | `081-rabbitmq-ingressroute.yaml` | RabbitMQ management UI IngressRoute |
+| `086-temporal-config.yaml` | Temporal Helm values (PostgreSQL-only persistence) |
+| `087-temporal-ingressroute.yaml` | Temporal Web UI + HTTP API IngressRoutes |
 | `090-gravitee-config.yaml` | Gravitee API management Helm values |
 | `091-gravitee-ingress.yaml` | Gravitee IngressRoute |
 

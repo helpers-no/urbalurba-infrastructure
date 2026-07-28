@@ -1,0 +1,87 @@
+---
+# File: manifests/087-temporal-ingressroute.yaml
+#
+# Description:
+# Traefik IngressRoutes for Temporal. Two routes are needed because the Web UI and
+# the frontend HTTP API are two different services on two different ports:
+#
+#   temporal.<domain>      -> temporal-web:8080       (browser UI for humans)
+#   temporal-api.<domain>  -> temporal-frontend:7243  (Temporal HTTP API)
+#
+# NOT routed here: the gRPC frontend on port 7233. That is what SDK workers and
+# clients connect to, and gRPC does not belong on Traefik's plain-HTTP `web`
+# entrypoint. Reach it in-cluster at temporal-frontend.temporal.svc.cluster.local:7233
+# or from the host with `./uis expose temporal` (localhost:37233).
+#
+# HostRegexp Routing:
+# Both routes use HostRegexp so the same manifest works on every domain the cluster
+# is reachable on, without edits:
+# - temporal.localhost / temporal-api.localhost                 (local development)
+# - temporal.<tailnet>.ts.net / temporal-api.<tailnet>.ts.net   (Tailscale)
+# - temporal.example.com / temporal-api.example.com             (Cloudflare tunnel)
+#
+# Usage:
+# kubectl apply -f 087-temporal-ingressroute.yaml
+#
+# Dependencies:
+# - 086-temporal-config.yaml (Temporal Helm deployment)
+# - services "temporal-web" and "temporal-frontend" must exist in the temporal namespace
+#
+# Testing:
+# Web UI:   curl -I http://temporal.localhost
+# HTTP API: curl http://temporal-api.localhost/api/v1/namespaces
+#
+# Security Considerations:
+# - The Web UI gives full operational access to every workflow (including terminate
+#   and reset). It is public here, following the dev-cluster convention already used
+#   by the RabbitMQ management UI and the MinIO console. Add the
+#   authentik-forward-auth middleware if the cluster is exposed to the internet.
+# - The HTTP API route has no authentication either — Temporal ships with the
+#   "noop" authorizer by default and UIS does not enable mTLS on a laptop cluster.
+#
+# Cluster Standards Compliance:
+# - traefik.io/v1alpha1 API version (current working version in Traefik 3.3.6)
+# - HostRegexp pattern for unified routing (recommended approach)
+# - Descriptive labels matching cluster conventions
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: temporal-web
+  namespace: temporal
+  labels:
+    app: temporal
+    component: web-ui
+    type: public
+    routing: unified
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: HostRegexp(`temporal\..+`)
+      kind: Rule
+      services:
+        - name: temporal-web
+          port: 8080
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: temporal-api
+  namespace: temporal
+  labels:
+    app: temporal
+    component: http-api
+    type: public
+    routing: unified
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: HostRegexp(`temporal-api\..+`)
+      kind: Rule
+      services:
+        - name: temporal-frontend
+          port: 7243

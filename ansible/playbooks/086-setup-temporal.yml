@@ -1,0 +1,452 @@
+---
+# file: ansible/playbooks/086-setup-temporal.yml
+# Description:
+# Set up Temporal (durable workflow engine) on the Kubernetes cluster, backed by
+# the SHARED UIS PostgreSQL. No Elasticsearch, no Cassandra, no bundled database.
+#
+# Part of: Integration Services - Workflow Orchestration Component
+#
+# Prerequisites:
+# - Kubernetes cluster with a default StorageClass
+# - PostgreSQL deployed (./uis deploy postgresql)
+# - urbalurba-secrets applied to the `temporal` namespace, carrying
+#   TEMPORAL_POSTGRES_USER / TEMPORAL_POSTGRES_PASSWORD /
+#   TEMPORAL_POSTGRES_DATABASE / TEMPORAL_POSTGRES_VISIBILITY_DATABASE
+# - urbalurba-secrets in `default` carrying PGPASSWORD (postgres superuser)
+# - Helm 3.x installed
+# - Required manifests: 086-temporal-config.yaml, 087-temporal-ingressroute.yaml
+#
+# Architecture:
+# - Official Temporal Helm chart (temporal/temporal), version pinned below
+# - The playbook creates the `temporal` role and the two databases in the shared
+#   PostgreSQL instance (same pattern as 090-setup-gravitee.yml). The chart's
+#   pre-install/pre-upgrade schema Job then applies the Temporal SQL schema.
+# - The DB password is never written to a manifest: the chart reads it straight
+#   from temporal/urbalurba-secrets via existingSecret/secretKey
+#   (see rules/secrets-management.md)
+# - Components: frontend (gRPC 7233 / HTTP 7243), history, matching, worker,
+#   web UI (8080), admintools
+# - Traefik IngressRoutes: temporal.<domain> = Web UI,
+#   temporal-api.<domain> = frontend HTTP API
+#
+# Usage:
+# ansible-playbook playbooks/086-setup-temporal.yml -e target_host="rancher-desktop"
+
+- name: Set up Temporal Workflow Engine on Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    manifests_folder: "/mnt/urbalurbadisk/manifests"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    temporal_namespace: "temporal"
+    postgres_namespace: "default"
+    component_name: "temporal"
+    installation_timeout: 900   # 15 minutes: schema hook Job + 6 pods on first install
+    pod_readiness_timeout: 300
+
+    # Helm chart references
+    temporal_release_name: "temporal"
+    temporal_chart: "temporal/temporal"
+    temporal_chart_version: "1.6.0"   # ships server/admintools 1.31.2, UI 2.52.0
+    temporal_repo_url: "https://go.temporal.io/helm-charts"
+
+    # Config files
+    temporal_config_file: "{{ manifests_folder }}/086-temporal-config.yaml"
+    temporal_ingressroute_file: "{{ manifests_folder }}/087-temporal-ingressroute.yaml"
+
+  tasks:
+    - name: 1. Display deployment information
+      ansible.builtin.debug:
+        msg:
+          - "======================================"
+          - "Temporal Workflow Engine Deployment"
+          - "File: ansible/playbooks/086-setup-temporal.yml"
+          - "======================================"
+          - "Target Host: {{ _target }}"
+          - "Namespace: {{ temporal_namespace }}"
+          - "Component: {{ component_name }}"
+          - "Chart: {{ temporal_chart }} @ {{ temporal_chart_version }}"
+          - "Datastores: shared postgresql.default (history + visibility)"
+          - "No Elasticsearch, no Cassandra"
+
+    # ============= PHASE 1: PREREQUISITES =============
+
+    - name: 2. Ensure the temporal namespace exists
+      kubernetes.core.k8s:
+        name: "{{ temporal_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: 3. Verify the shared PostgreSQL service is reachable
+      ansible.builtin.shell: >-
+        kubectl get service postgresql -n {{ postgres_namespace }} --no-headers 2>/dev/null | wc -l
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: postgres_check
+      changed_when: false
+
+    - name: 4. Fail if PostgreSQL is missing
+      ansible.builtin.fail:
+        msg: |
+          PostgreSQL is required for Temporal - it stores workflow history and
+          visibility records. Deploy it first:
+
+            ./uis deploy postgresql
+            ./uis deploy temporal
+      when: postgres_check.stdout | int == 0
+
+    - name: 5. Verify temporal/urbalurba-secrets carries the DB password
+      ansible.builtin.shell: >-
+        kubectl get secret urbalurba-secrets -n {{ temporal_namespace }}
+        -o jsonpath='{.data.TEMPORAL_POSTGRES_PASSWORD}' 2>/dev/null | wc -c
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: secret_check
+      changed_when: false
+
+    - name: 6. Fail early when credentials are missing
+      ansible.builtin.fail:
+        msg: |
+          TEMPORAL_POSTGRES_PASSWORD not found in urbalurba-secrets
+          (namespace {{ temporal_namespace }}).
+
+          Temporal cannot reach its datastores without it, so deployment stops here.
+
+          Fix:
+            ./uis secrets generate
+            ./uis secrets apply
+            ./uis deploy temporal
+
+          If `secrets generate` does not produce the key, your
+          .uis.secrets/secrets-config/00-common-values.env.template predates
+          Temporal - add the TEMPORAL_* block from the shipped template.
+      when: secret_check.stdout | int == 0
+
+    # ============= PHASE 2: DATABASE BOOTSTRAP =============
+    # Mirrors 090-setup-gravitee.yml: create the role and the databases in the
+    # shared instance, then let the application own its schema.
+
+    - name: 7. Get PostgreSQL pod name
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        kind: Pod
+        namespace: "{{ postgres_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/name=postgresql
+      register: postgres_pods
+
+    - name: 8. Set PostgreSQL pod name
+      ansible.builtin.set_fact:
+        postgres_pod_name: "{{ postgres_pods.resources[0].metadata.name }}"
+      when: postgres_pods.resources | length > 0
+
+    - name: 9. Fail if no PostgreSQL pod is running
+      ansible.builtin.fail:
+        msg: "No running PostgreSQL pod found in namespace {{ postgres_namespace }}. Run: ./uis deploy postgresql"
+      when: postgres_pods.resources | length == 0
+
+    - name: 10. Read postgres superuser password from default/urbalurba-secrets
+      ansible.builtin.shell: >-
+        kubectl get secret urbalurba-secrets -n {{ postgres_namespace }}
+        -o jsonpath='{.data.PGPASSWORD}' | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: postgres_password
+      changed_when: false
+      no_log: true
+
+    - name: 11. Read Temporal DB password from temporal/urbalurba-secrets
+      ansible.builtin.shell: >-
+        kubectl get secret urbalurba-secrets -n {{ temporal_namespace }}
+        -o jsonpath='{.data.TEMPORAL_POSTGRES_PASSWORD}' | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_db_password
+      changed_when: false
+      no_log: true
+
+    - name: 12. Read Temporal DB user and database names from secrets
+      ansible.builtin.shell: |
+        echo "user=$(kubectl get secret urbalurba-secrets -n {{ temporal_namespace }} -o jsonpath='{.data.TEMPORAL_POSTGRES_USER}' | base64 -d)"
+        echo "db=$(kubectl get secret urbalurba-secrets -n {{ temporal_namespace }} -o jsonpath='{.data.TEMPORAL_POSTGRES_DATABASE}' | base64 -d)"
+        echo "visdb=$(kubectl get secret urbalurba-secrets -n {{ temporal_namespace }} -o jsonpath='{.data.TEMPORAL_POSTGRES_VISIBILITY_DATABASE}' | base64 -d)"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_db_meta
+      changed_when: false
+
+    - name: 13. Parse user and database vars
+      ansible.builtin.set_fact:
+        temporal_db_user: "{{ (temporal_db_meta.stdout_lines | select('match', '^user=') | first).split('=', 1)[1] }}"
+        temporal_db_name: "{{ (temporal_db_meta.stdout_lines | select('match', '^db=') | first).split('=', 1)[1] }}"
+        temporal_vis_db_name: "{{ (temporal_db_meta.stdout_lines | select('match', '^visdb=') | first).split('=', 1)[1] }}"
+
+    - name: 14. Fail if the database names in the secret are empty
+      ansible.builtin.fail:
+        msg: |
+          temporal/urbalurba-secrets is missing TEMPORAL_POSTGRES_USER,
+          TEMPORAL_POSTGRES_DATABASE or TEMPORAL_POSTGRES_VISIBILITY_DATABASE.
+          Run: ./uis secrets generate && ./uis secrets apply
+      when: >
+        temporal_db_user | length == 0 or
+        temporal_db_name | length == 0 or
+        temporal_vis_db_name | length == 0
+
+    - name: 15. Check if the Temporal role exists
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ postgres_pod_name }} --
+        bash -c "PGPASSWORD='{{ postgres_password.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -tAc
+        \"SELECT 1 FROM pg_roles WHERE rolname='{{ temporal_db_user }}';\"" | grep -q 1
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: role_check
+      changed_when: false
+      ignore_errors: true
+      no_log: true
+
+    - name: 16. Create the Temporal role if missing
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ postgres_pod_name }} --
+        bash -c "PGPASSWORD='{{ postgres_password.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -c
+        \"CREATE ROLE {{ temporal_db_user }} WITH LOGIN PASSWORD '{{ temporal_db_password.stdout }}';\""
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: role_check.rc != 0
+      changed_when: true
+      no_log: true
+
+    - name: 17. Update the Temporal role password (idempotent on re-deploy)
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ postgres_pod_name }} --
+        bash -c "PGPASSWORD='{{ postgres_password.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -c
+        \"ALTER ROLE {{ temporal_db_user }} WITH PASSWORD '{{ temporal_db_password.stdout }}';\""
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: role_check.rc == 0
+      changed_when: true
+      no_log: true
+
+    - name: 18. Check which Temporal databases already exist
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ postgres_pod_name }} --
+        bash -c "PGPASSWORD='{{ postgres_password.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -lqt" | cut -d \| -f 1 | grep -qw {{ item }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: db_checks
+      changed_when: false
+      ignore_errors: true
+      no_log: true
+      loop:
+        - "{{ temporal_db_name }}"
+        - "{{ temporal_vis_db_name }}"
+
+    - name: 19. Create the Temporal databases if missing
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ postgres_pod_name }} --
+        bash -c "PGPASSWORD='{{ postgres_password.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -c
+        \"CREATE DATABASE {{ item.item }} OWNER {{ temporal_db_user }};\""
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: item.rc != 0
+      changed_when: true
+      no_log: true
+      loop: "{{ db_checks.results }}"
+
+    - name: 20. Grant privileges on both databases and their public schemas
+      # PostgreSQL 15+ no longer grants CREATE on schema public to PUBLIC, so the
+      # explicit schema grant is required for the Temporal schema tool to work.
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ postgres_pod_name }} --
+        bash -c "PGPASSWORD='{{ postgres_password.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -c
+        \"GRANT ALL PRIVILEGES ON DATABASE {{ item }} TO {{ temporal_db_user }};\"
+        && PGPASSWORD='{{ postgres_password.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -d {{ item }} -c
+        \"GRANT ALL ON SCHEMA public TO {{ temporal_db_user }};\""
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      changed_when: true
+      no_log: true
+      loop:
+        - "{{ temporal_db_name }}"
+        - "{{ temporal_vis_db_name }}"
+
+    - name: 21. Display database bootstrap status
+      ansible.builtin.debug:
+        msg: |
+          PostgreSQL bootstrap complete (shared postgresql.{{ postgres_namespace }}):
+            Role:            {{ temporal_db_user }} ({{ 'created' if role_check.rc != 0 else 'existing (password rotated)' }})
+            History store:   {{ temporal_db_name }}
+            Visibility store: {{ temporal_vis_db_name }}
+          The chart's schema Job applies/updates the Temporal SQL schema on install.
+
+    # ============= PHASE 3: APPLY INGRESS EARLY =============
+    # Applied before Helm so routing exists even if the chart install times out.
+
+    - name: 22. Apply Temporal IngressRoutes (Web UI + HTTP API)
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ temporal_ingressroute_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    # ============= PHASE 4: HELM REPO + DEPLOY =============
+
+    - name: 23. Check existing Helm repositories
+      ansible.builtin.command: helm repo list
+      register: helm_repo_list
+      changed_when: false
+      ignore_errors: true
+
+    - name: 24. Add the Temporal Helm repository if needed
+      kubernetes.core.helm_repository:
+        name: "temporal"
+        repo_url: "{{ temporal_repo_url }}"
+      when: "'go.temporal.io/helm-charts' not in helm_repo_list.stdout"
+
+    - name: 25. Update Helm repositories
+      ansible.builtin.command: helm repo update temporal
+      changed_when: false
+
+    - name: 26. Deploy Temporal via Helm
+      # No --set of credentials: the chart reads the DB password from
+      # temporal/urbalurba-secrets (existingSecret in 086-temporal-config.yaml).
+      ansible.builtin.command: >
+        helm upgrade --install {{ temporal_release_name }} {{ temporal_chart }}
+        --version {{ temporal_chart_version }}
+        -f {{ temporal_config_file }}
+        --namespace {{ temporal_namespace }}
+        --timeout {{ installation_timeout }}s
+        --wait
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_helm_result
+      changed_when: true
+
+    - name: 27. Display Helm deployment result
+      ansible.builtin.debug:
+        msg: "Temporal Helm release installed/upgraded. Waiting for readiness..."
+
+    # ============= PHASE 5: WAIT FOR READINESS =============
+
+    - name: 28. Wait for every Temporal component to reach Ready
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ temporal_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/instance={{ temporal_release_name }}"
+          - "app.kubernetes.io/component={{ item }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: component_pods
+      until: >
+        component_pods.resources | length > 0 and
+        component_pods.resources[0].status.containerStatuses is defined and
+        component_pods.resources[0].status.containerStatuses | length > 0 and
+        component_pods.resources[0].status.containerStatuses[0].ready == true
+      retries: 30
+      delay: 10
+      loop:
+        - frontend
+        - history
+        - matching
+        - worker
+        - web
+
+    # ============= PHASE 6: HEALTH PROBES =============
+
+    - name: 29. Check the frontend HTTP API from inside the cluster
+      ansible.builtin.shell: |
+        kubectl run temporal-health-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ temporal_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" \
+          http://temporal-frontend.{{ temporal_namespace }}.svc.cluster.local:7243/api/v1/namespaces
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: frontend_health
+      retries: 12
+      delay: 10
+      until: "'HTTP_CODE:200' in frontend_health.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: 30. Check the Web UI health endpoint from inside the cluster
+      ansible.builtin.shell: |
+        kubectl run temporal-web-health-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ temporal_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" \
+          http://temporal-web.{{ temporal_namespace }}.svc.cluster.local:8080/healthz
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: web_health
+      retries: 12
+      delay: 10
+      until: "'HTTP_CODE:200' in web_health.stdout"
+      failed_when: false
+      changed_when: false
+
+    # ============= PHASE 7: STATUS =============
+
+    - name: 31. Get Temporal pods
+      ansible.builtin.command: kubectl get pods -n {{ temporal_namespace }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_pods_out
+      changed_when: false
+
+    - name: 32. Get Temporal services
+      ansible.builtin.command: kubectl get svc -n {{ temporal_namespace }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_svc_out
+      changed_when: false
+
+    - name: 33. Display final deployment status
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          Temporal Workflow Engine Deployment Status
+          ===============================================
+
+          {{ 'SUCCESS - Temporal deployed and ready' if ('HTTP_CODE:200' in frontend_health.stdout and 'HTTP_CODE:200' in web_health.stdout) else 'DEPLOYED - health checks pending; pods may still be starting' }}
+
+          Status:
+          - Frontend HTTP API: {{ 'Responding (HTTP 200)' if 'HTTP_CODE:200' in frontend_health.stdout else 'Not responding' }}
+          - Web UI:            {{ 'Responding (HTTP 200)' if 'HTTP_CODE:200' in web_health.stdout else 'Not responding' }}
+
+          Deployment details:
+          - Namespace:        {{ temporal_namespace }}
+          - Chart:            {{ temporal_chart }} @ {{ temporal_chart_version }}
+          - History store:    {{ temporal_db_name }} on postgresql.{{ postgres_namespace }}
+          - Visibility store: {{ temporal_vis_db_name }} on postgresql.{{ postgres_namespace }} (no Elasticsearch)
+
+          Temporal pods:
+          {{ temporal_pods_out.stdout }}
+
+          Temporal services:
+          {{ temporal_svc_out.stdout }}
+
+          Access instructions:
+          - Web UI (browser):   http://temporal.localhost
+          - HTTP API (browser): http://temporal-api.localhost/api/v1/namespaces
+          - gRPC (in cluster):  temporal-frontend.{{ temporal_namespace }}.svc.cluster.local:7233
+          - gRPC (from host):   ./uis expose temporal   then use localhost:37233
+          - CLI:                kubectl exec -n {{ temporal_namespace }} deploy/temporal-admintools -- temporal operator cluster health
+
+          Connecting a worker (any Temporal SDK):
+          - Address:   temporal-frontend.{{ temporal_namespace }}.svc.cluster.local:7233
+          - Namespace: default (created by this deployment, 3d retention)
+
+          Troubleshooting:
+          - Check pods:   kubectl get pods -n {{ temporal_namespace }}
+          - View logs:    kubectl logs -n {{ temporal_namespace }} -l app.kubernetes.io/component=frontend
+          - Schema Job:   kubectl get jobs -n {{ temporal_namespace }}
+          - Check routes: kubectl get ingressroute -n {{ temporal_namespace }} -l app=temporal
+          - Verify E2E:   ./uis verify temporal
+
+          TEMPORAL READY - DURABLE WORKFLOW ENGINE DEPLOYED
+          ===============================================

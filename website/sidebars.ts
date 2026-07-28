@@ -202,6 +202,7 @@ const sidebars: SidebarsConfig = {
             'services/integration/enonic',
             'services/integration/rabbitmq',
             'services/integration/gravitee',
+            'services/integration/temporal',
           ],
         },
       ],
