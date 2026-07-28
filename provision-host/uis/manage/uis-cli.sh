@@ -148,6 +148,9 @@ MinIO:
 OpenMetadata:
   openmetadata verify            Run E2E health checks on OpenMetadata
 
+Temporal:
+  temporal verify                Run E2E health checks on Temporal
+
 Testing:
   test-all                       Run full integration test (deploy+undeploy all services)
   test-all --dry-run             Show test plan without executing
@@ -2011,6 +2014,7 @@ cmd_verify() {
         echo "  minio           Run E2E health checks on MinIO object storage"
         echo "  nextcloud       Run E2E health checks on Nextcloud + OnlyOffice"
         echo "  openmetadata    Run E2E health checks on OpenMetadata"
+        echo "  temporal        Run E2E health checks on Temporal"
         exit "$EXIT_GENERAL_ERROR"
     fi
 
@@ -2039,6 +2043,9 @@ cmd_verify() {
         openmetadata)
             cmd_openmetadata_verify
             ;;
+        temporal)
+            cmd_temporal_verify
+            ;;
         *)
             log_error "Unknown verify target: $target"
             echo ""
@@ -2051,6 +2058,7 @@ cmd_verify() {
             echo "  minio           Run E2E health checks on MinIO object storage"
             echo "  nextcloud       Run E2E health checks on Nextcloud + OnlyOffice"
             echo "  openmetadata    Run E2E health checks on OpenMetadata"
+            echo "  temporal        Run E2E health checks on Temporal"
             exit "$EXIT_GENERAL_ERROR"
             ;;
     esac
@@ -2351,6 +2359,15 @@ cmd_openmetadata_verify() {
 cmd_minio_verify() {
     print_section "Verifying MinIO Deployment"
     ansible-playbook "$ANSIBLE_DIR/045-test-minio.yml"
+}
+
+# ============================================================
+# Temporal Commands
+# ============================================================
+
+cmd_temporal_verify() {
+    print_section "Verifying Temporal Deployment"
+    ansible-playbook "$ANSIBLE_DIR/086-test-temporal.yml"
 }
 
 # ============================================================
@@ -2694,6 +2711,22 @@ main() {
                     echo ""
                     echo "Commands:"
                     echo "  minio verify    Run E2E health checks on MinIO object storage"
+                    exit "$EXIT_GENERAL_ERROR"
+                    ;;
+            esac
+            ;;
+        temporal)
+            local subcmd="${1:-}"
+            shift 2>/dev/null || true
+            case "$subcmd" in
+                verify)
+                    cmd_temporal_verify
+                    ;;
+                *)
+                    log_error "Unknown temporal command: $subcmd"
+                    echo ""
+                    echo "Commands:"
+                    echo "  temporal verify    Run E2E health checks on Temporal"
                     exit "$EXIT_GENERAL_ERROR"
                     ;;
             esac

@@ -16,6 +16,7 @@ Complete list of services available in UIS compared to their cloud equivalents.
 | **Search Engine** | Azure AI Search | Elasticsearch | `./uis deploy elasticsearch` |
 | **Vector Database** | Azure AI Search | Qdrant | `./uis deploy qdrant` |
 | **Object Storage** | Azure Blob Storage, AWS S3 | MinIO | `./uis deploy minio` |
+| **Workflow Orchestration** | Azure Durable Functions, AWS Step Functions | Temporal | `./uis deploy temporal` |
 | **Authentication & SSO** | Azure AD, AWS IAM | Authentik | `./uis deploy authentik` |
 | **AI Chat Interface** | Azure OpenAI Service | OpenWebUI | `./uis deploy openwebui` |
 | **LLM Proxy & Router** | Azure OpenAI, AWS Bedrock | LiteLLM | `./uis deploy litellm` |

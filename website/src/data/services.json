@@ -366,6 +366,29 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "temporal",
+    "name": "Temporal",
+    "description": "Durable workflow orchestration engine",
+    "category": "INTEGRATION",
+    "tags": ["workflow", "orchestration", "durable-execution", "saga", "background-jobs", "postgresql"],
+    "abstract": "Durable execution engine that runs long-lived workflows reliably across crashes and restarts",
+    "logo": "temporal-logo.svg",
+    "website": "https://temporal.io"
+    ,"summary": "Temporal is an open-source durable execution platform. Workflows are written as ordinary code in Go, TypeScript, Python, Java, .NET or PHP; the Temporal cluster records every state transition so a workflow resumes exactly where it left off after a crash, a deploy, or a multi-day wait. UIS deploys the official Helm chart with the shared UIS PostgreSQL as both the history and the visibility store - no Elasticsearch and no Cassandra - plus the Temporal Web UI behind Traefik at temporal.localhost."
+    ,"docs": "/docs/services/integration/temporal"
+    ,"playbook": "086-setup-temporal.yml"
+    ,"priority": 55
+    ,"checkCommand": "kubectl get pods -n temporal -l app.kubernetes.io/component=frontend --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "086-remove-temporal.yml"
+    ,"requires": ["postgresql"]
+    ,"helmChart": "temporal/temporal"
+    ,"namespace": "temporal"
+    ,"image": "temporalio/server:1.31.2"
+    ,"exposePort": 37233
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "argocd",
     "name": "ArgoCD",
     "description": "GitOps continuous delivery for Kubernetes",

@@ -1,0 +1,190 @@
+---
+# File: manifests/086-temporal-config.yaml
+#
+# Description:
+# Helm values for the official Temporal chart (temporal/temporal). Temporal is a
+# durable workflow engine: application code registers Workflows and Activities with
+# the cluster, and the cluster guarantees they run to completion across process
+# restarts, crashes and redeploys.
+#
+# UIS shape — PostgreSQL only, no Elasticsearch, no Cassandra:
+# - Both datastores (history + visibility) are SQL on the SHARED UIS PostgreSQL
+#   (service `postgresql` in the `default` namespace). Temporal 1.20+ supports
+#   advanced visibility (list/search workflows) on PostgreSQL 12+, so Elasticsearch
+#   is not needed. This was proven in a live PoC before this service was added.
+# - The chart bundles no database of its own here: `createDatabase: false`, because
+#   the `temporal` role and the two databases are created by 086-setup-temporal.yml
+#   against the shared instance (same pattern as Gravitee, 090-setup-gravitee.yml).
+# - `manageSchema: true` lets the chart's pre-install/pre-upgrade schema Job run
+#   `temporal-sql-tool setup-schema` + `update-schema` for both databases.
+#
+# Credentials:
+# The database password is NEVER written into this file. The chart reads it from
+# the existing `urbalurba-secrets` Secret in the `temporal` namespace via
+# `existingSecret` / `secretKey` (see rules/secrets-management.md).
+#
+# Components deployed (all single-replica):
+#   temporal-frontend    gRPC API on 7233, HTTP API on 7243  <- clients connect here
+#   temporal-history     workflow history service
+#   temporal-matching    task queue matching service
+#   temporal-worker      internal system workers
+#   temporal-web         Web UI on 8080                      <- temporal.localhost
+#   temporal-admintools  tctl / temporal CLI pod (used by ./uis verify temporal)
+#
+# Usage:
+#   helm upgrade --install temporal temporal/temporal -f 086-temporal-config.yaml \
+#     --namespace temporal
+#
+# Dependencies:
+# - PostgreSQL deployed (./uis deploy postgresql)
+# - urbalurba-secrets in the `temporal` namespace with TEMPORAL_POSTGRES_PASSWORD
+# - 087-temporal-ingressroute.yaml for browser access to the Web UI
+
+server:
+  enabled: true
+  replicaCount: 1
+
+  # Prometheus scrape annotations are on by default and harmless without Prometheus.
+  metrics:
+    serviceMonitor:
+      enabled: false
+
+  config:
+    logLevel: "info"
+
+    persistence:
+      defaultStore: default
+      visibilityStore: visibility
+
+      # IMPORTANT: numHistoryShards CANNOT be changed after the first deploy without
+      # wiping the `temporal` database. 4 matches the temporalio/auto-setup default
+      # used by the PoC docker-compose and is the right size for a laptop cluster
+      # (the chart default of 512 exists for production clusters).
+      numHistoryShards: 4
+
+      datastores:
+        # --- Workflow history / mutable state -------------------------------
+        default:
+          sql:
+            pluginName: postgres12
+            connectAddr: "postgresql.default.svc.cluster.local:5432"
+            connectProtocol: "tcp"
+            databaseName: temporal
+            user: temporal
+            # Helm-only keys, stripped before rendering the server config:
+            existingSecret: urbalurba-secrets
+            secretKey: TEMPORAL_POSTGRES_PASSWORD
+            createDatabase: false   # 086-setup-temporal.yml creates it
+            manageSchema: true      # chart schema Job applies/updates the schema
+            maxConns: 20
+            maxIdleConns: 20
+            maxConnLifetime: "1h"
+
+        # --- Visibility (list/search workflows) on PostgreSQL, not Elasticsearch
+        visibility:
+          sql:
+            pluginName: postgres12
+            connectAddr: "postgresql.default.svc.cluster.local:5432"
+            connectProtocol: "tcp"
+            databaseName: temporal_visibility
+            user: temporal
+            existingSecret: urbalurba-secrets
+            secretKey: TEMPORAL_POSTGRES_PASSWORD
+            createDatabase: false
+            manageSchema: true
+            maxConns: 10
+            maxIdleConns: 10
+            maxConnLifetime: "1h"
+
+    namespaces:
+      # Create the `default` Temporal namespace so workers can connect straight
+      # after deploy without an extra `temporal operator namespace create`.
+      create: true
+      namespace:
+        - name: default
+          retention: 3d
+
+  frontend:
+    enabled: true
+    service:
+      type: ClusterIP
+      port: 7233
+      httpPort: 7243
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+
+  history:
+    enabled: true
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
+
+  matching:
+    enabled: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+
+  worker:
+    enabled: true
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+
+  # Not needed for a single-cluster local deployment.
+  internal-frontend:
+    enabled: false
+
+# Web UI — routed by Traefik through 087-temporal-ingressroute.yaml.
+web:
+  enabled: true
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# admintools ships the `temporal` and `tctl` CLIs. Kept enabled: it is the
+# supported way to talk to the cluster from inside Kubernetes and is what
+# 086-test-temporal.yml uses for its E2E checks.
+admintools:
+  enabled: true
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 256Mi
+
+# Schema setup/update runs as a Helm pre-install/pre-upgrade hook Job.
+schema:
+  useHelmHooks: true
+  backoffLimit: 20
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+
+# Backwards-compatibility shims for Temporal <= 1.29 images. The chart ships
+# server/admintools 1.31.x, so both shims are off.
+shims:
+  dockerize: false
+  elasticsearchTool: false

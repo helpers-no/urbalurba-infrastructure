@@ -1,0 +1,295 @@
+---
+# file: ansible/playbooks/086-remove-temporal.yml
+# Description:
+# Remove Temporal from the Kubernetes cluster.
+#
+#   Default mode (no extra-var), set by `./uis undeploy temporal`:
+#     - Uninstall the Helm release
+#     - Remove the Traefik IngressRoutes (Web UI + HTTP API)
+#     - Wait for pods to terminate
+#     KEEPS: the `temporal` and `temporal_visibility` databases in the shared
+#     PostgreSQL, the `temporal` role, and urbalurba-secrets.
+#     A subsequent ./uis deploy temporal re-attaches the same workflow history.
+#
+#   Purge mode (-e _purge=true, set by `./uis undeploy temporal --purge`):
+#     - Everything default mode does, plus:
+#     - DROP both databases and the `temporal` role - PERMANENTLY DELETES ALL
+#       WORKFLOW HISTORY AND VISIBILITY DATA
+#     - Delete the temporal namespace
+#     User-level confirmation is enforced by uis-cli.sh before this playbook runs.
+#
+# Note on where the data lives: Temporal has no PVC of its own in UIS. Its state
+# is entirely in the shared PostgreSQL, so "keep the data" here means "leave the
+# databases alone" rather than "leave a PVC alone".
+#
+# Prerequisites:
+# - Kubernetes cluster with Temporal deployed
+# - kubectl and Helm 3.x available
+#
+# Usage:
+# ansible-playbook playbooks/086-remove-temporal.yml -e target_host="rancher-desktop"
+# ansible-playbook playbooks/086-remove-temporal.yml -e _purge=true
+
+- name: Remove Temporal Workflow Engine from Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    temporal_namespace: "temporal"
+    postgres_namespace: "default"
+    temporal_release_name: "temporal"
+    removal_timeout: 300       # 5 minutes timeout for helm uninstall
+    cleanup_wait_timeout: 180  # 3 minutes timeout for pod termination
+    purge_mode: "{{ _purge | default(false) | bool }}"
+
+  tasks:
+    - name: 1. Display removal information
+      ansible.builtin.debug:
+        msg:
+          - "======================================"
+          - "Temporal Workflow Engine Removal"
+          - "File: ansible/playbooks/086-remove-temporal.yml"
+          - "======================================"
+          - "Target Host: {{ _target }}"
+          - "Namespace: {{ temporal_namespace }}"
+          - "Release: {{ temporal_release_name }}"
+          - "Mode: {{ 'PURGE - drops the Temporal databases and role' if purge_mode else 'default - keeps the Temporal databases and role' }}"
+
+    - name: 2. Check if the Temporal Helm release exists
+      ansible.builtin.shell: |
+        helm list -n {{ temporal_namespace }} -q | grep -x {{ temporal_release_name }} | wc -l
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_release_check
+      changed_when: false
+      failed_when: false
+
+    - name: 3. Display Temporal release status
+      ansible.builtin.debug:
+        msg: >
+          Temporal Helm release: {{ 'found - will be removed'
+          if (temporal_release_check.stdout | int) > 0
+          else 'not found - nothing to uninstall' }}
+
+    - name: 4. Get current Temporal resources before removal
+      ansible.builtin.shell: |
+        echo "=== PODS ==="
+        kubectl get pods -n {{ temporal_namespace }} --no-headers 2>/dev/null || echo "No Temporal pods found"
+        echo "=== SERVICES ==="
+        kubectl get svc -n {{ temporal_namespace }} --no-headers 2>/dev/null || echo "No Temporal services found"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_resources_before
+      changed_when: false
+      failed_when: false
+
+    - name: 5. Display resources before removal
+      ansible.builtin.debug:
+        msg: |
+          Current Temporal resources:
+          {{ temporal_resources_before.stdout }}
+
+    - name: 6. Remove Temporal IngressRoutes
+      kubernetes.core.k8s:
+        state: absent
+        api_version: traefik.io/v1alpha1
+        kind: IngressRoute
+        name: "{{ item }}"
+        namespace: "{{ temporal_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      loop:
+        - temporal-web
+        - temporal-api
+      failed_when: false
+
+    - name: 7. Remove the Temporal Helm release
+      ansible.builtin.shell: |
+        helm uninstall {{ temporal_release_name }} -n {{ temporal_namespace }} --timeout {{ removal_timeout }}s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_uninstall_result
+      when: (temporal_release_check.stdout | int) > 0
+      changed_when: true
+      failed_when: false
+
+    - name: 8. Remove leftover schema/namespace Jobs
+      # The chart's hook Jobs have ttlSecondsAfterFinished, but a failed hook Job
+      # can outlive the release and block a later re-install.
+      ansible.builtin.shell: |
+        kubectl delete jobs -n {{ temporal_namespace }} --all --ignore-not-found=true
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      changed_when: true
+      failed_when: false
+
+    - name: 9. Wait for Temporal pods to terminate
+      ansible.builtin.shell: |
+        timeout {{ cleanup_wait_timeout }} bash -c 'while kubectl get pods -n {{ temporal_namespace }} --no-headers 2>/dev/null | grep -q .; do echo "Waiting for pods to terminate..."; sleep 5; done'
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_pod_termination
+      changed_when: false
+      failed_when: false
+
+    - name: 10. Count remaining Temporal pods
+      ansible.builtin.shell: |
+        kubectl get pods -n {{ temporal_namespace }} --no-headers 2>/dev/null | wc -l
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_remaining_pods
+      changed_when: false
+      failed_when: false
+
+    - name: 11. Count remaining Temporal services
+      ansible.builtin.shell: |
+        kubectl get svc -n {{ temporal_namespace }} --no-headers 2>/dev/null | wc -l
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_remaining_services
+      changed_when: false
+      failed_when: false
+
+    # ============= PURGE ONLY: DESTROYS ALL WORKFLOW HISTORY =============
+
+    - name: 12. PURGE - read database identifiers from temporal/urbalurba-secrets
+      ansible.builtin.shell: |
+        echo "user=$(kubectl get secret urbalurba-secrets -n {{ temporal_namespace }} -o jsonpath='{.data.TEMPORAL_POSTGRES_USER}' 2>/dev/null | base64 -d)"
+        echo "db=$(kubectl get secret urbalurba-secrets -n {{ temporal_namespace }} -o jsonpath='{.data.TEMPORAL_POSTGRES_DATABASE}' 2>/dev/null | base64 -d)"
+        echo "visdb=$(kubectl get secret urbalurba-secrets -n {{ temporal_namespace }} -o jsonpath='{.data.TEMPORAL_POSTGRES_VISIBILITY_DATABASE}' 2>/dev/null | base64 -d)"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: purge_db_meta
+      when: purge_mode
+      changed_when: false
+      failed_when: false
+
+    - name: 13. PURGE - parse database identifiers (fall back to the shipped defaults)
+      ansible.builtin.set_fact:
+        purge_db_user: "{{ (purge_db_meta.stdout_lines | select('match', '^user=') | first | default('user=temporal')).split('=', 1)[1] | default('temporal', true) }}"
+        purge_db_name: "{{ (purge_db_meta.stdout_lines | select('match', '^db=') | first | default('db=temporal')).split('=', 1)[1] | default('temporal', true) }}"
+        purge_vis_db_name: "{{ (purge_db_meta.stdout_lines | select('match', '^visdb=') | first | default('visdb=temporal_visibility')).split('=', 1)[1] | default('temporal_visibility', true) }}"
+      when: purge_mode
+
+    - name: 14. PURGE - get PostgreSQL pod name
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        kind: Pod
+        namespace: "{{ postgres_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/name=postgresql
+      register: purge_postgres_pods
+      when: purge_mode
+      failed_when: false
+
+    - name: 15. PURGE - read postgres superuser password
+      ansible.builtin.shell: >-
+        kubectl get secret urbalurba-secrets -n {{ postgres_namespace }}
+        -o jsonpath='{.data.PGPASSWORD}' | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: purge_postgres_password
+      when: purge_mode and (purge_postgres_pods.resources | default([]) | length) > 0
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: 16. PURGE - drop both Temporal databases and the role
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ purge_postgres_pods.resources[0].metadata.name }} --
+        bash -c "PGPASSWORD='{{ purge_postgres_password.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -c
+        \"DROP DATABASE IF EXISTS {{ purge_db_name }};\"
+        && PGPASSWORD='{{ purge_postgres_password.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -c
+        \"DROP DATABASE IF EXISTS {{ purge_vis_db_name }};\"
+        && PGPASSWORD='{{ purge_postgres_password.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -c
+        \"DROP ROLE IF EXISTS {{ purge_db_user }};\""
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: purge_db_result
+      when: purge_mode and (purge_postgres_pods.resources | default([]) | length) > 0 and purge_postgres_password.stdout | default('') | length > 0
+      changed_when: true
+      failed_when: false
+      no_log: true
+
+    - name: 17. PURGE - delete the temporal namespace (removes urbalurba-secrets too)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ temporal_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      when: purge_mode
+      failed_when: false
+
+    # ============= STATUS =============
+
+    - name: 18. Check remaining Temporal databases
+      ansible.builtin.shell: |
+        POD=$(kubectl get pods -n {{ postgres_namespace }} -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        PW=$(kubectl get secret urbalurba-secrets -n {{ postgres_namespace }} -o jsonpath='{.data.PGPASSWORD}' 2>/dev/null | base64 -d)
+        [ -z "$POD" ] && exit 0
+        kubectl exec -n {{ postgres_namespace }} "$POD" -- \
+          bash -c "PGPASSWORD='$PW' psql -h postgresql.{{ postgres_namespace }} -U postgres -lqt" \
+          | cut -d '|' -f 1 | grep -E '^\s*temporal' || true
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: temporal_preserved_dbs
+      changed_when: false
+      failed_when: false
+
+    - name: 19. Set removal status facts
+      ansible.builtin.set_fact:
+        helm_removed: "{{ (temporal_release_check.stdout | int) == 0 or (temporal_uninstall_result.rc is defined and temporal_uninstall_result.rc == 0) }}"
+        pods_terminated: "{{ (temporal_remaining_pods.stdout | int) == 0 }}"
+        services_removed: "{{ (temporal_remaining_services.stdout | int) == 0 }}"
+        dbs_preserved: "{{ temporal_preserved_dbs.stdout | trim | length > 0 }}"
+
+    - name: 20. Display final removal status
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          Temporal Workflow Engine Removal Status
+          ===============================================
+
+          Removal status:
+          - Helm release:  {{ 'Removed' if helm_removed else 'Still present' }}
+          - Pods:          {{ 'All terminated' if pods_terminated else 'Still running' }}
+          - Services:      {{ 'Removed' if services_removed else 'Still present' }}
+          - IngressRoutes: Removed (temporal-web, temporal-api)
+
+          Data (shared postgresql.{{ postgres_namespace }}):
+          {% if purge_mode %}
+          - Databases: DROPPED - all workflow history and visibility data is gone permanently
+          - Role:      DROPPED
+          - Namespace: {{ temporal_namespace }} deleted (urbalurba-secrets removed with it)
+          {% else %}
+          - Databases: {{ 'Preserved - workflow history survives' if dbs_preserved else 'Not found' }}
+          - Role + secrets: preserved (TEMPORAL_POSTGRES_* in temporal/urbalurba-secrets)
+          {% endif %}
+
+          {% if dbs_preserved and not purge_mode %}
+          Preserved databases:
+          {{ temporal_preserved_dbs.stdout }}
+          {% endif %}
+
+          Re-deployment:
+          - ./uis deploy temporal
+          {% if not purge_mode %}
+          - Existing workflow history is re-attached from the preserved databases
+          {% endif %}
+
+          {% if not purge_mode %}
+          Complete cleanup (DESTRUCTIVE):
+          - ./uis undeploy temporal --purge
+          - WARNING: this permanently drops the temporal and temporal_visibility databases
+          {% endif %}
+
+          Verification commands:
+          - kubectl get all -n {{ temporal_namespace }}
+          - helm list -n {{ temporal_namespace }}
+
+          {{ 'TEMPORAL REMOVED' if helm_removed and pods_terminated and services_removed else 'CHECK REMOVAL STATUS' }}
+          ===============================================

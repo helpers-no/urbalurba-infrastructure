@@ -1,0 +1,316 @@
+---
+# file: ansible/playbooks/086-test-temporal.yml
+# Description:
+# End-to-end tests for the Temporal deployment.
+# Validates cluster health, both PostgreSQL datastores, the Web UI and Traefik routing.
+#
+# Tests (all CRITICAL):
+#   A. Cluster health - `temporal operator cluster health` must report SERVING
+#   B. Datastores     - the rendered server config must use postgres12 for BOTH
+#                       stores and must not mention elasticsearch/cassandra
+#   C. HTTP API       - frontend :7243 must list the `default` namespace
+#   D. Round-trip     - start a workflow (history store), find it again with a
+#                       visibility query (visibility store on PostgreSQL), terminate it
+#   E. Web UI         - :8080/healthz must return 200
+#   F. Routing        - temporal.<domain> and temporal-api.<domain> must resolve
+#                       through Traefik
+#
+# Usage:
+# ansible-playbook ansible/playbooks/086-test-temporal.yml
+
+- name: End-to-End Temporal Tests
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    temporal_namespace: "temporal"
+    temporal_frontend_service: "temporal-frontend.temporal.svc.cluster.local"
+    temporal_web_service: "temporal-web.temporal.svc.cluster.local"
+    temporal_workflow_id: "uis-verify-temporal"
+
+  tasks:
+    - name: "0. Display test suite initiation"
+      ansible.builtin.debug:
+        msg: |
+          End-to-End Temporal Tests
+          ===============================================
+          Running 6 test groups (all CRITICAL)
+
+    - name: "0.1. Get Traefik ClusterIP for in-cluster hostname routing"
+      ansible.builtin.command: kubectl get svc traefik -n kube-system -o jsonpath={.spec.clusterIP}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: traefik_ip_result
+      changed_when: false
+
+    - name: "0.2. Store Traefik IP"
+      ansible.builtin.set_fact:
+        traefik_ip: "{{ traefik_ip_result.stdout }}"
+
+    # ===== Test A: Cluster health (CRITICAL) =====
+    - name: "A1. Ask the admintools pod for cluster health"
+      ansible.builtin.shell: |
+        kubectl exec -n {{ temporal_namespace }} deploy/temporal-admintools -- \
+          temporal operator cluster health
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: health_test
+      retries: 10
+      delay: 10
+      until: "'SERVING' in health_test.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: "A2. Verify the frontend reports SERVING"
+      ansible.builtin.assert:
+        that:
+          - "'SERVING' in health_test.stdout"
+        fail_msg: |
+          CRITICAL: Temporal cluster health check failed!
+          Expected `temporal operator cluster health` to report SERVING.
+          Got: {{ health_test.stdout[:500] | default('No output') }}
+
+          Troubleshooting:
+          - Check pods: kubectl get pods -n {{ temporal_namespace }}
+          - Check logs: kubectl logs -n {{ temporal_namespace }} -l app.kubernetes.io/component=frontend --tail=50
+        success_msg: "Test A PASSED: Temporal frontend is SERVING"
+
+    - name: "A3. Display cluster health test success"
+      ansible.builtin.debug:
+        msg: "Test A: Cluster health - PASSED (CRITICAL)"
+
+    # ===== Test B: PostgreSQL-only persistence (CRITICAL) =====
+    - name: "B1. Read the rendered server persistence config"
+      ansible.builtin.shell: |
+        kubectl get configmap temporal-config -n {{ temporal_namespace }} \
+          -o jsonpath='{.data.config_template\.yaml}'
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: persistence_config
+      changed_when: false
+      failed_when: false
+
+    - name: "B2. Verify both stores are PostgreSQL and no Elasticsearch/Cassandra is configured"
+      ansible.builtin.assert:
+        that:
+          - "'databaseName: temporal' in persistence_config.stdout"
+          - "'databaseName: temporal_visibility' in persistence_config.stdout"
+          - "persistence_config.stdout | regex_findall('pluginName: postgres12') | length == 2"
+          - "'elasticsearch' not in persistence_config.stdout"
+          - "'cassandra' not in persistence_config.stdout"
+        fail_msg: |
+          CRITICAL: Temporal is not running in the PostgreSQL-only shape UIS expects!
+          Both the default (history) and visibility stores must use pluginName postgres12
+          against the shared postgresql service, with no Elasticsearch or Cassandra.
+
+          Rendered persistence config:
+          {{ persistence_config.stdout[:1000] | default('No output') }}
+        success_msg: "Test B PASSED: history + visibility both on PostgreSQL, no Elasticsearch"
+
+    - name: "B3. Display datastore test success"
+      ansible.builtin.debug:
+        msg: "Test B: PostgreSQL-only datastores - PASSED (CRITICAL)"
+
+    # ===== Test C: Frontend HTTP API (CRITICAL) =====
+    - name: "C1. List namespaces over the frontend HTTP API (port 7243)"
+      ansible.builtin.shell: |
+        kubectl run temporal-test-api-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ temporal_namespace }} -- \
+          curl -s http://{{ temporal_frontend_service }}:7243/api/v1/namespaces
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: api_test
+      retries: 5
+      delay: 10
+      until: "'default' in api_test.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: "C2. Verify the default namespace is present"
+      ansible.builtin.assert:
+        that:
+          - "'default' in api_test.stdout"
+        fail_msg: |
+          CRITICAL: Temporal HTTP API did not return the `default` namespace!
+          Expected /api/v1/namespaces to include it (created at deploy time).
+          Got: {{ api_test.stdout[:500] | default('No output') }}
+
+          Troubleshooting:
+          - Namespace job: kubectl get jobs -n {{ temporal_namespace }}
+          - Create it manually:
+              kubectl exec -n {{ temporal_namespace }} deploy/temporal-admintools -- \
+                temporal operator namespace create -n default --retention 3d
+        success_msg: "Test C PASSED: HTTP API lists the default namespace"
+
+    - name: "C3. Display HTTP API test success"
+      ansible.builtin.debug:
+        msg: "Test C: Frontend HTTP API - PASSED (CRITICAL)"
+
+    # ===== Test D: Workflow round-trip through both stores (CRITICAL) =====
+    # Starting a workflow writes to the history store; finding it again with a
+    # visibility query reads from the visibility store. No worker is needed - the
+    # execution simply stays Running until we terminate it.
+    - name: "D0. Clean up any workflow left behind by an earlier verify run"
+      ansible.builtin.shell: |
+        kubectl exec -n {{ temporal_namespace }} deploy/temporal-admintools -- \
+          temporal workflow terminate --workflow-id {{ temporal_workflow_id }} --reason "uis-verify cleanup" || true
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      changed_when: false
+      failed_when: false
+
+    - name: "D1. Start a workflow (writes to the history store)"
+      ansible.builtin.shell: |
+        kubectl exec -n {{ temporal_namespace }} deploy/temporal-admintools -- \
+          temporal workflow start \
+            --task-queue uis-verify-queue \
+            --type UisVerifyWorkflow \
+            --workflow-id {{ temporal_workflow_id }} \
+            --execution-timeout 120s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: workflow_start
+      retries: 3
+      delay: 10
+      until: workflow_start.rc == 0
+      failed_when: false
+      changed_when: false
+
+    - name: "D2. Query the visibility store for that workflow"
+      ansible.builtin.shell: |
+        kubectl exec -n {{ temporal_namespace }} deploy/temporal-admintools -- \
+          temporal workflow list --query "WorkflowId = '{{ temporal_workflow_id }}'"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: workflow_list
+      retries: 6
+      delay: 5
+      until: temporal_workflow_id in workflow_list.stdout
+      failed_when: false
+      changed_when: false
+
+    - name: "D3. Verify the workflow round-tripped through both stores"
+      ansible.builtin.assert:
+        that:
+          - workflow_start.rc == 0
+          - temporal_workflow_id in workflow_list.stdout
+        fail_msg: |
+          CRITICAL: Temporal workflow round-trip failed!
+          Expected to start workflow '{{ temporal_workflow_id }}' (history store) and
+          find it again with a visibility query (visibility store on PostgreSQL).
+
+          start rc: {{ workflow_start.rc | default('n/a') }}
+          start out: {{ workflow_start.stdout[:300] | default('') }}{{ workflow_start.stderr[:300] | default('') }}
+          list out:  {{ workflow_list.stdout[:500] | default('No output') }}
+
+          A failing visibility query with a working start usually means the
+          temporal_visibility schema was not applied. Check the schema job:
+            kubectl get jobs -n {{ temporal_namespace }}
+        success_msg: "Test D PASSED: workflow written to history and found via visibility query"
+
+    - name: "D4. Terminate the verification workflow"
+      ansible.builtin.shell: |
+        kubectl exec -n {{ temporal_namespace }} deploy/temporal-admintools -- \
+          temporal workflow terminate --workflow-id {{ temporal_workflow_id }} --reason "uis-verify complete"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      changed_when: false
+      failed_when: false
+
+    - name: "D5. Display round-trip test success"
+      ansible.builtin.debug:
+        msg: "Test D: Workflow round-trip (history + visibility) - PASSED (CRITICAL)"
+
+    # ===== Test E: Web UI (CRITICAL) =====
+    - name: "E1. Request the Web UI health endpoint (port 8080)"
+      ansible.builtin.shell: |
+        kubectl run temporal-test-web-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ temporal_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" http://{{ temporal_web_service }}:8080/healthz
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: web_test
+      retries: 5
+      delay: 10
+      until: "'HTTP_CODE:200' in web_test.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: "E2. Verify the Web UI returns 200"
+      ansible.builtin.assert:
+        that:
+          - "'HTTP_CODE:200' in web_test.stdout"
+        fail_msg: |
+          CRITICAL: Temporal Web UI is not responding!
+          Expected HTTP 200 from :8080/healthz.
+          Got: {{ web_test.stdout[:500] | default('No output') }}
+
+          Troubleshooting:
+          - Check the web service: kubectl get svc temporal-web -n {{ temporal_namespace }}
+          - Check the web logs:    kubectl logs -n {{ temporal_namespace }} -l app.kubernetes.io/component=web --tail=50
+        success_msg: "Test E PASSED: Temporal Web UI responding"
+
+    - name: "E3. Display Web UI test success"
+      ansible.builtin.debug:
+        msg: "Test E: Web UI reachable - PASSED (CRITICAL)"
+
+    # ===== Test F: Traefik routing (CRITICAL) =====
+    - name: "F1. Reach the Web UI through Traefik (Host: temporal.localhost)"
+      ansible.builtin.shell: |
+        kubectl run temporal-test-route-ui-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ temporal_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" -H "Host: temporal.localhost" http://{{ traefik_ip }}/
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: route_ui_test
+      retries: 5
+      delay: 10
+      until: "'HTTP_CODE:200' in route_ui_test.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: "F2. Reach the HTTP API through Traefik (Host: temporal-api.localhost)"
+      ansible.builtin.shell: |
+        kubectl run temporal-test-route-api-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ temporal_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" -H "Host: temporal-api.localhost" http://{{ traefik_ip }}/api/v1/namespaces
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: route_api_test
+      retries: 5
+      delay: 10
+      until: "'HTTP_CODE:200' in route_api_test.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: "F3. Verify both IngressRoutes resolve"
+      ansible.builtin.assert:
+        that:
+          - "'HTTP_CODE:200' in route_ui_test.stdout"
+          - "'HTTP_CODE:200' in route_api_test.stdout"
+        fail_msg: |
+          CRITICAL: Temporal Traefik routing failed!
+          temporal.localhost     -> {{ route_ui_test.stdout | default('No output') }}
+          temporal-api.localhost -> {{ route_api_test.stdout | default('No output') }}
+
+          Troubleshooting:
+          - Check routes: kubectl get ingressroute -n {{ temporal_namespace }} -l app=temporal
+          - Re-apply:     kubectl apply -f /mnt/urbalurbadisk/manifests/087-temporal-ingressroute.yaml
+        success_msg: "Test F PASSED: both Temporal IngressRoutes resolve through Traefik"
+
+    - name: "F4. Display routing test success"
+      ansible.builtin.debug:
+        msg: "Test F: Traefik routing - PASSED (CRITICAL)"
+
+    # ===== Summary =====
+    - name: "SUMMARY - Display all test results"
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          Temporal E2E Test Results
+          ===============================================
+          A. Cluster health (SERVING):                    PASS
+          B. PostgreSQL-only datastores (no ES):          PASS
+          C. Frontend HTTP API lists `default` namespace: PASS
+          D. Workflow round-trip (history + visibility):  PASS
+          E. Web UI /healthz:                             PASS
+          F. Traefik routing (temporal.* / temporal-api.*): PASS
+
+          ALL TESTS PASSED - Temporal is healthy
+          ===============================================

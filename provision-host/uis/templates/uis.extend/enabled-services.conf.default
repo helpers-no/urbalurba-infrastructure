@@ -23,5 +23,9 @@ nginx
 # === Storage ===
 # minio
 
+# === Integration ===
+# rabbitmq
+# temporal
+
 # === Applications ===
 # nextcloud

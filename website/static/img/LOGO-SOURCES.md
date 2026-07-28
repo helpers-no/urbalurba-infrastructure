@@ -25,7 +25,7 @@ Service logos sourced from official project websites and icon repositories. SVG 
 
 **Actual Sources Used:**
 - **CNCF Artwork**: prometheus, argocd, otel-collector
-- **Simple Icons**: grafana, postgresql, mysql, mongodb, redis, rabbitmq, elasticsearch, nginx, spark, jupyterhub, cloudflare, tailscale, traefik, ollama, minio
+- **Simple Icons**: grafana, postgresql, mysql, mongodb, redis, rabbitmq, elasticsearch, nginx, spark, jupyterhub, cloudflare, tailscale, traefik, ollama, minio, temporal
 - **Official GitHub**: authentik, litellm, qdrant, loki (PNG), openwebui (PNG), pgadmin (PNG), unity-catalog (PNG)
 - **Created (Heroicons style)**: gravitee, redisinsight, tempo, tika
 
@@ -63,6 +63,11 @@ Service logos sourced from official project websites and icon repositories. SVG 
 | Logo ID | Service | Source | License |
 |---------|---------|--------|---------|
 | `gravitee-logo` | Gravitee | [gravitee.io](https://www.gravitee.io/) | Gravitee |
+
+### Workflow Orchestration
+| Logo ID | Service | Source | License |
+|---------|---------|--------|---------|
+| `temporal-logo` | Temporal | [temporal.io](https://temporal.io/) via [Simple Icons](https://simpleicons.org/) (brand black #000000) | Temporal (mark); SVG CC0-1.0 |
 
 ### Management Tools
 | Logo ID | Service | Source | License |
@@ -110,7 +115,7 @@ Service logos sourced from official project websites and icon repositories. SVG 
 |---------|---------|--------|---------|
 | `authentik-logo` | Authentik | [goauthentik.io](https://goauthentik.io/) | MIT |
 
-**Total: 28 service logos**
+**Total: 29 service logos**
 
 ## Stack Logos
 

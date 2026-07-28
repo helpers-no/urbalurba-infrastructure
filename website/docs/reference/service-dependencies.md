@@ -16,6 +16,7 @@ graph LR
     postgresql --> litellm
     postgresql --> unity-catalog
     postgresql --> pgadmin
+    postgresql --> temporal
 
     redis --> authentik
     redis --> redisinsight
@@ -45,6 +46,7 @@ graph LR
 | litellm | AI | postgresql | `./uis deploy litellm` |
 | unity-catalog | Analytics | postgresql | `./uis deploy unity-catalog` |
 | pgadmin | Management | postgresql | `./uis deploy pgadmin` |
+| temporal | Integration | postgresql | `./uis deploy temporal` |
 | redisinsight | Management | redis | `./uis deploy redisinsight` |
 | cloudflare-tunnel | Networking | nginx | `./uis deploy cloudflare-tunnel` |
 
@@ -78,7 +80,7 @@ These can be deployed in any order:
 
 | Service | Required by |
 |---------|------------|
-| **postgresql** | authentik, openwebui, litellm, unity-catalog, pgadmin |
+| **postgresql** | authentik, openwebui, litellm, unity-catalog, pgadmin, temporal |
 | **redis** | authentik, redisinsight |
 | **nginx** | tailscale-tunnel, cloudflare-tunnel |
 | **prometheus** | otel-collector, grafana |
@@ -129,6 +131,7 @@ For a full deployment, this order respects all dependencies:
 ./uis deploy qdrant
 ./uis deploy rabbitmq
 ./uis deploy gravitee
+./uis deploy temporal
 ```
 
 Or use stacks to deploy groups:
