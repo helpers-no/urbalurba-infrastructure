@@ -252,6 +252,108 @@
       ansible.builtin.debug:
         var: litellm_service.stdout_lines
 
+    # ---- schema verification & repair -------------------------------------
+    # The chart's migration Job reports Completed even when prisma fails with
+    # P1000, so a fresh install can end with an empty database while every
+    # other check passes. Verify the schema really exists; repair it if not;
+    # fail loudly rather than printing SUCCESS over a broken install.
+    - name: 20a. Read LiteLLM DB password from the ai secret
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        api_version: v1
+        kind: Secret
+        namespace: "{{ ai_namespace }}"
+        name: urbalurba-secrets
+      register: litellm_ai_secret
+      no_log: true
+
+    - name: 20b. Count tables in the litellm schema
+      ansible.builtin.shell: |
+        kubectl exec -n default deploy/postgresql -c postgresql -- \
+          env PGPASSWORD="$PGPW" psql -h postgresql.default.svc.cluster.local \
+          -U litellm -d litellm -tAc \
+          "select count(*) from information_schema.tables where table_schema='public'"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+        PGPW: "{{ litellm_ai_secret.resources[0].data.LITELLM_POSTGRESQL__PASSWORD | b64decode }}"
+      register: litellm_table_count
+      changed_when: false
+      failed_when: false
+
+    - name: 20c. Display schema state
+      ansible.builtin.debug:
+        msg: "LiteLLM schema tables found: {{ litellm_table_count.stdout | default('0') | trim }}"
+
+    - name: 20d. Repair schema when migrations did not apply
+      ansible.builtin.shell: |
+        POD=$(kubectl get pod -n {{ ai_namespace }} -l app.kubernetes.io/name=litellm -o name | head -1)
+        SCHEMA=$(kubectl exec -n {{ ai_namespace }} "$POD" -- sh -c \
+          'find / -name schema.prisma -path "*litellm_proxy_extras*" 2>/dev/null | head -1' | tr -d '\r')
+        echo "repairing with schema: $SCHEMA"
+        kubectl exec -n {{ ai_namespace }} "$POD" -- prisma migrate deploy --schema "$SCHEMA"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: litellm_schema_repair
+      when: (litellm_table_count.stdout | default('0') | trim | int) < 50
+
+    - name: 20e. Re-count tables after repair
+      ansible.builtin.shell: |
+        kubectl exec -n default deploy/postgresql -c postgresql -- \
+          env PGPASSWORD="$PGPW" psql -h postgresql.default.svc.cluster.local \
+          -U litellm -d litellm -tAc \
+          "select count(*) from information_schema.tables where table_schema='public'"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+        PGPW: "{{ litellm_ai_secret.resources[0].data.LITELLM_POSTGRESQL__PASSWORD | b64decode }}"
+      register: litellm_table_count_after
+      changed_when: false
+      failed_when: false
+      when: litellm_schema_repair.changed | default(false)
+
+    - name: 20f. Restart LiteLLM so it picks up the repaired schema
+      ansible.builtin.command: >
+        kubectl rollout restart deployment/litellm -n {{ ai_namespace }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: litellm_schema_repair.changed | default(false)
+
+    # Without this the playbook returns while the new pod is still starting,
+    # so anything that immediately queries /v1/models gets an empty list.
+    - name: 20f2. Wait for the restarted deployment to become ready
+      ansible.builtin.command: >
+        kubectl rollout status deployment/litellm -n {{ ai_namespace }} --timeout=240s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: litellm_rollout_wait
+      changed_when: false
+      when: litellm_schema_repair.changed | default(false)
+
+    - name: 20f3. Wait for the API to actually answer
+      ansible.builtin.shell: |
+        kubectl run apiready-$RANDOM -n {{ ai_namespace }} --rm -i --restart=Never \
+          --image=curlimages/curl:latest --quiet -- \
+          curl -s -o /dev/null -w '%{http_code}' -m 10 \
+          http://litellm.{{ ai_namespace }}.svc.cluster.local:4000/v1/models </dev/null
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: litellm_api_ready
+      until: litellm_api_ready.stdout is search('200|401')
+      retries: 20
+      delay: 6
+      changed_when: false
+      when: litellm_schema_repair.changed | default(false)
+
+    - name: 20g. FAIL if the database schema is still missing
+      ansible.builtin.fail:
+        msg: >-
+          LiteLLM database schema was not created. Tables found:
+          {{ (litellm_table_count_after.stdout | default(litellm_table_count.stdout) | default('0')) | trim }}.
+          The proxy will appear to work (models come from the ConfigMap) but
+          virtual keys and spend tracking will fail silently.
+          Check: kubectl logs -n {{ ai_namespace }} -l app.kubernetes.io/name=litellm | grep P1000
+      when: >-
+        ((litellm_table_count_after.stdout | default(litellm_table_count.stdout) | default('0')) | trim | int) < 50
+
     - name: 21. Display final status
       ansible.builtin.debug:
         msg:
