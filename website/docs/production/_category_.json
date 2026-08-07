@@ -1,0 +1,8 @@
+{
+  "label": "Production",
+  "position": 5,
+  "link": {
+    "type": "doc",
+    "id": "production/index"
+  }
+}
