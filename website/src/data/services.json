@@ -657,6 +657,26 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "uptime-kuma",
+    "name": "Uptime Kuma",
+    "description": "External availability watchdog - deploy OUTSIDE the cluster it monitors",
+    "category": "OBSERVABILITY",
+    "tags": ["monitoring", "uptime", "availability", "watchdog", "heartbeat", "alerting", "status-page"],
+    "abstract": "Self-hosted uptime monitoring with HTTP, TCP, ping and push-heartbeat checks, and ~90 notification channels",
+    "logo": "uptime-kuma-logo.svg",
+    "website": "https://uptime.kuma.pet"
+    ,"summary": "Uptime Kuma answers is it up, and did the job run? from outside the platform. It complements rather than replaces an in-cluster metrics stack: Prometheus and Grafana explain why something is behaving badly, but they die with the cluster they run in. Uptime Kuma also provides push/heartbeat monitors, which detect the absence of expected work - a stalled pipeline or a backup that silently stopped - that metric-based alerting handles poorly. Deploy it on a host that is not part of the platform it watches."
+    ,"docs": "/docs/services/observability/uptime-kuma"
+    ,"playbook": "230-setup-uptime-kuma.yml"
+    ,"priority": 30
+    ,"checkCommand": "kubectl get pods -n monitoring -l app=uptime-kuma --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "230-remove-uptime-kuma.yml"
+    ,"namespace": "monitoring"
+    ,"image": "louislam/uptime-kuma:2.5.0"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "minio",
     "name": "MinIO",
     "description": "S3-compatible object storage",
