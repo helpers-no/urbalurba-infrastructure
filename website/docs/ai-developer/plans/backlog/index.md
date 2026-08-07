@@ -25,6 +25,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [INVESTIGATE: Provision-Host Tools and Provider Authentication](INVESTIGATE-system-provision-host-tools-and-auth.md) | — | 2026-08-07 |
 | [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-08-07 |
 | [Investigate: Observability — the stack deploys, but the signals don't arrive](INVESTIGATE-system-observability.md) | Make a UIS deployment actually observable. The observability stack | 2026-08-07 |
+| [Investigate: should a service bring its own availability probe, and can Uptime Kuma accept one?](INVESTIGATE-system-monitor-definitions-with-services.md) | Decide how the external watchdog's monitors get created and stay in | 2026-08-07 |
 | [Investigate: migrate `hosts/*` to `platforms/*` (or formally retire)](INVESTIGATE-system-migrate-hosts-to-platforms.md) | — | 2026-08-07 |
 | [Investigate: Backup and scheduling — UIS deploys stateful services it cannot back up](INVESTIGATE-system-backup-and-scheduling.md) | Give UIS (a) a backup capability for the stateful services it deploys, | 2026-08-07 |
 | [Investigate: an external watchdog — does Uptime Kuma overlap the observability stack?](INVESTIGATE-service-uptime-kuma.md) | Decide whether UIS needs an availability watchdog that runs *outside* | 2026-08-07 |
