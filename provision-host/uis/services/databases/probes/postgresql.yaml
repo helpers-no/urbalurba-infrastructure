@@ -1,0 +1,18 @@
+# Availability probe shipped with the postgresql service.
+#
+# Deliberately probes the in-cluster Service rather than a database host.
+#
+# WHY THAT MATTERS: an installation may run PostgreSQL outside the cluster and
+# expose it through a shim Service (see the production guide, "components beside
+# the cluster"). Probing the Service tests the whole path applications use -
+# shim, network, and the database itself. Probing the database host directly
+# would stay green while the path applications depend on was broken.
+#
+# It also means externalised state needs no special handling here: UIS sees an
+# ordinary Service either way.
+probes:
+  - id: reachable
+    type: tcp
+    port_from: service          # take the port from the k8s Service
+    interval: 60
+    maxretries: 2
