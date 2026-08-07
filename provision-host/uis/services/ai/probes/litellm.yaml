@@ -1,0 +1,20 @@
+# Availability probe shipped with the litellm service.
+#
+# Contains only what is true of EVERY LiteLLM install. No hostnames: the
+# endpoint is discovered from the Service and Ingress that `uis deploy` created.
+# No secret values: `auth` names a key in urbalurba-secrets.
+probes:
+  - id: gateway
+    type: http
+    path: /v1/models
+    auth: bearer:LITELLM_PROXY_MASTER_KEY
+
+    # ⚠️ KEYWORD, NOT JUST A STATUS CODE.
+    # LiteLLM serves its model list from a ConfigMap, not from its database, so
+    # it answers 200 while the database is dead and virtual keys silently fail.
+    # Observed on the reference deployment: HTTP 200 for hours over an empty
+    # schema. Matching a model name proves the model list actually loaded.
+    keyword_from: model_list_first_entry
+
+    interval: 60
+    maxretries: 2
