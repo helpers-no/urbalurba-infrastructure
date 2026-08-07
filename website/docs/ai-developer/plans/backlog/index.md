@@ -9,6 +9,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Ship an availability probe with every service](PLAN-system-observability-006-service-probes.md) | `uis deploy <service>` results in that service being monitored by the | 2026-08-07 |
 | [Make the watchdog able to wake someone — and watch itself](PLAN-service-uptime-kuma-003-alerting.md) | An alert reaches a human away from home, and the watchdog's own death | 2026-08-07 |
 | [Define what the watchdog watches](PLAN-service-uptime-kuma-002-monitors.md) | Every incident from the investigation's F1 table would be caught, and | 2026-08-07 |
 | [Fix: default LiteLLM config only works on Docker Desktop](PLAN-service-litellm-004-config-portability.md) | A first-time `uis deploy litellm` should produce a usable model list on | 2026-08-07 |
