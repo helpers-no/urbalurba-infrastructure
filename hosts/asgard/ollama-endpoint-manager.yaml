@@ -1,0 +1,162 @@
+# Health-driven addressing for the Ollama backends.
+#
+# WHY THIS EXISTS
+# The Macs move between networks and sleep:
+#   - the M4 is on the LAN today (192.168.68.58, DHCP) and will be on Tailscale
+#     (100.115.97.90) after the holiday — a static Endpoints entry cannot span that
+#   - a sleeping Mac still completes a TCP handshake, so requests HANG rather than
+#     fail, and the request that wakes the machine is always the one that dies
+#
+# WHAT IT DOES
+# Every INTERVAL seconds it probes each backend's candidate addresses in order
+# (LAN first — the most local path that works — then Tailscale) and repoints the
+# Service's Endpoints at whichever answers.
+#
+# The important part: if NO address answers, it clears the Endpoints. A Service
+# with no endpoints refuses connections immediately, which turns a 60s hang into
+# an instant failure — so LiteLLM's fallback to the M1 copy fires at once instead
+# of after a timeout. Fast failure is the feature.
+#
+# ⚠️ SIDE EFFECT: probing every 60s will very likely keep the M4 awake, because a
+# TCP connect triggers "Wake for network access". That is usually what you want
+# for a model server. If you would rather let it sleep, raise INTERVAL or
+# `kubectl scale deploy/ollama-endpoint-manager -n ai --replicas=0`.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ollama-endpoint-manager
+  namespace: ai
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ollama-endpoint-manager
+  namespace: ai
+rules:
+  # Deliberately narrow: only these two Endpoints objects, only in this namespace.
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    resourceNames: ["mac-ollama", "m1-ollama"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ollama-endpoint-manager
+  namespace: ai
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ollama-endpoint-manager
+subjects:
+  - kind: ServiceAccount
+    name: ollama-endpoint-manager
+    namespace: ai
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ollama-endpoint-manager
+  namespace: ai
+data:
+  manage.sh: |
+    #!/bin/sh
+    # Talks to the Kubernetes API with curl + the ServiceAccount token, so the
+    # image needs nothing but curl.
+    set -u
+    API=https://kubernetes.default.svc
+    SA=/var/run/secrets/kubernetes.io/serviceaccount
+    TOKEN=$(cat $SA/token)
+    NS=$(cat $SA/namespace)
+    CA=$SA/ca.crt
+
+    : "${INTERVAL:=60}"
+    : "${PROBE_TIMEOUT:=3}"
+    : "${MAC_ADDRS:=192.168.68.58 100.115.97.90}"
+    : "${M1_ADDRS:=192.168.68.70 100.127.6.20}"
+
+    log() { echo "$(date -u +%H:%M:%S) $*"; }
+
+    # First address whose Ollama API answers. Empty output = none reachable.
+    pick() {
+      for a in $1; do
+        if curl -sf -m "$PROBE_TIMEOUT" -o /dev/null "http://$a:11434/api/version" 2>/dev/null; then
+          echo "$a"; return 0
+        fi
+      done
+      return 1
+    }
+
+    patch_ep() {
+      name=$1; ip=$2
+      if [ -z "$ip" ]; then
+        body='{"subsets":[]}'
+      else
+        body="{\"subsets\":[{\"addresses\":[{\"ip\":\"$ip\"}],\"ports\":[{\"name\":\"http\",\"port\":11434,\"protocol\":\"TCP\"}]}]}"
+      fi
+      curl -sS -o /dev/null -w '%{http_code}' -X PATCH --cacert "$CA" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H 'Content-Type: application/merge-patch+json' \
+        -d "$body" "$API/api/v1/namespaces/$NS/endpoints/$name"
+    }
+
+    reconcile() {
+      name=$1; addrs=$2; statefile=$3
+      new=$(pick "$addrs") || new=""
+      old=$(cat "$statefile" 2>/dev/null || echo "__init__")
+      if [ "$new" != "$old" ]; then
+        code=$(patch_ep "$name" "$new")
+        if [ "$new" = "" ]; then
+          log "$name: NO address reachable -> endpoints cleared (fail fast) [api $code]"
+        else
+          log "$name: now $new [api $code]"
+        fi
+        echo "$new" > "$statefile"
+      fi
+    }
+
+    log "starting: interval=${INTERVAL}s probe_timeout=${PROBE_TIMEOUT}s"
+    log "  mac-ollama candidates: $MAC_ADDRS"
+    log "  m1-ollama  candidates: $M1_ADDRS"
+    while true; do
+      reconcile mac-ollama "$MAC_ADDRS" /tmp/.mac
+      reconcile m1-ollama  "$M1_ADDRS"  /tmp/.m1
+      sleep "$INTERVAL"
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-endpoint-manager
+  namespace: ai
+  labels: { app: ollama-endpoint-manager }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: ollama-endpoint-manager }
+  template:
+    metadata:
+      labels: { app: ollama-endpoint-manager }
+    spec:
+      serviceAccountName: ollama-endpoint-manager
+      containers:
+        - name: manager
+          image: curlimages/curl:latest
+          command: ["sh", "/scripts/manage.sh"]
+          env:
+            - { name: INTERVAL,      value: "60" }
+            - { name: PROBE_TIMEOUT, value: "3" }
+            # LAN first, Tailscale second. The M4's tailnet node is currently
+            # offline; it becomes the working path after the holiday and this
+            # picks that up with no config change.
+            - { name: MAC_ADDRS,     value: "192.168.68.58 100.115.97.90" }
+            - { name: M1_ADDRS,      value: "192.168.68.70 100.127.6.20" }
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts }
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }
+            limits:   { cpu: 100m, memory: 64Mi }
+      volumes:
+        - name: scripts
+          configMap: { name: ollama-endpoint-manager }

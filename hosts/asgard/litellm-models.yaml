@@ -1,0 +1,198 @@
+# LiteLLM model list for asgard.
+#
+# MUST be applied BEFORE `uis deploy litellm`. The UIS playbook only creates a
+# default ai-models-litellm ConfigMap when one is missing (task 3.1), and that
+# default points at http://host.docker.internal:11434 — which resolves only
+# under Docker Desktop / Rancher Desktop and is unreachable on a real k3s node.
+#
+# Backends are the two Macs, via the Services in ollama-backends.yaml. Addresses
+# live there, not here, so a DHCP move does not touch this file.
+#
+# NAMING CONTRACT
+# Clients call a CAPABILITY name (gemma3:4b, mistral, nomic-embed-text). Which
+# machine serves it — and any failover, queueing or load-spreading — is decided
+# HERE, not by the caller. Clients must not contain routing logic; that is the
+# whole point of the gateway and it is what lets us add backends and models
+# without touching a single client.
+#
+# m1-* / m4-* names are INTERNAL: fallback targets and deliberate pinning.
+# They are still served, so nothing breaks, but no client should call them.
+#
+# Historic note: unprefixed names originally meant "the M4 copy", gemma3:4b, llava:7b and nomic-embed-text exist on BOTH
+# Macs — without the prefix the duplicate model_name would make LiteLLM
+# load-balance across them and which machine served a request would be
+# unpredictable.
+#
+# After editing: kubectl rollout restart deployment/litellm -n ai
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-models-litellm
+  namespace: ai
+  labels:
+    managed-by: urbalurba-asgard
+data:
+  config.yaml: |
+    general_settings:
+      master_key: os.environ/LITELLM_PROXY_MASTER_KEY
+      # Needed for Claude Code and other clients that pass their own headers
+      forward_client_headers_to_llm_api: true
+
+    litellm_settings:
+      # WHY THIS IS NOT 600s (the previous value):
+      # Both Macs sleep. A sleeping Mac still answers ICMP and even completes a
+      # TCP handshake while the CPU is down, so the request does not fail — it
+      # HANGS. Worse, the request itself is what wakes the machine, so the
+      # waking request is always the one that dies. Measured: a request to a
+      # sleeping M4 hung 45s+, while the same request once awake took 0.6s
+      # (1.5s even with a cold model load). At 600s that turns into a 10-minute
+      # stall and, in a pipeline, a retry storm.
+      # 300s is safe ONLY because ollama-endpoint-manager clears the Endpoints
+      # when a Mac is unreachable, so "backend absent" fails instantly rather
+      # than waiting this out. This bound therefore only applies to a backend
+      # that is genuinely present and slow (e.g. a saturated queue), where
+      # waiting is the correct behaviour.
+      request_timeout: 300
+      # num_retries is 0 on purpose. A retry runs BEFORE the fallback, so with
+      # retries enabled a sleeping M4 cost 67s before the M1 served the request.
+      # Falling straight over is faster and the M1 copy is equivalent.
+      num_retries: 0
+      json_logs: true
+      drop_params: true
+
+      # Three models exist on BOTH Macs. If the M4 copy is unreachable, serve
+      # from the M1 rather than failing. This is what stops a sleeping M4 from
+      # taking down embeddings for the enrichment pipeline.
+      # Models with no M1 equivalent (gpt-oss:20b, gemma4, qwen3, the coders)
+      # cannot fall back — they now fail in 120s instead of hanging for 600s.
+      fallbacks:
+        - {"gemma3:4b": ["m1-gemma3:4b"]}
+        # llava restored 2026-08-07 after 1590 hard failures in 12h.
+        # The "llava is M4-only" note in the pipeline .env is about
+        # LLM_REPLICAS — ROUTINE load-spreading, which keeps 4.7GB
+        # permanently resident on the M1. A fallback is different: it
+        # fires only while the M4 is absent and the model unloads after.
+        # Capacity policy and availability policy are not the same thing.
+        - {"llava:7b": ["m1-llava:7b"]}
+
+    model_list:
+      # ================================================================
+      # M4 Pro (MBP-J4G0G066W2) — LAN. The larger, faster set.
+      # ================================================================
+
+      # --- General purpose --------------------------------------------
+      - model_name: gpt-oss:20b            # 13.8 GB, most capable here
+        litellm_params:
+          model: ollama_chat/gpt-oss:20b
+          api_base: "http://mac-ollama.ai.svc.cluster.local:11434"
+
+      # Alias kept for compatibility: Open WebUI's DEFAULT_MODELS used this name
+      - model_name: mac-gpt-oss-balanced
+        litellm_params:
+          model: ollama_chat/gpt-oss:20b
+          api_base: "http://mac-ollama.ai.svc.cluster.local:11434"
+          temperature: 0.7
+
+      - model_name: gemma4:latest          # 9.6 GB
+        litellm_params:
+          model: ollama_chat/gemma4:latest
+          api_base: "http://mac-ollama.ai.svc.cluster.local:11434"
+
+      - model_name: qwen3:8b               # 5.2 GB
+        litellm_params:
+          model: ollama_chat/qwen3:8b
+          api_base: "http://mac-ollama.ai.svc.cluster.local:11434"
+
+      - model_name: gemma3:4b              # 3.3 GB, fastest — good default
+        litellm_params:
+          model: ollama_chat/gemma3:4b
+          api_base: "http://mac-ollama.ai.svc.cluster.local:11434"
+          timeout: 180  # high on purpose: a BUSY M4 must queue, not spill to the M1.
+                        # Genuine absence is caught by ollama-endpoint-manager
+                        # (empty Endpoints -> instant connect fail -> fallback fires).
+
+      # --- Coding ------------------------------------------------------
+      - model_name: qwen2.5-coder:7b       # 4.7 GB
+        litellm_params:
+          model: ollama_chat/qwen2.5-coder:7b
+          api_base: "http://mac-ollama.ai.svc.cluster.local:11434"
+
+      - model_name: deepseek-coder:6.7b    # 3.8 GB
+        litellm_params:
+          model: ollama_chat/deepseek-coder:6.7b
+          api_base: "http://mac-ollama.ai.svc.cluster.local:11434"
+
+      # --- Vision ------------------------------------------------------
+      - model_name: llava:7b               # 4.7 GB
+        litellm_params:
+          model: ollama_chat/llava:7b
+          api_base: "http://mac-ollama.ai.svc.cluster.local:11434"
+          timeout: 300  # M4-ONLY by design: 4.7GB on the M1 is most of its headroom
+
+      # --- Embeddings --------------------------------------------------
+      # PINNED TO THE M1, not the M4, on purpose. Embeddings are the
+      # pipeline-critical path and LiteLLM's `fallbacks` does not cover the
+      # embeddings route (verified: it hung rather than failing over). The M1 is
+      # stationary, always on and LAN-reachable, so pinning removes the failure
+      # mode instead of trying to recover from it. The M4 copy is still
+      # reachable explicitly as `m4-nomic-embed-text`.
+      - model_name: nomic-embed-text       # 0.3 GB, for RAG
+        litellm_params:
+          model: ollama/nomic-embed-text
+          api_base: "http://m1-ollama.ai.svc.cluster.local:11434"
+
+      - model_name: m4-nomic-embed-text    # explicit M4 copy, if ever wanted
+        litellm_params:
+          model: ollama/nomic-embed-text
+          api_base: "http://mac-ollama.ai.svc.cluster.local:11434"
+          timeout: 20
+
+      # ================================================================
+      # M1 (tecMacDev) — Tailscale. Prefixed m1-* on purpose (see header).
+      # ================================================================
+
+      # Capability names. A client asks for a MODEL, never for a machine —
+      # which backend serves it is this gateway's decision, not the caller's.
+      - model_name: deepseek-r1            # reasoning
+        litellm_params:
+          model: ollama_chat/deepseek-r1:latest
+          api_base: "http://m1-ollama.ai.svc.cluster.local:11434"
+
+      - model_name: mistral
+        litellm_params:
+          model: ollama_chat/mistral:latest
+          api_base: "http://m1-ollama.ai.svc.cluster.local:11434"
+
+      # --- internal plumbing below: machine-pinned aliases -------------------
+      # These exist as fallback targets and as an escape hatch for pinning a
+      # request to one machine on purpose. CLIENTS SHOULD NOT USE THESE.
+      - model_name: m1-deepseek-r1         # 4.7 GB, reasoning — M1 only
+        litellm_params:
+          model: ollama_chat/deepseek-r1:latest
+          api_base: "http://m1-ollama.ai.svc.cluster.local:11434"
+
+      - model_name: m1-mistral             # 4.1 GB — M1 only
+        litellm_params:
+          model: ollama_chat/mistral:latest
+          api_base: "http://m1-ollama.ai.svc.cluster.local:11434"
+
+      - model_name: m1-gemma3:4b           # also on the M4
+        litellm_params:
+          model: ollama_chat/gemma3:4b
+          api_base: "http://m1-ollama.ai.svc.cluster.local:11434"
+
+      - model_name: m1-llava:7b            # also on the M4
+        litellm_params:
+          model: ollama_chat/llava:7b
+          api_base: "http://m1-ollama.ai.svc.cluster.local:11434"
+
+      - model_name: m1-nomic-embed-text    # also on the M4
+        litellm_params:
+          model: ollama/nomic-embed-text
+          api_base: "http://m1-ollama.ai.svc.cluster.local:11434"
+
+      # ================================================================
+      # Cloud providers
+      # ================================================================
+      # Listed only once real keys exist in urbalurba-secrets. Adding entries
+      # here with dummy keys makes them appear in /v1/models and fail on call.

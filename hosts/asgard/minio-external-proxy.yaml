@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: default
+  labels: { app: minio, app.kubernetes.io/name: minio }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: minio }
+  template:
+    metadata:
+      labels: { app: minio, app.kubernetes.io/name: minio }
+    spec:
+      containers:
+        # FIRST container = target of `kubectl exec`; provides the mc client.
+        - name: minio
+          image: minio/mc:latest
+          command: ["sleep","infinity"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+        # Backplane addresses (vmbr1, host-only). 10.10.0.107 = CT 107.
+        # Not the tailnet address - see docs: odin-backplane-network.md
+        - name: socat-api
+          image: alpine/socat:1.8.0.0
+          args: ["TCP-LISTEN:9000,fork,reuseaddr","TCP:10.10.0.107:9000"]
+          ports: [{ containerPort: 9000, name: s3 }]
+          readinessProbe:
+            tcpSocket: { port: 9000 }
+            initialDelaySeconds: 3
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 300m, memory: 64Mi }
+        - name: socat-console
+          image: alpine/socat:1.8.0.0
+          args: ["TCP-LISTEN:9001,fork,reuseaddr","TCP:10.10.0.107:9001"]
+          ports: [{ containerPort: 9001, name: console }]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 200m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: minio, namespace: default, labels: { app: minio } }
+spec:
+  type: ClusterIP
+  selector: { app: minio }
+  ports: [{ name: s3, port: 9000, targetPort: 9000 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: minio-console, namespace: default, labels: { app: minio } }
+spec:
+  type: ClusterIP
+  selector: { app: minio }
+  ports: [{ name: console, port: 9001, targetPort: 9001 }]

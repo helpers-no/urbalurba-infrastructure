@@ -86,6 +86,7 @@ minio:minio verify
 nextcloud:nextcloud verify
 openmetadata:openmetadata verify
 temporal:temporal verify
+uptime-kuma:uptime-kuma verify
 "
 
 # ============================================================

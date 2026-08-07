@@ -1,0 +1,50 @@
+# Tailnet-ONLY ingresses (no Funnel => reachable only from your devices).
+# Requires HTTPS Certificates enabled at login.tailscale.com/admin/dns
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: temporal-ts
+  namespace: temporal
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: temporal-web
+      port: { number: 8080 }
+  tls:
+    - hosts: [temporal]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-console-ts
+  namespace: default
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: minio-console
+      port: { number: 9001 }
+  tls:
+    - hosts: [minio-console]     # 'minio' is taken by the MinIO CT
+---
+# LiteLLM: the OpenAI-compatible gateway. Consumed by the M1 Mac, which is on
+# the tailnet but not on Odin, so Tailscale is the correct layer here (unlike
+# intra-host traffic, which uses the backplane — see odin-backplane-network.md).
+#
+# Tailnet-only, no Funnel: this must not be internet-reachable. Auth is a
+# LiteLLM virtual key, and the tailnet is the network boundary.
+#   https://litellm.taile269d.ts.net/v1
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: litellm-ts
+  namespace: ai
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: litellm
+      port: { number: 4000 }
+  tls:
+    - hosts: [litellm]

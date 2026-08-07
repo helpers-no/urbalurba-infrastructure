@@ -2015,6 +2015,7 @@ cmd_verify() {
         echo "  nextcloud       Run E2E health checks on Nextcloud + OnlyOffice"
         echo "  openmetadata    Run E2E health checks on OpenMetadata"
         echo "  temporal        Run E2E health checks on Temporal"
+        echo "  uptime-kuma     Run E2E health checks on Uptime Kuma"
         exit "$EXIT_GENERAL_ERROR"
     fi
 
@@ -2045,6 +2046,9 @@ cmd_verify() {
             ;;
         temporal)
             cmd_temporal_verify
+            ;;
+        uptime-kuma)
+            cmd_uptime_kuma_verify
             ;;
         *)
             log_error "Unknown verify target: $target"
@@ -2368,6 +2372,11 @@ cmd_minio_verify() {
 cmd_temporal_verify() {
     print_section "Verifying Temporal Deployment"
     ansible-playbook "$ANSIBLE_DIR/086-test-temporal.yml"
+}
+
+cmd_uptime_kuma_verify() {
+    print_section "Verifying Uptime Kuma Deployment"
+    ansible-playbook "$ANSIBLE_DIR/230-test-uptime-kuma.yml"
 }
 
 # ============================================================

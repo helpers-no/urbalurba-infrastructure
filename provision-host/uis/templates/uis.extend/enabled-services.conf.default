@@ -11,6 +11,7 @@ nginx
 # prometheus
 # grafana
 # loki
+# uptime-kuma        # external watchdog - run it OUTSIDE the cluster it monitors
 
 # === AI ===
 # openwebui

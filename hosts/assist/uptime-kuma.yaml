@@ -1,0 +1,146 @@
+# Uptime Kuma — external availability watchdog for the whole fleet.
+#
+# ⚠️ RUNS ON assist ON PURPOSE. It must NEVER be deployed to asgard or Odin:
+# a monitor inside the cluster cannot report the cluster being down, which is
+# the entire reason this exists. See
+# INVESTIGATE-service-uptime-kuma.md (finding F3) in the urbalurba repo.
+#
+# Deliberately NOT placed in the UIS manifests/ directory: `uis deploy` targets
+# a cluster, and having this sitting where UIS tooling can pick it up invites
+# exactly the deployment we must prevent.
+#
+# Apply:  sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f deployment.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+# STATIC PV, deliberately not the local-path-usb StorageClass.
+#
+# That class declares parameters.nodePath=/mnt/hadata/k3s-storage, which THIS
+# version of the k3s local-path-provisioner ignores; it only honours the
+# nodePathMap in the local-path-config ConfigMap, which lists just the boot
+# microSD. New claims therefore fail with:
+#     config doesn't contain path /mnt/hadata/k3s-storage on node assist
+# MinIO's volume predates that and still works, so the class LOOKS functional.
+#
+# Editing local-path-config would fix it until the next k3s upgrade, which
+# rewrites that ConfigMap. A static PV has no such dependency.
+#
+# The USB stick is 5x SLOWER than the boot card (6.9 vs 33.3 MB/s sequential;
+# 136 vs 155 sync-writes/sec). It is chosen for BLAST RADIUS -- wearing it out
+# costs a stick, not a rebuild of the Pi.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: uptime-kuma-usb
+spec:
+  capacity: { storage: 4Gi }
+  accessModes: [ReadWriteOnce]
+  # Retain: the monitor history must survive an accidental PVC delete.
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: uptime-kuma-usb
+  local:
+    path: /mnt/hadata/k3s-storage/uptime-kuma
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [assist]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: uptime-kuma
+  namespace: monitoring
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: uptime-kuma-usb
+  volumeName: uptime-kuma-usb
+  resources:
+    requests:
+      storage: 4Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: uptime-kuma
+  namespace: monitoring
+  labels: { app: uptime-kuma }
+spec:
+  replicas: 1
+  strategy:
+    # SQLite on a ReadWriteOnce volume must never have two writers.
+    type: Recreate
+  selector:
+    matchLabels: { app: uptime-kuma }
+  template:
+    metadata:
+      labels: { app: uptime-kuma }
+    spec:
+      containers:
+        - name: uptime-kuma
+          # Pinned, not :latest or :2 — a watchdog that changes under you is
+          # not a watchdog. Verified to publish arm64 for this Pi.
+          image: louislam/uptime-kuma:2.5.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { containerPort: 3001, name: http }
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+          env:
+            - { name: UPTIME_KUMA_PORT, value: "3001" }
+            - { name: TZ, value: "Europe/Oslo" }
+          resources:
+            # Bounded so it can never starve Home Assistant or Z-Wave JS,
+            # which are the other tenants of this Pi.
+            requests: { cpu: 50m,  memory: 200Mi }
+            limits:   { cpu: 1000m, memory: 512Mi }
+          readinessProbe:
+            httpGet: { path: /, port: 3001 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /, port: 3001 }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: uptime-kuma
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: uptime-kuma
+  namespace: monitoring
+  labels: { app: uptime-kuma }
+spec:
+  type: ClusterIP
+  selector: { app: uptime-kuma }
+  ports:
+    - { name: http, port: 3001, targetPort: 3001 }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: uptime-kuma
+  namespace: monitoring
+spec:
+  # No host rule: assist's traefik has no other ingress, so this is a
+  # catch-all. Reachable on the LAN (192.168.68.79) and over the tailnet
+  # (100.83.51.125) without needing DNS anywhere.
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: uptime-kuma
+                port: { number: 3001 }

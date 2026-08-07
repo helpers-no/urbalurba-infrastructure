@@ -1,0 +1,29 @@
+# fast = Samsung NVMe (Proxmox storage: local-lvm)   ~ Azure Premium SSD
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast
+provisioner: csi.proxmox.sinextra.dev
+parameters:
+  csi.storage.k8s.io/fstype: ext4
+  storage: local-lvm
+  cache: writethrough
+  ssd: "true"
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+# standard = 1TB PNY via ZFS (Proxmox storage: tank-vm)  ~ Azure Standard SSD
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard
+provisioner: csi.proxmox.sinextra.dev
+parameters:
+  csi.storage.k8s.io/fstype: ext4
+  storage: tank-vm
+  cache: writethrough
+  ssd: "true"
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
