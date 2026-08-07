@@ -88,7 +88,154 @@
       changed_when: false
       failed_when: "'MOUNTED' not in kuma_data.stdout"
 
-    - name: "7. Deployment complete"
+    # ---- unattended admin setup -------------------------------------------
+    # Uptime Kuma's browser wizard has two screens. UPTIME_KUMA_DB_TYPE in the
+    # StatefulSet handles the first. This handles the second.
+    #
+    # `needSetup` is computed at startup as simply "is the user table empty?",
+    # so seeding one row removes the wizard. The image already ships bcryptjs
+    # (the app's own hashing library, 10 salt rounds) and sqlite3, so no extra
+    # tooling is needed.
+    #
+    # Idempotent: only seeds when the table is empty, so re-running never
+    # clobbers a password that has since been changed in the UI.
+    - name: "7. Read admin credentials from urbalurba-secrets"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ namespace }}"
+        name: urbalurba-secrets
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: kuma_secret
+      no_log: true
+
+    - name: "7.1 Fail clearly if the credentials are missing"
+      ansible.builtin.assert:
+        that:
+          - kuma_secret.resources | length > 0
+          - "'uptime-kuma-admin-user' in kuma_secret.resources[0].data"
+          - "'uptime-kuma-admin-password' in kuma_secret.resources[0].data"
+        fail_msg: >-
+          urbalurba-secrets in {{ namespace }} has no uptime-kuma-admin-user /
+          uptime-kuma-admin-password. Run `./uis secrets apply` first.
+
+    - name: "8. Is the admin account already set up?"
+      ansible.builtin.shell: >
+        kubectl exec -n {{ namespace }} {{ component_name }}-0
+        --kubeconfig {{ merged_kubeconf_file }}
+        -- sqlite3 /app/data/kuma.db "select count(*) from user;"
+      register: kuma_user_count
+      changed_when: false
+      retries: 10
+      delay: 6
+      until: kuma_user_count.rc == 0
+
+    # Guard against upstream changing the schema underneath us. This writes
+    # directly to the application's own table, which is a private interface -
+    # if it ever changes shape, fail loudly rather than corrupt the database.
+    - name: "8.1 Verify the user table still has the expected shape"
+      ansible.builtin.shell: >
+        kubectl exec -n {{ namespace }} {{ component_name }}-0
+        --kubeconfig {{ merged_kubeconf_file }}
+        -- sqlite3 /app/data/kuma.db ".schema user"
+      register: kuma_schema
+      changed_when: false
+      failed_when: >-
+        'username' not in kuma_schema.stdout or
+        'password' not in kuma_schema.stdout or
+        'active' not in kuma_schema.stdout
+      when: kuma_user_count.stdout | trim | int == 0
+
+    - name: "9. Seed the admin account"
+      # Username AND password both arrive on stdin, one per line, so neither
+      # appears in a process list. A heredoc builds the SQL inside the pod,
+      # which avoids nested-quote escaping - an earlier version interpolated
+      # $KUMA_USER inside a single-quoted `sh -c`, where the outer shell never
+      # expanded it, and silently created an account with an empty username.
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf '%s\n%s\n' "$KUMA_USER" "$KUMA_PW" \
+        | kubectl exec -i -n {{ namespace }} {{ component_name }}-0 \
+            --kubeconfig {{ merged_kubeconf_file }} -- sh -c '
+              read -r U
+              read -r P
+              H=$(cd /app && P="$P" node -e "console.log(require(\"bcryptjs\").hashSync(process.env.P, 10))")
+              sqlite3 /app/data/kuma.db <<SQL
+        insert into user (username, password, active) values ("$U", "$H", 1);
+        SQL
+            '
+      args:
+        executable: /bin/bash
+      environment:
+        KUMA_PW: "{{ kuma_secret.resources[0].data['uptime-kuma-admin-password'] | b64decode }}"
+        KUMA_USER: "{{ kuma_secret.resources[0].data['uptime-kuma-admin-user'] | b64decode }}"
+      register: kuma_seed
+      when: kuma_user_count.stdout | trim | int == 0
+      no_log: true
+
+    - name: "10. Restart so needSetup is recomputed"
+      ansible.builtin.command: >
+        kubectl rollout restart statefulset/{{ component_name }} -n {{ namespace }}
+        --kubeconfig {{ merged_kubeconf_file }}
+      when: kuma_seed.changed | default(false)
+
+    - name: "10.1 Wait for the restart"
+      ansible.builtin.command: >
+        kubectl rollout status statefulset/{{ component_name }} -n {{ namespace }}
+        --timeout=240s --kubeconfig {{ merged_kubeconf_file }}
+      changed_when: false
+      when: kuma_seed.changed | default(false)
+
+    - name: "11. Confirm the wizard is gone"
+      ansible.builtin.shell: >
+        kubectl run kuma-setupcheck-{{ 999 | random }}
+        -n {{ namespace }} --rm -i --restart=Never --quiet
+        --image=curlimages/curl:latest --
+        curl -s -o /dev/null -w '%{redirect_url}'
+        -m 10 http://{{ component_name }}.{{ namespace }}.svc.cluster.local:3001/
+        < /dev/null | tail -c 60
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: kuma_redirect
+      retries: 20
+      delay: 6
+      until: kuma_redirect.stdout is search('dashboard|login')
+      changed_when: false
+
+    # The redirect check above is NOT sufficient on its own: it flips as soon
+    # as ANY row exists in the user table, including a broken one. An earlier
+    # version of task 9 created an account with an empty username and this
+    # playbook still reported success. Verify the credential actually works.
+    - name: "11.1 Verify the seeded credential actually authenticates"
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf '%s\n%s\n' "$KUMA_USER" "$KUMA_PW" \
+        | kubectl exec -i -n {{ namespace }} {{ component_name }}-0 \
+            --kubeconfig {{ merged_kubeconf_file }} -- sh -c '
+              read -r U
+              read -r P
+              H=$(sqlite3 /app/data/kuma.db "select password from user where username = \"$U\";")
+              [ -n "$H" ] || { echo "NO_SUCH_USER"; exit 0; }
+              cd /app && P="$P" H="$H" node -e "
+                const b = require(\"bcryptjs\");
+                console.log(b.compareSync(process.env.P, process.env.H) ? \"AUTH_OK\" : \"HASH_MISMATCH\");
+              "
+            '
+      args:
+        executable: /bin/bash
+      environment:
+        KUMA_PW: "{{ kuma_secret.resources[0].data['uptime-kuma-admin-password'] | b64decode }}"
+        KUMA_USER: "{{ kuma_secret.resources[0].data['uptime-kuma-admin-user'] | b64decode }}"
+      register: kuma_auth
+      changed_when: false
+      failed_when: "'AUTH_OK' not in kuma_auth.stdout"
+      no_log: true
+
+    - name: "11.2 Report the credential check"
+      ansible.builtin.debug:
+        msg: "Admin credential verified - the seeded password authenticates"
+
+    - name: "12. Deployment complete"
       ansible.builtin.debug:
         msg:
           - "==============================================="
@@ -98,9 +245,9 @@
           - "URL: http://uptime-kuma.localhost"
           - "Health: HTTP {{ kuma_http.stdout }}   Data volume: mounted"
           - ""
-          - "NEXT STEP - first-run wizard (browser only):"
-          - "  Open the URL, choose SQLite, create the admin account."
-          - "  Monitors cannot be added until this is done."
+          - "Admin account: {{ kuma_secret.resources[0].data['uptime-kuma-admin-user'] | b64decode }}"
+          - "Password: the shared DEFAULT_ADMIN_PASSWORD from urbalurba-secrets"
+          - "{{ 'Account seeded on this run - no browser wizard needed.' if (kuma_seed.changed | default(false)) else 'Account already existed - left untouched.' }}"
           - ""
           - "WARNING - where this should run:"
           - "  Uptime Kuma is an EXTERNAL watchdog. If you have just deployed it"

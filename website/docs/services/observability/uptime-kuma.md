@@ -65,9 +65,17 @@ where a dashboard shows all green for hours.
 ./uis deploy uptime-kuma
 ```
 
-Then open the URL and complete the **first-run wizard** — choose SQLite and
-create the admin account. This is browser-only; no monitors can exist until it
-is done.
+**No first-run wizard.** Both of its steps are automated:
+
+- `UPTIME_KUMA_DB_TYPE=sqlite` makes the app create its database at startup
+  instead of asking which one to use.
+- The playbook seeds the admin account directly. `needSetup` is computed at
+  startup as simply "is the user table empty?", so one row removes the wizard.
+
+Log in with `admin` and the shared `DEFAULT_ADMIN_PASSWORD`.
+
+Seeding is idempotent — it only runs when the user table is empty, so
+re-deploying never clobbers a password you have since changed in the UI.
 
 ## Verify
 
@@ -103,14 +111,29 @@ similar, prefer putting the volume on something other than the boot card — not
 for speed, but so that wearing it out costs a replaceable device rather than a
 rebuild.
 
-## No secrets
+## Secrets
 
-Uptime Kuma creates its admin account through the first-run wizard and stores it
-in its own database. Nothing is read from `urbalurba-secrets`.
+Two keys in `urbalurba-secrets` (namespace `monitoring`):
+
+| Key | Value |
+|---|---|
+| `uptime-kuma-admin-user` | `admin` |
+| `uptime-kuma-admin-password` | inherits `${DEFAULT_ADMIN_PASSWORD}` |
+
+It deliberately **shares the platform admin password** rather than defining its
+own, so there is one credential to rotate rather than one per service — the same
+arrangement Grafana uses.
 
 Notification credentials (Telegram token, SMTP password, ntfy topic) are entered
-in the UI and live in the same database. Treat that volume as sensitive and back
-it up.
+in the UI and live in the application's own database. Treat that volume as
+sensitive and back it up.
+
+:::warning
+Seeding writes directly to the application's `user` table, which is a private
+interface rather than a published API. The playbook guards against upstream
+schema changes by checking the table shape first and failing loudly, and it
+verifies afterwards that the seeded password actually authenticates.
+:::
 
 ## Suggested first monitors
 

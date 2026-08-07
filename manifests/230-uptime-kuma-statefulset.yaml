@@ -18,8 +18,10 @@
 # Ports:
 # - 3001: web UI and API
 #
-# No secrets: the admin account is created through a first-run wizard and lives
-# in the application's own database, so nothing is read from urbalurba-secrets.
+# Secrets: uptime-kuma-admin-user / uptime-kuma-admin-password in
+# urbalurba-secrets (monitoring namespace). Both inherit the shared
+# DEFAULT_ADMIN_PASSWORD; the setup playbook seeds the account so the
+# browser first-run wizard never appears.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -69,6 +71,12 @@ spec:
           env:
             - name: UPTIME_KUMA_PORT
               value: "3001"
+            # Skips the first screen of the browser wizard: with this set the
+            # app creates kuma.db itself at startup instead of asking which
+            # database to use. The second screen (admin account) is handled by
+            # the setup playbook seeding the user table.
+            - name: UPTIME_KUMA_DB_TYPE
+              value: "sqlite"
           volumeMounts:
             - name: data
               mountPath: /app/data
