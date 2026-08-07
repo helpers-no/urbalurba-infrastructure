@@ -68,8 +68,11 @@
         --image=curlimages/curl:latest --
         curl -s -o /dev/null -w '%{http_code}'
         -m 10 http://{{ component_name }}.{{ namespace }}.svc.cluster.local:3001/
-        --kubeconfig {{ merged_kubeconf_file }} < /dev/null
+        < /dev/null | tail -c 3
       environment:
+        # kubectl reads this. Do NOT pass --kubeconfig after the `--`:
+        # everything after `--` is the CONTAINER's argv, so curl receives it
+        # and dies with "option --kubeconfig: is unknown".
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: kuma_http
       retries: 20
