@@ -1,0 +1,82 @@
+# External Ollama backends for LiteLLM on asgard.
+#
+# Neither Mac is a Proxmox guest, so the Odin backplane (10.10.0.0/24) does not
+# apply here. Each is a selector-less Service with hand-managed Endpoints, which
+# gives a stable cluster DNS name and means an address change is a one-file edit
+# with NO LiteLLM restart — it resolves the name per request.
+#
+#   M4  http://mac-ollama.ai.svc.cluster.local:11434
+#   M1  http://m1-ollama.ai.svc.cluster.local:11434
+#
+# When an address moves:
+#   getent hosts MBP-J4G0G066W2.local     # M4 is DHCP and does move
+#   # edit the ip below, then: kubectl apply -f ollama-backends.yaml
+#
+# Both Macs sleep. A sleeping Mac still answers ICMP while every TCP port is
+# closed, so `ping` is not a liveness check — probe /api/version instead. A
+# request to a sleeping Mac hangs rather than failing fast (request_timeout is
+# 600s). Wake them with ~/uis/mac-ollama/wake-macs.sh.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mac-ollama
+  namespace: ai
+  labels: { app: mac-ollama }
+  annotations:
+    urbalurba.io/description: "External Ollama on the M4 MacBook Pro (LAN)"
+    urbalurba.io/host: "MBP-J4G0G066W2.local"
+spec:
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: mac-ollama
+  namespace: ai
+  labels: { app: mac-ollama }
+subsets:
+  - addresses:
+      # M4 Pro — LAN only, DHCP, not on the tailnet. Verify with:
+      #   curl -m5 http://192.168.68.58:11434/api/version
+      - ip: 192.168.68.58
+    ports:
+      - name: http
+        port: 11434
+        protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: m1-ollama
+  namespace: ai
+  labels: { app: m1-ollama }
+  annotations:
+    urbalurba.io/description: "External Ollama on the M1 Mac (Tailscale)"
+    urbalurba.io/host: "tecmacdev"
+spec:
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: m1-ollama
+  namespace: ai
+  labels: { app: m1-ollama }
+subsets:
+  - addresses:
+      # M1 tecMacDev — reached over Tailscale, so this address is stable.
+      # Its LAN address 192.168.68.70 is DHCP and deliberately not used.
+      - ip: 100.127.6.20
+    ports:
+      - name: http
+        port: 11434
+        protocol: TCP

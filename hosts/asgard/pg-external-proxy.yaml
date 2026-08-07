@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgresql
+  namespace: default
+  labels: { app.kubernetes.io/name: postgresql }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: postgresql }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: postgresql }
+    spec:
+      containers:
+        # FIRST container = what `kubectl exec` targets. Provides bash + psql
+        # so UIS playbooks that exec into "the postgres pod" work unchanged.
+        - name: postgresql
+          image: postgres:18
+          command: ["sleep","infinity"]
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+        # Forwards the pod's :5432 to the real external database on Odin,
+        # over the host-only backplane bridge (vmbr1). 10.10.0.105 = CT 105.
+        # Deliberately NOT the tailnet address: asgard and pg sit on the same
+        # Proxmox host, so this traffic must not depend on WireGuard or on
+        # Tailscale's coordination server being reachable. See
+        # docs: odin-backplane-network.md
+        - name: socat
+          image: alpine/socat:1.8.0.0
+          args: ["TCP-LISTEN:5432,fork,reuseaddr","TCP:10.10.0.105:5432"]
+          ports: [{ containerPort: 5432, name: tcp-postgresql }]
+          readinessProbe:
+            tcpSocket: { port: 5432 }
+            initialDelaySeconds: 3
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 200m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+  namespace: default
+  labels: { app.kubernetes.io/name: postgresql }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: postgresql }
+  ports:
+    - name: tcp-postgresql
+      port: 5432
+      targetPort: 5432
