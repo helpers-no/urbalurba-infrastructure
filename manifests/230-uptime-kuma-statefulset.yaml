@@ -1,0 +1,115 @@
+# 230-uptime-kuma-statefulset.yaml
+#
+# Description:
+# Uptime Kuma - external availability watchdog.
+# StatefulSet pattern: no maintained official Helm chart, and the application
+# keeps all state in an embedded SQLite database, so it needs stable storage
+# identity and exactly one writer.
+#
+# ⚠️ Deploy this on a host that is NOT part of the platform it monitors. A
+# monitor inside a cluster cannot report that cluster being down.
+#
+# Usage:
+#   kubectl apply -f 230-uptime-kuma-statefulset.yaml
+#
+# Prerequisites:
+# - monitoring namespace created
+#
+# Ports:
+# - 3001: web UI and API
+#
+# No secrets: the admin account is created through a first-run wizard and lives
+# in the application's own database, so nothing is read from urbalurba-secrets.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: uptime-kuma-data
+  namespace: monitoring
+  labels:
+    app: uptime-kuma
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 4Gi
+  # No storageClassName: use the cluster default. The database is small; the
+  # real constraint is write volume, not capacity. Host-specific storage (for
+  # example putting it on a USB disk to keep wear off a boot microSD) belongs
+  # in a host override, not here.
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: uptime-kuma
+  namespace: monitoring
+  labels:
+    app: uptime-kuma
+spec:
+  serviceName: uptime-kuma
+  replicas: 1
+  selector:
+    matchLabels:
+      app: uptime-kuma
+  template:
+    metadata:
+      labels:
+        app: uptime-kuma
+    spec:
+      containers:
+        - name: uptime-kuma
+          # Pinned deliberately. A watchdog that changes version underneath you
+          # is not a watchdog. Publishes both amd64 and arm64.
+          image: louislam/uptime-kuma:2.5.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3001
+              name: http
+          env:
+            - name: UPTIME_KUMA_PORT
+              value: "3001"
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 200Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3001
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: uptime-kuma-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: uptime-kuma
+  namespace: monitoring
+  labels:
+    app: uptime-kuma
+spec:
+  type: ClusterIP
+  selector:
+    app: uptime-kuma
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001
+      protocol: TCP

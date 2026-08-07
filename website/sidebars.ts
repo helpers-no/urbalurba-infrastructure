@@ -79,6 +79,7 @@ const sidebars: SidebarsConfig = {
             'services/observability/tempo',
             'services/observability/otel',
             'services/observability/sovdev-logger',
+            'services/observability/uptime-kuma',
           ],
         },
         {

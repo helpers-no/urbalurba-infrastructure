@@ -1,0 +1,130 @@
+---
+# 230-test-uptime-kuma.yml
+# E2E verification tests for Uptime Kuma
+#
+# Usage:
+#   ansible-playbook 230-test-uptime-kuma.yml
+#   ./uis verify uptime-kuma
+
+- name: Verify Uptime Kuma
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    namespace: "monitoring"
+    component_name: "uptime-kuma"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+
+  tasks:
+    # --- Setup ---
+    - name: "0.1 Confirm the pod exists and is Running"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "app={{ component_name }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: kuma_pods
+
+    - name: "0.2 Assert pod is Running"
+      ansible.builtin.assert:
+        that:
+          - kuma_pods.resources | length > 0
+          - kuma_pods.resources[0].status.phase == "Running"
+        fail_msg: "No Running uptime-kuma pod in {{ namespace }}"
+
+    # --- Test A: the web UI answers ---
+    - name: "A1. Request the web UI through the Service"
+      ansible.builtin.shell: >
+        kubectl run kuma-test-a1-{{ 999 | random }}
+        -n {{ namespace }} --rm -i --restart=Never --quiet
+        --image=curlimages/curl:latest --
+        curl -s -o /dev/null -w '%{http_code}'
+        -m 15 http://{{ component_name }}.{{ namespace }}.svc.cluster.local:3001/
+        < /dev/null
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: test_a_result
+      changed_when: false
+
+    - name: "A2. Assert the UI responded"
+      ansible.builtin.assert:
+        that: test_a_result.stdout is search('200|302')
+        fail_msg: "Web UI returned {{ test_a_result.stdout }}, expected 200 or 302"
+
+    - name: "A3. Display result"
+      ansible.builtin.debug:
+        msg: "Web UI HTTP {{ test_a_result.stdout }}"
+
+    # --- Test B: it is really Uptime Kuma, not something else on the port ---
+    - name: "B1. Follow the redirect and read the page title"
+      ansible.builtin.shell: >
+        kubectl run kuma-test-b1-{{ 999 | random }}
+        -n {{ namespace }} --rm -i --restart=Never --quiet
+        --image=curlimages/curl:latest --
+        curl -sL -m 15 http://{{ component_name }}.{{ namespace }}.svc.cluster.local:3001/
+        < /dev/null
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: test_b_result
+      changed_when: false
+
+    - name: "B2. Assert the page identifies as Uptime Kuma"
+      ansible.builtin.assert:
+        that: "'Uptime Kuma' in test_b_result.stdout"
+        fail_msg: "Page did not identify as Uptime Kuma - something else may be answering on 3001"
+
+    - name: "B3. Display result"
+      ansible.builtin.debug:
+        msg: "Page title confirms Uptime Kuma"
+
+    # --- Test C: state is on a volume, not the container filesystem ---
+    - name: "C1. Check /app/data is a mounted volume"
+      ansible.builtin.shell: >
+        kubectl exec -n {{ namespace }} {{ component_name }}-0
+        --kubeconfig {{ merged_kubeconf_file }}
+        -- sh -c 'mount | grep -q " /app/data " && echo MOUNTED || echo NOT_MOUNTED'
+      register: test_c_result
+      changed_when: false
+
+    - name: "C2. Assert the data volume is mounted"
+      ansible.builtin.assert:
+        that: "'MOUNTED' in test_c_result.stdout"
+        fail_msg: "/app/data is not a mounted volume - the monitor history would not survive a restart"
+
+    - name: "C3. Display result"
+      ansible.builtin.debug:
+        msg: "Data volume mounted at /app/data"
+
+    # --- Test D: Traefik routing ---
+    - name: "D1. Check the IngressRoute exists"
+      kubernetes.core.k8s_info:
+        api_version: traefik.io/v1alpha1
+        kind: IngressRoute
+        namespace: "{{ namespace }}"
+        name: "{{ component_name }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: test_d_result
+
+    - name: "D2. Assert the IngressRoute is present"
+      ansible.builtin.assert:
+        that: test_d_result.resources | length > 0
+        fail_msg: "IngressRoute {{ component_name }} not found in {{ namespace }}"
+
+    - name: "D3. Display result"
+      ansible.builtin.debug:
+        msg: "IngressRoute present"
+
+    # --- Summary ---
+    - name: "SUMMARY - Display all test results"
+      ansible.builtin.debug:
+        msg:
+          - "A. Web UI responds:        PASS (HTTP {{ test_a_result.stdout }})"
+          - "B. Identifies as Kuma:     PASS"
+          - "C. Data volume mounted:    PASS"
+          - "D. IngressRoute present:   PASS"
+          - ""
+          - "NOTE: these prove the service runs. They cannot prove it is USEFUL -"
+          - "that depends on it running outside the platform it monitors, and on"
+          - "the first-run wizard having been completed so monitors exist."

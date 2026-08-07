@@ -1,0 +1,106 @@
+---
+# 230-setup-uptime-kuma.yml
+# Deploy Uptime Kuma - external availability watchdog
+#
+# ⚠️ Uptime Kuma is only useful on a host that is NOT part of the platform it
+# monitors. A monitor inside a cluster cannot report that cluster being down.
+# UIS cannot express "deploy this elsewhere", so this playbook warns instead.
+#
+# Usage:
+#   ansible-playbook 230-setup-uptime-kuma.yml -e "target_host=rancher-desktop"
+
+- name: Deploy Uptime Kuma
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    namespace: "monitoring"
+    component_name: "uptime-kuma"
+    manifests_folder: "/mnt/urbalurbadisk/manifests"
+    statefulset_file: "{{ manifests_folder }}/230-uptime-kuma-statefulset.yaml"
+    ingressroute_file: "{{ manifests_folder }}/230-uptime-kuma-ingressroute.yaml"
+
+  tasks:
+    - name: "1. Create {{ namespace }} namespace"
+      kubernetes.core.k8s:
+        name: "{{ namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: "2. Deploy PVC + StatefulSet + Service"
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ statefulset_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: "3. Deploy IngressRoute"
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ ingressroute_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: "4. Wait for {{ component_name }} to be running"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "app={{ component_name }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: kuma_pods
+      retries: 30
+      delay: 10
+      until: >
+        kuma_pods.resources | length > 0 and
+        kuma_pods.resources[0].status.phase == "Running"
+
+    # Do not report success on a pod that is Running but not yet serving.
+    # The lesson from PLAN-service-litellm-001: a playbook that prints SUCCESS
+    # without checking is worse than one that says nothing.
+    - name: "5. Wait for the web UI to actually answer"
+      ansible.builtin.shell: >
+        kubectl run kuma-ready-check-{{ 999 | random }}
+        -n {{ namespace }} --rm -i --restart=Never --quiet
+        --image=curlimages/curl:latest --
+        curl -s -o /dev/null -w '%{http_code}'
+        -m 10 http://{{ component_name }}.{{ namespace }}.svc.cluster.local:3001/
+        --kubeconfig {{ merged_kubeconf_file }} < /dev/null
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: kuma_http
+      retries: 20
+      delay: 6
+      until: kuma_http.stdout is search('200|302')
+      changed_when: false
+
+    - name: "6. Verify the data volume is mounted"
+      ansible.builtin.shell: >
+        kubectl exec -n {{ namespace }} {{ component_name }}-0
+        --kubeconfig {{ merged_kubeconf_file }} -- sh -c 'test -d /app/data && echo MOUNTED'
+      register: kuma_data
+      changed_when: false
+      failed_when: "'MOUNTED' not in kuma_data.stdout"
+
+    - name: "7. Deployment complete"
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "Uptime Kuma deployed"
+          - "==============================================="
+          - ""
+          - "URL: http://uptime-kuma.localhost"
+          - "Health: HTTP {{ kuma_http.stdout }}   Data volume: mounted"
+          - ""
+          - "NEXT STEP - first-run wizard (browser only):"
+          - "  Open the URL, choose SQLite, create the admin account."
+          - "  Monitors cannot be added until this is done."
+          - ""
+          - "WARNING - where this should run:"
+          - "  Uptime Kuma is an EXTERNAL watchdog. If you have just deployed it"
+          - "  onto the cluster you intend to monitor, it cannot tell you when"
+          - "  that cluster is down - which is the one case it exists for."
+          - "  Run it on a host outside the platform it watches."

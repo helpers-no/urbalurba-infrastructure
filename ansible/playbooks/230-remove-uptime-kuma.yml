@@ -1,0 +1,72 @@
+---
+# 230-remove-uptime-kuma.yml
+# Remove Uptime Kuma from the cluster
+#
+# The PVC is KEPT by default: it holds the monitor definitions, the notification
+# configuration and the whole uptime history, none of which is reproducible.
+# Remove it explicitly with -e remove_pvc=true.
+#
+# Usage:
+#   ansible-playbook 230-remove-uptime-kuma.yml
+#   ansible-playbook 230-remove-uptime-kuma.yml -e remove_pvc=true
+
+- name: Remove Uptime Kuma
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    _remove_pvc: "{{ remove_pvc | default(false) | bool }}"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    namespace: "monitoring"
+    component_name: "uptime-kuma"
+
+  tasks:
+    - name: "1. Remove IngressRoute"
+      kubernetes.core.k8s:
+        state: absent
+        kind: IngressRoute
+        api_version: traefik.io/v1alpha1
+        name: "{{ component_name }}"
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: "2. Remove StatefulSet"
+      kubernetes.core.k8s:
+        state: absent
+        kind: StatefulSet
+        api_version: apps/v1
+        name: "{{ component_name }}"
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: "3. Remove Service"
+      kubernetes.core.k8s:
+        state: absent
+        kind: Service
+        api_version: v1
+        name: "{{ component_name }}"
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: "4. Remove PVC (only when remove_pvc=true)"
+      kubernetes.core.k8s:
+        state: absent
+        kind: PersistentVolumeClaim
+        api_version: v1
+        name: "{{ component_name }}-data"
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      when: _remove_pvc
+      failed_when: false
+
+    - name: "5. Removal complete"
+      ansible.builtin.debug:
+        msg:
+          - "{{ component_name }} removed from {{ namespace }}"
+          - "{{ 'PVC deleted - monitor history and notification config are gone' if _remove_pvc else 'PVC kept - monitors, notifications and history survive a redeploy' }}"
+          - "{{ '' if _remove_pvc else 'To remove the data too: ansible-playbook 230-remove-uptime-kuma.yml -e remove_pvc=true' }}"
