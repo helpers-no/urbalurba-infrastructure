@@ -1,0 +1,13 @@
+# The Kubernetes Service is temporal-web, not temporal.
+service: temporal-web
+# Availability probe shipped with the temporal service.
+#
+# Probes the WEB UI, which is what a human reaches. Whether workflows are
+# actually completing is a different question, and one an availability probe
+# cannot answer - see the observability docs on liveness vs correctness.
+probes:
+  - id: gateway
+    type: http
+    path: /
+    interval: 60
+    maxretries: 2

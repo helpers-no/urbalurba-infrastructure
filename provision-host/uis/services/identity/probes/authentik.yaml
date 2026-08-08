@@ -1,0 +1,14 @@
+# The Kubernetes Service is authentik-server, not authentik.
+service: authentik-server
+# Availability probe shipped with the authentik service.
+#
+# ⚠️ This proves Authentik is SERVING, not that anyone can log in. A working
+# /-/health/live/ with a broken database or a misconfigured provider still fails
+# every actual login. A synthetic login check would be the honest test; this is
+# the cheap one.
+probes:
+  - id: gateway
+    type: http
+    path: /-/health/live/
+    interval: 60
+    maxretries: 2
