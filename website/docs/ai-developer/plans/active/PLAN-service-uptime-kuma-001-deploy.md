@@ -4,16 +4,27 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — Phases 1 & 2 done, Phase 3 pending first-run setup
+## Status: Active — goal met; retention tuning (3.2) is all that remains
+
+⚠️ **Phases 1 and 2 were superseded on 2026-08-08.** The hand-written manifest
+they describe was removed and replaced by the UIS service definition in
+[PLAN-service-uptime-kuma-004-uis-service](../completed/PLAN-service-uptime-kuma-004-uis-service.md)
+(completed), at the user's direction: *"Remove the hand written service and use
+the uis command to deploy."* Their findings are kept below because they are still
+true and still cost real time to rediscover; the specific resources they created
+no longer exist.
+
+The first-run wizard that blocked Phase 3 is **gone** — the account is seeded by
+the setup playbook and there is no browser step.
 
 **Goal**: Run Uptime Kuma on a host outside the monitored platform, with its
 database on storage whose failure does not cost a rebuild.
 
-**Investigation**: [INVESTIGATE-service-uptime-kuma.md](./INVESTIGATE-service-uptime-kuma.md)
+**Investigation**: [INVESTIGATE-service-uptime-kuma.md](../backlog/INVESTIGATE-service-uptime-kuma.md)
 
 **Priority**: High
 
-**Last Updated**: 2026-08-07
+**Last Updated**: 2026-08-08
 
 **Deployed**: 2026-08-07 on `assist` k3s, namespace `monitoring`
 
@@ -62,14 +73,39 @@ MinIO's volume predates this and still works, so **the class looks functional
 until you try to use it**. Editing `local-path-config` would fix it until the
 next k3s upgrade, which rewrites that ConfigMap.
 
-Resolved with a static PV pinned by `nodeAffinity` — no provisioner dependency,
-survives upgrades. Anything else on this cluster wanting USB-backed storage will
-hit the same wall.
+Resolved at the time with a static PV pinned by `nodeAffinity`.
+
+**Superseded 2026-08-08 by a better fix.** The static PV solved it for this one
+volume and left the trap in place for everything else. The durable fix is a k3s
+server flag in `/etc/rancher/k3s/config.yaml` on assist:
+
+```yaml
+default-local-storage-path: /mnt/hadata/k3s-storage
+```
+
+The default `local-path` StorageClass now provisions onto the USB stick, so
+**every** claim on this cluster lands there without asking — no static PV, no
+`local-path-usb`, nothing per-volume to remember. The static PV was deleted.
+
+Verified after a full purge-and-rebuild on 2026-08-08 — both the Kuma and
+AutoKuma volumes provisioned to `/dev/sda1` (the USB stick):
+
+```
+/mnt/hadata/k3s-storage/pvc-…_monitoring_uptime-kuma-data   /dev/sda1
+/mnt/hadata/k3s-storage/pvc-…_monitoring_autokuma-data      /dev/sda1
+```
+
+That the fresh claims landed on USB *by default* is the point: the previous
+arrangement would have silently put a rebuilt volume back on the microSD.
+`minio` still uses the old `local-path-usb` class and still works, which is why
+that class looks functional until you try to make a new claim with it.
 
 ### Validation
 
 ```bash
-kubectl get pvc -n monitoring uptime-kuma -o wide   # Bound, local-path-usb
+kubectl get pvc -n monitoring uptime-kuma-data -o wide   # Bound, local-path
+# then confirm it is really on the stick, not just named as if it were:
+kubectl get pv <name> -o jsonpath='{.spec.local.path}' | xargs df -h
 ```
 
 Rationale: the USB stick is **slower** than the boot card (measured: 6.9 vs
@@ -110,9 +146,28 @@ follow -> /setup-database  200  <title>Uptime Kuma</title>
 Image `louislam/uptime-kuma:2.5.0` (arm64 verified before pinning). Ready ~90s
 after the image pull completed.
 
-⏳ **Outstanding**: the v2 first-run wizard (`/setup-database` → choose SQLite,
-then create the admin account) is browser-only and has not been completed.
-Phase 3 cannot start until it is.
+✅ **The first-run wizard is gone (2026-08-08).** It was browser-only, which made
+the whole deployment non-reproducible from the CLI. Removed in two parts, both in
+the UIS service:
+
+- `UPTIME_KUMA_DB_TYPE=sqlite` skips `/setup-database`
+- the setup playbook seeds the admin row directly (bcrypt, 10 rounds), using
+  `uptime-kuma-admin-user` / `uptime-kuma-admin-password` from
+  `urbalurba-secrets`, which inherit `DEFAULT_ADMIN_PASSWORD`
+
+⚠️ The seeding step reported success while creating an account with an **empty
+username** — `$KUMA_USER` was inside a single-quoted `sh -c` and never expanded.
+The playbook now passes the value on stdin via a heredoc, and task 11.1 verifies
+the seeded credential actually authenticates (bcrypt `compareSync`) rather than
+trusting that the insert ran.
+
+**A resource existing is not the same as it working.** That is the same shape as
+this plan's `local-path-usb` finding and as the empty push tokens found in
+PLAN-006 — three instances in one service.
+
+Also superseded: this is now a **StatefulSet**, not a Deployment, so `strategy:
+Recreate` in 2.3 is moot — a StatefulSet with one replica cannot double-write
+SQLite.
 
 ---
 
@@ -120,28 +175,47 @@ Phase 3 cannot start until it is.
 
 ### Tasks
 
-- [ ] 3.1 Default check interval **60s**, not 20s
-- [ ] 3.2 Retention trimmed (~30 days) rather than the default
-- [ ] 3.3 After a week, record DB size and growth rate in this plan
+- [x] 3.1 Default check interval **60s**, not 20s ✓ — `defaults.interval: 60` in
+      `monitors.yaml`. Intervals in use: 60s (services), 900s (the enrichment
+      heartbeat), 93600s (the daily backup heartbeats)
+- [ ] 3.2 Retention trimmed (~30 days) rather than the default — **NOT DONE**.
+      `keepDataPeriodDays` is unset, i.e. Kuma's default of 180 days
+- [ ] 3.3 After a week, record DB size and growth rate — **not yet measurable**
 
 ### Validation
 
 ```bash
-kubectl exec -n monitoring deploy/uptime-kuma -- du -sh /app/data
+kubectl exec -n monitoring uptime-kuma-0 -- du -sh /app/data
 ```
 
-User confirms growth is linear and modest.
+**2026-08-08: 2.8 MB.** Not a useful baseline — the database was purged and
+rebuilt the same day, so this is one day of 14 monitors at 60s with no history
+behind it. Re-measure after a week of uninterrupted running.
+
+⚠️ **3.2 must be set by the playbook, not in the UI.** Retention lives in Kuma's
+`setting` table, so a value clicked in through the browser is destroyed by
+`uis undeploy --purge` — the same non-reproducibility the first-run wizard had.
+Seed it alongside the admin account.
 
 ---
 
 ## Acceptance Criteria
 
 - [x] Uptime Kuma reachable from the LAN and the tailnet
-- [x] Data on the USB stick, **not** the boot microSD (static PV)
+- [x] Data on the USB stick, **not** the boot microSD — now by k3s default rather
+      than a static PV, and re-verified after a full rebuild
 - [x] Image pinned to `2.5.0`
-- [ ] Survives a reboot of assist with monitors intact
-- [ ] Does not disturb Home Assistant or Z-Wave JS
-- [x] Deployed declaratively; manifest at `hosts/assist/uptime-kuma.yaml`
+- [ ] Survives a reboot of assist with monitors intact — **not tested.** A purge
+      and rebuild has been verified, which is a harder test of *reproducibility*
+      but not the same thing as surviving a reboot with state intact
+- [x] Does not disturb Home Assistant or Z-Wave JS — both still running; the
+      `home-assistant` monitor has been UP throughout
+- [x] Deployed declaratively — **as a UIS service**, `uis deploy uptime-kuma`.
+      The `hosts/assist/uptime-kuma.yaml` manifest this originally specified was
+      deleted; see PLAN-004
+- [x] Reproducible from nothing: `uis undeploy uptime-kuma --purge` followed by
+      `uis deploy uptime-kuma` rebuilds it with the admin account seeded and no
+      browser step. Verified twice on 2026-08-08
 
 ---
 
@@ -163,4 +237,15 @@ iMac. Worth its own plan.
 
 ## Files to Modify
 
-- new manifest for the assist deployment (namespace, PVC, Deployment, Service, Ingress)
+Superseded — the work landed as a UIS service rather than a standalone manifest:
+
+- `provision-host/uis/services/observability/service-uptime-kuma.sh`
+- `ansible/playbooks/230-setup-uptime-kuma.yml` (deploy + seed the admin account)
+- `ansible/playbooks/230-remove-uptime-kuma.yml` (honours `--purge`)
+- `manifests/230-uptime-kuma-*.yaml`
+- `provision-host/uis/templates/secrets-templates/00-master-secrets.yml.template`
+  — `uptime-kuma-admin-user` / `uptime-kuma-admin-password`
+- `/etc/rancher/k3s/config.yaml` on assist — `default-local-storage-path`
+  (installation config, not the product repo)
+
+Still to do for 3.2: seed `keepDataPeriodDays` in `230-setup-uptime-kuma.yml`.
