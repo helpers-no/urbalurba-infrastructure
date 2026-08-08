@@ -3,12 +3,22 @@
 # Remove Uptime Kuma from the cluster
 #
 # The PVC is KEPT by default: it holds the monitor definitions, the notification
-# configuration and the whole uptime history, none of which is reproducible.
-# Remove it explicitly with -e remove_pvc=true.
+# configuration and the whole uptime history.
 #
 # Usage:
+#   uis undeploy uptime-kuma                 keep the data
+#   uis undeploy uptime-kuma --purge         delete it too
+#
 #   ansible-playbook 230-remove-uptime-kuma.yml
 #   ansible-playbook 230-remove-uptime-kuma.yml -e remove_pvc=true
+#
+# `uis undeploy --purge` passes `_purge=true`, which is the CLI-wide convention
+# for "remove persistent state". Both spellings are honoured: _purge so the
+# standard CLI flag works, remove_pvc so direct playbook runs keep working.
+#
+# Leaving the PVC behind makes install bugs unfalsifiable - every reinstall after
+# the first lands on an existing database, so a broken first-install path stays
+# hidden. That is exactly how the empty-username seeding bug survived a redeploy.
 
 - name: Remove Uptime Kuma
   hosts: localhost
@@ -17,7 +27,9 @@
 
   vars:
     _target: "{{ target_host | default('rancher-desktop') }}"
-    _remove_pvc: "{{ remove_pvc | default(false) | bool }}"
+    # Either spelling: _purge from `uis undeploy --purge`, remove_pvc from a
+    # direct playbook run.
+    _remove_pvc: "{{ (remove_pvc | default(false) | bool) or (_purge | default(false) | bool) }}"
     merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
     namespace: "monitoring"
     component_name: "uptime-kuma"
@@ -53,7 +65,7 @@
         kubeconfig: "{{ merged_kubeconf_file }}"
       failed_when: false
 
-    - name: "4. Remove PVC (only when remove_pvc=true)"
+    - name: "4. Remove PVC (only with --purge / remove_pvc=true)"
       kubernetes.core.k8s:
         state: absent
         kind: PersistentVolumeClaim
@@ -69,4 +81,4 @@
         msg:
           - "{{ component_name }} removed from {{ namespace }}"
           - "{{ 'PVC deleted - monitor history and notification config are gone' if _remove_pvc else 'PVC kept - monitors, notifications and history survive a redeploy' }}"
-          - "{{ '' if _remove_pvc else 'To remove the data too: ansible-playbook 230-remove-uptime-kuma.yml -e remove_pvc=true' }}"
+          - "{{ '' if _remove_pvc else 'To remove the data too: uis undeploy uptime-kuma --purge' }}"
