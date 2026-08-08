@@ -4,7 +4,8 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog
+## Status: Active — alerting is live on the reference installation; two items
+outstanding (resend/maintenance windows, and true off-site dead-man cover)
 
 **Goal**: An alert reaches a human away from home, and the watchdog's own death
 is detectable.
@@ -37,14 +38,20 @@ Two specific gaps to close:
 
 ### Tasks
 
-- [ ] 1.1 Pick a notification provider that does not depend on home
+- [x] 1.1 **ntfy** (`https://ntfy.sh`) ✓ — free, no account, self-hostable later
       infrastructure. Uptime Kuma ships ~90; realistic options:
       **ntfy** (self-hostable but use the public instance for this),
       **Telegram**, **Pushover**, or plain **SMTP** via an external provider
-- [ ] 1.2 Configure it and send a test
-- [ ] 1.3 **Verify from a phone on mobile data, with home Wi-Fi off.** An alert
+- [x] 1.2 Configured and tested ✓ — verified twice by deliberately failing a real
+      monitor, not just by publishing to the topic directly
+- [ ] 1.3 ⏳ **Awaiting the user's confirmation.** The phone is subscribed and a
+      confirmation push was delivered, but delivery **on mobile data with home
+      Wi-Fi off** has not been proven and cannot be proven from here. An alert
       that only arrives on the LAN has not been tested
-- [ ] 1.4 Store the credential in OpenBao rather than only in Kuma's database
+- [x] 1.4 In OpenBao at `platform/uptime-kuma` ✓ (`ntfy_topic`, `ntfy_server`,
+      alongside `push_token_salt`). ⚠️ On the public ntfy.sh **the topic name IS
+      the credential** — anyone who learns it can read the alerts and publish
+      fakes. Self-host or set a topic password before treating it as private
 
 ### Validation
 
@@ -57,13 +64,17 @@ not on the home network.
 
 ### Tasks
 
-- [ ] 2.1 Infrastructure (Odin, asgard, pg, minio): notify after **2** failures
-- [ ] 2.2 Ollama backends: after **3** — the M4 sleeps in 9–16 minute cycles and
+- [x] 2.1 Infrastructure: `maxretries: 2` ✓
+- [x] 2.2 Ollama backends: `maxretries: 3` — **but that is not enough, so they do
+      not page at all** (`notify: false`). A 9–16 minute nap at a 60s interval
+      clears 3 retries every time. m4-ollama was DOWN while this was written and
+      correctly silent. Revisit when the wake/sleep behaviour is settled. The M4 sleeps in 9–16 minute cycles and
       must not page for a nap
-- [ ] 2.3 Heartbeats: notify on **first** expiry; the expiry window is itself the
+- [x] 2.3 Heartbeats notify on first expiry ✓ — the expiry window is itself the
       grace period
-- [ ] 2.4 Enable resend so an unacknowledged outage nags rather than scrolls away
-- [ ] 2.5 Set a maintenance window mechanism for planned work
+- [ ] 2.4 **NOT DONE** — resend is off, so a single missed push means the outage
+      scrolls away and is never repeated
+- [ ] 2.5 **NOT DONE** — no maintenance-window mechanism, so planned work pages
 
 ### Validation
 
@@ -76,14 +87,28 @@ monitors** — an ignored alert channel is worse than none.
 
 ### Tasks
 
-- [ ] 3.1 Add a **dead-man's switch**: Uptime Kuma pushes a heartbeat to a free
+- [x] 3.1 Dead-man's switch ✓ — **implemented the other way round.** Rather than
+      Kuma pushing outward to a third party, **Odin** (a different physical
+      machine) polls assist every 10 minutes via `watch-assist.timer` and pushes
+      to ntfy *directly* when Kuma is unreachable — going through Kuma would be
+      pointless when Kuma is what is down. It latches, so one alert plus one on
+      recovery. Verified against a closed port.
+
+      ⚠️ **This does not cover a whole-house failure.** Odin and assist watch each
+      other; if power or internet goes, both are down and you get silence. True
+      cover still needs something off-site — a free external service, or a
+      Cloudflare Worker on the account that already exists. Original task text:
+      Uptime Kuma pushes a heartbeat to a free
       external service (healthchecks.io or equivalent) on a schedule; that
       service alerts if the push stops. This is the only mechanism that catches
       assist dying, losing power, or losing its internet connection
 - [ ] 3.2 Once the in-cluster stack has any rules, add a Prometheus probe of
       Uptime Kuma — deliberate mutual monitoring, the one place duplication is
       correct (investigation F6)
-- [ ] 3.3 Document the recovery path: what to check when the dead-man's switch
+- [x] 3.3 Recovery path documented in `odin-ops/runbooks/odin-platform-runbook.md`
+      §7e ✓ — deliberately in a **private GitHub repo**, which is reachable from a
+      phone when the house is dark. A runbook that only exists on assist is
+      useless in exactly the situation it is for. Original: what to check when the dead-man's switch
       fires, given that by definition the dashboard is unreachable
 
 ### Validation
@@ -94,12 +119,14 @@ Stop Uptime Kuma. Confirm the external service raises an alert.
 
 ## Acceptance Criteria
 
-- [ ] An outage notification reaches a phone on mobile data with home Wi-Fi off
-- [ ] 48 h of running produces zero false alarms
-- [ ] The M4's sleep cycles are recorded but never page
-- [ ] Killing Uptime Kuma raises an external alert
-- [ ] Notification credentials are in OpenBao
-- [ ] The recovery path is written down somewhere reachable when everything is down
+- [ ] An outage notification reaches a phone on mobile data with home Wi-Fi off —
+      **unverified**; needs the user to check with Wi-Fi off
+- [ ] 48 h of running produces zero false alarms — **clock starts 2026-08-08**
+- [x] The M4's sleep cycles are recorded but never page ✓ (recorded; silenced)
+- [x] Killing Uptime Kuma raises an external alert ✓ (from Odin; not house-wide)
+- [x] Notification credentials are in OpenBao ✓
+- [x] The recovery path is written down somewhere reachable when everything is
+      down ✓ — private GitHub, readable from a phone
 
 ---
 
