@@ -185,9 +185,13 @@ A monitor appears in Uptime Kuma without anyone opening the UI.
 - [ ] 4.3 `uis monitors check` — compare intended against the ConfigMap **and**
       against what Kuma is running, so a wedged AutoKuma is visible. Reconcilers
       fail silently; that is the same absence-renders-as-green trap
-- [ ] 4.4 Optional `.uis.extend/monitors.yaml` for targets UIS did not deploy —
-      a hypervisor, a NAS, machines outside the cluster, job heartbeats. **Empty
-      or absent on a stock install.**
+- [ ] 4.4 Optional `.uis.extend/monitors.yaml` — **only for things UIS does not
+      depend on**: a hypervisor, a NAS, the watchdog's own host, job heartbeats.
+      Anything UIS *depends on* is declared as a shim Service instead and
+      discovered like any other Service — see
+      [PLAN-system-dependencies-shim-services](./PLAN-system-dependencies-shim-services.md).
+      If you find yourself hand-writing a monitor for a dependency, the bug is a
+      missing shim. **Empty or absent on a stock install.**
 
 ### Validation
 
@@ -213,13 +217,21 @@ uis undeploy redis && uis monitors check   # gone, no orphan
 
 ## Implementation Notes
 
-**Probe through the Service, not the container.** On the reference deployment
-PostgreSQL runs *outside* the cluster behind a shim Service. Probing
-`postgresql.default:5432` tests the whole path — shim, network, external
-container — which is what Temporal and Authentik actually depend on. Probing the
-database host directly would stay green while that path was broken. It also
-means installations that externalise state need no special handling: UIS sees an
-ordinary Service either way.
+**Probe through the Service, not the container.** Where a dependency runs
+outside the cluster behind a shim Service, probing `postgresql.default:5432`
+tests the whole path — shim, network, external process — which is what Temporal
+and Authentik actually depend on. Probing the database host directly would stay
+green while that path was broken. It also means installations that externalise
+state need no special handling: UIS sees an ordinary Service either way.
+
+⚠️ **This describes the target state, not the reference installation today.**
+Verified on `asgard` 2026-08-08: `default/postgresql` and `default/minio` are
+ordinary in-cluster services with pod endpoints; the production PostgreSQL on
+Proxmox has no shim, and the only shims that exist are the two Ollama hosts. An
+earlier revision of this note asserted the shim already existed and reasoned
+from it. Getting there is
+[PLAN-system-dependencies-shim-services](./PLAN-system-dependencies-shim-services.md),
+which this plan should be read alongside.
 
 **Why not keep the direct-to-database reconciler.** The reference deployment has
 a working one, and it was tempting to promote it. Reading Kuma's own `add`
