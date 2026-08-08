@@ -44,9 +44,10 @@ Two specific gaps to close:
       **Telegram**, **Pushover**, or plain **SMTP** via an external provider
 - [x] 1.2 Configured and tested ✓ — verified twice by deliberately failing a real
       monitor, not just by publishing to the topic directly
-- [ ] 1.3 ⏳ **Awaiting the user's confirmation.** The phone is subscribed and a
-      confirmation push was delivered, but delivery **on mobile data with home
-      Wi-Fi off** has not been proven and cannot be proven from here. An alert
+- [x] 1.3 **Confirmed on the user's phone 2026-08-08** ✓ — and more strongly than
+      this task asks: the user is abroad, so the message arrived with the device
+      on a foreign network, nowhere near home Wi-Fi. That is the condition that
+      matters — an alert
       that only arrives on the LAN has not been tested
 - [x] 1.4 In OpenBao at `platform/uptime-kuma` ✓ (`ntfy_topic`, `ntfy_server`,
       alongside `push_token_salt`). ⚠️ On the public ntfy.sh **the topic name IS
@@ -119,8 +120,8 @@ Stop Uptime Kuma. Confirm the external service raises an alert.
 
 ## Acceptance Criteria
 
-- [ ] An outage notification reaches a phone on mobile data with home Wi-Fi off —
-      **unverified**; needs the user to check with Wi-Fi off
+- [x] An outage notification reaches a phone off the home network ✓ — confirmed by
+      the user while abroad
 - [ ] 48 h of running produces zero false alarms — **clock starts 2026-08-08**
 - [x] The M4's sleep cycles are recorded but never page ✓ (recorded; silenced)
 - [x] Killing Uptime Kuma raises an external alert ✓ (from Odin; not house-wide)
