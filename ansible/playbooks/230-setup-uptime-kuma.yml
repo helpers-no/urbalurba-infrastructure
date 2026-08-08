@@ -22,6 +22,9 @@
     manifests_folder: "/mnt/urbalurbadisk/manifests"
     statefulset_file: "{{ manifests_folder }}/230-uptime-kuma-statefulset.yaml"
     ingressroute_file: "{{ manifests_folder }}/230-uptime-kuma-ingressroute.yaml"
+    # AutoKuma is PART OF THIS SERVICE, not a service of its own. Uptime Kuma
+    # without it is an empty dashboard you have to fill in by hand.
+    autokuma_file: "{{ manifests_folder }}/230-uptime-kuma-autokuma.yaml"
     # History retention. Kuma's default is 180 days; the watchdog is expected to
     # run on modest/flash storage, so trim it. Override with
     # -e kuma_retention_days=N.
@@ -83,6 +86,28 @@
       delay: 6
       until: kuma_http.stdout is search('200|302')
       changed_when: false
+
+    - name: "5.1 Deploy AutoKuma (the monitor reconciler, part of this service)"
+      # After task 5, so Kuma is already answering and AutoKuma's first connect
+      # attempt succeeds rather than relying on its restart loop.
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ autokuma_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: "5.2 Wait for AutoKuma to be ready"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "app=autokuma"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: autokuma_pods
+      retries: 30
+      delay: 10
+      until: >
+        autokuma_pods.resources | length > 0 and
+        autokuma_pods.resources[0].status.phase == "Running"
 
     - name: "6. Verify the data volume is mounted"
       ansible.builtin.shell: >

@@ -1,0 +1,175 @@
+# 230-autokuma-deployment.yaml
+#
+# Description:
+# AutoKuma - reconciles monitor definition files into Uptime Kuma over its
+# Socket.IO interface, so UIS never writes to Kuma's database to manage monitors.
+# Definitions arrive as one JSON per monitor in the `uptime-kuma-monitors`
+# Secret; adding a key creates a monitor, removing one deletes it.
+#
+# Usage:
+#   kubectl apply -f 230-autokuma-deployment.yaml
+#
+# Prerequisites:
+# - monitoring namespace, with uptime-kuma running
+# - urbalurba-secrets with uptime-kuma-admin-user / uptime-kuma-admin-password
+# - Secret `uptime-kuma-monitors` (created by `uis monitors apply`; may be empty)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ⚠️ SIX BEHAVIOURS ARE ENCODED BELOW. EVERY ONE OF THEM FAILS SILENTLY.
+# All were found by prototyping on a live installation; none produce an error.
+# Changing any of them will appear to work.
+#
+#   1. Separate Deployment, not a sidecar in the uptime-kuma pod
+#   2. strategy: Recreate, not the default RollingUpdate
+#   3. /data must be a PVC
+#   4. The Secret must be flattened with `cp -L` before AutoKuma reads it
+#   5. Image tag 2.0.0, not v2.0.0
+#   6. Notifications are NOT managed here (see the note at the bottom)
+# ─────────────────────────────────────────────────────────────────────────────
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: autokuma-data
+  namespace: monitoring
+  labels:
+    app: autokuma
+spec:
+  # (3) AutoKuma keeps its id -> entity mapping in /data. That mapping is how it
+  # knows a monitor it created earlier is the same monitor on the next pass.
+  # Without persistence every pod restart re-creates every monitor as a new one:
+  # observed going from 19 monitors to 38, every name duplicated, no error
+  # anywhere.
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 256Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autokuma
+  namespace: monitoring
+  labels:
+    app: autokuma
+spec:
+  replicas: 1
+  # (2) /data is ReadWriteOnce and holds a lock-protected store, so only one
+  # AutoKuma may hold it. RollingUpdate starts the new pod before terminating
+  # the old, leaving two instances running - and because the definitions are
+  # COPIED into an emptyDir (see 4), the two can be working from different file
+  # sets. Observed: two pods coexisting for 20+ minutes, one of them still
+  # holding a monitor that had been deleted.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: autokuma
+  template:
+    metadata:
+      labels:
+        app: autokuma
+    spec:
+      initContainers:
+        # Kuma needs ~30s before it accepts Socket.IO. This is not the
+        # correctness guarantee - the restart loop is - but it avoids a noisy
+        # first failure on a cold boot. Targets the Service, not localhost,
+        # because this is a different pod.
+        - name: wait-for-kuma
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              until curl -s -o /dev/null -m 5 http://uptime-kuma.monitoring.svc.cluster.local:3001/; do
+                echo "waiting for uptime-kuma..."; sleep 5
+              done
+              echo "uptime-kuma is answering"
+        # (4) Kubernetes projects a Secret as a tree of symlinks into a hidden
+        # ..data/ directory:
+        #     asgard-k3s-api.json -> ..data/asgard-k3s-api.json
+        #     ..data              -> ..2026_08_07_23_49_10.3043089993/
+        # AutoKuma's file scanner does not follow them. It connects, runs its
+        # migrations, finds no files, logs NOTHING, and syncs NOTHING - which
+        # reads exactly like "there is nothing to do". `cp -L` dereferences the
+        # symlinks so it sees real files.
+        - name: flatten-monitors
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              # An empty Secret is normal on a stock install; do not fail on it.
+              cp -L /secret-monitors/*.json /monitors/ 2>/dev/null || true
+              echo "monitor definitions: $(ls -1 /monitors 2>/dev/null | wc -l)"
+          volumeMounts:
+            - { name: monitors-secret, mountPath: /secret-monitors, readOnly: true }
+            - { name: monitors, mountPath: /monitors }
+      containers:
+        - name: autokuma
+          # (5) 2.0.0, NOT v2.0.0. The v-prefixed tag is single-arch and will
+          # not pull on arm64 - which is exactly where a watchdog tends to run.
+          image: ghcr.io/bigboot/autokuma:2.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AUTOKUMA__KUMA__URL
+              value: "http://uptime-kuma.monitoring.svc.cluster.local:3001"
+            # The same admin the setup playbook seeds - no extra credential.
+            - name: AUTOKUMA__KUMA__USERNAME
+              valueFrom:
+                secretKeyRef: { name: urbalurba-secrets, key: uptime-kuma-admin-user }
+            - name: AUTOKUMA__KUMA__PASSWORD
+              valueFrom:
+                secretKeyRef: { name: urbalurba-secrets, key: uptime-kuma-admin-password }
+            - name: AUTOKUMA__STATIC_MONITORS
+              value: "/monitors"
+            # Removing a definition removes the monitor. This is what keeps
+            # `uis undeploy <service>` from leaving an orphaned monitor behind,
+            # without UIS having to implement deletion itself.
+            - name: AUTOKUMA__ON_DELETE
+              value: "delete"
+            - name: AUTOKUMA__DELETE_GRACE_PERIOD
+              value: "120"
+            # The file source is the supported one. AutoKuma's Kubernetes and
+            # Docker Swarm providers are documented as as-is and looking for a
+            # maintainer.
+            - name: AUTOKUMA__DOCKER__ENABLED
+              value: "false"
+          volumeMounts:
+            # Read-only: the init container populated this.
+            - { name: monitors, mountPath: /monitors, readOnly: true }
+            - { name: data, mountPath: /data }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits:   { cpu: 500m, memory: 128Mi }
+      volumes:
+        # A Secret rather than a ConfigMap: a rendered probe can carry a
+        # resolved Authorization header.
+        - name: monitors-secret
+          secret:
+            secretName: uptime-kuma-monitors
+            optional: true
+        - name: monitors
+          emptyDir: {}
+        - name: data
+          persistentVolumeClaim:
+            claimName: autokuma-data
+#
+# (6) ⚠️ NOTIFICATIONS ARE DELIBERATELY NOT MANAGED HERE.
+#
+# AutoKuma *can* own the alert channel: a file with `"type": "notification"` is
+# accepted by the file source (undocumented - upstream only documents Docker
+# labels), monitors then resolve `notification_name_list` by name, and alerts
+# deliver correctly. It was verified working end to end.
+#
+# It is not used because AutoKuma 2.0.0 never converges on notifications: it
+# re-sends "Updating notification" every ~5 seconds, forever, which is a Kuma
+# database write every 5s - on a watchdog that typically runs on flash storage.
+# Confirmed with a single instance and a freshly cleared state store, so it is
+# not a duplicate-pod artifact. Upstream calls notification support experimental.
+#
+# The channel and its monitor attachments are seeded by the setup playbook
+# instead. AutoKuma leaves them alone because it has no record of them.
+#
+# Consequence: rendered monitor files must NOT contain `notification_name_list`,
+# or AutoKuma logs a resolve warning for every monitor on every pass.
