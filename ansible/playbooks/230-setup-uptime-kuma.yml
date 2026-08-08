@@ -22,6 +22,10 @@
     manifests_folder: "/mnt/urbalurbadisk/manifests"
     statefulset_file: "{{ manifests_folder }}/230-uptime-kuma-statefulset.yaml"
     ingressroute_file: "{{ manifests_folder }}/230-uptime-kuma-ingressroute.yaml"
+    # History retention. Kuma's default is 180 days; the watchdog is expected to
+    # run on modest/flash storage, so trim it. Override with
+    # -e kuma_retention_days=N.
+    kuma_retention_days: "{{ uptime_kuma_retention_days | default(30) }}"
 
   tasks:
     - name: "1. Create {{ namespace }} namespace"
@@ -173,18 +177,70 @@
       when: kuma_user_count.stdout | trim | int == 0
       no_log: true
 
-    - name: "10. Restart so needSetup is recomputed"
+    - name: "9.1 Seed retention (keepDataPeriodDays)"
+      # Flash storage: trim history rather than keeping Uptime Kuma's 180-day
+      # default. 19 monitors at 60s is ~27k rows/day.
+      #
+      # This MUST be seeded here rather than clicked in the UI. Retention lives
+      # in Kuma's `setting` table, so a value set through the browser is
+      # destroyed by `uis undeploy --purge` and silently reverts to 180 days -
+      # the same non-reproducibility the first-run wizard had.
+      #
+      # Values are JSON-encoded (Kuma's Settings.set does JSON.stringify, and
+      # get does JSON.parse), so a number goes in bare - '30', not '"30"'.
+      # Idempotent: on conflict it updates, so re-running is safe.
+      ansible.builtin.shell: |
+        set -o pipefail
+        CUR=$(kubectl exec -n {{ namespace }} {{ component_name }}-0 \
+                --kubeconfig {{ merged_kubeconf_file }} -- \
+                sqlite3 /app/data/kuma.db \
+                "select value from setting where key='keepDataPeriodDays';" | tr -d '\r')
+        if [ "$CUR" = "{{ kuma_retention_days }}" ]; then
+          echo RETENTION_ALREADY_SET; exit 0
+        fi
+        kubectl exec -n {{ namespace }} {{ component_name }}-0 \
+          --kubeconfig {{ merged_kubeconf_file }} -- \
+          sqlite3 /app/data/kuma.db \
+          "insert into setting (key, value, type)
+           values ('keepDataPeriodDays', '{{ kuma_retention_days }}', 'general')
+           on conflict(key) do update
+           set value='{{ kuma_retention_days }}', type='general';"
+        echo RETENTION_UPDATED
+      args:
+        executable: /bin/bash
+      register: kuma_retention_set
+      # Distinct tokens, not CHANGED/UNCHANGED: 'CHANGED' in 'UNCHANGED' is
+      # substring-true, which made this report changed on every run and restart
+      # Kuma needlessly.
+      changed_when: "'RETENTION_UPDATED' in kuma_retention_set.stdout"
+
+    - name: "9.2 Verify retention was stored as a number Kuma can parse"
+      # A quoted value would JSON.parse to the string "30" and Kuma's cleanup
+      # comparison would misbehave. Check the stored form, not just that the
+      # row exists - a row existing is not the same as it being correct.
+      ansible.builtin.command: >
+        kubectl exec -n {{ namespace }} {{ component_name }}-0
+        --kubeconfig {{ merged_kubeconf_file }} --
+        sqlite3 /app/data/kuma.db
+        "select value from setting where key='keepDataPeriodDays';"
+      register: kuma_retention_check
+      changed_when: false
+      failed_when: kuma_retention_check.stdout | trim != kuma_retention_days | string
+
+    - name: "10. Restart so needSetup is recomputed / settings cache is reloaded"
+      # Kuma caches settings in memory, so a retention change needs a restart to
+      # take effect - not just the row being written.
       ansible.builtin.command: >
         kubectl rollout restart statefulset/{{ component_name }} -n {{ namespace }}
         --kubeconfig {{ merged_kubeconf_file }}
-      when: kuma_seed.changed | default(false)
+      when: (kuma_seed.changed | default(false)) or (kuma_retention_set.changed | default(false))
 
     - name: "10.1 Wait for the restart"
       ansible.builtin.command: >
         kubectl rollout status statefulset/{{ component_name }} -n {{ namespace }}
         --timeout=240s --kubeconfig {{ merged_kubeconf_file }}
       changed_when: false
-      when: kuma_seed.changed | default(false)
+      when: (kuma_seed.changed | default(false)) or (kuma_retention_set.changed | default(false))
 
     - name: "11. Confirm the wizard is gone"
       ansible.builtin.shell: >
