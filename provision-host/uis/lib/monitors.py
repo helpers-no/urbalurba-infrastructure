@@ -210,6 +210,17 @@ def load_probes(services_dir):
     return out
 
 
+def read_secret_key(key, namespace="monitoring"):
+    """A single key out of urbalurba-secrets. Values never live in YAML."""
+    import base64
+    r = subprocess.run(
+        ["kubectl", "get", "secret", "urbalurba-secrets", "-n", namespace,
+         "-o", f"jsonpath={{.data.{key}}}"], capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    return base64.b64decode(r.stdout.strip()).decode().strip()
+
+
 def push_token(salt, name):
     """Heartbeat tokens are DERIVED, never random.
 
@@ -233,6 +244,7 @@ def render_monitor(name, kind, value, probe):
     attachments instead.
     """
     o = {"name": name,
+         "_notify": probe.get("notify", True),
          "interval": int(probe.get("interval", 60)),
          "max_retries": int(probe.get("maxretries", 2)),
          "retry_interval": int(probe.get("retry_interval", 60)),
@@ -318,6 +330,7 @@ def build(services_dir, extend_file=None, salt=None, watchdog="auto"):
             m = dict(defaults)
             m.update(entry)
             o = {"name": m["name"], "type": m["type"],
+                 "_notify": m.get("notify", True),
                  "interval": int(m.get("interval", 60)),
                  "max_retries": int(m.get("maxretries", 2)),
                  "retry_interval": int(m.get("retry_interval", 60)),
@@ -333,7 +346,18 @@ def build(services_dir, extend_file=None, salt=None, watchdog="auto"):
                     o["accepted_statuscodes"] = m["accepted_statuscodes"]
             elif m["type"] == "port":
                 o["hostname"], o["port"] = m["hostname"], int(m["port"])
-            elif m["type"] == "push":
+            # auth_header_secret names a key in urbalurba-secrets - never a
+            # value. Resolved at render time so the secret lives in exactly one
+            # place and the definition stays safe to read.
+            if m.get("auth_header_secret"):
+                hv = read_secret_key(m["auth_header_secret"])
+                if hv:
+                    o["headers"] = json.dumps({"Authorization": hv})
+                else:
+                    sys.exit(f"ERROR: {m['name']} references auth_header_secret "
+                             f"'{m['auth_header_secret']}' but that key is not in "
+                             f"urbalurba-secrets")
+            if m["type"] == "push":
                 if not salt:
                     sys.exit("ERROR: a push monitor needs uptime-kuma-push-salt "
                              "in urbalurba-secrets - without it the heartbeat "
@@ -342,6 +366,67 @@ def build(services_dir, extend_file=None, salt=None, watchdog="auto"):
             monitors.append(o)
 
     return monitors, skipped, in_cluster
+
+
+def kuma_sql(namespace, query):
+    r = subprocess.run(
+        ["kubectl", "exec", "-n", namespace, "uptime-kuma-0", "--",
+         "sqlite3", "-separator", "\x1f", "/app/data/kuma.db", query],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    return [l.split("\x1f") for l in r.stdout.strip().splitlines() if l.strip()]
+
+
+def attach_alerts(namespace, monitors, wait=180):
+    """Attach the alert channel to every monitor that should page.
+
+    Done here rather than by AutoKuma: AutoKuma resolves notification names only
+    against notifications it manages, and letting it manage the channel makes it
+    rewrite that channel every ~5 seconds forever.
+
+    Insert-only, so a channel a human attached by hand is never removed.
+    """
+    rows = kuma_sql(namespace,
+                    f"select id from notification where name='{NOTIFICATION_NAME}';")
+    if not rows:
+        print(f"\n  no '{NOTIFICATION_NAME}' channel - nothing will notify you.")
+        print("  Set UPTIME_KUMA_NTFY_TOPIC and redeploy uptime-kuma.")
+        return 0
+    nid = rows[0][0]
+
+    # AutoKuma creates monitors asynchronously; wait for them rather than
+    # attaching to a half-populated set.
+    want = {m["name"] for m in monitors if m.get("_notify", True)}
+    import time
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        have = {r[0] for r in (kuma_sql(namespace, "select name from monitor;") or [])}
+        if want <= have:
+            break
+        time.sleep(5)
+
+    ids = {r[0]: r[1] for r in (kuma_sql(namespace, "select name, id from monitor;") or [])}
+    attached = {r[0] for r in (kuma_sql(
+        namespace,
+        "select m.name from monitor m join monitor_notification mn "
+        f"on mn.monitor_id=m.id where mn.notification_id={nid};") or [])}
+    added = 0
+    for name in sorted(want):
+        if name in attached or name not in ids:
+            continue
+        kuma_sql(namespace, "insert into monitor_notification (monitor_id, "
+                            f"notification_id) values ({ids[name]}, {nid});")
+        added += 1
+    missing = sorted(want - set(ids))
+    print(f"\n  alerting: {added} newly attached, {len(attached)} already, "
+          f"{len(monitors) - len(want)} deliberately silent")
+    if missing:
+        # Loud: these were rendered but Kuma does not have them, so they cannot
+        # be attached and are not being watched.
+        print(f"  ⚠️  {len(missing)} rendered but absent from Uptime Kuma "
+              f"(AutoKuma may be wedged): {', '.join(missing)}")
+    return added
 
 
 def main():
@@ -382,14 +467,17 @@ def main():
         if args.outdir:
             os.makedirs(args.outdir, exist_ok=True)
             for m in monitors:
-                json.dump(m, open(f"{args.outdir}/{m['name']}.json", "w"), indent=2)
+                json.dump({k: v for k, v in m.items() if k != "_notify"},
+                          open(f"{args.outdir}/{m['name']}.json", "w"), indent=2)
             print(f"\n  wrote {len(monitors)} files to {args.outdir}")
         return 0
 
     if args.action == "apply":
         import base64
+        # _notify is UIS bookkeeping; AutoKuma must not see it.
+        clean = [{k: v for k, v in m.items() if k != "_notify"} for m in monitors]
         data = {f"{m['name']}.json": base64.b64encode(
-            json.dumps(m, indent=2).encode()).decode() for m in monitors}
+            json.dumps(m, indent=2).encode()).decode() for m in clean}
         secret = {"apiVersion": "v1", "kind": "Secret",
                   "metadata": {"name": "uptime-kuma-monitors",
                                "namespace": args.namespace},
@@ -399,6 +487,7 @@ def main():
         if p.returncode != 0:
             sys.exit(f"ERROR: {p.stderr.strip()}")
         print(f"\n  applied {len(monitors)} definitions to uptime-kuma-monitors")
+        attach_alerts(args.namespace, monitors)
         return 0
 
     if args.action == "check":

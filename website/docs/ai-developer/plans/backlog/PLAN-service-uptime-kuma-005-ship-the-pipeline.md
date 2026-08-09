@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog
+## Status: Active — Phases 1–4 done and the reference installation migrated; auto-discovery is single-cluster only
 
 **Goal**: `uis deploy uptime-kuma` gives a watchdog that is **already monitoring
 and already alerting**, rebuildable from nothing, with the only
@@ -64,22 +64,22 @@ rediscovers them.
 
 ### Tasks
 
-- [ ] 1.1 `manifests/230-autokuma-deployment.yaml` — a **separate Deployment**,
+- [x] 1.1 `manifests/230-uptime-kuma-autokuma.yaml` — a **separate Deployment**,
       not a sidecar. Containers in a pod start together, Kuma needs ~30s before
       it accepts Socket.IO, and AutoKuma makes one connect attempt and never
       retries. Its own Deployment makes the restart loop the retry
-- [ ] 1.2 `strategy: Recreate`. `/data` is RWO with a lock-protected store;
+- [x] 1.2 `strategy: Recreate`. `/data` is RWO with a lock-protected store;
       RollingUpdate runs two instances, and because files are copied into an
       `emptyDir` the two can work from **different file sets**
-- [ ] 1.3 A **PVC for `/data`** — AutoKuma's id→entity map. Without it every
+- [x] 1.3 A **PVC for `/data`** — AutoKuma's id→entity map. Without it every
       restart re-creates every monitor: one restart took 19 monitors to 38
-- [ ] 1.4 An init container that **flattens the Secret with `cp -L`** into an
+- [x] 1.4 An init container that **flattens the Secret with `cp -L`** into an
       `emptyDir`. Kubernetes mounts Secrets as symlinks into `..data/`, which
       AutoKuma's file scanner does not follow — it syncs nothing and logs nothing
-- [ ] 1.5 A `wait-for-kuma` init container against the Service, not localhost
-- [ ] 1.6 Pin the image to `2.0.0` — **not** `v2.0.0`, which is single-arch and
+- [x] 1.5 A `wait-for-kuma` init container against the Service, not localhost
+- [x] 1.6 Pin the image to `2.0.0` — **not** `v2.0.0`, which is single-arch and
       will not pull on arm64
-- [ ] 1.7 `AUTOKUMA__ON_DELETE=delete` with a grace period, so removing a
+- [x] 1.7 `AUTOKUMA__ON_DELETE=delete` with a grace period, so removing a
       definition removes the monitor
 
 ### Validation
@@ -95,16 +95,16 @@ kubectl rollout restart deployment/autokuma -n monitoring
 
 ### Tasks
 
-- [ ] 2.1 `uis monitors render` — print what would be written, change nothing
-- [ ] 2.2 `uis monitors apply` — render into the `uptime-kuma-monitors` Secret
-- [ ] 2.3 `uis monitors check` — compare intended against the Secret **and**
+- [x] 2.1 `uis monitors render` — print what would be written, change nothing
+- [x] 2.2 `uis monitors apply` — render into the `uptime-kuma-monitors` Secret
+- [x] 2.3 `uis monitors check` — compare intended against the Secret **and**
       against what Kuma is running. AutoKuma self-heals drift, so a *stopped*
       AutoKuma looks exactly like a healthy one
-- [ ] 2.4 Heartbeat tokens derived as `HMAC-SHA256(salt, monitor name)` from
+- [x] 2.4 Heartbeat tokens derived as `HMAC-SHA256(salt, monitor name)` from
       `uptime-kuma-push-salt` in `urbalurba-secrets`. **Not random**: a rebuild
       must reissue identical URLs or every job needs rewiring, and the old URL
       goes quietly silent rather than failing loudly
-- [ ] 2.5 Emit `push_token` explicitly — AutoKuma does not generate one, and a
+- [x] 2.5 Emit `push_token` explicitly — AutoKuma does not generate one, and a
       push monitor without a token has no callable URL and can never go UP
 
 ### Validation
@@ -121,8 +121,8 @@ uis monitors check                            # still clean, same push URLs
 
 ### Tasks
 
-- [ ] 3.1 Read `.uis.extend/monitors.yaml` if present. Absent is normal
-- [ ] 3.2 Schema: `name`, `type` (`http`/`port`/`push`), `url`/`hostname`+`port`,
+- [x] 3.1 Read `.uis.extend/monitors.yaml` if present. Absent is normal
+- [x] 3.2 Schema: `name`, `type` (`http`/`port`/`push`), `url`/`hostname`+`port`,
       `keyword`, `accepted_statuscodes`, `ignore_tls`, `interval`, `maxretries`,
       `notify`, and `auth_header_secret` naming a key in `urbalurba-secrets` —
       **never a secret value**
@@ -144,18 +144,18 @@ makes it a watchdog.
 
 ### Tasks
 
-- [ ] 4.1 Seed the notification channel from `urbalurba-secrets`
+- [x] 4.1 Seed the notification channel from `urbalurba-secrets`
       (`uptime-kuma-ntfy-server`, `uptime-kuma-ntfy-topic`). Absent ⇒ skip
       cleanly with a warning, never fail the deploy
-- [ ] 4.2 Attach it to every monitor with `notify: true` (the default)
-- [ ] 4.3 ⚠️ **Do not let AutoKuma own the channel.** It can — a file with
+- [x] 4.2 Attach it to every monitor with `notify: true` (the default)
+- [x] 4.3 ⚠️ **Do not let AutoKuma own the channel.** It can — a file with
       `"type": "notification"` is accepted and delivers correctly — but AutoKuma
       2.0.0 never converges on notifications, rewriting it every ~5s forever.
       Confirmed with a single instance and a cleared state store
-- [ ] 4.4 Consequence of 4.3: `notification_name_list` must **not** appear in
+- [x] 4.4 Consequence of 4.3: `notification_name_list` must **not** appear in
       rendered monitor files, or AutoKuma logs a resolve warning per monitor per
       pass
-- [ ] 4.5 Seed retention (`keepDataPeriodDays`) — already shipped, keep it
+- [x] 4.5 Seed retention (`keepDataPeriodDays`) — already shipped, keep it
 
 ### Validation
 
@@ -170,11 +170,11 @@ shipped one, and nothing is lost.
 
 ### Tasks
 
-- [ ] 5.1 Move the 19 monitors into `.uis.extend/monitors.yaml`
-- [ ] 5.2 Move salt, ntfy topic and auth headers into `urbalurba-secrets`,
+- [x] 5.1 Move the 19 monitors into `.uis.extend/monitors.yaml`
+- [x] 5.2 Move salt, ntfy topic and auth headers into `urbalurba-secrets`,
       sourced from OpenBao where they already live
-- [ ] 5.3 `uis undeploy uptime-kuma --purge`, redeploy, `uis monitors apply`
-- [ ] 5.4 Confirm: same 19 monitors, **same push URLs** (so no job needs
+- [x] 5.3 `uis undeploy uptime-kuma --purge`, redeploy, `uis monitors apply`
+- [x] 5.4 Confirm: same 19 monitors, **same push URLs** (so no job needs
       rewiring), same 16 paging, alert delivery still verified
 - [ ] 5.5 Retire the hand-built reconciler in the ops repo, leaving only the
       installation-specific YAML and secrets
@@ -201,6 +201,27 @@ The ops repo keeps no code — only intent.
 - [ ] The reference installation runs entirely on the shipped pipeline
 
 ---
+
+## ⚠️ Known limitation: auto-discovery is single-cluster
+
+`uis monitors` reads the cluster it is pointed at and writes the definitions into
+the watchdog's namespace. That is correct when the watchdog and the services
+share a cluster — the developer topology, and the case this was designed for.
+
+**In production they usually do not.** On the reference installation Uptime Kuma
+runs on `assist` while the services run on `asgard`, so the auto-discovery half
+finds nothing and all 19 monitors come from `.uis.extend/monitors.yaml` with
+hand-written addresses. The discovery logic is proven correct against asgard —
+run there it produces exactly the right URLs — but nothing yet carries that
+result across to the watchdog's cluster.
+
+Closing it means reading from one context and writing to another: `uis monitors
+apply --from <context> --to <context>`, or having the watchdog pull. Until then
+the promise "deploy a service and it is monitored" holds **only when the watchdog
+shares the cluster**, and the production case still needs the extend file.
+
+That is the single biggest remaining gap in this plan and it should be stated
+plainly wherever the feature is documented.
 
 ## Implementation Notes
 
