@@ -238,22 +238,81 @@ fails. That is worse than no heartbeat, because it manufactures confidence.
 and no job needs rewiring. Back that salt up: lose it and every heartbeat caller
 is silently orphaned, still exiting 0 while nothing records that it ran.
 
-## Alerting
+## Alerting — getting it onto your phone
 
-Set a topic and alerting is configured on deploy:
+This is the one step UIS cannot do for you: an app has to be installed on a
+device, and only you can do that.
+
+### 1. Generate a topic
 
 ```bash
-UPTIME_KUMA_NTFY_TOPIC=uis-<something-long-and-random>
+echo "uis-$(head -c 18 /dev/urandom | base64 | tr -dc 'a-z0-9')"
 ```
 
-Then subscribe to the same topic in the [ntfy](https://ntfy.sh) app. Leave it
-empty and the watchdog still monitors — it just tells nobody, and says so during
-deploy rather than being quietly silent.
-
 :::warning On public ntfy.sh the topic name *is* the credential
-Anyone who learns it can read your alerts and publish fake ones. Use a long
-random value, or self-host.
+There are no accounts and no passwords — **anyone who knows the topic can read
+your alerts and publish fake ones**. Use a generated value, never something
+guessable like `uis-alerts` or your company name. Treat it like a password:
+do not paste it into a ticket, a chat, or a screenshot.
 :::
+
+### 2. Tell UIS about it
+
+```bash
+UPTIME_KUMA_NTFY_TOPIC=uis-xxxxxxxxxxxxxxxxx
+```
+
+in the secrets template, then `uis secrets generate && uis secrets apply` and
+deploy or re-deploy `uptime-kuma`. Leave it empty and the watchdog still
+monitors — it just tells nobody, and says so during deploy rather than being
+quietly silent about it.
+
+### 3. Install the app and subscribe
+
+**ntfy** — free, open source, no account:
+
+| | |
+|---|---|
+| iOS | App Store — *ntfy* |
+| Android | Play Store, or [F-Droid](https://f-droid.org/packages/io.heckel.ntfy/) |
+| Desktop / browser | `https://ntfy.sh/<your-topic>` |
+
+In the app: **+** → paste the topic → leave the server as `ntfy.sh` → Subscribe.
+There is no sign-up step; subscribing to the topic *is* the whole configuration.
+
+### 4. Prove it arrives — before you rely on it
+
+```bash
+curl -H "Title: test" -d "if you can read this, alerting works" \
+     https://ntfy.sh/<your-topic>
+```
+
+If that does not reach the phone, alerting does not work, and **you will not find
+out later** — a watchdog with a broken channel is indistinguishable from a quiet
+week. Check it now, and re-check after changing the topic.
+
+Then test the real path, which is not the same thing: point a throwaway monitor
+at a closed port and confirm Uptime Kuma itself pushes.
+
+### Things that will bite you
+
+**Android battery optimisation** can delay or drop notifications. Exclude ntfy
+from it, or the alerts arrive an hour late — which for an outage is the same as
+not arriving.
+
+**Alerts are sent at priority 5** so they break through Do Not Disturb. That is
+deliberate: an availability alert you sleep through has not done its job. If that
+is too aggressive, lower it in the notification's settings rather than muting the
+app.
+
+**iOS and self-hosting do not mix freely.** The topic-is-the-credential problem
+above makes self-hosting tempting, but iOS push has to travel via Apple's APNs,
+which the ntfy iOS app reaches through ntfy.sh's infrastructure. A self-hosted
+server needs `upstream-base-url` configured before iOS delivery works at all.
+Android has no such constraint. Check this *before* migrating, not after.
+
+**One phone is one point of failure.** If it is off, lost, or with someone on a
+plane, nobody is alerted. Subscribe a second device, or a second person.
 
 Every monitor pages by default. Set `notify: false` on anything whose failure is
 not both real and actionable:
