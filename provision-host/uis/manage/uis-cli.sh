@@ -2555,10 +2555,15 @@ cmd_monitors() {
             ;;
         *)
             log_error "Unknown monitors subcommand: $subcmd"
-            echo "Usage: uis monitors [render|apply|check]"
+            echo "Usage: uis monitors [render|apply|check] [--from CTX] [--to CTX]"
             echo "  render  show what would be monitored, change nothing"
-            echo "  apply   write the definitions; AutoKuma picks them up"
+            echo "  apply   write the definitions and restart AutoKuma"
             echo "  check   compare intent against what Uptime Kuma is running"
+            echo ""
+            echo "  --from  cluster to discover services in (read-only)"
+            echo "  --to    cluster where Uptime Kuma runs. Defaults to --from."
+            echo "          Use both when the watchdog is outside the platform"
+            echo "          it watches, which is the production arrangement."
             exit "$EXIT_GENERAL_ERROR"
             ;;
     esac

@@ -202,26 +202,32 @@ The ops repo keeps no code — only intent.
 
 ---
 
-## ⚠️ Known limitation: auto-discovery is single-cluster
+## Cross-cluster: `--from` and `--to`
 
-`uis monitors` reads the cluster it is pointed at and writes the definitions into
-the watchdog's namespace. That is correct when the watchdog and the services
-share a cluster — the developer topology, and the case this was designed for.
+*Resolved 2026-08-09.* `uis monitors` reads services from one cluster and writes
+definitions into another:
 
-**In production they usually do not.** On the reference installation Uptime Kuma
-runs on `assist` while the services run on `asgard`, so the auto-discovery half
-finds nothing and all 19 monitors come from `.uis.extend/monitors.yaml` with
-hand-written addresses. The discovery logic is proven correct against asgard —
-run there it produces exactly the right URLs — but nothing yet carries that
-result across to the watchdog's cluster.
+```bash
+uis monitors apply --from asgard --to assist
+```
 
-Closing it means reading from one context and writing to another: `uis monitors
-apply --from <context> --to <context>`, or having the watchdog pull. Until then
-the promise "deploy a service and it is monitored" holds **only when the watchdog
-shares the cluster**, and the production case still needs the extend file.
+`--from` is where the services are (read-only). `--to` is where Uptime Kuma runs.
+Omit both for a single-cluster developer setup; the topology is then detected by
+looking for the watchdog in the discovered cluster.
 
-That is the single biggest remaining gap in this plan and it should be stated
-plainly wherever the feature is documented.
+⚠️ **Least privilege, not an admin kubeconfig.** Discovery needs three read verbs
+on services, endpoints and ingresses — nothing more. `manifests/230-uptime-kuma-
+discovery-rbac.yaml` creates a `monitor-discovery` ServiceAccount for exactly
+that. Copying a cluster-admin kubeconfig onto the watchdog would put full control
+of the platform on the machine whose entire purpose is to sit outside it — on the
+reference installation, a Raspberry Pi running from a microSD card. Verified: the
+identity can list services and cannot read secrets or delete anything.
+
+### Still to do
+
+- [ ] Persist the context pair per installation. Typing `--from`/`--to` every
+      time invites getting them wrong, and a `check` run with the wrong contexts
+      reports confident, entirely spurious drift — observed while building this
 
 ## Implementation Notes
 

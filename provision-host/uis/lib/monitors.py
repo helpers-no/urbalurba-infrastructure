@@ -36,8 +36,22 @@ POD_CIDRS = ["10.42.0.0/16", "10.244.0.0/16"]
 NOTIFICATION_NAME = "uis-alerts"
 
 
-def kubectl_json(args):
-    r = subprocess.run(["kubectl"] + args + ["-o", "json"],
+# Two clusters, deliberately separate.
+#   FROM - where the services are.       Read-only. Discovery.
+#   TO   - where the watchdog runs.      Written to.
+# They are the same cluster for a developer on Rancher Desktop, and different in
+# production, because a watchdog inside the cluster it watches cannot report that
+# cluster being down.
+CTX_FROM = None
+CTX_TO = None
+
+
+def _ctx(ctx):
+    return ["--context", ctx] if ctx else []
+
+
+def kubectl_json(args, ctx=None):
+    r = subprocess.run(["kubectl"] + _ctx(ctx) + args + ["-o", "json"],
                        capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"ERROR: kubectl {' '.join(args)} failed: {r.stderr.strip()}")
@@ -55,7 +69,7 @@ def is_pod_ip(addr):
 def load_cluster():
     """One read of everything endpoint resolution needs."""
     out = {"Service": {}, "Endpoints": {}, "Ingress": [], "IngressRoute": []}
-    d = kubectl_json(["get", "svc,endpoints,ingress", "-A"])
+    d = kubectl_json(["get", "svc,endpoints,ingress", "-A"], CTX_FROM)
     for i in d.get("items", []):
         k, md = i["kind"], i["metadata"]
         if k in ("Service", "Endpoints"):
@@ -64,7 +78,7 @@ def load_cluster():
             out["Ingress"].append(i)
     # IngressRoute is a CRD and may not exist (no Traefik). Not an error.
     try:
-        d = kubectl_json(["get", "ingressroute", "-A"])
+        d = kubectl_json(["get", "ingressroute", "-A"], CTX_FROM)
         out["IngressRoute"] = d.get("items", [])
     except SystemExit:
         pass
@@ -115,7 +129,7 @@ def external_endpoint(cluster, ns, name):
     return None
 
 
-def watchdog_is_in_cluster(cluster, namespace="monitoring"):
+def watchdog_in_from_cluster(cluster, namespace="monitoring"):
     """Is Uptime Kuma running in the cluster we are rendering for?
 
     This is THE question that decides how endpoints resolve, and it is answered
@@ -214,8 +228,9 @@ def read_secret_key(key, namespace="monitoring"):
     """A single key out of urbalurba-secrets. Values never live in YAML."""
     import base64
     r = subprocess.run(
-        ["kubectl", "get", "secret", "urbalurba-secrets", "-n", namespace,
-         "-o", f"jsonpath={{.data.{key}}}"], capture_output=True, text=True)
+        ["kubectl"] + _ctx(CTX_TO) + ["get", "secret", "urbalurba-secrets",
+         "-n", namespace, "-o", f"jsonpath={{.data.{key}}}"],
+        capture_output=True, text=True)
     if r.returncode != 0 or not r.stdout.strip():
         return None
     return base64.b64decode(r.stdout.strip()).decode().strip()
@@ -233,6 +248,33 @@ def push_token(salt, name):
     import hashlib
     import hmac
     return hmac.new(salt.encode(), name.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def resolve_auth(probe):
+    """Resolve `auth: bearer:<SECRET_KEY>` to a header value.
+
+    Returns (headers_json, error). The probe names a KEY in urbalurba-secrets,
+    never a value, so definitions stay safe to read and the secret lives in one
+    place.
+
+    ⚠️ A missing key must NOT yield an unauthenticated monitor. That produces a
+    401, which reads as "the service is down" and pages someone about a
+    configuration mistake. Better to refuse to create the monitor and say why.
+    """
+    spec = probe.get("auth")
+    if not spec:
+        return None, None
+    if ":" not in spec:
+        return None, f"unrecognised auth spec '{spec}' (expected bearer:KEY)"
+    scheme, key = spec.split(":", 1)
+    if scheme != "bearer":
+        return None, f"unsupported auth scheme '{scheme}' (only bearer:KEY)"
+    val = read_secret_key(key)
+    if not val:
+        return None, (f"needs secret key '{key}' in urbalurba-secrets. Without "
+                      f"it the probe would get 401 and page you about a config "
+                      f"mistake, so no monitor was created")
+    return json.dumps({"Authorization": f"Bearer {val}"}), None
 
 
 def render_monitor(name, kind, value, probe):
@@ -261,6 +303,11 @@ def render_monitor(name, kind, value, probe):
             o["accepted_statuscodes"] = probe["accepted_statuscodes"]
         if probe.get("ignore_tls"):
             o["ignore_tls"] = True
+        headers, err = resolve_auth(probe)
+        if err:
+            return err                 # a string means "cannot build this one"
+        if headers:
+            o["headers"] = headers
     elif ptype in ("tcp", "port"):
         o["type"] = "port"
         if kind == "hostport":
@@ -297,7 +344,10 @@ def build(services_dir, extend_file=None, salt=None, watchdog="auto"):
     svc = deployed_services(cluster)
 
     if watchdog == "auto":
-        in_cluster = watchdog_is_in_cluster(cluster)
+        # Only in-cluster if the watchdog lives in the SAME cluster we are
+        # discovering from. Different contexts means production topology, even
+        # if a Kuma happens to exist in both.
+        in_cluster = (CTX_FROM == CTX_TO) and watchdog_in_from_cluster(cluster)
     else:
         in_cluster = (watchdog == "in-cluster")
     monitors, skipped = [], []
@@ -314,6 +364,9 @@ def build(services_dir, extend_file=None, salt=None, watchdog="auto"):
         for p in plist:
             mname = sid if p.get("id") in (None, "gateway") else f"{sid}-{p['id']}"
             m = render_monitor(mname, kind, value, p)
+            if isinstance(m, str):
+                skipped.append((mname, m))
+                continue
             if m is None:
                 skipped.append((mname, f"probe type {p.get('type')} needs a "
                                        f"host:port, but {sid} resolved to a URL"))
@@ -365,12 +418,28 @@ def build(services_dir, extend_file=None, salt=None, watchdog="auto"):
                 o["push_token"] = push_token(salt, m["name"])
             monitors.append(o)
 
+    # ⚠️ Duplicate names would silently overwrite each other: definitions are
+    # written as <name>.json, so the second one wins and the first monitor just
+    # never exists. Refuse instead. Almost always this means the extend file
+    # lists something UIS can now discover on its own.
+    seen, dupes = set(), []
+    for m in monitors:
+        if m["name"] in seen:
+            dupes.append(m["name"])
+        seen.add(m["name"])
+    if dupes:
+        sys.exit(
+            "ERROR: duplicate monitor names: " + ", ".join(sorted(set(dupes))) +
+            "\n\nEach becomes <name>.json, so one would silently replace the "
+            "other.\nIf UIS discovered it, remove it from .uis.extend/monitors.yaml "
+            "-\nthe extend file is only for targets UIS did NOT deploy.")
+
     return monitors, skipped, in_cluster
 
 
 def kuma_sql(namespace, query):
     r = subprocess.run(
-        ["kubectl", "exec", "-n", namespace, "uptime-kuma-0", "--",
+        ["kubectl"] + _ctx(CTX_TO) + ["exec", "-n", namespace, "uptime-kuma-0", "--",
          "sqlite3", "-separator", "\x1f", "/app/data/kuma.db", query],
         capture_output=True, text=True)
     if r.returncode != 0:
@@ -437,6 +506,11 @@ def main():
     ap.add_argument("--extend", default="/mnt/urbalurbadisk/.uis.extend/monitors.yaml")
     ap.add_argument("--namespace", default="monitoring")
     ap.add_argument("--outdir")
+    ap.add_argument("--from", dest="ctx_from", metavar="CONTEXT",
+                    help="kube context to DISCOVER services in (read-only). "
+                         "Defaults to the current context")
+    ap.add_argument("--to", dest="ctx_to", metavar="CONTEXT",
+                    help="kube context where Uptime Kuma runs. Defaults to --from")
     ap.add_argument("--watchdog", choices=["auto", "in-cluster", "external"],
                     default="auto",
                     help="where Uptime Kuma runs. auto detects it by looking for "
@@ -444,7 +518,17 @@ def main():
                          "rendering for a watchdog that is not up yet")
     args = ap.parse_args()
 
-    salt = os.environ.get("UPTIME_KUMA_PUSH_SALT")
+    global CTX_FROM, CTX_TO
+    CTX_FROM = args.ctx_from
+    CTX_TO = args.ctx_to or args.ctx_from
+    if CTX_FROM or CTX_TO:
+        print(f"  discovering in: {CTX_FROM or '(current)'}   "
+              f"watchdog in: {CTX_TO or '(current)'}")
+
+    # Read from the WATCHDOG's cluster, not whichever context happens to be
+    # current - with --from/--to they are different clusters.
+    salt = os.environ.get("UPTIME_KUMA_PUSH_SALT") or read_secret_key(
+        "uptime-kuma-push-salt", args.namespace)
     monitors, skipped, in_cluster = build(args.services_dir, args.extend, salt,
                                           args.watchdog)
 
@@ -482,11 +566,25 @@ def main():
                   "metadata": {"name": "uptime-kuma-monitors",
                                "namespace": args.namespace},
                   "type": "Opaque", "data": data}
-        p = subprocess.run(["kubectl", "apply", "-f", "-"], input=json.dumps(secret),
-                           capture_output=True, text=True)
+        p = subprocess.run(["kubectl"] + _ctx(CTX_TO) + ["apply", "-f", "-"],
+                           input=json.dumps(secret), capture_output=True, text=True)
         if p.returncode != 0:
             sys.exit(f"ERROR: {p.stderr.strip()}")
         print(f"\n  applied {len(monitors)} definitions to uptime-kuma-monitors")
+
+        # ⚠️ REQUIRED, not an optimisation. The init container copies the Secret
+        # into an emptyDir with `cp -L` (because AutoKuma will not follow the
+        # symlinks Kubernetes projects), and that copy is made ONCE at pod
+        # start. Updating the Secret alone changes nothing AutoKuma can see:
+        # `apply` would report success and silently do nothing.
+        print("  restarting AutoKuma so it re-reads the definitions...")
+        subprocess.run(["kubectl"] + _ctx(CTX_TO) +
+                       ["rollout", "restart", "deployment/autokuma",
+                        "-n", args.namespace], capture_output=True, text=True)
+        subprocess.run(["kubectl"] + _ctx(CTX_TO) +
+                       ["rollout", "status", "deployment/autokuma",
+                        "-n", args.namespace, "--timeout=300s"],
+                       capture_output=True, text=True)
         attach_alerts(args.namespace, monitors)
         return 0
 
@@ -495,9 +593,9 @@ def main():
         # self-heals drift, so a stopped AutoKuma looks exactly like a healthy
         # one - checking only the Secret would miss that entirely.
         r = subprocess.run(
-            ["kubectl", "exec", "-n", args.namespace, "uptime-kuma-0", "--",
-             "sqlite3", "/app/data/kuma.db", "select name from monitor;"],
-            capture_output=True, text=True)
+            ["kubectl"] + _ctx(CTX_TO) + ["exec", "-n", args.namespace,
+             "uptime-kuma-0", "--", "sqlite3", "/app/data/kuma.db",
+             "select name from monitor;"], capture_output=True, text=True)
         if r.returncode != 0:
             sys.exit("ERROR: could not read Uptime Kuma - is it deployed?")
         live = {l.strip() for l in r.stdout.splitlines() if l.strip()}
