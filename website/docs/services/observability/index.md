@@ -156,17 +156,29 @@ matters less than two properties:
 
 See [Uptime Kuma](./uptime-kuma.md) for configuration.
 
-## What is automated today, and what is not
+## Monitors are generated, not written
 
-:::info Monitor definitions are still manual
-UIS deploys the watchdog, seeds its admin account, and needs no browser wizard.
-It does **not** yet create monitors for the services you deploy — you define
-those yourself in the Uptime Kuma UI.
+You do not hand-write availability monitors. Each service ships a probe artifact
+saying *how* to check it; UIS discovers *where* it is from the `Service` and
+`Ingress` it created:
 
-Automating it, so that `uis deploy <service>` produces a monitor with no
-configuration written by anyone, is designed but not shipped:
-`PLAN-system-observability-006-service-probes` in the
-[ai-developer plans](../../ai-developer/plans/index.md). Two related plans cover
-per-service dashboards and declaring external dependencies as Services so probes
-can discover them like anything else.
+```bash
+uis deploy uptime-kuma
+uis monitors apply
+```
+
+Nothing asks for a hostname — you did not need one to deploy the service, so you
+should not need one to monitor it. Targets UIS did **not** deploy (a hypervisor,
+a NAS, a job heartbeat) go in `.uis.extend/monitors.yaml`, which is empty on a
+stock install.
+
+See [Uptime Kuma](./uptime-kuma.md) for both topologies: a developer running
+everything in one cluster, and an operator running the watchdog on a separate
+machine.
+
+:::info Not yet automated
+**Dashboards** per service, and **alert rules** for the in-cluster stack. A
+freshly deployed Prometheus collects everything and alerts on nothing, so it
+tells you what happened *after* you go looking. Tracked in the
+[ai-developer plans](../../ai-developer/plans/index.md).
 :::
