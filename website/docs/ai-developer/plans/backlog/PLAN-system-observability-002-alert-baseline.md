@@ -27,9 +27,25 @@ before things break**, not one that records that they did.
 ## Problem
 
 ```
-PrometheusRules across the cluster:  0
-Alertmanager pods running:           1
+alerting_rules.yml in the prometheus-server ConfigMap:  {}      ← literally empty
+Alertmanager pods running:                             1
+Alertmanager present as a scrape target:               NO
 ```
+
+⚠️ **Two corrections to how this was measured** (2026-08-11):
+
+**There is no prometheus-operator.** UIS deploys the community `prometheus` chart,
+not `kube-prometheus-stack`, so `monitoring.coreos.com` CRDs do not exist — 0 of
+them. `kubectl get prometheusrule -A` returns 0 and always will, whatever rules
+are configured. Rules live in the `prometheus-server` ConfigMap key
+`alerting_rules.yml`, set from `serverFiles.alerting_rules.yml` in
+`manifests/030-prometheus-config.yaml`. The investigation's "no alert rules" was
+right; the way to check it was not.
+
+**Alertmanager is not scraped**, so `alertmanager_notifications_failed_total` does
+not exist. The component whose job is to tell you things are broken is the one
+component nobody is watching. Fixing that is a prerequisite for task 1.5, not a
+detail.
 
 **Alertmanager is deployed, healthy, and evaluating nothing.** Every metric is
 collected and stored; nothing looks at any of it until a human opens Grafana.
@@ -129,10 +145,11 @@ separate from "a disk is filling" (the other channel) without any configuration.
 - [ ] 1.4 Group and throttle: `group_by` on alertname + namespace, `group_wait`
       ~30s, `repeat_interval` ~4h, so a broad failure is one notification and not
       forty
-- [ ] 1.5 ⚠️ **Alert on Alertmanager's own delivery failures.** Uptime Kuma was
-      found to make a single delivery attempt with no retry, losing a real alert to
-      a transient timeout. Assume this one can fail too and make that visible —
-      `alertmanager_notifications_failed_total` is the signal
+- [ ] 1.5 ⚠️ **Add Alertmanager as a scrape target first — it is not one today**,
+      which is why `alertmanager_notifications_failed_total` does not exist. Then
+      alert on it. Uptime Kuma was found to make a single delivery attempt with no
+      retry, losing a real alert to a transient timeout; assume Alertmanager can
+      fail the same way. Until it is scraped, a silent notifier is invisible
 
 ### Validation
 
@@ -174,7 +191,20 @@ sleeping-Mac monitors taught.
 ### Validation
 
 ```bash
-kubectl get prometheusrule -A          # non-zero, which is the whole point
+# NOT `kubectl get prometheusrule` - there is no operator, so that is always 0.
+kubectl get cm prometheus-server -n monitoring \
+  -o jsonpath='{.data.alerting_rules\.yml}' | head    # must not be "{}"
+```
+
+Metrics the rules depend on were confirmed present before writing them, so none
+is an alert that can never fire:
+
+```
+kube_pod_container_status_restarts_total  57    kubelet_volume_stats_used_bytes  14
+kube_pod_status_ready                    132    node_filesystem_avail_bytes       5
+kube_node_status_condition                12    node_memory_MemAvailable_bytes    1
+kube_deployment_status_replicas_unavailable 31  up                               18
+prometheus_config_last_reload_successful   1    alertmanager_notifications_failed_total  ABSENT
 ```
 
 Stop a deployment; a firing alert is visible in Alertmanager within ~2 minutes and
@@ -243,8 +273,8 @@ alert would have helped.
 
 ## Files to Modify
 
-- `manifests/` — a `PrometheusRule` for the baseline group
-- `manifests/` — Alertmanager configuration with the chosen native receiver
+- `manifests/030-prometheus-config.yaml` — `serverFiles.alerting_rules.yml` for
+  the baseline group, an Alertmanager scrape job, and `alertmanager.config`
 - `ansible/playbooks/` — the prometheus setup playbook, to apply both
 - `provision-host/uis/templates/secrets-templates/00-master-secrets.yml.template`
   — credentials for the chosen receiver
