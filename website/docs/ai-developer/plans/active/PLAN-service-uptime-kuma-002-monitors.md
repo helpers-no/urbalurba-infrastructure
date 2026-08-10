@@ -69,10 +69,14 @@ is this one's.
 
 ### Validation
 
-⏳ **Not done.** Stop one guest deliberately; confirm it goes red and recovers.
-All seven report UP, which proves the probe reaches something — it does **not**
-prove the probe would notice failure. Until one has been seen red, this is
-untested in the direction that matters.
+✅ **Done for one target (2026-08-10).** The registry cache container was stopped:
+`registry-cache` went DOWN within 60s with `connect ECONNREFUSED`, the phone got
+a priority-5 alert, and it returned to `200 - OK` after restart.
+
+That proves the chain end to end — probe, detection, notification, recovery — but
+only for that one monitor. The other targets remain untested individually, and
+"the probe reaches something" still is not the same as "the probe would notice
+failure".
 
 ---
 
@@ -174,7 +178,11 @@ in OpenBao at `platform/uptime-kuma`; losing it silently orphans every caller.
 - [ ] The M4's sleep cycles are visible but do not page — vacuously true, since
       **no notification channel exists at all**
       ([PLAN-service-uptime-kuma-003-alerting](../backlog/PLAN-service-uptime-kuma-003-alerting.md))
-- [ ] Each monitor has been seen to go red at least once — **none has**
+- [ ] Each monitor has been seen to go red at least once — **one has.**
+      `registry-cache` was taken down deliberately on 2026-08-10: DOWN within
+      60s with `connect ECONNREFUSED`, alert on the phone, recovery to `200 - OK`
+      after restart. The probe mechanism is proven; the other 18 are still
+      untested individually
 
 ⚠️ **Read the state honestly: 14 monitors are UP, 5 are waiting for a caller, and
 nothing pages anyone.** A dashboard of green with no notification channel is the
