@@ -379,6 +379,16 @@ def build(services_dir, extend_file=None, salt=None, watchdog="auto"):
         import yaml
         doc = yaml.safe_load(open(extend_file)) or {}
         defaults = doc.get("defaults", {})
+        missing_why = [e.get("name", "(unnamed)") for e in doc.get("monitors", [])
+                       if not str(e.get("why", "")).strip()]
+        if missing_why:
+            # A monitor nobody can justify is a monitor nobody maintains - and
+            # when it goes red at 3am, the first question is "what breaks if I
+            # ignore this?". Answer it now, while you still remember.
+            sys.exit("ERROR: these entries in %s have no `why:` -\n  %s\n\n"
+                     "State what breaks if the target is down. It is the only "
+                     "thing that makes a monitor maintainable by someone who "
+                     "did not add it." % (extend_file, ", ".join(missing_why)))
         for entry in doc.get("monitors", []):
             m = dict(defaults)
             m.update(entry)
