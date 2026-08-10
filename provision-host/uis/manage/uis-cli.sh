@@ -2543,15 +2543,30 @@ cmd_monitors() {
         exit "$EXIT_GENERAL_ERROR"
     fi
 
-    # Heartbeat tokens are DERIVED from this salt, so the same monitor always
-    # gets the same push URL. Optional: without it, push monitors are refused
-    # rather than issued a URL that would change on the next rebuild.
-    local salt
-    salt=$(kubectl get secret urbalurba-secrets -n monitoring              -o jsonpath='{.data.uptime-kuma-push-salt}' 2>/dev/null | base64 -d 2>/dev/null || true)
+    # The salt that derives heartbeat URLs is read by the library from the
+    # WATCHDOG's cluster. Reading it here would use whatever context happens to
+    # be current, which is the wrong cluster whenever --from and --to differ.
+
+    # Where the services are, and where the watchdog is. Persisted so they are
+    # not retyped every time: getting them wrong makes `check` report confident,
+    # entirely spurious drift, which is worse than an outright error.
+    local cfg
+    cfg="$(get_base_path)/.uis.extend/cluster-config.sh"
+    if [[ -f "$cfg" ]]; then
+        # shellcheck source=/dev/null
+        source "$cfg" 2>/dev/null || true
+    fi
+
+    local ctx_args=()
+    if [[ "$*" != *--from* && -n "${MONITORS_FROM_CONTEXT:-}" ]]; then
+        ctx_args+=(--from "$MONITORS_FROM_CONTEXT")
+        [[ -n "${MONITORS_TO_CONTEXT:-}" ]] && ctx_args+=(--to "$MONITORS_TO_CONTEXT")
+        log_info "contexts from cluster-config.sh: ${MONITORS_FROM_CONTEXT} -> ${MONITORS_TO_CONTEXT:-$MONITORS_FROM_CONTEXT}"
+    fi
 
     case "$subcmd" in
         render|apply|check)
-            UPTIME_KUMA_PUSH_SALT="$salt" python3 "$lib" "$subcmd" "$@"
+            python3 "$lib" "$subcmd" "${ctx_args[@]}" "$@"
             ;;
         *)
             log_error "Unknown monitors subcommand: $subcmd"
@@ -2562,6 +2577,9 @@ cmd_monitors() {
             echo ""
             echo "  --from  cluster to discover services in (read-only)"
             echo "  --to    cluster where Uptime Kuma runs. Defaults to --from."
+            echo ""
+            echo "  Set MONITORS_FROM_CONTEXT / MONITORS_TO_CONTEXT in"
+            echo "  .uis.extend/cluster-config.sh to avoid retyping them."
             echo "          Use both when the watchdog is outside the platform"
             echo "          it watches, which is the production arrangement."
             exit "$EXIT_GENERAL_ERROR"

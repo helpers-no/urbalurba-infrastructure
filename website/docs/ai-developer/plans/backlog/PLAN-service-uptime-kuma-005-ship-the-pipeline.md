@@ -126,8 +126,9 @@ uis monitors check                            # still clean, same push URLs
       `keyword`, `accepted_statuscodes`, `ignore_tls`, `interval`, `maxretries`,
       `notify`, and `auth_header_secret` naming a key in `urbalurba-secrets` —
       **never a secret value**
-- [ ] 3.3 Require a `why:` per entry. A monitor nobody can justify is a monitor
-      nobody will maintain
+- [x] 3.3 Require a `why:` per entry ✓ — render fails if any entry lacks one.
+      A monitor nobody can justify is a monitor nobody maintains, and when it
+      goes red the first question is "what breaks if I ignore this?"
 - [ ] 3.4 Document it with the reference installation's file as the worked
       example
 
@@ -225,9 +226,11 @@ identity can list services and cannot read secrets or delete anything.
 
 ### Still to do
 
-- [ ] Persist the context pair per installation. Typing `--from`/`--to` every
-      time invites getting them wrong, and a `check` run with the wrong contexts
-      reports confident, entirely spurious drift — observed while building this
+- [x] Persist the context pair per installation ✓ —
+      `MONITORS_FROM_CONTEXT` / `MONITORS_TO_CONTEXT` in
+      `.uis.extend/cluster-config.sh`, so `uis monitors check` needs no flags.
+      Explicit flags still win. This mattered: a `check` run with the wrong
+      contexts reports confident, entirely spurious drift
 
 ## Implementation Notes
 

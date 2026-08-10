@@ -290,6 +290,13 @@ def render_monitor(name, kind, value, probe):
          "interval": int(probe.get("interval", 60)),
          "max_retries": int(probe.get("maxretries", 2)),
          "retry_interval": int(probe.get("retry_interval", 60)),
+         # Re-notify while still down. NOT optional comfort: Uptime Kuma makes
+         # ONE delivery attempt per notification and does not retry. Observed
+         # 2026-08-10 - a recovery alert was lost to a transient ETIMEDOUT
+         # reaching the notification service, with nothing but a line in the pod
+         # log to say so. Without resend, one network blip silently costs you the
+         # alert. 30 minutes nags without becoming noise.
+         "resend_interval": int(probe.get("resend_interval", 30)),
          "active": True}
     ptype = probe.get("type", "http")
     if ptype == "http":
@@ -379,6 +386,16 @@ def build(services_dir, extend_file=None, salt=None, watchdog="auto"):
         import yaml
         doc = yaml.safe_load(open(extend_file)) or {}
         defaults = doc.get("defaults", {})
+        missing_why = [e.get("name", "(unnamed)") for e in doc.get("monitors", [])
+                       if not str(e.get("why", "")).strip()]
+        if missing_why:
+            # A monitor nobody can justify is a monitor nobody maintains - and
+            # when it goes red at 3am, the first question is "what breaks if I
+            # ignore this?". Answer it now, while you still remember.
+            sys.exit("ERROR: these entries in %s have no `why:` -\n  %s\n\n"
+                     "State what breaks if the target is down. It is the only "
+                     "thing that makes a monitor maintainable by someone who "
+                     "did not add it." % (extend_file, ", ".join(missing_why)))
         for entry in doc.get("monitors", []):
             m = dict(defaults)
             m.update(entry)
@@ -387,6 +404,7 @@ def build(services_dir, extend_file=None, salt=None, watchdog="auto"):
                  "interval": int(m.get("interval", 60)),
                  "max_retries": int(m.get("maxretries", 2)),
                  "retry_interval": int(m.get("retry_interval", 60)),
+                 "resend_interval": int(m.get("resend_interval", 30)),
                  "active": True}
             if m["type"] == "http":
                 o["url"] = m["url"]
@@ -487,6 +505,30 @@ def attach_alerts(namespace, monitors, wait=180):
         kuma_sql(namespace, "insert into monitor_notification (monitor_id, "
                             f"notification_id) values ({ids[name]}, {nid});")
         added += 1
+    # ⚠️ AutoKuma silently drops resend_interval for `port` and `push` monitors -
+    # it lands for http/keyword and nowhere else. Verified 2026-08-10: 10 of 19
+    # monitors took it, and the 9 that did not were exactly the port and push
+    # ones. That is the worst possible subset: the cluster API and every backup
+    # heartbeat, i.e. the monitors where losing a notification matters most.
+    #
+    # Kuma makes ONE delivery attempt and does not retry, so no resend means a
+    # single network blip silently costs the alert. Set it directly for the
+    # monitors AutoKuma left behind. Narrow, single column, verified after.
+    fixed = 0
+    for name in sorted(want):
+        mid = ids.get(name)
+        if not mid:
+            continue
+        cur = kuma_sql(namespace,
+                       f"select resend_interval from monitor where id={mid};")
+        if cur and str(cur[0][0]) == "0":
+            kuma_sql(namespace, "update monitor set resend_interval=30 "
+                                f"where id={mid};")
+            fixed += 1
+    if fixed:
+        print(f"  resend: set on {fixed} monitor(s) AutoKuma left at 0 "
+              f"(it drops resend_interval for port and push types)")
+
     missing = sorted(want - set(ids))
     print(f"\n  alerting: {added} newly attached, {len(attached)} already, "
           f"{len(monitors) - len(want)} deliberately silent")

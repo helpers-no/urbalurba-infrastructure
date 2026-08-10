@@ -73,8 +73,19 @@ not on the home network.
       must not page for a nap
 - [x] 2.3 Heartbeats notify on first expiry ✓ — the expiry window is itself the
       grace period
-- [ ] 2.4 **NOT DONE** — resend is off, so a single missed push means the outage
-      scrolls away and is never repeated
+- [x] 2.4 Resend every 30 minutes while still down ✓ — and it turned out to
+      matter more than "an outage scrolls away".
+
+      **Uptime Kuma makes ONE delivery attempt per notification and does not
+      retry.** Observed 2026-08-10: a recovery alert was lost to a transient
+      `ETIMEDOUT` reaching ntfy, leaving nothing but a line in the pod log. Without
+      resend, a single network blip silently costs the alert.
+
+      ⚠️ **AutoKuma silently drops `resend_interval` for `port` and `push`
+      monitors** — it lands for http/keyword only. 10 of 19 took it and the 9 that
+      did not were exactly the port and push ones: the cluster API and every
+      backup heartbeat, i.e. where losing a notification matters most. `uis
+      monitors apply` now sets it directly for those, and verifies.
 - [ ] 2.5 **NOT DONE** — no maintenance-window mechanism, so planned work pages
 
 ### Validation
@@ -125,6 +136,11 @@ Stop Uptime Kuma. Confirm the external service raises an alert.
 - [ ] 48 h of running produces zero false alarms — **clock starts 2026-08-08**
 - [x] The M4's sleep cycles are recorded but never page ✓ (recorded; silenced)
 - [x] Killing Uptime Kuma raises an external alert ✓ (from Odin; not house-wide)
+- [x] **A real service failure reaches the phone** ✓ — verified 2026-08-10 by
+      stopping the registry cache container: DOWN at 60s, `connect ECONNREFUSED`,
+      priority-5 push delivered. Restarted, monitor recovered to `200 - OK`.
+      ⚠️ The *recovery* notification was lost to a network timeout, which is how
+      the no-retry behaviour above was found
 - [x] Notification credentials are in OpenBao ✓
 - [x] The recovery path is written down somewhere reachable when everything is
       down ✓ — private GitHub, readable from a phone
