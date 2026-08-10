@@ -53,11 +53,60 @@ server:
     web.enable-remote-write-receiver: ""
 
 # Alertmanager configuration
+#
+# ⚠️ THE RECEIVER MUST BE ONE ALERTMANAGER SUPPORTS NATIVELY.
+# The obvious idea - reuse the ntfy channel the external watchdog already uses -
+# does not work: this Alertmanager has no ntfy receiver, and ntfy cannot format
+# Alertmanager's webhook JSON (posting it delivers raw JSON to the phone;
+# ${...} placeholders arrive literally; {{...}} returns HTTP 400). Unifying them
+# would mean a bespoke translator sitting in the alert path, and a component
+# whose failure produces silence must not live there. Telegram is native, so
+# delivery is upstream-tested code end to end.
 alertmanager:
   enabled: true
   persistentVolume:
     enabled: true
     size: 2Gi
+
+  # The bot token as a FILE, never inline: `config` below is rendered into a
+  # ConfigMap, which is not a place for a credential that can control the bot.
+  extraSecretMounts:
+    - name: telegram-token
+      mountPath: /etc/alertmanager/telegram
+      secretName: alertmanager-telegram
+      readOnly: true
+
+  config:
+    global:
+      resolve_timeout: 5m
+
+    route:
+      receiver: telegram
+      # One notification for a broad failure, not forty. A node going away
+      # otherwise produces an alert per pod on it.
+      group_by: [alertname, namespace]
+      group_wait: 30s
+      group_interval: 5m
+      # Re-notify while unresolved. Assume a single delivery can be lost - that
+      # was observed happening to the external watchdog, which retries nothing.
+      repeat_interval: 4h
+      routes:
+        - matchers: ['severity = "critical"']
+          receiver: telegram
+          repeat_interval: 1h
+
+    receivers:
+      - name: telegram
+        telegram_configs:
+          - bot_token_file: /etc/alertmanager/telegram/token
+            chat_id: TELEGRAM_CHAT_ID_PLACEHOLDER
+            parse_mode: HTML
+            send_resolved: true
+            message: |-
+              {{ if eq .Status "firing" }}🔴{{ else }}🟢 RESOLVED:{{ end }} <b>{{ .CommonLabels.alertname }}</b>
+              {{ range .Alerts }}{{ .Annotations.summary }}
+              {{ if .Annotations.description }}<i>{{ .Annotations.description }}</i>
+              {{ end }}{{ end }}
   resources:
     requests:
       cpu: 100m
@@ -95,3 +144,153 @@ kubeStateMetrics:
 # Enables automatic scraping of services with ServiceMonitor CRDs
 serviceMonitors:
   enabled: true
+
+# ---------------------------------------------------------------------------
+# Scrape Alertmanager itself.
+#
+# ⚠️ WITHOUT THIS, THE NOTIFIER IS THE ONE COMPONENT NOBODY WATCHES.
+# alertmanager_notifications_failed_total does not exist unless Alertmanager is
+# scraped, so a notifier that silently stops delivering is invisible - which is
+# the same failure the alerts below exist to prevent, one level up. Uptime Kuma
+# was observed losing a real alert to a single failed delivery attempt with no
+# retry; assume this one can do the same and make it visible.
+# ---------------------------------------------------------------------------
+extraScrapeConfigs: |
+  - job_name: alertmanager
+    static_configs:
+      - targets:
+          - prometheus-alertmanager.monitoring.svc.cluster.local:9093
+
+# ---------------------------------------------------------------------------
+# Baseline alert rules.
+#
+# There is NO prometheus-operator here (the community chart, not
+# kube-prometheus-stack), so these are files in the prometheus-server ConfigMap,
+# not PrometheusRule CRDs. `kubectl get prometheusrule` returns 0 no matter what
+# is configured.
+#
+# DESIGN RULES, learned the hard way elsewhere in this platform:
+#  - Every alert must answer "what would I do about this?". If it cannot, it is
+#    noise, and noise teaches people to ignore alerts.
+#  - `for:` durations are the difference between alerting and noise. A pod not
+#    ready for 15 seconds is a deployment; for 15 minutes it is a problem.
+#  - Prefer forecasting to thresholds where possible. "85% full" says where you
+#    are; "full in 6 hours" says whether to care.
+#  - Deliberately NOT the ~100 rules from kube-prometheus-stack: on a single-node
+#    k3s many are meaningless or permanently firing, and a permanently-firing
+#    alert is a muted alert.
+#
+# Every metric referenced here was confirmed present on a live cluster before
+# being used, so none of these is an alert that can never fire.
+# ---------------------------------------------------------------------------
+serverFiles:
+  alerting_rules.yml:
+    groups:
+      - name: capacity
+        rules:
+          - alert: PersistentVolumeFillingUp
+            expr: |
+              kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes > 0.85
+            for: 10m
+            labels: { severity: warning }
+            annotations:
+              summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full"
+              description: "Expand the volume or delete data. Above 90% many databases stop accepting writes."
+
+          # The one that gives you a working day's notice instead of a surprise.
+          - alert: PersistentVolumeWillFillIn24h
+            expr: |
+              predict_linear(kubelet_volume_stats_available_bytes[6h], 24 * 3600) < 0
+              and kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes > 0.6
+            for: 30m
+            labels: { severity: critical }
+            annotations:
+              summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} is on course to be full within 24h"
+              description: "Based on the last 6h of growth. Act now rather than at 100%."
+
+          - alert: NodeFilesystemFillingUp
+            expr: |
+              (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+                 / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) > 0.85
+            for: 15m
+            labels: { severity: warning }
+            annotations:
+              summary: "{{ $labels.instance }} filesystem {{ $labels.mountpoint }} is over 85% full"
+              description: "A full root filesystem takes the kubelet with it."
+
+          - alert: NodeMemoryPressure
+            expr: |
+              node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+            for: 15m
+            labels: { severity: warning }
+            annotations:
+              summary: "{{ $labels.instance }} has under 10% memory available"
+              description: "The OOM killer will start choosing for you."
+
+      - name: workloads
+        rules:
+          - alert: PodCrashLooping
+            expr: |
+              increase(kube_pod_container_status_restarts_total[30m]) > 3
+            for: 5m
+            labels: { severity: critical }
+            annotations:
+              summary: "{{ $labels.namespace }}/{{ $labels.pod }} is restarting repeatedly"
+              description: "More than 3 restarts in 30m. kubectl logs --previous."
+
+          # 15m, not 5m: long enough that an ordinary rollout does not page.
+          - alert: PodNotReady
+            expr: |
+              kube_pod_status_ready{condition="false"} == 1
+            for: 15m
+            labels: { severity: warning }
+            annotations:
+              summary: "{{ $labels.namespace }}/{{ $labels.pod }} has been not-ready for 15m"
+              description: "Too long for a deployment. kubectl describe pod."
+
+          - alert: DeploymentReplicasUnavailable
+            expr: |
+              kube_deployment_status_replicas_unavailable > 0
+            for: 15m
+            labels: { severity: warning }
+            annotations:
+              summary: "{{ $labels.namespace }}/{{ $labels.deployment }} has unavailable replicas"
+
+          - alert: NodeNotReady
+            expr: |
+              kube_node_status_condition{condition="Ready",status="true"} == 0
+            for: 5m
+            labels: { severity: critical }
+            annotations:
+              summary: "Node {{ $labels.node }} is not Ready"
+              description: "On a single-node cluster this means the platform is down."
+
+      - name: monitoring-itself
+        rules:
+          # A monitoring stack that has stopped looking must say so. This is the
+          # in-cluster version of "absence renders as green".
+          - alert: ScrapeTargetDown
+            expr: up == 0
+            for: 10m
+            labels: { severity: warning }
+            annotations:
+              summary: "Prometheus cannot scrape {{ $labels.job }} ({{ $labels.instance }})"
+              description: "Metrics from this target are missing, so alerts based on them cannot fire."
+
+          - alert: PrometheusConfigReloadFailed
+            expr: prometheus_config_last_reload_successful == 0
+            for: 5m
+            labels: { severity: critical }
+            annotations:
+              summary: "Prometheus is running with a stale config"
+              description: "The last reload failed, so any rule change since then is NOT active."
+
+          # Requires the alertmanager scrape job above.
+          - alert: AlertNotificationsFailing
+            expr: |
+              increase(alertmanager_notifications_failed_total[30m]) > 0
+            for: 5m
+            labels: { severity: critical }
+            annotations:
+              summary: "Alertmanager is failing to deliver notifications"
+              description: "Alerts are firing and not reaching anyone. Check the receiver's credentials and outbound network."

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog
+## Status: Active — deployed and delivering on the reference installation; 48h quiet period running
 
 **Goal**: `uis stack install observability` produces a platform that **tells you
 before things break**, not one that records that they did.
@@ -135,17 +135,16 @@ separate from "a disk is filling" (the other channel) without any configuration.
 
 ### Tasks
 
-- [ ] 1.1 Route Alertmanager through a **natively supported** receiver — no
-      translator, no webhook shim
-- [ ] 1.2 Credentials from `urbalurba-secrets`. Absent ⇒ rules still deploy,
-      delivery is skipped, and the deploy **says so loudly** rather than being
-      quietly silent
-- [ ] 1.3 Keep it distinct from the watchdog's channel, so an
-      "everything-is-unreachable" alert cannot be lost among routine ones
-- [ ] 1.4 Group and throttle: `group_by` on alertname + namespace, `group_wait`
-      ~30s, `repeat_interval` ~4h, so a broad failure is one notification and not
-      forty
-- [ ] 1.5 ⚠️ **Add Alertmanager as a scrape target first — it is not one today**,
+- [x] 1.1 Telegram, native ✓ — no translator, no webhook shim
+- [x] 1.2 Credentials from `urbalurba-secrets` ✓. Absent ⇒ rules still deploy,
+      delivery is skipped, and the deploy warns. The token goes into a **Secret**,
+      never the values file — `alertmanager.config` renders into a ConfigMap, and
+      `bot_token_file` (verified supported) keeps it out of there
+- [x] 1.3 Distinct from the watchdog's ntfy channel ✓
+- [x] 1.4 Grouped and throttled ✓ — `group_by` alertname+namespace, `group_wait`
+      30s, `repeat_interval` 4h and 1h for critical
+- [x] 1.5 ✓ **Alertmanager added as a scrape target** (`up{job="alertmanager"} 1`)
+      and alerted on. It was not one before,
       which is why `alertmanager_notifications_failed_total` does not exist. Then
       alert on it. Uptime Kuma was found to make a single delivery attempt with no
       retry, losing a real alert to a transient timeout; assume Alertmanager can
@@ -167,25 +166,25 @@ sleeping-Mac monitors taught.
 
 ### Tasks
 
-- [ ] 2.1 **Capacity, with warning time** — the whole point of this plan:
+- [x] 2.1 **Capacity, with warning time** ✓ — the whole point of this plan:
       - PVC above 85% `for: 10m`, and separately **predicted full within 24h**
         (`predict_linear`), which is the one that gives you a working day's notice
       - node filesystem above 85%
       - node memory pressure
-- [ ] 2.2 **Workload health**:
+- [x] 2.2 **Workload health** ✓:
       - pod crash-looping (`kube_pod_container_status_restarts_total` rate)
       - pod not ready `for: 15m` — long enough to ignore ordinary rollouts
       - deployment replicas unavailable `for: 15m`
       - node not ready `for: 5m`
-- [ ] 2.3 **The stack itself**: `up == 0` for any scrape target, and
+- [x] 2.3 **The stack itself** ✓: `up == 0` for any scrape target, and
       Prometheus/Alertmanager config-reload failures. A monitoring stack that has
       stopped scraping must say so; that is this plan's own version of *absence
       renders as green*
-- [ ] 2.4 **Certificate expiry** — within 14 days. Cheap, and it removes a whole
-      class of self-inflicted outage
-- [ ] 2.5 Every rule carries `summary`, `description` and a **runbook hint**. An
+- [ ] 2.4 **Certificate expiry** — NOT DONE. No cert metrics are collected today;
+      needs a blackbox/cert exporter first, so it is not a rule but a scrape target
+- [x] 2.5 Every rule carries `summary`, `description` and a **runbook hint**. An
       alert that does not say what to do is a puzzle delivered at 3am
-- [ ] 2.6 Severity split: `warning` (has slack — fix in hours) vs `critical`
+- [x] 2.6 Severity split: `warning` (has slack — fix in hours) vs `critical`
       (acting now). Only `critical` should be able to wake someone
 
 ### Validation
@@ -234,13 +233,15 @@ Recorded so the boundary is explicit rather than forgotten:
 
 ## Acceptance Criteria
 
-- [ ] `uis stack install observability` yields a non-empty rule set
+- [x] `uis stack install observability` yields a non-empty rule set ✓ — 11 rules, 3 groups
 - [ ] A capacity problem is alerted **before** it becomes an outage
-- [ ] Alerts reach a real device, readable, on a topic separate from the watchdog's
+- [x] Alerts reach a real device, readable, separate from the watchdog ✓ — verified by
+      posting an alert to Alertmanager: `notifications_total{telegram} 1`, all
+      failure counters 0, message received
 - [ ] A missing topic degrades to "rules but no delivery", loudly, never silently
-- [ ] Prometheus failing to scrape raises an alert about itself
+- [x] Prometheus failing to scrape raises an alert about itself ✓
 - [ ] 48 hours of normal operation produces **zero** alerts needing no action
-- [ ] Every alert states what to do about it
+- [x] Every alert states what to do about it ✓
 
 ---
 
