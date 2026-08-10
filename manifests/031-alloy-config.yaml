@@ -1,0 +1,156 @@
+# File: manifests/031-alloy-config.yaml
+#
+# Description:
+# Helm values for Grafana Alloy — the log collection agent that ships container
+# logs into Loki. Without it Loki is deployed, healthy, and empty: it holds only
+# its own canary traffic, and Grafana's Loki datasource returns nothing useful.
+#
+# Alloy runs as a DaemonSet because logs are per-node.
+#
+# Usage:
+#   helm upgrade --install alloy grafana/alloy \
+#     -n monitoring -f manifests/031-alloy-config.yaml
+#
+# Prerequisites:
+# - the 'monitoring' namespace, with Loki already deployed
+# - Helm repository: https://grafana.github.io/helm-charts
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY ALLOY, AND NOT PROMTAIL
+# Promtail reached end-of-life on 2 March 2026. Alloy is its successor and a
+# vendor-neutral distribution of the OTel Collector.
+#
+# ⚠️ SCOPE: LOGS ONLY.
+# Alloy can also replace the standalone OTel Collector, taking the stack from
+# five components to four. That is deliberately NOT done here. The collector
+# currently carries the metrics remote-write path into Prometheus and it works;
+# replacing it in the same change that introduces log collection would put two
+# failure domains in one step and make any regression hard to attribute.
+# Consolidate later, once logs are known good.
+# ─────────────────────────────────────────────────────────────────────────────
+---
+# Pin it, like every other image.
+image:
+  tag: v1.13.1
+
+controller:
+  # Logs live on nodes, so the agent has to be on every node.
+  type: daemonset
+
+alloy:
+  # No UI needed for a log shipper; it is one less thing exposed.
+  enableReporting: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Mounts /var/log and the container runtime's log directory.
+  mounts:
+    varlog: true
+
+  configMap:
+    content: |-
+      // Discover every pod in the cluster.
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // ── Labels ──────────────────────────────────────────────────────────
+      // Labels are the whole ergonomics of Loki: they are what you filter on,
+      // and they are indexed.
+      //
+      // ⚠️ NOTHING HIGH-CARDINALITY HERE. No pod UID, no request id, no trace
+      // id. Loki indexes every label value, so a label that is unique per pod
+      // instance turns the index into the component that falls over. This is
+      // the most common way a working Loki install becomes an unusable one.
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_node_name"]
+          target_label  = "node"
+        }
+        // The app label if the workload sets one - this is what makes
+        // "show me everything for this service" a single query.
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app"
+        }
+        // Blank out `instance` at the TARGET level. loki.source.kubernetes
+        // derives it as "<ns>/<pod>:<container>", which embeds the pod name and
+        // therefore mints a new label value on every deploy. stage.label_drop in
+        // the process pipeline does NOT remove it - verified - because the source
+        // sets it outside that label set. In relabel semantics an empty
+        // replacement drops the label.
+        rule {
+          target_label = "instance"
+          replacement  = ""
+        }
+        // Drop anything not actually running, so we do not tail nothing.
+        rule {
+          source_labels = ["__meta_kubernetes_pod_phase"]
+          regex         = "Pending|Succeeded|Failed|Completed"
+          action        = "drop"
+        }
+      }
+
+      // Tail the files the kubelet writes.
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.process.drop_empty.receiver]
+      }
+
+      loki.process "drop_empty" {
+        // Drop blank lines. Pure cost: stored, indexed, never read.
+        stage.drop {
+          expression = "^\\s*$"
+        }
+
+        // ⚠️ REMOVE HIGH-CARDINALITY LABELS THE SOURCE ADDS BY DEFAULT.
+        // loki.source.kubernetes attaches `instance`, which looks like
+        //   ai/litellm-765b7db9dd-nvm9p:litellm
+        // - it contains the pod name, so every deploy or restart mints a new
+        // label value and the index grows without bound. Observed on the first
+        // deploy of this config, which is why the relabel rules above are not
+        // sufficient on their own: they add labels, they do not remove the
+        // ones the source supplies.
+        //
+        // namespace + pod + container already identify the stream, without the
+        // unbounded growth.
+        stage.label_drop {
+          values = ["instance", "service_name"]
+        }
+
+        forward_to = [loki.write.loki.receiver]
+      }
+
+      // Write to the Loki that is already deployed. Do NOT stand up a second one.
+      loki.write "loki" {
+        endpoint {
+          url = "http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push"
+        }
+      }
+
+# The chart's own service account needs to read pods to discover them.
+rbac:
+  create: true
+
+serviceMonitor:
+  enabled: false
