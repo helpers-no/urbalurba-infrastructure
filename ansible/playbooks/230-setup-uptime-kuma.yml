@@ -22,6 +22,9 @@
     manifests_folder: "/mnt/urbalurbadisk/manifests"
     statefulset_file: "{{ manifests_folder }}/230-uptime-kuma-statefulset.yaml"
     ingressroute_file: "{{ manifests_folder }}/230-uptime-kuma-ingressroute.yaml"
+    # AutoKuma is PART OF THIS SERVICE, not a service of its own. Uptime Kuma
+    # without it is an empty dashboard you have to fill in by hand.
+    autokuma_file: "{{ manifests_folder }}/230-uptime-kuma-autokuma.yaml"
     # History retention. Kuma's default is 180 days; the watchdog is expected to
     # run on modest/flash storage, so trim it. Override with
     # -e kuma_retention_days=N.
@@ -83,6 +86,28 @@
       delay: 6
       until: kuma_http.stdout is search('200|302')
       changed_when: false
+
+    - name: "5.1 Deploy AutoKuma (the monitor reconciler, part of this service)"
+      # After task 5, so Kuma is already answering and AutoKuma's first connect
+      # attempt succeeds rather than relying on its restart loop.
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ autokuma_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: "5.2 Wait for AutoKuma to be ready"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "app=autokuma"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: autokuma_pods
+      retries: 30
+      delay: 10
+      until: >
+        autokuma_pods.resources | length > 0 and
+        autokuma_pods.resources[0].status.phase == "Running"
 
     - name: "6. Verify the data volume is mounted"
       ansible.builtin.shell: >
@@ -226,6 +251,79 @@
       register: kuma_retention_check
       changed_when: false
       failed_when: kuma_retention_check.stdout | trim != kuma_retention_days | string
+
+    # ---- alert channel -----------------------------------------------------
+    # An installed watchdog that notifies nobody is a dashboard. This is the
+    # step that makes it a watchdog.
+    #
+    # ⚠️ Seeded here rather than left to AutoKuma. AutoKuma CAN manage
+    # notifications - a file with "type": "notification" is accepted and alerts
+    # deliver correctly - but 2.0.0 never converges, rewriting the channel every
+    # ~5 seconds forever. That is a database write every 5s on what is usually
+    # flash storage.
+    - name: "9.3 Is an alert channel configured?"
+      ansible.builtin.set_fact:
+        _ntfy_topic: "{{ (kuma_secret.resources[0].data['uptime-kuma-ntfy-topic'] | default('') | b64decode) | trim }}"
+        _ntfy_server: "{{ (kuma_secret.resources[0].data['uptime-kuma-ntfy-server'] | default('') | b64decode) | trim or 'https://ntfy.sh' }}"
+      no_log: true
+
+    - name: "9.4 Note that alerting is not configured"
+      # Not a failure. A watchdog with no channel still monitors - the user just
+      # has to look. Say so plainly rather than deploying silently.
+      ansible.builtin.debug:
+        msg:
+          - "No alert channel configured - nothing will notify you."
+          - "Set UPTIME_KUMA_NTFY_TOPIC in the secrets template, then:"
+          - "  uis secrets generate && uis secrets apply && uis deploy uptime-kuma"
+      when: _ntfy_topic | length == 0
+
+    - name: "9.5 Seed the ntfy alert channel"
+      # Idempotent on name. Config is JSON on stdin so the topic never appears
+      # in a process list.
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf '%s' "$CFG" | kubectl exec -i -n {{ namespace }} {{ component_name }}-0 \
+          --kubeconfig {{ merged_kubeconf_file }} -- sh -c '
+            read -r C
+            sqlite3 /app/data/kuma.db <<SQL
+        insert into notification (name, active, user_id, is_default, config)
+        select "uis-alerts", 1, 1, 0, '"'"'$C'"'"'
+        where not exists (select 1 from notification where name = "uis-alerts");
+        SQL
+          '
+      args:
+        executable: /bin/bash
+      environment:
+        # ⚠️ Build a mapping and serialise with to_json. A hand-written JSON
+        # STRING here does not survive: Ansible sees something that looks like a
+        # Python literal, converts it to a dict, and str()s it back with single
+        # quotes - which sqlite then rejects as a syntax error. Verified.
+        CFG: >-
+          {{ {'name': 'uis-alerts',
+              'type': 'ntfy',
+              'ntfyserverurl': _ntfy_server,
+              'ntfytopic': _ntfy_topic,
+              'ntfyPriority': 5,
+              'ntfyAuthenticationMethod': 'none',
+              'ntfyIcon': '',
+              'isDefault': false,
+              'applyExisting': false} | to_json }}
+      when: _ntfy_topic | length > 0
+      no_log: true
+      changed_when: true
+
+    - name: "9.6 Verify the channel is usable, not merely present"
+      # A row existing is not the same as it working. Check the stored config
+      # parses and carries the provider type Kuma dispatches on.
+      ansible.builtin.command: >
+        kubectl exec -n {{ namespace }} {{ component_name }}-0
+        --kubeconfig {{ merged_kubeconf_file }} --
+        sqlite3 /app/data/kuma.db
+        "select json_extract(config,'$.type') from notification where name='uis-alerts';"
+      register: kuma_notif_check
+      changed_when: false
+      failed_when: kuma_notif_check.stdout | trim != 'ntfy'
+      when: _ntfy_topic | length > 0
 
     - name: "10. Restart so needSetup is recomputed / settings cache is reloaded"
       # Kuma caches settings in memory, so a retention change needs a restart to

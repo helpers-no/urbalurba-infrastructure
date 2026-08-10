@@ -1,0 +1,50 @@
+# Read-only identity for monitor discovery from another cluster.
+#
+# ⚠️ The watchdog must NEVER hold cluster-admin. It only needs to answer
+# "what services exist and where are they reachable", which is three read verbs
+# on three resource types. Copying an admin kubeconfig onto the watchdog host
+# would put full control of this cluster on a machine whose whole purpose is to
+# be outside it - and, on the reference installation, on a Raspberry Pi with its
+# root filesystem on a microSD card.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: monitor-discovery
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: monitor-discovery
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["traefik.io", "traefik.containo.us"]
+    resources: ["ingressroutes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: monitor-discovery
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: monitor-discovery
+subjects:
+  - kind: ServiceAccount
+    name: monitor-discovery
+    namespace: kube-system
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: monitor-discovery-token
+  namespace: kube-system
+  annotations:
+    kubernetes.io/service-account.name: monitor-discovery
+type: kubernetes.io/service-account-token

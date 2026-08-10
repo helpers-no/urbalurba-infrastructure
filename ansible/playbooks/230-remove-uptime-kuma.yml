@@ -35,6 +35,17 @@
     component_name: "uptime-kuma"
 
   tasks:
+    - name: "0. Remove AutoKuma (part of this service)"
+      # Before the StatefulSet: AutoKuma reconciles continuously, and leaving it
+      # running against a disappearing Kuma just produces connect errors.
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apps/v1
+        kind: Deployment
+        name: autokuma
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
     - name: "1. Remove IngressRoute"
       kubernetes.core.k8s:
         state: absent
@@ -75,6 +86,28 @@
         kubeconfig: "{{ merged_kubeconf_file }}"
       when: _remove_pvc
       failed_when: false
+
+    - name: "4.1 Remove AutoKuma's state PVC (only with --purge)"
+      # Holds AutoKuma's id -> monitor mapping. Keeping it across a purge would
+      # leave it pointing at monitor ids that no longer exist.
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: PersistentVolumeClaim
+        name: autokuma-data
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      when: _remove_pvc
+
+    - name: "4.2 Remove the rendered monitor definitions (only with --purge)"
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: uptime-kuma-monitors
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      when: _remove_pvc
 
     - name: "5. Removal complete"
       ansible.builtin.debug:

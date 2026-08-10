@@ -2525,6 +2525,50 @@ cmd_host_create() {
 # Secrets Commands
 # ============================================================
 
+# uis monitors - availability monitors for the services UIS deployed
+#
+# Reads probe artifacts shipped with each service, discovers where those
+# services actually are, and writes the result into the uptime-kuma-monitors
+# Secret. AutoKuma reconciles it into Uptime Kuma.
+#
+# The user supplies nothing: they deployed the services, so UIS already knows
+# the hostnames, and the probe details ship with the service.
+cmd_monitors() {
+    local subcmd="${1:-check}"
+    shift || true
+
+    local lib="${UIS_ROOT:-/mnt/urbalurbadisk/provision-host/uis}/lib/monitors.py"
+    if [[ ! -f "$lib" ]]; then
+        log_error "monitors library not found at $lib"
+        exit "$EXIT_GENERAL_ERROR"
+    fi
+
+    # Heartbeat tokens are DERIVED from this salt, so the same monitor always
+    # gets the same push URL. Optional: without it, push monitors are refused
+    # rather than issued a URL that would change on the next rebuild.
+    local salt
+    salt=$(kubectl get secret urbalurba-secrets -n monitoring              -o jsonpath='{.data.uptime-kuma-push-salt}' 2>/dev/null | base64 -d 2>/dev/null || true)
+
+    case "$subcmd" in
+        render|apply|check)
+            UPTIME_KUMA_PUSH_SALT="$salt" python3 "$lib" "$subcmd" "$@"
+            ;;
+        *)
+            log_error "Unknown monitors subcommand: $subcmd"
+            echo "Usage: uis monitors [render|apply|check] [--from CTX] [--to CTX]"
+            echo "  render  show what would be monitored, change nothing"
+            echo "  apply   write the definitions and restart AutoKuma"
+            echo "  check   compare intent against what Uptime Kuma is running"
+            echo ""
+            echo "  --from  cluster to discover services in (read-only)"
+            echo "  --to    cluster where Uptime Kuma runs. Defaults to --from."
+            echo "          Use both when the watchdog is outside the platform"
+            echo "          it watches, which is the production arrangement."
+            exit "$EXIT_GENERAL_ERROR"
+            ;;
+    esac
+}
+
 cmd_secrets() {
     local subcmd="${1:-status}"
     shift || true
@@ -2619,6 +2663,9 @@ main() {
             ;;
         secrets)
             cmd_secrets "$@"
+            ;;
+        monitors)
+            cmd_monitors "$@"
             ;;
         docs)
             cmd_docs "$@"

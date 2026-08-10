@@ -1,0 +1,16 @@
+# Availability probe shipped with the grafana service.
+#
+# No hostname: the endpoint is discovered from the Ingress `uis deploy` created.
+probes:
+  - id: gateway
+    type: http
+    path: /api/health
+
+    # KEYWORD, not just a status code. /api/health returns 200 with
+    # {"database": "failing"} when Grafana is up but its database is not -
+    # which is precisely the state worth knowing about. Matching "database"
+    # only proves the field is present, so pair it with the status check.
+    keyword: database
+
+    interval: 60
+    maxretries: 2
