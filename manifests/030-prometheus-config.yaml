@@ -161,6 +161,35 @@ extraScrapeConfigs: |
       - targets:
           - prometheus-alertmanager.monitoring.svc.cluster.local:9093
 
+  # ---------------------------------------------------------------------------
+  # Hosts and services OUTSIDE the cluster.
+  #
+  # On a production install the cluster runs on something, and that something is
+  # invisible here by default: the external watchdog says whether it answers, but
+  # nothing says whether its disk is filling. The in-cluster workloads are
+  # replaceable; the storage pool holding every volume is not.
+  #
+  # ⚠️ Addresses are installation-specific. This block belongs in
+  # `.uis.extend` for a real deployment (PLAN-004 Phase 2) - it is inline here
+  # only until that mechanism exists, and a stock install should scrape nothing
+  # extra.
+  #
+  # Scraped over the host-only backplane rather than the LAN, so monitoring
+  # traffic cannot leave the hypervisor and does not depend on anything hosted.
+  # The exporter is bound to that address too, so host metrics - a detailed
+  # inventory of filesystems, memory and processes - are not offered to the LAN.
+  #
+  # No new alert rules are needed: PLAN-002's capacity rules match on
+  # node_filesystem_* with no cluster-specific selector, so this host is covered
+  # the moment it is scraped. If adding a host had required new rules, the rules
+  # were written too narrowly.
+  - job_name: external-hosts
+    static_configs:
+      - targets:
+          - 10.10.0.1:9100        # hypervisor - ZFS pool, disks, memory
+        labels:
+          role: hypervisor
+
 # ---------------------------------------------------------------------------
 # Baseline alert rules.
 #
