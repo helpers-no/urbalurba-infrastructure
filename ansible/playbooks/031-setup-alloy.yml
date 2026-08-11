@@ -1,0 +1,109 @@
+---
+# 031-setup-alloy.yml
+# Deploy Grafana Alloy - the log collection agent.
+#
+# Without this, Loki is deployed and empty. The stack looks complete and returns
+# nothing when you search it, which is worse than an obviously missing component.
+#
+# Usage:
+#   ansible-playbook 031-setup-alloy.yml -e "target_host=rancher-desktop"
+
+- name: Deploy Grafana Alloy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    namespace: "monitoring"
+    component_name: "alloy"
+    alloy_config_file: "/mnt/urbalurbadisk/manifests/031-alloy-config.yaml"
+    helm_repos:
+      - name: grafana
+        url: https://grafana.github.io/helm-charts
+
+  tasks:
+    - name: "1. Create the {{ namespace }} namespace"
+      kubernetes.core.k8s:
+        name: "{{ namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        context: "{{ _target }}"
+
+    - name: "2. Add/update Helm repositories"
+      kubernetes.core.helm_repository:
+        name: "{{ item.name }}"
+        repo_url: "{{ item.url }}"
+      loop: "{{ helm_repos }}"
+
+    - name: "3. Update Helm repositories"
+      ansible.builtin.command: helm repo update
+      changed_when: false
+
+    - name: "4. Warn if Loki is absent"
+      # Not fatal: Alloy will retry, and an install order that puts the collector
+      # first is inconvenient rather than wrong. But say so, because an agent
+      # shipping into nothing looks healthy.
+      ansible.builtin.command: >
+        kubectl get svc loki-gateway -n {{ namespace }} --context {{ _target }}
+      register: loki_present
+      failed_when: false
+      changed_when: false
+
+    - name: "4.1 Say so plainly"
+      ansible.builtin.debug:
+        msg:
+          - "⚠️  Loki was not found in {{ namespace }}."
+          - "Alloy will collect logs and fail to deliver them, which looks healthy."
+          - "Deploy loki first: uis deploy loki"
+      when: loki_present.rc != 0
+
+    - name: "5. Install/upgrade Alloy via Helm"
+      ansible.builtin.command: >
+        helm upgrade --install {{ component_name }} grafana/alloy
+        -f {{ alloy_config_file }}
+        --namespace {{ namespace }}
+        --create-namespace
+        --timeout 600s
+        --kube-context {{ _target }}
+      register: alloy_helm
+      changed_when: true
+
+    - name: "6. Wait for the DaemonSet to be ready"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name=alloy"
+        context: "{{ _target }}"
+      register: alloy_pods
+      retries: 30
+      delay: 10
+      until: >
+        alloy_pods.resources | length > 0 and
+        (alloy_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length) == (alloy_pods.resources | length)
+
+    # ---- prove it is actually collecting -----------------------------------
+    # A running agent is not the same as a working pipeline. Alloy can be
+    # perfectly healthy while shipping nothing - wrong labels, unreachable Loki,
+    # a scanner that found no files. Ask Loki what it has instead.
+    - name: "7. Verify logs are ARRIVING, not just that Alloy is running"
+      ansible.builtin.shell: >
+        kubectl run alloy-verify-{{ 999 | random }} -n {{ namespace }}
+        --rm -i --restart=Never --quiet --context {{ _target }}
+        --image=curlimages/curl:latest --
+        curl -s "http://loki-gateway.{{ namespace }}.svc.cluster.local/loki/api/v1/label/namespace/values"
+        < /dev/null
+      register: loki_namespaces
+      retries: 12
+      delay: 15
+      until: loki_namespaces.stdout is search('"data"') and loki_namespaces.stdout is search('kube-system')
+      changed_when: false
+      failed_when: false
+
+    - name: "8. Report"
+      ansible.builtin.debug:
+        msg:
+          - "Alloy deployed - {{ alloy_pods.resources | length }} pod(s)"
+          - "{{ 'Logs are arriving in Loki ✅' if (loki_namespaces.stdout | default('')) is search('kube-system') else '⚠️  Alloy is running but no logs have reached Loki yet. Check: kubectl logs -n monitoring -l app.kubernetes.io/name=alloy' }}"

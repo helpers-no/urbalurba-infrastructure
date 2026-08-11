@@ -208,6 +208,55 @@
       failed_when: false
       when: grafana_e2e_traces.rc == 0
 
+    # ⚠️ DASHBOARDS ARE APPLIED BEFORE THE E2E GATE BELOW, DELIBERATELY.
+    # The gate (task 20) aborts the play when the trace round-trip test fails,
+    # and that test races Tempo's block flush - a known defect (OBS-F6) that
+    # fires while the stack is perfectly healthy. Because the play aborted,
+    # EVERY dashboard apply below it was skipped: this installation reported
+    # dashboards as deployed and had zero ConfigMaps. Dashboards do not depend
+    # on traces being searchable, so they must not be gated behind that test.
+
+    - name: "Is PostgreSQL being scraped? (decides the postgres dashboard)"
+      # Condition on the METRIC, not on "is the postgresql service deployed".
+      # A production install may run PostgreSQL outside the cluster and still
+      # deserves the dashboard; and a dashboard whose panels all read "No data"
+      # is worse than an absent one - it looks broken, so people stop trusting
+      # every dashboard.
+      ansible.builtin.shell: >
+        kubectl exec -n {{ namespace }} deploy/prometheus-server -c prometheus-server
+        --context {{ _target }} --
+        wget -qO- "http://localhost:9090/api/v1/query?query=pg_up" 2>/dev/null
+      register: pg_up_probe
+      failed_when: false
+      changed_when: false
+
+    - name: "Deploy the PostgreSQL dashboard (only if pg metrics exist)"
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ manifests_folder }}/037-grafana-postgresql-dashboard.yaml"
+        context: "{{ _target }}"
+      when: (pg_up_probe.stdout | default('')) is search('"metric"')
+
+    - name: "Say why the PostgreSQL dashboard was skipped"
+      ansible.builtin.debug:
+        msg:
+          - "No pg_up metric, so the PostgreSQL dashboard was not applied."
+          - "Every panel would read 'No data', which reads as broken."
+          - "Deploy a postgres exporter and re-run to get it."
+      when: (pg_up_probe.stdout | default('')) is not search('"metric"')
+
+    - name: 21. Deploy Installation Test Suite dashboards
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ manifests_folder }}/035-grafana-test-dashboards.yaml"
+        context: "{{ _target }}"
+
+    - name: 22. Deploy sovdev-logger Overview dashboard
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ manifests_folder }}/036-grafana-sovdev-metrics.yaml"
+        context: "{{ _target }}"
+
     - name: 20. FAIL deployment if core tests did not pass
       ansible.builtin.fail:
         msg: |
@@ -234,17 +283,6 @@
         not (grafana_loki_e2e_verify is defined and grafana_loki_e2e_verify.stdout is defined and grafana_loki_e2e_verify.stdout.find('"status":"success"') != -1 and grafana_loki_e2e_verify.stdout.find('grafana-datasource-test') != -1) or
         not (grafana_tempo_e2e_verify is defined and grafana_tempo_e2e_verify.stdout is defined and grafana_tempo_e2e_verify.stdout.find('"traces"') != -1 and grafana_tempo_e2e_verify.stdout.find('grafana-e2e-validation') != -1)
 
-    - name: 21. Deploy Installation Test Suite dashboards
-      kubernetes.core.k8s:
-        state: present
-        src: "{{ manifests_folder }}/035-grafana-test-dashboards.yaml"
-        context: "{{ _target }}"
-
-    - name: 22. Deploy sovdev-logger Overview dashboard
-      kubernetes.core.k8s:
-        state: present
-        src: "{{ manifests_folder }}/036-grafana-sovdev-metrics.yaml"
-        context: "{{ _target }}"
 
     - name: 23. Wait for dashboard ConfigMaps to be created
       kubernetes.core.k8s_info:

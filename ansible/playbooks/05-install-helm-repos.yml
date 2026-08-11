@@ -18,6 +18,8 @@
         - { name: 'graviteeio', url: 'https://helm.gravitee.io' }
         - { name: 'rhdh-chart', url: 'https://redhat-developer.github.io/rhdh-chart' }
         - { name: 'minio', url: 'https://charts.min.io/' }
+        # Loki, Tempo and Alloy all come from here.
+        - { name: 'grafana', url: 'https://grafana.github.io/helm-charts' }
         - { name: 'temporal', url: 'https://go.temporal.io/helm-charts' }
       register: helm_repo_result
 
