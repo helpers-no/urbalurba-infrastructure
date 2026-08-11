@@ -133,6 +133,9 @@ Network:
   network expose   <provider> <service>   Expose a service via Funnel (Tailscale only)
   network unexpose <provider> <service>   Remove a per-service Funnel exposure (Tailscale only)
 
+Alloy:
+  alloy verify                   Run E2E health checks on Alloy log collection
+
 ArgoCD:
   argocd register <name> <url>  Register a GitHub repo as ArgoCD application
   argocd remove <name>          Remove an ArgoCD-managed application
@@ -150,6 +153,15 @@ OpenMetadata:
 
 Temporal:
   temporal verify                Run E2E health checks on Temporal
+
+Backstage:
+  backstage verify               Run E2E health checks on Backstage (RHDH)
+
+Nextcloud:
+  nextcloud verify               Run E2E health checks on Nextcloud + OnlyOffice
+
+Uptime Kuma:
+  uptime-kuma verify             Run E2E health checks on Uptime Kuma
 
 Testing:
   test-all                       Run full integration test (deploy+undeploy all services)
@@ -2008,6 +2020,7 @@ cmd_verify() {
         echo "Available verifications:"
         echo "  tailscale       Check Tailscale secrets, API, devices, and operator"
         echo "  cloudflare      Check Cloudflare secrets, network, and pod status"
+        echo "  alloy           Run E2E health checks on Alloy log collection"
         echo "  argocd          Run E2E health checks on ArgoCD server"
         echo "  backstage       Run E2E health checks on Backstage (RHDH)"
         echo "  enonic          Run E2E health checks on Enonic XP"
@@ -2025,6 +2038,9 @@ cmd_verify() {
             ;;
         cloudflare|cloudflare-tunnel)
             cmd_network_verify cloudflare
+            ;;
+        alloy)
+            cmd_alloy_verify
             ;;
         argocd)
             cmd_argocd_verify
@@ -2056,6 +2072,7 @@ cmd_verify() {
             echo "Available verifications:"
             echo "  tailscale       Check Tailscale secrets, API, devices, and operator"
             echo "  cloudflare      Check Cloudflare secrets, network, and pod status"
+            echo "  alloy           Run E2E health checks on Alloy log collection"
             echo "  argocd          Run E2E health checks on ArgoCD server"
             echo "  backstage       Run E2E health checks on Backstage (RHDH)"
             echo "  enonic          Run E2E health checks on Enonic XP"
@@ -2063,6 +2080,7 @@ cmd_verify() {
             echo "  nextcloud       Run E2E health checks on Nextcloud + OnlyOffice"
             echo "  openmetadata    Run E2E health checks on OpenMetadata"
             echo "  temporal        Run E2E health checks on Temporal"
+            echo "  uptime-kuma     Run E2E health checks on Uptime Kuma"
             exit "$EXIT_GENERAL_ERROR"
             ;;
     esac
@@ -2372,6 +2390,28 @@ cmd_minio_verify() {
 cmd_temporal_verify() {
     print_section "Verifying Temporal Deployment"
     ansible-playbook "$ANSIBLE_DIR/086-test-temporal.yml"
+}
+
+# ============================================================
+# Alloy Commands
+# ============================================================
+
+cmd_alloy_verify() {
+    print_section "Verifying Alloy Deployment"
+
+    # The alloy playbooks pin `context: {{ _target }}`, so verify must resolve the
+    # target the same way service-deployment.sh does for deploy. Without it the
+    # playbook falls back to 'rancher-desktop' and fails on every other cluster -
+    # which is the whole dev/prod parity the platform is supposed to have.
+    local cluster_config="$CONFIG_DIR/cluster-config.sh"
+    local target_host="rancher-desktop"
+    if [[ -f "$cluster_config" ]]; then
+        # shellcheck source=/dev/null
+        source "$cluster_config"
+        target_host="${TARGET_HOST:-rancher-desktop}"
+    fi
+
+    ansible-playbook "$ANSIBLE_DIR/031-test-alloy.yml" -e "target_host=$target_host"
 }
 
 cmd_uptime_kuma_verify() {
@@ -2757,6 +2797,26 @@ main() {
         argocd)
             cmd_argocd "$@"
             ;;
+        # `uis alloy verify` is the form VERIFY_SERVICES stores, so test-all
+        # reaches the E2E tests through here - not through `uis verify alloy`.
+        # Both are registered; a service with only one of them is unreachable
+        # from whichever path it is missing.
+        alloy)
+            local subcmd="${1:-}"
+            shift 2>/dev/null || true
+            case "$subcmd" in
+                verify)
+                    cmd_alloy_verify
+                    ;;
+                *)
+                    log_error "Unknown alloy command: $subcmd"
+                    echo ""
+                    echo "Commands:"
+                    echo "  alloy verify     Run E2E health checks on Alloy log collection"
+                    exit "$EXIT_GENERAL_ERROR"
+                    ;;
+            esac
+            ;;
         enonic)
             local subcmd="${1:-}"
             shift 2>/dev/null || true
@@ -2785,6 +2845,22 @@ main() {
                     echo ""
                     echo "Commands:"
                     echo "  minio verify    Run E2E health checks on MinIO object storage"
+                    exit "$EXIT_GENERAL_ERROR"
+                    ;;
+            esac
+            ;;
+        uptime-kuma)
+            local subcmd="${1:-}"
+            shift 2>/dev/null || true
+            case "$subcmd" in
+                verify)
+                    cmd_uptime_kuma_verify
+                    ;;
+                *)
+                    log_error "Unknown uptime-kuma command: $subcmd"
+                    echo ""
+                    echo "Commands:"
+                    echo "  uptime-kuma verify    Run E2E health checks on Uptime Kuma"
                     exit "$EXIT_GENERAL_ERROR"
                     ;;
             esac
