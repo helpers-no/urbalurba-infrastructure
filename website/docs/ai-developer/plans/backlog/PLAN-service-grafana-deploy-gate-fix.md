@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — implemented in the working tree, awaiting review
+## Status: Active — Phases 1–3 done and verified; Phase 4 (move E2E to a verify playbook) open
 
 **Goal**: Make `uis deploy grafana` succeed deterministically on a healthy stack,
 so an automated stand-up never reports failure for telemetry that merely had not
@@ -105,24 +105,67 @@ fatally**, exactly as designed.
 
 Phase 2 proved the gate is correct. It did not prove the Loki pipeline is.
 
-The probe queries `{service_name="telemetrygen"}` while the telemetry is tagged
-`service.name="grafana-e2e-validation"` — so the label the probe selects on and
-the label the generator emits may simply not match, in which case the pipeline is
-fine and the *probe* is wrong. That must be settled before this plan completes:
-a warning that is always yellow trains everyone to ignore it.
+**The hypothesis in this section was wrong, and measuring killed it.** It guessed
+a label mismatch — that the probe selects `{service_name="telemetrygen"}` while
+the generator tags `service.name="grafana-e2e-validation"`. Sending the exact
+payload the playbook sends and then querying Loki showed the probe is right:
+
+```
+service_name:            "telemetrygen"              <- what the probe queries
+service_name_extracted:  "grafana-e2e-validation"
+test_type:               "grafana-datasource-test"   <- what the probe asserts on
+```
+
+`--telemetry-attributes service.name=...` does not become the stream label; the
+resource attribute does, and it is `telemetrygen`. Running task 16's exact
+command by hand returned `"status":"success"` and the asserted string, rc=0.
+Probe correct, pipeline correct.
+
+### The actual defect: the retry budget outgrew the query window
+
+Both round-trip probes query a **120-second lookback** (`START=$((NOW-120))`).
+Phase 2 gave Tempo 12×10s = **exactly 120s** of retries and Loki 12×5s = 60s.
+
+So the two windows were coupled, and nobody had noticed. On the later attempts
+the probe searches a period that no longer contains the telemetry *it just sent* —
+and every additional retry makes it strictly worse rather than better. Phase 2's
+widening had quietly pushed Tempo to the exact edge of its own window.
+
+That also explains the signature that started this whole plan: a probe that
+passes, then fails, then passes, with nothing about the stack changing.
 
 ### Tasks
 
-- [ ] 3.1 Query Loki directly for both label values to establish which one the
-      collector actually writes
-- [ ] 3.2 Fix whichever side is wrong — the probe's selector, or the collector's
-      label handling
-- [ ] 3.3 Re-deploy and confirm task 20b reports OK
+- [x] 3.1 Query Loki directly for both label values — establishes the probe is
+      correct and the pipeline delivers
+- [x] 3.2 Decouple the two windows: lookback 120s → 900s on both probes, so the
+      retry budget sits well inside the period being searched
+- [x] 3.3 Give the Loki probe the same 12×10s patience as Tempo, now that the
+      window can accommodate it
+- [x] 3.4 Re-deploy from a **cold** Grafana and confirm task 20b reports OK
 
 ### Validation
 
-Two consecutive deploys report `OK - telemetry pushed via OTLP was queryable
-back through Grafana.`
+Two consecutive deploys, each from a deliberately deleted Grafana pod so the
+start-up race is present rather than avoided:
+
+| | run 1 | run 2 |
+|---|---|---|
+| all seven checks | PASS | PASS |
+| task 20b | OK | OK |
+| PLAY RECAP | `failed=0` | `failed=0` |
+| widest probe | 7/12 retries | 8/12 retries |
+
+Headroom is real but not vast — task 16 is the one to watch if this regresses.
+
+### Rejected: a datasource-provisioning readiness gate
+
+A task 9b was written first, polling `/api/datasources` until all three appear,
+on the theory that the proxy checks were racing sidecar provisioning. **Measured
+and removed**: it passed with **0 retries** while tasks 10 and 11 still needed
+55–60s. Datasource *registration* is immediate; what is slow is Grafana's proxy
+reaching a backend on a cold pod. A gate that always passes instantly gates
+nothing and is worse than no gate, because it reads like protection.
 
 ---
 
