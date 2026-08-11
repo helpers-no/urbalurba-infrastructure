@@ -91,16 +91,23 @@ which is the right time to have the forecast rather than the wrong one.
 
 ### Tasks
 
-- [ ] 2.1 External targets come from `.uis.extend`, rendered into the Prometheus
-      scrape config — the same shape as `.uis.extend/monitors.yaml` for the
-      watchdog, so there is one idea to learn rather than two
-- [ ] 2.2 Absent ⇒ nothing extra is scraped, and a stock install is unaffected
-- [ ] 2.3 Each entry carries a `why:`, for the same reason monitors do
+- [x] 2.1 Targets come from `.uis.extend/prometheus-targets.yaml` ✓, rendered
+      into the scrape config by the playbook — the same shape as
+      `.uis.extend/monitors.yaml`, so there is one idea to learn rather than two
+- [x] 2.2 Absent ⇒ nothing extra is scraped ✓ — the playbook reports
+      "none declared" rather than failing
+- [x] 2.3 `why:` required and **enforced** ✓ — the deploy fails with a message
+      naming the offending target, rather than accepting it
 
 ### Validation
 
-A stock install behaves identically. The reference installation's targets are
-declared in one file, not embedded in helm values.
+✅ **Done.** `uis deploy prometheus` reports
+`Scraping Alertmanager plus 1 declared external target(s). odin-hypervisor`, and
+the job appears as `odin-hypervisor 1/1 up` — named from the declaration.
+
+The product manifest now contains **zero** occurrences of the installation's
+addresses. The whole scrape config is generated: Alertmanager always, declared
+targets when present.
 
 ---
 
@@ -151,8 +158,8 @@ Exactly one system alerts when a backup stops. Verified by stopping one.
 - [x] Pool capacity trends, so `predict_linear` can warn before it is full ✓
 - [x] `PLAN-002`'s existing rules cover external hosts with no rule changes ✓
 - [x] Host metrics are **not** exposed to the LAN ✓ — verified by trying
-- [ ] External targets are declared in `.uis.extend`, not helm values
-- [ ] A stock install scrapes nothing extra
+- [x] External targets are declared in `.uis.extend`, not helm values ✓
+- [x] A stock install scrapes nothing extra ✓
 - [ ] Exactly one system owns backup-freshness alerting
 
 ---
