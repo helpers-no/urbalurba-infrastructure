@@ -264,6 +264,40 @@ serverFiles:
               summary: "Node {{ $labels.node }} is not Ready"
               description: "On a single-node cluster this means the platform is down."
 
+      # Only fires where an external database is actually scraped. Absent
+      # metrics mean the rule is simply never true - it costs nothing on an
+      # install that has no external database.
+      - name: external-database
+        rules:
+          - alert: PostgresConnectionsSaturating
+            expr: |
+              sum(pg_stat_database_numbackends) / max(pg_settings_max_connections) > 0.8
+            for: 10m
+            labels: { severity: warning }
+            annotations:
+              summary: "PostgreSQL is using over 80% of max_connections"
+              description: "New connections will start being refused. Find the leaking client, or raise max_connections."
+
+          # Long-running transactions block VACUUM, so the table bloats and the
+          # database slowly degrades. It is a classic slow failure: nothing is
+          # down, everything gets worse.
+          - alert: PostgresLongRunningTransaction
+            expr: |
+              max(pg_stat_activity_max_tx_duration) > 3600
+            for: 15m
+            labels: { severity: warning }
+            annotations:
+              summary: "A PostgreSQL transaction has been open over an hour"
+              description: "It blocks VACUUM and bloats tables. Find it in pg_stat_activity."
+
+          - alert: PostgresDown
+            expr: pg_up == 0
+            for: 5m
+            labels: { severity: critical }
+            annotations:
+              summary: "The PostgreSQL exporter cannot reach the database"
+              description: "Either the database is down or the exporter's credentials stopped working."
+
       - name: monitoring-itself
         rules:
           # A monitoring stack that has stopped looking must say so. This is the

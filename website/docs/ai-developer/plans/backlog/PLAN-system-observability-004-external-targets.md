@@ -115,16 +115,44 @@ targets when present.
 
 ### Tasks
 
-- [ ] 3.1 `postgres_exporter` for an external PostgreSQL — connection saturation,
-      replication lag, transaction age
-- [ ] 3.2 Object storage: most S3 implementations expose Prometheus metrics
-      natively, so this is a scrape target rather than an exporter
-- [ ] 3.3 ⚠️ Credentials for exporters come from `urbalurba-secrets`, never from
-      the scrape config, which lands in a ConfigMap
+- [x] 3.1 `postgres_exporter` ✓ — 772 metric series, `pg_up 1`. Connection
+      saturation and transaction age are now visible; both degrade *before* an
+      outage rather than during one.
+
+      Runs as a dedicated `metrics_exporter` role with `pg_monitor`, **not**
+      superuser (`rolsuper = f`, verified) — a metrics agent should not be able to
+      drop the database it watches. Bound to the backplane, because database
+      statistics name every database, table and connecting user.
+
+      ⚠️ **Role names cannot begin with `pg_`** — PostgreSQL reserves that prefix
+      for system roles, so `CREATE ROLE pg_exporter` fails outright. The first
+      attempt used that name and the exporter came up "active" serving `pg_up 0`.
+- [ ] 3.2 Object storage — **deferred, with a reason.** MinIO's metrics endpoints
+      return `403`: they need a JWT unless `MINIO_PROMETHEUS_AUTH_TYPE=public`,
+      and MinIO listens on the LAN, so making them public would expose them
+      beyond the backplane. The alternative is a bearer token in the scrape
+      config, which lands in a ConfigMap.
+
+      Deferred rather than bodged because the value is low right now: MinIO's
+      data lives on the ZFS pool, and pool capacity is **already** covered by the
+      hypervisor's node exporter. Doing it properly means `bearer_token_file`
+      plus a mounted secret.
+- [x] 3.3 ⚠️ Exporter credentials are not in the scrape config ✓ — the PostgreSQL
+      password lives in the exporter's own `0600` defaults file on the database
+      host and in OpenBao, never in anything Prometheus renders
 
 ### Validation
 
-Grafana shows database and storage health for components the cluster does not run.
+✅ **PostgreSQL done.** `up{job="pg-postgresql"} = 1`, `max_connections 100`,
+`17` connections in use — the saturation signal exists where before there was
+only "the port answers".
+
+Three rules were added with it (`PostgresConnectionsSaturating`,
+`PostgresLongRunningTransaction`, `PostgresDown`), because a metric with no alert
+is back to collecting everything and alerting on nothing. They only fire where an
+external database is scraped, so they cost nothing on an install without one.
+
+14 rules across 4 groups, none firing.
 
 ---
 
