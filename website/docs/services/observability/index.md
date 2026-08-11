@@ -23,6 +23,7 @@ taste.
 |---------|-------------|--------|
 | [Prometheus](./prometheus.md) | Metrics collection and storage | `./uis deploy prometheus` |
 | [Loki](./loki.md) | Log aggregation with label-based indexing | `./uis deploy loki` |
+| [Alloy](./alloy.md) | Ships container logs into Loki — **without it Loki stays empty** | `./uis deploy alloy` |
 | [Tempo](./tempo.md) | Distributed tracing backend | `./uis deploy tempo` |
 | [OTLP Collector](./otel.md) | Telemetry pipeline routing to all backends | `./uis deploy otel-collector` |
 | [Grafana](./grafana.md) | Visualization dashboards for all data | `./uis deploy grafana` |

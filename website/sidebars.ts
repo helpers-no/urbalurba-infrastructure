@@ -76,6 +76,7 @@ const sidebars: SidebarsConfig = {
             'services/observability/prometheus',
             'services/observability/grafana',
             'services/observability/loki',
+        'services/observability/alloy',
             'services/observability/tempo',
             'services/observability/otel',
             'services/observability/sovdev-logger',

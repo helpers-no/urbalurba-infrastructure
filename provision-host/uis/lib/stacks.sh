@@ -20,7 +20,7 @@ _UIS_STACKS_LOADED=1
 # Stack definitions as indexed arrays (bash 3.x compatible)
 # Format: id|name|description|category|tags|abstract|services|optional_services|summary|docs|logo
 _STACK_DATA=(
-    "observability|Observability Stack|Complete monitoring with metrics, logs, and distributed tracing|OBSERVABILITY|monitoring,metrics,logs,tracing,grafana,prometheus|Full observability with Prometheus, Loki, Tempo, and Grafana|prometheus,tempo,loki,otel-collector,grafana|otel-collector|The observability stack provides full visibility into your infrastructure. Prometheus collects metrics, Loki aggregates logs, Tempo stores traces, and Grafana visualizes everything in unified dashboards. The OpenTelemetry Collector receives telemetry data from applications.|/docs/stacks/observability|observability-stack-logo.svg"
+    "observability|Observability Stack|Complete monitoring with metrics, logs, and distributed tracing|OBSERVABILITY|monitoring,metrics,logs,tracing,grafana,prometheus|Full observability with Prometheus, Loki, Tempo, and Grafana|prometheus,tempo,loki,alloy,otel-collector,grafana|otel-collector|The observability stack provides full visibility into your infrastructure. Prometheus collects metrics, Alloy ships container logs into Loki which aggregates them, Tempo stores traces, and Grafana visualizes everything in unified dashboards. The OpenTelemetry Collector receives telemetry data from applications.|/docs/stacks/observability|observability-stack-logo.svg"
     "ai-local|Local AI Stack|Run AI models locally with a unified API and chat interface|AI|ai,llm,ollama,openai,chat,local|Self-hosted AI with LiteLLM proxy and Open WebUI|litellm,openwebui||The local AI stack provides a unified LLM interface. LiteLLM proxies to external Ollama (on host Mac) and cloud providers, while Open WebUI offers a ChatGPT-like interface for users. Note: Ollama runs on the host machine, not in-cluster.|/docs/stacks/ai-local|ai-local-stack-logo.svg"
     "analytics|Analytics Stack|Collaborative data science platform with notebooks and distributed computing|ANALYTICS|analytics,spark,jupyter,notebooks,datascience|Analytics platform with Spark, JupyterHub, and Unity Catalog|spark,jupyterhub,unity-catalog|unity-catalog|The analytics stack provides a complete platform for data analysis and ML workflows. Apache Spark handles distributed computing, JupyterHub provides collaborative notebooks, and Unity Catalog manages data governance.|/docs/stacks/analytics|datascience-stack-logo.svg"
 )
@@ -339,6 +339,7 @@ EOF
                 prometheus) note="Metrics collection and storage" ;;
                 tempo) note="Distributed tracing backend" ;;
                 loki) note="Log aggregation" ;;
+                alloy) note="Ships container logs into Loki" ;;
                 otel-collector) note="Telemetry data receiver" ;;
                 grafana) note="Visualization and dashboards" ;;
                 ollama) note="LLM inference engine" ;;

@@ -1,0 +1,31 @@
+---
+# 031-remove-alloy.yml
+# Remove Grafana Alloy.
+#
+# Removing the collector stops new logs arriving. Logs already in Loki stay
+# until its own retention expires them.
+
+- name: Remove Grafana Alloy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    namespace: "monitoring"
+    component_name: "alloy"
+
+  tasks:
+    - name: "1. Uninstall the Helm release"
+      ansible.builtin.command: >
+        helm uninstall {{ component_name }} --namespace {{ namespace }}
+        --kube-context {{ _target }}
+      register: uninstall
+      failed_when: false
+      changed_when: uninstall.rc == 0
+
+    - name: "2. Removal complete"
+      ansible.builtin.debug:
+        msg:
+          - "Alloy removed from {{ namespace }}"
+          - "Log COLLECTION has stopped. Existing logs remain in Loki until its retention expires them."

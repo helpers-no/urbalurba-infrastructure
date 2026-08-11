@@ -1,0 +1,69 @@
+---
+# 031-test-alloy.yml
+# Verify Alloy is not merely running, but actually delivering logs.
+#
+# ⚠️ THE POINT OF THIS PLAYBOOK IS THE DIFFERENCE BETWEEN THOSE TWO THINGS.
+# A DaemonSet can be perfectly healthy while shipping nothing: wrong labels, an
+# unreachable Loki, a file scanner that matched no paths. Checking that the pod is
+# Running proves the process started, and an empty log search then looks like
+# "nothing happened" rather than "collection is broken".
+#
+# Usage:
+#   ansible-playbook 031-test-alloy.yml -e "target_host=rancher-desktop"
+
+- name: Verify Grafana Alloy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    namespace: "monitoring"
+
+  tasks:
+    - name: "1. Alloy pods are Running"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name=alloy"
+        context: "{{ _target }}"
+      register: pods
+      failed_when: >
+        pods.resources | length == 0 or
+        (pods.resources | selectattr('status.phase', 'equalto', 'Running') | list | length) != (pods.resources | length)
+
+    - name: "2. Loki reports real namespaces, not just its own canary"
+      # The actual test. If Alloy is delivering, Loki knows about namespaces it
+      # could only have learned from container logs.
+      ansible.builtin.shell: >
+        kubectl run alloy-verify-{{ 999 | random }} -n {{ namespace }}
+        --rm -i --restart=Never --quiet --context {{ _target }}
+        --image=curlimages/curl:latest --
+        curl -s "http://loki-gateway.{{ namespace }}.svc.cluster.local/loki/api/v1/label/namespace/values"
+        < /dev/null
+      register: ns_values
+      changed_when: false
+      failed_when: ns_values.stdout is not search('kube-system')
+
+    - name: "3. No high-cardinality labels have crept in"
+      # `instance` embeds the pod name, so it mints a new label value on every
+      # deploy and grows Loki's index without bound. The log source adds it by
+      # default; the config blanks it. If this regresses, Loki degrades slowly
+      # and silently rather than breaking.
+      ansible.builtin.shell: >
+        kubectl run alloy-verify-{{ 999 | random }} -n {{ namespace }}
+        --rm -i --restart=Never --quiet --context {{ _target }}
+        --image=curlimages/curl:latest --
+        curl -s "http://loki-gateway.{{ namespace }}.svc.cluster.local/loki/api/v1/labels"
+        < /dev/null
+      register: labels
+      changed_when: false
+      failed_when: labels.stdout is search('"instance"')
+
+    - name: "4. Report"
+      ansible.builtin.debug:
+        msg:
+          - "✅ Alloy: {{ pods.resources | length }} pod(s) Running"
+          - "✅ Logs are reaching Loki - real namespaces present"
+          - "✅ No high-cardinality `instance` label"

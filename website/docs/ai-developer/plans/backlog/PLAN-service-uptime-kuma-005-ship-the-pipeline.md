@@ -12,6 +12,8 @@ installation-specific input being a list of targets UIS did not deploy.
 
 **Last Updated**: 2026-08-09
 
+**Investigation**: [INVESTIGATE-service-uptime-kuma](./INVESTIGATE-service-uptime-kuma.md)
+
 **Prerequisites**: [PLAN-service-uptime-kuma-004-uis-service](../completed/PLAN-service-uptime-kuma-004-uis-service.md) *(done)*
 
 **Related**:

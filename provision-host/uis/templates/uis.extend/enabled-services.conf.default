@@ -11,6 +11,7 @@ nginx
 # prometheus
 # grafana
 # loki
+# alloy        # ships container logs into Loki - without it Loki stays empty
 # uptime-kuma        # external watchdog - run it OUTSIDE the cluster it monitors
 
 # === AI ===

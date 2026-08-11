@@ -12,6 +12,7 @@
     _target: "{{ target_host | default('rancher-desktop') }}"
     namespace: "monitoring"
     component_name: "prometheus"
+    uis_extend_dir: "/mnt/urbalurbadisk/.uis.extend"
     manifests_folder: "/mnt/urbalurbadisk/manifests"
     prometheus_config_file: "{{ manifests_folder }}/030-prometheus-config.yaml"
 
@@ -49,10 +50,134 @@
       ansible.builtin.command: helm repo update
       changed_when: false
 
+    # ---- alerting credentials ------------------------------------------------
+    # Rules deploy regardless. Only DELIVERY depends on these, and if they are
+    # absent the deploy says so loudly rather than installing a monitoring stack
+    # that quietly notifies nobody.
+    - name: "4.1 Read alerting credentials from urbalurba-secrets"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ namespace }}"
+        name: urbalurba-secrets
+        kubeconfig: "{{ merged_kubeconf_file | default(omit) }}"
+      register: obs_secret
+      failed_when: false
+      no_log: true
+
+    - name: "4.2 Extract the Telegram bot token and chat id"
+      ansible.builtin.set_fact:
+        _tg_token: "{{ (obs_secret.resources[0].data['alertmanager-telegram-bot-token'] | default('') | b64decode) | trim }}"
+        _tg_chat: "{{ (obs_secret.resources[0].data['alertmanager-telegram-chat-id'] | default('') | b64decode) | trim }}"
+      when: obs_secret.resources | default([]) | length > 0
+      no_log: true
+
+    - name: "4.3 Warn when alerting has no receiver"
+      ansible.builtin.debug:
+        msg:
+          - "⚠️  No Telegram credentials - alert rules will deploy but NOTHING WILL BE DELIVERED."
+          - "Set ALERTMANAGER_TELEGRAM_BOT_TOKEN and ALERTMANAGER_TELEGRAM_CHAT_ID,"
+          - "then: uis secrets generate && uis secrets apply && uis deploy prometheus"
+      when: (_tg_token | default('')) | length == 0
+
+    - name: "4.4 Create the Alertmanager token Secret"
+      # A Secret, not the values file: `alertmanager.config` is rendered into a
+      # ConfigMap, and a token that can control the bot does not belong there.
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: alertmanager-telegram
+            namespace: "{{ namespace }}"
+          type: Opaque
+          stringData:
+            token: "{{ _tg_token }}"
+        kubeconfig: "{{ merged_kubeconf_file | default(omit) }}"
+      when: (_tg_token | default('')) | length > 0
+      no_log: true
+
+    - name: "4.5 Render the chat id into the values file"
+      # chat_id cannot be read from a file by Alertmanager (only bot_token can),
+      # so it has to be substituted. Installation-specific, hence not committed.
+      ansible.builtin.command: >
+        sed -i 's/TELEGRAM_CHAT_ID_PLACEHOLDER/{{ _tg_chat }}/'
+        {{ prometheus_config_file }}
+      when: (_tg_chat | default('')) | length > 0
+      changed_when: true
+
+    - name: "4.6 Disable the receiver when unconfigured"
+      # Leaving the literal placeholder in would make Alertmanager fail to load
+      # its config, which takes ALL alerting down rather than just delivery.
+      ansible.builtin.command: >
+        sed -i 's/chat_id: TELEGRAM_CHAT_ID_PLACEHOLDER/chat_id: 0/'
+        {{ prometheus_config_file }}
+      when: (_tg_chat | default('')) | length == 0
+      changed_when: true
+
+    # ---- scrape targets ------------------------------------------------------
+    # Generated rather than written into the values file, so installation
+    # addresses never end up in the product repo. Always Alertmanager; plus
+    # anything the installation declares.
+    - name: "4.7 Read declared external scrape targets"
+      ansible.builtin.slurp:
+        src: "{{ uis_extend_dir }}/prometheus-targets.yaml"
+      register: ext_targets_raw
+      failed_when: false
+
+    - name: "4.8 Parse them"
+      ansible.builtin.set_fact:
+        _ext_targets: "{{ (ext_targets_raw.content | b64decode | from_yaml).targets | default([]) }}"
+      when: ext_targets_raw.content is defined
+
+    - name: "4.9 Require a `why:` on every declared target"
+      # Same rule as the watchdog's monitors: a target nobody can justify is one
+      # nobody maintains, and scraping costs storage forever.
+      ansible.builtin.assert:
+        that:
+          - item.why is defined and (item.why | trim | length) > 0
+        fail_msg: >-
+          Target '{{ item.name | default(item.address) }}' in
+          .uis.extend/prometheus-targets.yaml has no `why:`. State what you lose
+          if this host stops being scraped.
+      loop: "{{ _ext_targets | default([]) }}"
+      loop_control: { label: "{{ item.name | default(item.address) }}" }
+
+    - name: "4.10 Generate the scrape config"
+      ansible.builtin.copy:
+        dest: /tmp/prometheus-scrape-generated.yaml
+        mode: "0644"
+        content: |
+          extraScrapeConfigs: |
+            - job_name: alertmanager
+              static_configs:
+                - targets:
+                    - prometheus-alertmanager.{{ namespace }}.svc.cluster.local:9093
+          {% for t in _ext_targets | default([]) %}
+            # {{ t.why }}
+            - job_name: {{ t.name }}
+              {% if t.metrics_path | default('') %}metrics_path: {{ t.metrics_path }}
+              {% endif %}static_configs:
+                - targets:
+                    - {{ t.address }}
+                  labels:
+                    role: {{ t.role | default('external') }}
+          {% endfor %}
+      changed_when: true
+
+    - name: "4.11 Report what will be scraped"
+      ansible.builtin.debug:
+        msg: >-
+          Scraping Alertmanager plus {{ (_ext_targets | default([])) | length }}
+          declared external target(s).
+          {{ (_ext_targets | default([])) | map(attribute='name') | list | join(', ') }}
+
     - name: 5. Install/upgrade Prometheus via Helm
       ansible.builtin.command: >
         helm upgrade --install prometheus prometheus-community/prometheus
         -f {{ prometheus_config_file }}
+        -f /tmp/prometheus-scrape-generated.yaml
         --namespace {{ namespace }}
         --create-namespace
         --timeout 600s

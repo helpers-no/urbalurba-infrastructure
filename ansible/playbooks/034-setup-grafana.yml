@@ -142,7 +142,10 @@
         --data-urlencode 'query=up'
         "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/1/api/v1/query"
       register: grafana_prometheus_data_test
-      retries: 3
+      # This is the ONLY probe left that aborts the deploy, so it must be
+      # deterministic: 30s was not enough on a cold cluster, where Prometheus has
+      # not completed its first scrape when Grafana comes up. 2 minutes is.
+      retries: 12
       delay: 10
       until: grafana_prometheus_data_test.rc == 0 and (grafana_prometheus_data_test.stdout.find('HTTP_CODE:200') != -1) and (grafana_prometheus_data_test.stdout.find('"status":"success"') != -1)
       failed_when: false
@@ -172,7 +175,9 @@
         -n {{ namespace }} --context {{ _target }} --timeout=20s --
         /bin/sh -c 'NOW=$(date +%s); START=$((NOW-120)); curl -s -u admin:SecretPassword1 -G --data-urlencode "query={service_name=\"telemetrygen\"}" --data-urlencode "start=${START}000000000" --data-urlencode "end=${NOW}000000000" --data-urlencode "limit=5" "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/2/loki/api/v1/query_range"'
       register: grafana_loki_e2e_verify
-      retries: 3
+      # Reported, not fatal - but a probe that gives up before the backend has
+      # flushed reports a failure that is not real, so give it a real window.
+      retries: 12
       delay: 5
       until: grafana_loki_e2e_verify.rc == 0 and (grafana_loki_e2e_verify.stdout.find('"status":"success"') != -1) and (grafana_loki_e2e_verify.stdout.find('grafana-datasource-test') != -1)
       failed_when: false
@@ -202,11 +207,82 @@
         -n {{ namespace }} --context {{ _target }} --timeout=20s --
         /bin/sh -c 'NOW=$(date +%s); START=$((NOW-120)); curl -s -u admin:SecretPassword1 -G --data-urlencode "q={.service.name=\"grafana-e2e-validation\"}" --data-urlencode "start=$START" --data-urlencode "end=$NOW" --data-urlencode "limit=5" "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/3/api/search"'
       register: grafana_tempo_e2e_verify
-      retries: 3
-      delay: 5
+      # Tempo only makes a trace searchable once the block is flushed, which is
+      # the slowest step in the whole suite - hence the widest window here.
+      retries: 12
+      delay: 10
       until: grafana_tempo_e2e_verify.rc == 0 and (grafana_tempo_e2e_verify.stdout.find('"traces"') != -1) and (grafana_tempo_e2e_verify.stdout.find('grafana-e2e-validation') != -1)
       failed_when: false
       when: grafana_e2e_traces.rc == 0
+
+    # ⚠️ DASHBOARDS ARE APPLIED BEFORE THE E2E GATE BELOW, DELIBERATELY.
+    # The gate (task 20) aborts the play when the trace round-trip test fails,
+    # and that test races Tempo's block flush - a known defect (OBS-F6) that
+    # fires while the stack is perfectly healthy. Because the play aborted,
+    # EVERY dashboard apply below it was skipped: this installation reported
+    # dashboards as deployed and had zero ConfigMaps. Dashboards do not depend
+    # on traces being searchable, so they must not be gated behind that test.
+
+    - name: "Is PostgreSQL being scraped? (decides the postgres dashboard)"
+      # Condition on the METRIC, not on "is the postgresql service deployed".
+      # A production install may run PostgreSQL outside the cluster and still
+      # deserves the dashboard; and a dashboard whose panels all read "No data"
+      # is worse than an absent one - it looks broken, so people stop trusting
+      # every dashboard.
+      ansible.builtin.shell: >
+        kubectl exec -n {{ namespace }} deploy/prometheus-server -c prometheus-server
+        --context {{ _target }} --
+        wget -qO- "http://localhost:9090/api/v1/query?query=pg_up" 2>/dev/null
+      register: pg_up_probe
+      failed_when: false
+      changed_when: false
+
+    - name: "Deploy the PostgreSQL dashboard (only if pg metrics exist)"
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ manifests_folder }}/037-grafana-postgresql-dashboard.yaml"
+        context: "{{ _target }}"
+      when: (pg_up_probe.stdout | default('')) is search('"metric"')
+
+    - name: "Say why the PostgreSQL dashboard was skipped"
+      ansible.builtin.debug:
+        msg:
+          - "No pg_up metric, so the PostgreSQL dashboard was not applied."
+          - "Every panel would read 'No data', which reads as broken."
+          - "Deploy a postgres exporter and re-run to get it."
+      when: (pg_up_probe.stdout | default('')) is not search('"metric"')
+
+    - name: "20b. Round-trip telemetry probes (reported, not fatal)"
+      # Deliberately loud. These probes are the ONLY check that telemetry survives
+      # the whole path, rather than that each component answers individually - so a
+      # failure must stay visible even though it no longer aborts the deploy. A
+      # warning nobody reads is no better than a silent pass.
+      ansible.builtin.debug:
+        msg: "{{ _rt_ok | ternary(_rt_pass, _rt_fail) }}"
+      vars:
+        _rt_ok: >-
+          {{ (grafana_loki_e2e_verify.stdout | default('')) is search('grafana-datasource-test')
+             and (grafana_tempo_e2e_verify.stdout | default('')) is search('grafana-e2e-validation') }}
+        _rt_pass: "OK - telemetry pushed via OTLP was queryable back through Grafana."
+        _rt_fail: >-
+          WARNING - round-trip probes did not verify. The datasources are reachable and
+          the stack is usable, but telemetry pushed via OTLP was not queryable back
+          within the retry window. Either the backends had not flushed yet, or the OTLP
+          pipeline into Loki/Tempo is not delivering. Investigate with:
+          kubectl logs -n monitoring deploy/otel-collector-opentelemetry-collector
+
+
+    - name: 21. Deploy Installation Test Suite dashboards
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ manifests_folder }}/035-grafana-test-dashboards.yaml"
+        context: "{{ _target }}"
+
+    - name: 22. Deploy sovdev-logger Overview dashboard
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ manifests_folder }}/036-grafana-sovdev-metrics.yaml"
+        context: "{{ _target }}"
 
     - name: 20. FAIL deployment if core tests did not pass
       ansible.builtin.fail:
@@ -225,26 +301,23 @@
           Tempo (OTEL→Tempo→Grafana query): {{ 'PASS' if grafana_tempo_e2e_verify is defined and grafana_tempo_e2e_verify.stdout is defined and grafana_tempo_e2e_verify.stdout.find('"traces"') != -1 and grafana_tempo_e2e_verify.stdout.find('grafana-e2e-validation') != -1 else 'FAIL' }}
 
           All datasources MUST be configured and queryable for successful deployment!
+      # ⚠️ HARD-FAILS ONLY ON CONNECTIVITY.
+      # The two round-trip probes used to be in this condition and aborted the
+      # deployment of a HEALTHY stack (OBS-F6): they push telemetry and query it
+      # back within a few retries, racing Tempo's block flush and the collector's
+      # log pipeline. Because the play aborted, the `enable` step never ran - and
+      # no dashboard was ever applied either.
+      #
+      # 'A probe did not verify' is not 'the stack is broken'. Conflating them
+      # makes every automated stand-up report failure. The probes still run and
+      # still report loudly - see task 20b.
       when: >
         not (grafana_health_test.stdout.find('HTTP_CODE:200') != -1) or
         not (grafana_prometheus_test.stdout.find('HTTP_CODE:200') != -1) or
         not (grafana_loki_test.stdout.find('HTTP_CODE:200') != -1) or
         not (grafana_tempo_test.stdout.find('HTTP_CODE:200') != -1) or
-        not (grafana_prometheus_data_test.stdout.find('HTTP_CODE:200') != -1 and grafana_prometheus_data_test.stdout.find('"status":"success"') != -1) or
-        not (grafana_loki_e2e_verify is defined and grafana_loki_e2e_verify.stdout is defined and grafana_loki_e2e_verify.stdout.find('"status":"success"') != -1 and grafana_loki_e2e_verify.stdout.find('grafana-datasource-test') != -1) or
-        not (grafana_tempo_e2e_verify is defined and grafana_tempo_e2e_verify.stdout is defined and grafana_tempo_e2e_verify.stdout.find('"traces"') != -1 and grafana_tempo_e2e_verify.stdout.find('grafana-e2e-validation') != -1)
+        not (grafana_prometheus_data_test.stdout.find('HTTP_CODE:200') != -1 and grafana_prometheus_data_test.stdout.find('"status":"success"') != -1)
 
-    - name: 21. Deploy Installation Test Suite dashboards
-      kubernetes.core.k8s:
-        state: present
-        src: "{{ manifests_folder }}/035-grafana-test-dashboards.yaml"
-        context: "{{ _target }}"
-
-    - name: 22. Deploy sovdev-logger Overview dashboard
-      kubernetes.core.k8s:
-        state: present
-        src: "{{ manifests_folder }}/036-grafana-sovdev-metrics.yaml"
-        context: "{{ _target }}"
 
     - name: 23. Wait for dashboard ConfigMaps to be created
       kubernetes.core.k8s_info:
