@@ -555,6 +555,27 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "alloy",
+    "name": "Grafana Alloy",
+    "description": "Collects container logs and ships them to Loki",
+    "category": "OBSERVABILITY",
+    "tags": ["logging", "logs", "collector", "agent", "observability", "monitoring"],
+    "abstract": "Log collection agent that ships container logs into Loki",
+    "logo": "alloy-logo.svg",
+    "website": "https://grafana.com/oss/alloy/"
+    ,"summary": "Grafana Alloy is an OpenTelemetry Collector distribution that discovers every pod in the cluster, tails its container logs, labels them with their Kubernetes metadata, and forwards them to Loki. It is what makes the Loki datasource in Grafana return anything at all - deploy Loki without it and the store stays empty."
+    ,"docs": "/docs/services/observability/alloy"
+    ,"playbook": "031-setup-alloy.yml"
+    ,"priority": 12
+    ,"checkCommand": "kubectl get pods -n monitoring -l app.kubernetes.io/name=alloy --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "031-remove-alloy.yml"
+    ,"requires": ["loki"]
+    ,"helmChart": "grafana/alloy"
+    ,"namespace": "monitoring"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "grafana",
     "name": "Grafana",
     "description": "Visualization and dashboards for observability",

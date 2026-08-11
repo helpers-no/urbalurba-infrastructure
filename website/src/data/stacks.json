@@ -13,7 +13,7 @@
       "tags": ["monitoring", "metrics", "logs", "tracing", "grafana", "prometheus"],
       "abstract": "Full observability with Prometheus, Loki, Tempo, and Grafana",
       "logo": "observability-stack-logo.svg",
-      "summary": "The observability stack provides full visibility into your infrastructure. Prometheus collects metrics, Loki aggregates logs, Tempo stores traces, and Grafana visualizes everything in unified dashboards. The OpenTelemetry Collector receives telemetry data from applications.",
+      "summary": "The observability stack provides full visibility into your infrastructure. Prometheus collects metrics, Alloy ships container logs into Loki which aggregates them, Tempo stores traces, and Grafana visualizes everything in unified dashboards. The OpenTelemetry Collector receives telemetry data from applications.",
       "docs": "/docs/stacks/observability",
       "components": [
         {
@@ -35,15 +35,21 @@
         }
 ,
         {
-          "service": "otel-collector",
+          "service": "alloy",
           "position": 4,
+          "note": "Ships container logs into Loki"
+        }
+,
+        {
+          "service": "otel-collector",
+          "position": 5,
           "note": "Telemetry data receiver",
           "optional": true
         }
 ,
         {
           "service": "grafana",
-          "position": 5,
+          "position": 6,
           "note": "Visualization and dashboards"
         }
       ]

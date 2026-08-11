@@ -339,6 +339,7 @@ EOF
                 prometheus) note="Metrics collection and storage" ;;
                 tempo) note="Distributed tracing backend" ;;
                 loki) note="Log aggregation" ;;
+                alloy) note="Ships container logs into Loki" ;;
                 otel-collector) note="Telemetry data receiver" ;;
                 grafana) note="Visualization and dashboards" ;;
                 ollama) note="LLM inference engine" ;;
