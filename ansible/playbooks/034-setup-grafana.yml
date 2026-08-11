@@ -105,7 +105,8 @@
         curl -s -u admin:SecretPassword1 -o /dev/null -w "HTTP_CODE:%{http_code}"
         "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/1/api/v1/status/runtimeinfo"
       register: grafana_prometheus_test
-      retries: 5
+      # Backstop only - task 9b is what makes this deterministic.
+      retries: 12
       delay: 5
       until: grafana_prometheus_test.rc == 0 and (grafana_prometheus_test.stdout.find('HTTP_CODE:200') != -1)
       failed_when: false
@@ -117,7 +118,8 @@
         curl -s -u admin:SecretPassword1 -o /dev/null -w "HTTP_CODE:%{http_code}"
         "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/2/loki/api/v1/labels"
       register: grafana_loki_test
-      retries: 5
+      # Backstop only - task 9b is what makes this deterministic.
+      retries: 12
       delay: 5
       until: grafana_loki_test.rc == 0 and (grafana_loki_test.stdout.find('HTTP_CODE:200') != -1)
       failed_when: false
@@ -129,7 +131,8 @@
         curl -s -u admin:SecretPassword1 -o /dev/null -w "HTTP_CODE:%{http_code}"
         "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/3/ready"
       register: grafana_tempo_test
-      retries: 5
+      # Backstop only - task 9b is what makes this deterministic.
+      retries: 12
       delay: 5
       until: grafana_tempo_test.rc == 0 and (grafana_tempo_test.stdout.find('HTTP_CODE:200') != -1)
       failed_when: false
@@ -173,12 +176,15 @@
       ansible.builtin.command: >
         kubectl run grafana-verify-loki-e2e --image=curlimages/curl --rm -i --restart=Never
         -n {{ namespace }} --context {{ _target }} --timeout=20s --
-        /bin/sh -c 'NOW=$(date +%s); START=$((NOW-120)); curl -s -u admin:SecretPassword1 -G --data-urlencode "query={service_name=\"telemetrygen\"}" --data-urlencode "start=${START}000000000" --data-urlencode "end=${NOW}000000000" --data-urlencode "limit=5" "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/2/loki/api/v1/query_range"'
+        /bin/sh -c 'NOW=$(date +%s); START=$((NOW-900)); curl -s -u admin:SecretPassword1 -G --data-urlencode "query={service_name=\"telemetrygen\"}" --data-urlencode "start=${START}000000000" --data-urlencode "end=${NOW}000000000" --data-urlencode "limit=5" "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/2/loki/api/v1/query_range"'
       register: grafana_loki_e2e_verify
       # Reported, not fatal - but a probe that gives up before the backend has
       # flushed reports a failure that is not real, so give it a real window.
+      # 12x10s = 2min of patience against a 15min lookback: the retry budget
+      # must stay well inside the query window, or the last attempts search a
+      # period that no longer contains the logs this task just sent.
       retries: 12
-      delay: 5
+      delay: 10
       until: grafana_loki_e2e_verify.rc == 0 and (grafana_loki_e2e_verify.stdout.find('"status":"success"') != -1) and (grafana_loki_e2e_verify.stdout.find('grafana-datasource-test') != -1)
       failed_when: false
       when: grafana_e2e_logs.rc == 0
@@ -205,7 +211,7 @@
       ansible.builtin.command: >
         kubectl run grafana-verify-tempo-e2e --image=curlimages/curl --rm -i --restart=Never
         -n {{ namespace }} --context {{ _target }} --timeout=20s --
-        /bin/sh -c 'NOW=$(date +%s); START=$((NOW-120)); curl -s -u admin:SecretPassword1 -G --data-urlencode "q={.service.name=\"grafana-e2e-validation\"}" --data-urlencode "start=$START" --data-urlencode "end=$NOW" --data-urlencode "limit=5" "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/3/api/search"'
+        /bin/sh -c 'NOW=$(date +%s); START=$((NOW-900)); curl -s -u admin:SecretPassword1 -G --data-urlencode "q={.service.name=\"grafana-e2e-validation\"}" --data-urlencode "start=$START" --data-urlencode "end=$NOW" --data-urlencode "limit=5" "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/3/api/search"'
       register: grafana_tempo_e2e_verify
       # Tempo only makes a trace searchable once the block is flushed, which is
       # the slowest step in the whole suite - hence the widest window here.
