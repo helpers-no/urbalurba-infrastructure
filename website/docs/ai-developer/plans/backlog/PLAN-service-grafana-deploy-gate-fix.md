@@ -158,6 +158,46 @@ start-up race is present rather than avoided:
 
 Headroom is real but not vast — task 16 is the one to watch if this regresses.
 
+### Phase 3b: the cause underneath the cause
+
+Verifying against the **shipped image** (not a hand-patched container) undid the
+conclusion above. From cold, task 13 needed all 12 retries and task 16 exhausted
+its 12 and failed. Two green runs earlier had been a warm cluster, not a fixed
+probe.
+
+The tell: task 10 reached Prometheus through the proxy in ~25s, yet task 13's
+`query=up` through *the same proxy* then needed 120s. That is not backend
+readiness.
+
+**`kubectl run --rm -i` was losing the output.** It attaches to the pod to
+capture stdout; curl finishes in milliseconds, so the container can reach
+Completed before the attach is established. kubectl then falls back to streaming
+logs from a pod that is already terminating and returns **rc=0 with empty
+stdout** — the `warning: couldn't attach to pod … no running task found` line
+that appeared all day and was dismissed as noise.
+
+Every `until:` in this playbook asserts on stdout. So a completely successful
+HTTP call reads as a failure. Measured directly — two back-to-back runs of task
+13's exact command, `rc=0`, no `HTTP_CODE` in stdout at all.
+
+This is load-dependent, which is exactly why a *different* check failed on each
+deploy, and why widening retries only ever changed the odds.
+
+- [x] 3b.1 Give all seven stdout-asserting probes a `sleep 2` head start, so the
+      container is alive and idle when kubectl attaches
+- [x] 3b.2 Correct the in-file comments that blamed scrape lag and Loki flush —
+      they recorded a cause that measurement disproved
+- [x] 3b.3 Re-verify: three consecutive cold deploys
+
+**Result — three consecutive cold deploys, shipped image:**
+
+```
+run 1/2/3:  every probe 0 retries   20b OK   failed=0
+```
+
+Zero retries across all six probes on every run, where they had been burning
+5–12 each. The retries are now a genuine backstop rather than the mechanism.
+
 ### Rejected: a datasource-provisioning readiness gate
 
 A task 9b was written first, polling `/api/datasources` until all three appear,
