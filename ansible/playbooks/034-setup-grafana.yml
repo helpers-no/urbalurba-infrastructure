@@ -86,12 +86,27 @@
         grafana_pods.resources[0].status.phase == "Running" and
         grafana_pods.resources[0].status.containerStatuses[0].ready == true
 
+    # ⚠️ EVERY PROBE BELOW STARTS WITH `sleep 2`. IT IS LOAD-BEARING.
+    #
+    # `kubectl run --rm -i` attaches to the pod to capture its output. curl
+    # finishes in milliseconds, so the container can reach Completed before the
+    # attach is established; kubectl then falls back to streaming logs from a pod
+    # that is already terminating and returns rc=0 with EMPTY STDOUT.
+    #
+    # Every `until:` here asserts on stdout, so a perfectly successful HTTP call
+    # reads as a failure. Measured directly: two back-to-back runs of task 13's
+    # exact command returned rc=0 with no HTTP_CODE in stdout at all.
+    #
+    # That is the real source of the flake this playbook has been chasing - it is
+    # load-dependent, which is why a DIFFERENT check failed on each deploy, and
+    # why widening retries only ever reduced the odds instead of fixing it.
+    # The sleep keeps the container alive and idle until kubectl has attached.
     - name: 9. Test Grafana health endpoint
       ansible.builtin.command: >
         kubectl run curl-test-grafana-health --image=curlimages/curl --rm -i --restart=Never
         -n {{ namespace }} --context {{ _target }} --timeout=10s --
-        curl -s -o /dev/null -w "HTTP_CODE:%{http_code}"
-        http://grafana.{{ namespace }}.svc.cluster.local:80/api/health
+        /bin/sh -c 'sleep 2; curl -s -o /dev/null -w "HTTP_CODE:%{http_code}"
+        http://grafana.{{ namespace }}.svc.cluster.local:80/api/health'
       register: grafana_health_test
       retries: 10
       delay: 10
@@ -102,10 +117,9 @@
       ansible.builtin.command: >
         kubectl run curl-test-grafana-prometheus --image=curlimages/curl --rm -i --restart=Never
         -n {{ namespace }} --context {{ _target }} --timeout=10s --
-        curl -s -u admin:SecretPassword1 -o /dev/null -w "HTTP_CODE:%{http_code}"
-        "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/1/api/v1/status/runtimeinfo"
+        /bin/sh -c 'sleep 2; curl -s -u admin:SecretPassword1 -o /dev/null -w "HTTP_CODE:%{http_code}"
+        "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/1/api/v1/status/runtimeinfo"'
       register: grafana_prometheus_test
-      # Backstop only - task 9b is what makes this deterministic.
       retries: 12
       delay: 5
       until: grafana_prometheus_test.rc == 0 and (grafana_prometheus_test.stdout.find('HTTP_CODE:200') != -1)
@@ -115,10 +129,9 @@
       ansible.builtin.command: >
         kubectl run curl-test-grafana-loki --image=curlimages/curl --rm -i --restart=Never
         -n {{ namespace }} --context {{ _target }} --timeout=10s --
-        curl -s -u admin:SecretPassword1 -o /dev/null -w "HTTP_CODE:%{http_code}"
-        "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/2/loki/api/v1/labels"
+        /bin/sh -c 'sleep 2; curl -s -u admin:SecretPassword1 -o /dev/null -w "HTTP_CODE:%{http_code}"
+        "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/2/loki/api/v1/labels"'
       register: grafana_loki_test
-      # Backstop only - task 9b is what makes this deterministic.
       retries: 12
       delay: 5
       until: grafana_loki_test.rc == 0 and (grafana_loki_test.stdout.find('HTTP_CODE:200') != -1)
@@ -128,10 +141,9 @@
       ansible.builtin.command: >
         kubectl run curl-test-grafana-tempo --image=curlimages/curl --rm -i --restart=Never
         -n {{ namespace }} --context {{ _target }} --timeout=10s --
-        curl -s -u admin:SecretPassword1 -o /dev/null -w "HTTP_CODE:%{http_code}"
-        "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/3/ready"
+        /bin/sh -c 'sleep 2; curl -s -u admin:SecretPassword1 -o /dev/null -w "HTTP_CODE:%{http_code}"
+        "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/3/ready"'
       register: grafana_tempo_test
-      # Backstop only - task 9b is what makes this deterministic.
       retries: 12
       delay: 5
       until: grafana_tempo_test.rc == 0 and (grafana_tempo_test.stdout.find('HTTP_CODE:200') != -1)
@@ -141,13 +153,16 @@
       ansible.builtin.command: >
         kubectl run curl-test-grafana-prometheus-data --image=curlimages/curl --rm -i --restart=Never
         -n {{ namespace }} --context {{ _target }} --timeout=15s --
-        curl -s -u admin:SecretPassword1 -w "HTTP_CODE:%{http_code}"
-        --data-urlencode 'query=up'
-        "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/1/api/v1/query"
+        /bin/sh -c 'sleep 2; curl -s -u admin:SecretPassword1 -w "HTTP_CODE:%{http_code}"
+        --data-urlencode "query=up"
+        "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/1/api/v1/query"'
       register: grafana_prometheus_data_test
-      # This is the ONLY probe left that aborts the deploy, so it must be
-      # deterministic: 30s was not enough on a cold cluster, where Prometheus has
-      # not completed its first scrape when Grafana comes up. 2 minutes is.
+      # The ONLY probe left that aborts the deploy, so it keeps a wide backstop.
+      # It is only ever a backstop now: with the attach fix above this probe
+      # passes on the FIRST attempt from a cold Grafana, measured over three
+      # consecutive cold deploys. It previously exhausted all 12 retries - not
+      # because Prometheus was slow to scrape, as an earlier comment here
+      # claimed, but because the result was being thrown away.
       retries: 12
       delay: 10
       until: grafana_prometheus_data_test.rc == 0 and (grafana_prometheus_data_test.stdout.find('HTTP_CODE:200') != -1) and (grafana_prometheus_data_test.stdout.find('"status":"success"') != -1)
@@ -176,10 +191,11 @@
       ansible.builtin.command: >
         kubectl run grafana-verify-loki-e2e --image=curlimages/curl --rm -i --restart=Never
         -n {{ namespace }} --context {{ _target }} --timeout=20s --
-        /bin/sh -c 'NOW=$(date +%s); START=$((NOW-900)); curl -s -u admin:SecretPassword1 -G --data-urlencode "query={service_name=\"telemetrygen\"}" --data-urlencode "start=${START}000000000" --data-urlencode "end=${NOW}000000000" --data-urlencode "limit=5" "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/2/loki/api/v1/query_range"'
+        /bin/sh -c 'sleep 2; NOW=$(date +%s); START=$((NOW-900)); curl -s -u admin:SecretPassword1 -G --data-urlencode "query={service_name=\"telemetrygen\"}" --data-urlencode "start=${START}000000000" --data-urlencode "end=${NOW}000000000" --data-urlencode "limit=5" "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/2/loki/api/v1/query_range"'
       register: grafana_loki_e2e_verify
-      # Reported, not fatal - but a probe that gives up before the backend has
-      # flushed reports a failure that is not real, so give it a real window.
+      # Reported, not fatal. Keeps a wide window for a genuinely slow flush,
+      # but in practice now passes first try - the failures attributed to
+      # 'Loki had not flushed yet' were lost stdout, not slow ingestion.
       # 12x10s = 2min of patience against a 15min lookback: the retry budget
       # must stay well inside the query window, or the last attempts search a
       # period that no longer contains the logs this task just sent.
@@ -211,10 +227,10 @@
       ansible.builtin.command: >
         kubectl run grafana-verify-tempo-e2e --image=curlimages/curl --rm -i --restart=Never
         -n {{ namespace }} --context {{ _target }} --timeout=20s --
-        /bin/sh -c 'NOW=$(date +%s); START=$((NOW-900)); curl -s -u admin:SecretPassword1 -G --data-urlencode "q={.service.name=\"grafana-e2e-validation\"}" --data-urlencode "start=$START" --data-urlencode "end=$NOW" --data-urlencode "limit=5" "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/3/api/search"'
+        /bin/sh -c 'sleep 2; NOW=$(date +%s); START=$((NOW-900)); curl -s -u admin:SecretPassword1 -G --data-urlencode "q={.service.name=\"grafana-e2e-validation\"}" --data-urlencode "start=$START" --data-urlencode "end=$NOW" --data-urlencode "limit=5" "http://grafana.{{ namespace }}.svc.cluster.local:80/api/datasources/proxy/3/api/search"'
       register: grafana_tempo_e2e_verify
-      # Tempo only makes a trace searchable once the block is flushed, which is
-      # the slowest step in the whole suite - hence the widest window here.
+      # Tempo only makes a trace searchable once the block is flushed, so this
+      # keeps the widest window. Like the others it now passes first try.
       retries: 12
       delay: 10
       until: grafana_tempo_e2e_verify.rc == 0 and (grafana_tempo_e2e_verify.stdout.find('"traces"') != -1) and (grafana_tempo_e2e_verify.stdout.find('grafana-e2e-validation') != -1)
