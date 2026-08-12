@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 35 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-11. Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-13. Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -28,13 +28,44 @@ shipped, so the triage view had drifted badly from the repo:
 
 ---
 
+## What changed 2026-08-13
+
+- **Observability landed on `main` but is not finished** — 55 tasks done, 56 open.
+  See its Tier 0 row. The gate defect (OBS-F6) is closed and verified against the
+  shipped image; the automation the platform promises is not.
+- **Tier 1 #2 gained a third and much more serious finding.** `kubectl run --rm -i`
+  can return `rc=0` with empty stdout. Any verify playbook asserting on stdout can
+  therefore report a passing service as failing — silently, and load-dependently.
+  This idiom is used well beyond the playbook where it was found.
+- **The docs site can now be built locally after all**, which changes a standing
+  assumption. There is no Node on the workstation or in the provision-host
+  container, so [adding-a-service](../../../contributors/guides/adding-a-service.md)
+  step 11 (`npm run build`) had been skipped every time it was asked for. It runs
+  fine in a container:
+
+  ```bash
+  cd website && docker run --rm -u $(id -u):$(id -g) \
+    -v "$PWD":/w -w /w -e HOME=/tmp -e CI=true node:20 \
+    sh -c 'npm ci && npm run build'
+  ```
+
+  The guide should say this. A required step that cannot be run on the machines
+  people actually use will keep being skipped, and it was.
+- **Website vulnerabilities went 99 → 2** (26 Dependabot PRs, then npm `overrides`
+  for two transitive roots Dependabot cannot reach). The remaining two are
+  `image-size` with no published patch — a floor, not a backlog item.
+- The first local build surfaced **pre-existing broken links and one broken
+  anchor** in the docs. Warnings, not failures. Currently owned by nobody.
+
+---
+
 ## Tier 0 — in flight
 
 INVESTIGATEs that still live in `backlog/` because their work isn't fully shipped yet — either active on a feature branch, or investigation-complete and waiting for a child PLAN to be drafted. No fresh investigation work needed; listed here so the priority view surfaces what's already moving. Items whose child PLANs have all shipped are not listed — they're in [`completed/`](../completed/index.md).
 
 | Investigation | Child plans | State |
 |---|---|---|
-| [system-observability](INVESTIGATE-system-observability.md) | 6 in `backlog/` (001 log-collection, 002 alert-baseline, 003 service-dashboards, 004 external-targets, 006 service-probes, grafana-deploy-gate-fix) | **The largest thing in flight.** Deployed and delivering on the reference installation; work sits on branch `plan/observability-alert-baseline`, unmerged. 001–004 are each partly open (retention decision, cert expiry, `uis deploy` wiring, phases 2–4). 006 is 0/27. |
+| [system-observability](INVESTIGATE-system-observability.md) | 6 in `backlog/` (001 log-collection, 002 alert-baseline, 003 service-dashboards, 004 external-targets, 006 service-probes, grafana-deploy-gate-fix) | **The largest thing in flight — and now merged, but not finished.** 55 tasks done / 56 open. Everything through 2026-08-13 is on `main`: OBS-F6 is closed and verified against the *shipped container image*, not a patched one. What remains is what the platform's own requirement turns on — **003's dashboards are still applied by hand, so a rebuild from nothing does not produce them**. Also open: Loki retention undecided (001), cert expiry (002), external-targets phases 2–4, grafana Phase 4 (move E2E to a verify playbook), and 006 at 0/27. **Do not open 006 before the artifact convention is decided** — 003 and 006 must share one, and deciding it unblocks both plus Tier 3 #17. |
 | [service-uptime-kuma](INVESTIGATE-service-uptime-kuma.md) | 2 in `active/`, 2 in `backlog/`, 1 shipped | Deployed on **assist** with 19 monitors reconciling. Its own 002 plan records the gap that matters: **nothing notifies** — no job calls the push URLs. Do not close this investigation until that is either done or split out. |
 | [service-litellm-install-reliability](INVESTIGATE-service-litellm-install-reliability.md) | 3 in `backlog/` (002 version-pinning, 003 undeploy-purge, 004 config-portability), 1 shipped | 001 schema-verify shipped; the remaining three are drafted and unstarted. |
 | [system-platform-provisioning-layer](INVESTIGATE-system-platform-provisioning-layer.md) | 1 in `backlog/` (aks-001b manual-setup), 2 shipped | Status ACTIVE, AKS-focused. Step 1 verified end-to-end 2026-05-11 against a real Azure subscription; `platforms/azure-aks/` is the production path. Next concrete work: Step 2 (start/stop/scale so the cluster doesn't bill 24/7). |
@@ -47,7 +78,7 @@ INVESTIGATEs that still live in `backlog/` because their work isn't fully shippe
 | # | Investigation | Effort | Why this tier |
 |---|---|---|---|
 | 1 | [secrets-template-defaults-clarity](INVESTIGATE-secrets-template-defaults-clarity.md) | S | Foundational fix to the secrets workflow every service depends on. The current silent-overwrite confusion between `00-common-values.env.template` and `default-secrets.env` produces bug reports from contributors and slows every onboarding. Investigation already half-shipped via the existing template scaffolding; closing it out is a small read-and-decide. |
-| 2 | [verification-playbooks-usage](INVESTIGATE-system-verification-playbooks-usage.md) | M | **Promoted from Tier 2 on evidence.** Written 2026-03-12, it states the risk as "verification playbooks present but not wired into active setup or test flows → deployments report success when no real validation happened." On 2026-08-11 exactly that was found twice: `031-test-alloy.yml` was reachable by no command at all, and uptime-kuma's verify was invisible to `test-all`. Both are now fixed, but ad-hoc — this investigation is the systematic version, and it has two free worked examples waiting for it. **Stays Tier 1, not Tier 0, on purpose**: it has two child plans, but they are point fixes to the two services that happened to break, not the investigation's output. The question "which services have verification, and what shape verifies what" is still entirely unanswered. |
+| 2 | [verification-playbooks-usage](INVESTIGATE-system-verification-playbooks-usage.md) | M | **Promoted from Tier 2 on evidence, and the evidence keeps arriving.** Written 2026-03-12, it states the risk as "verification playbooks present but not wired into active setup or test flows → deployments report success when no real validation happened." Three separate confirmations since: (1) `031-test-alloy.yml` was reachable by no command at all while its docs page told users to run it; (2) uptime-kuma's verify was invisible to `test-all`; (3) **`kubectl run --rm -i` silently returns rc=0 with empty stdout** when the container outlives the attach — every `until:` asserting on stdout then reads a successful call as a failure. (3) is the serious one: the same idiom appears across other services' verify playbooks, so an unknown number of them can fail or pass for reasons unrelated to the service. All three are fixed ad-hoc; this investigation is the systematic version. **Stays Tier 1, not Tier 0, on purpose** — its child plans are point fixes to the services that happened to break, not the investigation's output. |
 | 3 | [uis-deploy-no-playbook-semantics](INVESTIGATE-cli-deploy-no-playbook-semantics.md) | S | Genuine ambiguity in the deploy code today: services with `SCRIPT_PLAYBOOK=""` produce undefined behaviour. Affects every "metadata-only" service. Investigation gap is small; pinning the contract removes a class of latent bugs across all current and future services. |
 | 4 | [uis-deploy-auto-regen-secrets](INVESTIGATE-cli-deploy-auto-regen-secrets.md) | M | UX gap that bites tester loops repeatedly: stale `kubernetes-secrets.yml` produces silent failures. Decisions here lock down idempotency for the whole deploy command. Tester-feedback-driven; high payoff per hour. |
 
