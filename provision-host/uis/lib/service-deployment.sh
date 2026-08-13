@@ -130,6 +130,24 @@ deploy_single_service() {
             die_config "Playbook not found: $SCRIPT_PLAYBOOK"
         fi
 
+        # Does this installation provide the service OUTSIDE the cluster?
+        # Absent file / no entry => silence, and everything below runs unchanged.
+        # A stock laptop install never reaches this branch.
+        local _ext_playbook="" _ext_host="" _ext_port="" _ext_why="" _ext_tpl=""
+        if is_external_service "$service_id"; then
+            local _ext_fields
+            if ! _ext_fields="$(external_service_get "$service_id" "${SCRIPT_EXPOSE_PORT:-}")"; then
+                die_config "external-services.yaml is invalid for '$service_id'"
+            fi
+            read -r _ext_host _ext_port _ext_why <<< "$_ext_fields"
+            _ext_tpl="$(external_service_template "$service_id" "$SCRIPT_PLAYBOOK")"
+            _ext_playbook="$ANSIBLE_DIR/900-external-service-proxy.yml"
+            log_info "$service_id is provided externally by this installation"
+            log_info "  -> $_ext_host:$_ext_port  ($_ext_why)"
+            log_info "  deploying a transparent proxy; consumers are unaffected"
+            playbook_path="$_ext_playbook"
+        fi
+
         # Load cluster config for target_host
         local cluster_config="$CONFIG_DIR/cluster-config.sh"
         local target_host="rancher-desktop"  # Default
@@ -141,6 +159,13 @@ deploy_single_service() {
 
         # Build extra-vars. Multi-instance services receive per-app context.
         local -a ansible_args=("-e" "target_host=$target_host")
+        if [[ -n "$_ext_host" ]]; then
+            ansible_args+=("-e" "_service_id=$service_id"
+                           "-e" "_proxy_template=$_ext_tpl"
+                           "-e" "_external_host=$_ext_host"
+                           "-e" "_external_port=$_ext_port"
+                           "-e" "_namespace=${SCRIPT_NAMESPACE:-default}")
+        fi
         if [[ -n "$app_name" ]]; then
             ansible_args+=("-e" "_app_name=$app_name")
             [[ -n "$url_prefix" ]] && ansible_args+=("-e" "_url_prefix=$url_prefix")

@@ -71,6 +71,14 @@ copy_defaults_if_missing() {
         fi
     fi
 
+    # Declares nothing. Present so the capability is discoverable by reading your
+    # own extend dir, rather than only by reading the docs.
+    if [[ ! -f "$EXTEND_DIR/external-services.yaml" ]]; then
+        if [[ -f "$templates_extend/external-services.yaml.default" ]]; then
+            cp "$templates_extend/external-services.yaml.default" "$EXTEND_DIR/external-services.yaml"
+        fi
+    fi
+
     # Copy secrets README if missing
     if [[ ! -f "$SECRETS_DIR/README.md" ]]; then
         if [[ -f "$templates_secrets/README.md" ]]; then

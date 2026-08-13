@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog
+## Status: Active — Phases 1–2 done and verified; Phases 3–5 open
 
 **Goal**: `uis deploy postgresql` gives an in-cluster PostgreSQL on a laptop and a
 transparent proxy to the external one on a production installation — **same
@@ -17,7 +17,7 @@ declared in `.uis.extend/` rather than hand-built.
 
 ## Dependencies
 
-**Investigation**: [INVESTIGATE-system-external-or-in-cluster-services](./INVESTIGATE-system-external-or-in-cluster-services.md) — EXT-F1, EXT-F2, EXT-F3.
+**Investigation**: [INVESTIGATE-system-external-or-in-cluster-services](../backlog/INVESTIGATE-system-external-or-in-cluster-services.md) — EXT-F1, EXT-F2, EXT-F3.
 
 **Prerequisites**: none.
 
@@ -77,18 +77,34 @@ coordination server being reachable.
 
 ### Tasks
 
-- [ ] 1.1 `ansible/playbooks/templates/040-postgresql-external-proxy.yml.j2`,
-      parametrised by external host and port — the existing multi-instance
-      templates are the shape to follow
-- [ ] 1.2 Keep all four properties above. Each is load-bearing and each was
-      learned the hard way; the template must carry the comments explaining why
-- [ ] 1.3 Render it against the reference installation's values and **diff against
-      the hand-written file** — the template is correct when the diff is empty
+- [x] 1.1 `ansible/playbooks/templates/040-postgresql-external-proxy.yml.j2`,
+      parametrised by `_external_host`, `_external_port`, `namespace` — and by
+      nothing else, so accidental variation cannot creep in
+- [x] 1.2 All four properties kept, with the comments explaining why
+- [x] 1.3 Rendered against the reference installation's values and diffed against
+      the hand-written file
+- [x] 1.4 *(added)* `templates/README.md` gained a **third case**. It documented
+      static manifests and multi-instance templates only; this is single-instance
+      but parametrised per installation, and fitted neither
 
 ### Validation
 
-Generated output is byte-equivalent to the file production runs today, modulo the
-declared values.
+**Passed.** Rendered with `_external_host=10.10.0.105`, `_external_port=5432`:
+
+| Check | Result |
+|---|---|
+| YAML documents | 2 vs 2 |
+| Parsed objects vs production's file | **identical** — every key, value and structure |
+| Non-comment textual differences | **0** |
+| Comment differences | 10 lines, deliberate — see below |
+| Alternate values (`192.0.2.10:6543`, ns `data`) | render cleanly |
+
+The only textual differences are comments, changed on purpose: the hand-written
+file says *"the real external database on Odin … asgard and pg sit on the same
+Proxmox host"*, which is false for any other installation rendering this template.
+The guidance is kept but generalised — prefer a backplane address over a tailnet
+one when the database and cluster share a host — with Odin named as the example
+rather than the rule.
 
 ---
 
@@ -96,28 +112,42 @@ declared values.
 
 ### Tasks
 
-- [ ] 2.1 `.uis.extend/external-services.yaml` — per installation, absent by
-      default:
+- [x] 2.1 `.uis.extend/external-services.yaml` — installed by `first-run.sh` as a
+      fully-commented file that **declares nothing**, so the capability is
+      discoverable by reading your own extend dir rather than only the docs
+- [x] 2.2 `why:` required — deploy refuses without it, and says why it refused
+- [x] 2.3 `uis deploy <id>` consults it: absent ⇒ in-cluster exactly as today;
+      present ⇒ `900-external-service-proxy.yml` renders the proxy instead
+- [x] 2.4 Absent is silent — verified below
 
-      ```yaml
-      postgresql:
-        host: 10.10.0.105      # never a secret; addresses are not credentials
-        port: 5432
-        why: "production database on Odin CT 105, over the vmbr1 backplane"
-      ```
-
-- [ ] 2.2 Require `why:` per entry — the rule
-      [kuma-005](./PLAN-service-uptime-kuma-005-ship-the-pipeline.md) already
-      holds. An external dependency nobody can justify is one nobody maintains,
-      and when it breaks the first question is why it was pointed there
-- [ ] 2.3 `uis deploy <id>` consults the file: absent ⇒ deploy in-cluster exactly
-      as today; present ⇒ render the proxy instead
-- [ ] 2.4 **Absent is the default and must stay silent.** A stock laptop install
-      declares nothing and never learns this feature exists
+Implemented as `provision-host/uis/lib/external-services.sh` (three functions:
+`is_external_service`, `external_service_get`, `external_service_template`) plus a
+short branch in `service-deployment.sh`. The generic playbook resolves the
+per-service template by the `<NNN>-<id>-external-proxy.yml.j2` convention and
+**fails with an explicit message** when a declared service has no template, rather
+than deploying nothing and reporting success.
 
 ### Validation
 
-`uis deploy postgresql` with no file behaves exactly as it does today.
+**Passed.** 9/9 unit tests against the helper, run in the provision-host container:
+
+| Case | Result |
+|---|---|
+| no file at all — the stock laptop case | not external |
+| commented file `first-run` installs | not external |
+| a *different* service declared | not external |
+| declared service | external |
+| entry missing `why:` | **refused**, and says why |
+| valid entry | `host port why` returned |
+| port omitted | falls back to the service default |
+| template name from playbook prefix | `040-postgresql-external-proxy.yml.j2` |
+
+And on the reference installation, with no declaration file present: `uis list`
+runs clean, PostgreSQL and MinIO report exactly as before. Nothing changed for an
+installation that has not opted in.
+
+Note `uis list` still reports PostgreSQL as `✅ Deployed` there — true of the pod,
+misleading about the data. That is Phase 3's job.
 
 ---
 

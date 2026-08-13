@@ -1,0 +1,106 @@
+---
+# 900-external-service-proxy.yml
+# Deploy a transparent proxy for a service this installation runs OUTSIDE the
+# cluster, instead of deploying the service itself.
+#
+# ⚠️ THE POINT IS THAT NOTHING DOWNSTREAM KNOWS THE DIFFERENCE.
+# The rendered objects carry the real service's name and labels, so consumers,
+# `SCRIPT_CHECK_COMMAND` and `uis list` all behave as if the service were running
+# in-cluster. Only the data lives elsewhere.
+#
+# Called by `uis deploy <service>` when .uis.extend/external-services.yaml
+# declares the service. Never called directly.
+#
+# Usage:
+#   ansible-playbook 900-external-service-proxy.yml \
+#     -e "target_host=rancher-desktop" \
+#     -e "_service_id=postgresql" \
+#     -e "_proxy_template=040-postgresql-external-proxy.yml.j2" \
+#     -e "_external_host=10.10.0.105" -e "_external_port=5432"
+
+- name: Deploy external-service proxy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    namespace: "{{ _namespace | default('default') }}"
+    templates_dir: "/mnt/urbalurbadisk/ansible/playbooks/templates"
+
+  tasks:
+    - name: "1. Refuse to run without the address of the real service"
+      ansible.builtin.assert:
+        that:
+          - _service_id is defined and _service_id | length > 0
+          - _external_host is defined and _external_host | length > 0
+          - _proxy_template is defined and _proxy_template | length > 0
+        fail_msg: >-
+          Missing required extra-vars. This playbook is called by `uis deploy`,
+          not directly.
+
+    - name: "2. The proxy template must exist for this service"
+      ansible.builtin.stat:
+        path: "{{ templates_dir }}/{{ _proxy_template }}"
+      register: _tpl
+
+    - name: "3. Fail clearly when a service has no proxy template"
+      ansible.builtin.fail:
+        msg: |
+          {{ _service_id }} is declared external in external-services.yaml, but
+          no proxy template exists at:
+            {{ templates_dir }}/{{ _proxy_template }}
+
+          A service can only be provided externally if it ships one. Either add
+          it (see ansible/playbooks/templates/README.md) or remove the entry
+          from .uis.extend/external-services.yaml.
+      when: not _tpl.stat.exists
+
+    - name: "4. Ensure {{ namespace }} exists"
+      kubernetes.core.k8s:
+        name: "{{ namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        context: "{{ _target }}"
+
+    - name: "5. Apply the proxy for {{ _service_id }}"
+      kubernetes.core.k8s:
+        state: present
+        context: "{{ _target }}"
+        definition: "{{ lookup('template', templates_dir + '/' + _proxy_template) | from_yaml_all | list }}"
+
+    - name: "6. Wait for the proxy to be ready"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name={{ _service_id }}"
+        context: "{{ _target }}"
+      register: _pods
+      retries: 20
+      delay: 5
+      until: >
+        _pods.resources | length > 0 and
+        (_pods.resources | selectattr('status.phase','equalto','Running') | list | length) > 0
+
+    # Reachability is the only claim worth making here. A Running proxy pod whose
+    # socat cannot reach the far side looks exactly like a healthy one - the same
+    # defect class as reporting a service Deployed when nothing verified it.
+    - name: "7. Prove the external service actually answers"
+      ansible.builtin.command: >
+        kubectl run extproxy-check-{{ 9999 | random }} --image=busybox:1.36 --rm -i
+        --restart=Never -n {{ namespace }} --context {{ _target }} --timeout=30s --
+        /bin/sh -c 'sleep 2; nc -z -w 5 {{ _service_id }}.{{ namespace }}.svc.cluster.local {{ _external_port }} && echo REACHABLE || echo UNREACHABLE'
+      register: _reach
+      changed_when: false
+      failed_when: false
+      retries: 6
+      delay: 5
+      until: _reach.stdout is search('REACHABLE')
+
+    - name: "8. Report"
+      ansible.builtin.debug:
+        msg:
+          - "{{ _service_id }}: proxied to {{ _external_host }}:{{ _external_port }}"
+          - "{{ (_reach.stdout is search('REACHABLE')) | ternary('Reachable through the in-cluster Service - consumers need no change.', 'WARNING - the proxy is Running but ' ~ _external_host ~ ':' ~ _external_port ~ ' did not answer. Consumers will fail. Check the address, the route, and that the service is up.') }}"

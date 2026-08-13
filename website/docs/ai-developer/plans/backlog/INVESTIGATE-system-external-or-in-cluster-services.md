@@ -220,7 +220,7 @@ investigation exists to prevent.
 
 ## Part 5: Proposed plans (ordered, to be drafted after the questions above are answered)
 
-1. **The convention** — [PLAN-system-external-services-001-proxy-convention](./PLAN-system-external-services-001-proxy-convention.md)
+1. **The convention** — [PLAN-system-external-services-001-proxy-convention](../active/PLAN-system-external-services-001-proxy-convention.md)
    *(drafted 2026-08-13)*. It turned out not to need designing: the reference
    installation already runs a transparent proxy that keeps the real service's
    name, labels and first container, so `PGHOST=postgresql.default` resolves

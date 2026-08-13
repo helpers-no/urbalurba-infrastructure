@@ -1,0 +1,38 @@
+# external-services.yaml — services this installation provides OUTSIDE the cluster
+#
+# Empty by default, and an empty file changes nothing: every service deploys
+# in-cluster exactly as it always has. A developer on Rancher Desktop never needs
+# to touch this file.
+#
+# Declare a service here when this installation already runs it elsewhere — a
+# database on another host, an object store on the hypervisor. `uis deploy <id>`
+# then deploys a transparent proxy instead of the real thing: same Service name,
+# same labels, same in-cluster address. Nothing downstream changes, because
+# nothing downstream can tell the difference.
+#
+# ⚠️ ADDRESSES ONLY, NEVER CREDENTIALS. Secrets belong in `urbalurba-secrets`.
+#
+# ⚠️ Prefer a private/backplane address over a tunnelled one when the service and
+# the cluster sit on the same host. Routing that traffic over a VPN makes an
+# in-house dependency rely on an external coordination service being reachable.
+#
+# Format:
+#
+#   <service-id>:
+#     host: <address>        # reachable from inside the cluster
+#     port: <number>         # optional; defaults to the service's normal port
+#     why:  <text>           # REQUIRED - see below
+#
+# `why:` is required and the deploy fails without it. An external dependency
+# nobody can justify is one nobody maintains, and when it breaks at 3am the first
+# question is why anything was pointed there in the first place.
+#
+# Example — the reference installation's PostgreSQL, which runs in a container on
+# the hypervisor rather than in the cluster:
+#
+#   postgresql:
+#     host: 10.10.0.105
+#     port: 5432
+#     why: "production database on Odin CT 105, reached over the vmbr1 backplane"
+#
+# To go back to running it in-cluster, delete the entry and redeploy.

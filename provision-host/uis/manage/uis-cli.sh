@@ -20,6 +20,7 @@ source "$LIB_DIR/categories.sh"
 source "$LIB_DIR/stacks.sh"
 source "$LIB_DIR/service-scanner.sh"
 source "$LIB_DIR/first-run.sh"
+source "$LIB_DIR/external-services.sh"
 source "$LIB_DIR/service-deployment.sh"
 source "$LIB_DIR/service-auto-enable.sh" 2>/dev/null || true
 source "$LIB_DIR/menu-helpers.sh" 2>/dev/null || true
