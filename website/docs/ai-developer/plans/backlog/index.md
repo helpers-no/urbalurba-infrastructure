@@ -14,6 +14,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Ship a dashboard with the service](PLAN-system-observability-003-service-dashboards.md) | `uis deploy <service>` on a cluster with Grafana yields a dashboard for | 2026-08-13 |
 | [Baseline alert rules, and somewhere for them to go](PLAN-system-observability-002-alert-baseline.md) | `uis stack install observability` produces a platform that **tells you | 2026-08-13 |
 | [Ship container logs to Loki](PLAN-system-observability-001-log-collection.md) | Logs from every pod are searchable in Grafana, automatically, so that | 2026-08-13 |
+| [Plan: ship the external-service proxy that production already runs by hand](PLAN-system-external-services-001-proxy-convention.md) | `uis deploy postgresql` gives an in-cluster PostgreSQL on a laptop and a | 2026-08-13 |
 | [Declare external dependencies as shim Services](PLAN-system-dependencies-shim-services.md) | Every dependency UIS has on something outside the cluster is declared | 2026-08-13 |
 | [Ship the monitor pipeline as part of the service](PLAN-service-uptime-kuma-005-ship-the-pipeline.md) | `uis deploy uptime-kuma` gives a watchdog that is **already monitoring | 2026-08-13 |
 | [Make the watchdog able to wake someone — and watch itself](PLAN-service-uptime-kuma-003-alerting.md) | An alert reaches a human away from home, and the watchdog's own death | 2026-08-13 |
