@@ -20,6 +20,7 @@ source "$LIB_DIR/categories.sh"
 source "$LIB_DIR/stacks.sh"
 source "$LIB_DIR/service-scanner.sh"
 source "$LIB_DIR/first-run.sh"
+source "$LIB_DIR/external-services.sh"
 source "$LIB_DIR/service-deployment.sh"
 source "$LIB_DIR/service-auto-enable.sh" 2>/dev/null || true
 source "$LIB_DIR/menu-helpers.sh" 2>/dev/null || true
@@ -132,6 +133,9 @@ Network:
   network verify   <provider>             Diagnostics for the provider's tunnel/route + pod
   network expose   <provider> <service>   Expose a service via Funnel (Tailscale only)
   network unexpose <provider> <service>   Remove a per-service Funnel exposure (Tailscale only)
+
+PostgreSQL:
+  postgresql verify              Verify the database answers (either topology)
 
 Alloy:
   alloy verify                   Run E2E health checks on Alloy log collection
@@ -300,6 +304,18 @@ cmd_list() {
             elif check_service_deployed "$service_id" 2>/dev/null; then
                 status_icon="✅"
                 status_text="Deployed"
+                # ⚠️ A proxy pod passing its check does NOT mean the data is here.
+                # Reporting plain "Deployed" for an externally-provided service is
+                # true of the pod and misleading about everything that matters -
+                # the same defect as reporting a service Deployed when nothing
+                # verified it. Say where the data actually lives.
+                if is_external_service "$service_id" 2>/dev/null; then
+                    local _x_host _x_port _x_why
+                    if read -r _x_host _x_port _x_why < <(external_service_get "$service_id" "${SCRIPT_EXPOSE_PORT:-}" 2>/dev/null); then
+                        status_icon="🔗"
+                        status_text="External → ${_x_host}:${_x_port}"
+                    fi
+                fi
             else
                 status_icon="❌"
                 status_text="Not deployed"
@@ -2027,6 +2043,7 @@ cmd_verify() {
         echo "  minio           Run E2E health checks on MinIO object storage"
         echo "  nextcloud       Run E2E health checks on Nextcloud + OnlyOffice"
         echo "  openmetadata    Run E2E health checks on OpenMetadata"
+        echo "  postgresql      Verify the database answers (either topology)"
         echo "  temporal        Run E2E health checks on Temporal"
         echo "  uptime-kuma     Run E2E health checks on Uptime Kuma"
         exit "$EXIT_GENERAL_ERROR"
@@ -2041,6 +2058,9 @@ cmd_verify() {
             ;;
         alloy)
             cmd_alloy_verify
+            ;;
+        postgresql|postgres)
+            cmd_postgresql_verify
             ;;
         argocd)
             cmd_argocd_verify
@@ -2079,6 +2099,7 @@ cmd_verify() {
             echo "  minio           Run E2E health checks on MinIO object storage"
             echo "  nextcloud       Run E2E health checks on Nextcloud + OnlyOffice"
             echo "  openmetadata    Run E2E health checks on OpenMetadata"
+            echo "  postgresql      Verify the database answers (either topology)"
             echo "  temporal        Run E2E health checks on Temporal"
             echo "  uptime-kuma     Run E2E health checks on Uptime Kuma"
             exit "$EXIT_GENERAL_ERROR"
@@ -2395,6 +2416,21 @@ cmd_temporal_verify() {
 # ============================================================
 # Alloy Commands
 # ============================================================
+
+cmd_postgresql_verify() {
+    print_section "Verifying PostgreSQL"
+
+    # Same target resolution deploy uses; the alloy verify learned this the hard way.
+    local cluster_config="$CONFIG_DIR/cluster-config.sh"
+    local target_host="rancher-desktop"
+    if [[ -f "$cluster_config" ]]; then
+        # shellcheck source=/dev/null
+        source "$cluster_config"
+        target_host="${TARGET_HOST:-rancher-desktop}"
+    fi
+
+    ansible-playbook "$ANSIBLE_DIR/040-test-postgresql.yml" -e "target_host=$target_host"
+}
 
 cmd_alloy_verify() {
     print_section "Verifying Alloy Deployment"
@@ -2801,6 +2837,22 @@ main() {
         # reaches the E2E tests through here - not through `uis verify alloy`.
         # Both are registered; a service with only one of them is unreachable
         # from whichever path it is missing.
+        postgresql)
+            local subcmd="${1:-}"
+            shift 2>/dev/null || true
+            case "$subcmd" in
+                verify)
+                    cmd_postgresql_verify
+                    ;;
+                *)
+                    log_error "Unknown postgresql command: $subcmd"
+                    echo ""
+                    echo "Commands:"
+                    echo "  postgresql verify    Verify the database answers (either topology)"
+                    exit "$EXIT_GENERAL_ERROR"
+                    ;;
+            esac
+            ;;
         alloy)
             local subcmd="${1:-}"
             shift 2>/dev/null || true

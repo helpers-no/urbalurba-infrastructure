@@ -1,0 +1,96 @@
+---
+# 040-test-postgresql.yml
+# E2E verification for PostgreSQL.
+#
+# ⚠️ THIS ASKS THE DATABASE A QUESTION. IT DOES NOT CHECK THAT A POD IS RUNNING.
+#
+# That distinction is the whole point once a service can be provided externally.
+# `uis list` sees a Running pod either way - in-cluster PostgreSQL, or the proxy
+# standing in for a database on another host. A Running proxy whose far side is
+# unreachable looks exactly like a healthy database until something tries to use
+# it.
+#
+# It is also the same test in both topologies, deliberately: it connects through
+# `postgresql.<namespace>` like every consumer does, so a pass means consumers
+# will work, and it proves the interface is genuinely identical.
+#
+# Usage:
+#   ansible-playbook 040-test-postgresql.yml -e "target_host=rancher-desktop"
+
+- name: Verify PostgreSQL answers
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    _ns: "{{ pg_namespace | default('default') }}"
+
+  tasks:
+    - name: "0.1 Read the password consumers use"
+      ansible.builtin.shell: >
+        kubectl get secret urbalurba-secrets -n {{ _ns }} --context {{ _target }}
+        -o jsonpath="{.data.PGPASSWORD}" | base64 -d
+      register: _pgpw
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: "0.2 Fail clearly if the platform secret is missing"
+      ansible.builtin.fail:
+        msg: >-
+          No PGPASSWORD in urbalurba-secrets ({{ _ns }}). PostgreSQL cannot be
+          verified without the credential its consumers use.
+      when: _pgpw.stdout | default('') | length == 0
+
+    # --- Test A: the database answers a real query, through the Service ---
+    - name: "A1. SELECT through postgresql.{{ _ns }}"
+      ansible.builtin.command: >
+        kubectl run pg-verify-{{ 9999 | random }} --image=postgres:18 --rm -i
+        --restart=Never -n {{ _ns }} --context {{ _target }} --timeout=60s
+        --env PGPASSWORD={{ _pgpw.stdout }} --
+        /bin/sh -c 'sleep 2; psql -h postgresql.{{ _ns }}.svc.cluster.local -U postgres -tAc "select version()"'
+      register: _q
+      changed_when: false
+      failed_when: false
+      retries: 6
+      delay: 5
+      until: _q.stdout is search('PostgreSQL')
+      no_log: true
+
+    - name: "A2. Assert the database answered"
+      ansible.builtin.assert:
+        that: _q.stdout is search('PostgreSQL')
+        fail_msg: >-
+          postgresql.{{ _ns }} did not answer a query. If this installation
+          declares PostgreSQL in .uis.extend/external-services.yaml, the proxy is
+          running but the real database is unreachable - check the address, the
+          route, and that it is up. Otherwise the in-cluster database is unhealthy.
+        success_msg: "The database answered."
+
+    - name: "A3. Which server answered"
+      ansible.builtin.debug:
+        msg: "{{ _q.stdout | default('') | regex_search('PostgreSQL [0-9.]+') }}"
+
+    # --- Test B: say which topology served that answer ---
+    - name: "B1. Is this installation proxying to an external database?"
+      ansible.builtin.stat:
+        path: "/mnt/urbalurbadisk/.uis.extend/external-services.yaml"
+      register: _extfile
+
+    - name: "B2. Read the declaration"
+      ansible.builtin.shell: >
+        yq -r '.postgresql.host // ""' /mnt/urbalurbadisk/.uis.extend/external-services.yaml
+      register: _exthost
+      changed_when: false
+      failed_when: false
+      when: _extfile.stat.exists
+
+    - name: "SUMMARY"
+      ansible.builtin.debug:
+        msg:
+          - "A. Database answers a real query:  PASS"
+          - "B. Topology: {{ (_exthost.stdout | default('') | length > 0) | ternary('EXTERNAL - proxied to ' ~ (_exthost.stdout | default('')), 'in-cluster') }}"
+          - ""
+          - "The same test passes in both topologies. That is the point: consumers"
+          - "connect to postgresql.{{ _ns }} and cannot tell the difference."

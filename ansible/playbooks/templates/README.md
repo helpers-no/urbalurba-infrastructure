@@ -20,6 +20,24 @@ keep the static YAML in `manifests/<NNN>-<service>-*.yaml` and reference it
 via `src:` in the setup playbook. There is no need to introduce a Jinja
 template for the single-instance case.
 
+### Third case: single-instance, but parametrised per installation
+
+There is one more reason a template belongs here, added after the fact because
+the first example did not fit either category above: a service that has **one
+instance per cluster** but whose manifest depends on **where that installation
+put it**.
+
+The external-service proxies are the case. `040-postgresql-external-proxy.yml.j2`
+renders a stand-in Deployment + Service that forwards to a database living
+outside the cluster, so the address and port differ per installation while the
+object is otherwise fixed. It cannot be static YAML (the address varies) and it
+is not multi-instance (there is exactly one).
+
+Name these `<NNN>-<service>-external-proxy.yml.j2` and parametrise **only** what
+genuinely varies between installations — address, port, namespace. Anything else
+that differs between two hand-written examples is accidental variation and should
+be removed rather than templated.
+
 ## File naming
 
 `<NNN>-<service>-<role>.yml.j2` — same numeric prefix the static manifests use,
