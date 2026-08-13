@@ -156,7 +156,7 @@ The doc rewrite for each page lands as part of that page's parent decision in "P
 ## Related
 
 - [INVESTIGATE-system-platform-provisioning-layer](INVESTIGATE-system-platform-provisioning-layer.md) — the architectural umbrella above this execution work (what `platforms/*` should look like as a category).
-- [PLAN-platform-aks-destroy-kubeconfig-cleanup.md](./PLAN-platform-aks-destroy-kubeconfig-cleanup.md) — destroy-side kubeconfig cleanup; the `03-destroy.sh` shape that future platforms inherit.
+- [PLAN-platform-aks-destroy-kubeconfig-cleanup.md](../completed/PLAN-platform-aks-destroy-kubeconfig-cleanup.md) — destroy-side kubeconfig cleanup; the `03-destroy.sh` shape that future platforms inherit.
 - [INVESTIGATE-active-cluster-visibility-ux.md](../completed/INVESTIGATE-active-cluster-visibility-ux.md) — once we have multiple platforms, "which cluster am I about to deploy to?" becomes more pressing. Visibility UX is a prerequisite for confidently using multiple `platforms/*` flows.
 - [INVESTIGATE-system-remote-deployment-targets](INVESTIGATE-system-remote-deployment-targets.md) — remote-cluster targeting; the docs migration above can't finish until the supported target set is decided.
 - PR #149 — landed `platforms/azure-aks/`, the template every other migrated platform should follow.

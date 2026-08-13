@@ -10,7 +10,7 @@
 
 **Last Updated**: 2026-05-14
 
-**Investigation**: [INVESTIGATE-tailscale-architecture-cleanup.md](../backlog/INVESTIGATE-tailscale-architecture-cleanup.md) — Decisions 5, 7, 8, 9, 10, 14; Contracts C-1 through C-11.
+**Investigation**: [INVESTIGATE-tailscale-architecture-cleanup.md](./INVESTIGATE-tailscale-architecture-cleanup.md) — Decisions 5, 7, 8, 9, 10, 14; Contracts C-1 through C-11.
 
 **Prerequisites**: [PLAN-001-tailscale-variable-cleanup-and-deletions](../completed/PLAN-001-tailscale-variable-cleanup-and-deletions.md) — ✅ shipped in PR #173 (`c02c2e5`) + #174 (`9129a08`) + #175 (`f5c56c8`). Talk52 closed with full clean-slate verification on `:latest`.
 

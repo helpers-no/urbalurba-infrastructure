@@ -170,7 +170,7 @@ Once deployed, the Dagster UI at `dagster.sovereignsky.no` (or equivalent) shows
 
 This is "Atlas's data platform" as seen from inside Dagster. A future second application on UIS contributes its own user-code image and adds its own asset group without touching Atlas's.
 
-Reference: the full data journey for one Atlas source is documented in [`~/learn/helpers/atlas/docs/stack/data-journey-ssb-08764.md`](~/learn/helpers/atlas/docs/stack/data-journey-ssb-08764.md).
+Reference: the full data journey for one Atlas source is documented in ``~/learn/helpers/atlas/docs/stack/data-journey-ssb-08764.md``.
 
 ---
 

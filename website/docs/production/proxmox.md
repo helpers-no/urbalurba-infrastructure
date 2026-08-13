@@ -7,9 +7,9 @@ sidebar_position: 2
 # Production UIS on Proxmox VE
 
 The reference on-premises production deployment: a single Proxmox host running
-one Kubernetes cluster plus the [components beside the cluster](./index#components-beside-the-cluster).
+one Kubernetes cluster plus the [components beside the cluster](./index.md#components-beside-the-cluster).
 
-Read [Production overview](./index) first — this page is only the mechanics.
+Read [Production overview](./index.md) first — this page is only the mechanics.
 
 Everything here was built and verified on a real deployment. Where something bit
 us, it is called out as a **⚠️ gotcha** rather than left for you to rediscover.
@@ -189,7 +189,7 @@ spring-forward that hour does not exist and the job is silently skipped.
 
 ### 10. Verify the restores
 
-Not optional — see [production overview #4](./index).
+Not optional — see [production overview #4](./index.md).
 
 - Restore a database dump into a scratch database.
 - Restore a file from the off-box repo and compare it byte-for-byte with the live one.
@@ -205,7 +205,7 @@ Not optional — see [production overview #4](./index).
 
 Install the stack, then do the part that makes it useful: a log-collection agent,
 alert rules, and scrape targets for the components outside the cluster —
-including backup freshness. See [production overview #5](./index).
+including backup freshness. See [production overview #5](./index.md).
 
 ---
 

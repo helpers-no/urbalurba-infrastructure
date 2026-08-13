@@ -10,7 +10,7 @@
 
 **Last Updated**: 2026-04-05
 
-**Investigation**: [INVESTIGATE-templates-first-uis-template.md](INVESTIGATE-templates-first-uis-template.md) — decisions on template selection and format
+**Investigation**: [INVESTIGATE-templates-first-uis-template.md](../backlog/INVESTIGATE-templates-first-uis-template.md) — decisions on template selection and format
 
 **Specs**: `helpers-no/dev-templates` → `INVESTIGATE-unified-template-system.md` — `template-info.yaml` format (especially `provides` with stack refs per 26MSG and per-service config per 28MSG)
 

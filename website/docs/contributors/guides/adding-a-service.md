@@ -484,7 +484,31 @@ See **[Kubernetes Deployment Rules](../rules/kubernetes-deployment.md)** for sta
 
 1. Create `website/docs/services/<category>/myservice.md`
 2. Add the page to `website/sidebars.ts` under the appropriate category
-3. Run `cd website && npm run build` to verify no broken links
+3. Build the site to verify no broken links
+
+```bash
+cd website && npm run build
+```
+
+**No Node installed? Use the container.** Neither the workstation nor the
+provision-host container ships Node, so this step kept being skipped — a
+required check nobody could run on the machines they actually use. This needs
+nothing but Docker, and pins the same Node version CI uses:
+
+```bash
+cd website && docker run --rm -u $(id -u):$(id -g) \
+  -v "$PWD":/w -w /w -e HOME=/tmp -e CI=true node:20 \
+  sh -c 'npm ci && npm run build'
+```
+
+First run takes a few minutes for `npm ci`. It writes `node_modules/` and
+`build/` into `website/` — both gitignored, and together ~1.7 GB, so delete them
+afterwards if you are working on a small disk.
+
+⚠️ **Read the warnings, not just the exit code.** Broken links and broken anchors
+are reported as warnings and the build still exits 0 — and CI does not fail on
+them either. A green build with `[WARNING] Docusaurus found broken links` in it
+is a failure you have to look for.
 
 See **[Documentation Standards](../rules/documentation.md)** for page conventions.
 
@@ -521,7 +545,7 @@ If you created a verify playbook, make sure it is registered in both `integratio
 
 A few platform services ship **one instance per consuming application** rather than one shared instance per cluster. PostgREST is the first — every consuming app gets its own PostgREST Deployment, all sharing the `postgrest` namespace and the platform's PostgreSQL. The lifecycle becomes `./uis configure postgrest --app atlas` then `./uis deploy postgrest --app atlas`, repeated per app.
 
-If you're adding a service that fits this shape, the conventions below are what you need on top of the single-instance flow already covered above. The full worked example is [INVESTIGATE-postgrest.md](../../ai-developer/plans/backlog/INVESTIGATE-postgrest.md) — read it for the design rationale; this section is the contributor checklist.
+If you're adding a service that fits this shape, the conventions below are what you need on top of the single-instance flow already covered above. The full worked example is [INVESTIGATE-postgrest.md](../../ai-developer/plans/completed/INVESTIGATE-postgrest.md) — read it for the design rationale; this section is the contributor checklist.
 
 ### When to use the multi-instance shape
 
@@ -576,7 +600,7 @@ Add a handler at `provision-host/uis/lib/configure-<id>.sh` (no `handlers/` subd
 
 The `deploy` playbook in turn **assumes** configure has already run and errors clearly if its preconditions are missing — the user should always be able to fix the error by running the configure step the message tells them to run.
 
-For the lifecycle conventions (idempotent re-configure, `--rotate` to regenerate credentials, `--purge` to remove per-app state, removal-without-purge so re-deploy works without re-configure), see Decisions #16–#20 in [INVESTIGATE-postgrest.md](../../ai-developer/plans/backlog/INVESTIGATE-postgrest.md).
+For the lifecycle conventions (idempotent re-configure, `--rotate` to regenerate credentials, `--purge` to remove per-app state, removal-without-purge so re-deploy works without re-configure), see Decisions #16–#20 in [INVESTIGATE-postgrest.md](../../ai-developer/plans/completed/INVESTIGATE-postgrest.md).
 
 ### Worked example: PostgREST
 

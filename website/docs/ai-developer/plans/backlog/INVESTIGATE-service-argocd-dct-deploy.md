@@ -14,7 +14,7 @@
 
 **Related**:
 - `helpers-no/dev-templates` → `INVESTIGATE-unified-template-system.md` — unified template system with `uis-bridge.sh` pattern (3UIS)
-- [argocd-commands.md](../../developing/argocd-commands.md) — existing UIS ArgoCD command documentation
+- [argocd-commands.md](../../../developing/argocd-commands.md) — existing UIS ArgoCD command documentation
 - [PLAN-argocd-migration.md](../completed/PLAN-argocd-migration.md) — migration of ArgoCD commands to UIS CLI (completed)
 
 ---

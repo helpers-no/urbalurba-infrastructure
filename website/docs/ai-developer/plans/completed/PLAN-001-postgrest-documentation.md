@@ -27,7 +27,7 @@ This plan defers all deployment work. The deliverable is one Docusaurus page tha
 
 ## How this plan respects the existing docs pipeline
 
-UIS service pages are not hand-written from scratch. They are seeded by `provision-host/uis/manage/uis-docs-markdown.sh` from the metadata fields in `service-<id>.sh`, then hand-augmented in `<!-- MANUAL: ... -->` blocks and additional sections. See [Documentation Standards — Path A: Service pages](../../../contributors/rules/documentation.md#path-a--service-pages-most-common) and [CI/CD and Generators §uis-docs-markdown.sh](../../../contributors/guides/ci-cd-and-generators.md#uis-docs-markdownsh--service-documentation-pages).
+UIS service pages are not hand-written from scratch. They are seeded by `provision-host/uis/manage/uis-docs-markdown.sh` from the metadata fields in `service-<id>.sh`, then hand-augmented in `<!-- MANUAL: ... -->` blocks and additional sections. See [Documentation Standards — Path A: Service pages](../../../contributors/rules/documentation.md) and [CI/CD and Generators §uis-docs-markdown.sh](../../../contributors/guides/ci-cd-and-generators.md#uis-docs-markdownsh--service-documentation-pages).
 
 This plan therefore creates `service-postgrest.sh` with **metadata fields only** (no `SCRIPT_PLAYBOOK`, no actual deployment), runs the generator to produce the stub, and augments it with the substantive content. The service definition becomes "deployable" only when a later plan adds `SCRIPT_PLAYBOOK` and the playbook itself.
 

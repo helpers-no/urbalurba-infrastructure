@@ -6,7 +6,7 @@
 
 ## Status: Backlog
 
-**Goal**: Decide what `./uis deploy <service>` should do when the target service has `SCRIPT_PLAYBOOK=""` (and `SCRIPT_MANIFEST=""`) — the "metadata-only" case introduced when [`service-postgrest.sh`](../../../../../provision-host/uis/services/integration/service-postgrest.sh) shipped without a playbook (PLAN-001 documentation gate; PLAN-002 will add the playbook).
+**Goal**: Decide what `./uis deploy <service>` should do when the target service has `SCRIPT_PLAYBOOK=""` (and `SCRIPT_MANIFEST=""`) — the "metadata-only" case introduced when [`service-postgrest.sh`](https://github.com/helpers-no/urbalurba-infrastructure/blob/main/provision-host/uis/services/integration/service-postgrest.sh) shipped without a playbook (PLAN-001 documentation gate; PLAN-002 will add the playbook).
 
 **Last Updated**: 2026-04-29
 

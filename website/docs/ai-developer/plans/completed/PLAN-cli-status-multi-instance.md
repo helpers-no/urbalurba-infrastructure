@@ -14,7 +14,7 @@
 
 **Prerequisites**: None — independent of any in-flight work. Touches `provision-host/uis/lib/` + `provision-host/uis/manage/uis-cli.sh` only.
 
-**Priority**: Medium — operationally useful for the customer-onboarding flow (per [INVESTIGATE-docs-customer-onboarding-database](INVESTIGATE-docs-customer-onboarding-database.md)), no production-blocking impact.
+**Priority**: Medium — operationally useful for the customer-onboarding flow (per [INVESTIGATE-docs-customer-onboarding-database](../backlog/INVESTIGATE-docs-customer-onboarding-database.md)), no production-blocking impact.
 
 ---
 

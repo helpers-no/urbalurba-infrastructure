@@ -18,7 +18,7 @@ This document is preserved as the diagnostic trail. PLAN-002 carries the close-o
 
 **Request origin**: Browser-tester audit run after PR #137 (gravitee deploy) and PR #139 (undeploy route count) merged. Audit report and tester response live in the contributor's testing area outside this repo (`/learn/helpers/testing/uis1/talk/gravitee-config-audit.md` and `/learn/helpers/testing/uis1/talk/talk.md`); the relevant excerpts that informed the findings below are quoted inline rather than referenced. The audit verified 11 of 13 surfaces correct; the remaining items are tracked here. Maintainer reframed the investigation: "i want the investigation to focus on how to set the variables correct in the first place and not how to change what we have so that it is correct."
 
-**Depends on**: [INVESTIGATE-service-email-smtp.md](INVESTIGATE-service-email-smtp.md) for the SMTP gap (Gravitee email is one of several services that needs a UIS-level SMTP relay). Everything else in this plan is local to Gravitee.
+**Depends on**: [INVESTIGATE-service-email-smtp.md](../backlog/INVESTIGATE-service-email-smtp.md) for the SMTP gap (Gravitee email is one of several services that needs a UIS-level SMTP relay). Everything else in this plan is local to Gravitee.
 
 **Phase 0 status (2026-05-04, all open questions resolved)**: nine open questions answered across tester rounds 1, 1.5 (read-only experiments + fresh-DB baseline), 3 (OQ4 — Console relative baseURL), 5 (OQ8 + system-wide `DEFAULT_AUTOSCALING` — shipped via PLAN-gravitee-disable-hpa-dev), and 6/6.5 (OQ5 — Portal sub-path consolidation). OQ1 and OQ2 demoted to fallbacks and not run. Finding 1 resolved as a side effect of OQ5. Finding 5 demoted (does not reproduce as a functional bug). Finding 8 shipped. **All chart/ingress experiments closed; next step is PLAN-001+ for the remaining deploy-time fixes (Findings 2 + 3 + Finding 4 api-side).**
 
@@ -209,7 +209,7 @@ For each finding, the investigation must determine **the layer at which the wron
 
 **Important interaction with Finding 4:** Finding 4's design constraint is "one deploy, any number of hostnames." That rules out any solution to Finding 2 that bakes a single absolute URL into the DB and relies on it — because the right URL depends on which hostname the user accessed. So the *only* acceptable resolutions are ones where the api pod constructs outbound URLs from `X-Forwarded-Host` / `X-Forwarded-Proto` per request, ignoring (or harmlessly fallback-ing to) the DB column. If we can't get the api pod to do that, Finding 2 is unsolvable under Finding 4's constraint and we'd need to relax one.
 
-**Test scope caveat:** the drop-database test's check 2b is a single-endpoint canary — it verifies that `/portal/redirect` honours `X-Forwarded-Host`. Gravitee's api pod renders absolute URLs in three known shapes (redirects, notification emails, webhook payloads), and they may be served by different Spring filter chains. A passing 2b check is *strong evidence* the redirect path is correct but not *proof* that email and webhook paths are. When SMTP eventually lands ([INVESTIGATE-service-email-smtp.md](INVESTIGATE-service-email-smtp.md)), the PLAN for that work should add a corresponding email-rendering check (trigger a password-reset, capture the outbound mail in Mailpit, assert the link host echoes the requesting host). Webhooks are out of scope until anyone wires them.
+**Test scope caveat:** the drop-database test's check 2b is a single-endpoint canary — it verifies that `/portal/redirect` honours `X-Forwarded-Host`. Gravitee's api pod renders absolute URLs in three known shapes (redirects, notification emails, webhook payloads), and they may be served by different Spring filter chains. A passing 2b check is *strong evidence* the redirect path is correct but not *proof* that email and webhook paths are. When SMTP eventually lands ([INVESTIGATE-service-email-smtp.md](../backlog/INVESTIGATE-service-email-smtp.md)), the PLAN for that work should add a corresponding email-rendering check (trigger a password-reset, capture the outbound mail in Mailpit, assert the link host echoes the requesting host). Webhooks are out of scope until anyone wires them.
 
 **OQ6 resolved (Round 1, 2026-05-03):** the api pod does **NOT** honour `X-Forwarded-Host` / `X-Forwarded-Proto` for outbound URLs. A probe of `/management/.../portal/redirect` with `Host: gravitee.test.example` + `X-Forwarded-Host: gravitee.test.example` + `X-Forwarded-Proto: https` returned `Location: http://gravitee.localhost/portal/...` — both forwarded headers ignored, host *and* scheme baked in from the chart's `installation.standalone.console.urls[]` value. The same probe with the natural `Host: gravitee.localhost` (OQ9) produced an identically-shaped 307 with absolute Location at the chart-baked URL. **Confirms the api pod constructs outbound URLs from the helm-rendered `gravitee.yml`, not from the request.**
 
@@ -366,7 +366,7 @@ So this isn't just a Gravitee asymmetry fix — it's the first concrete instance
 
 ### Finding 6 — SMTP placeholder
 
-Tracked separately: see [INVESTIGATE-service-email-smtp.md](INVESTIGATE-service-email-smtp.md). Once UIS has a shared SMTP layer, Gravitee picks up `SMTP_HOST/PORT/USER/PASSWORD/FROM_ADDRESS` like every other service. Until then, Gravitee email flows silently fail. **Out of scope** for this investigation; not part of the drop-database test.
+Tracked separately: see [INVESTIGATE-service-email-smtp.md](../backlog/INVESTIGATE-service-email-smtp.md). Once UIS has a shared SMTP layer, Gravitee picks up `SMTP_HOST/PORT/USER/PASSWORD/FROM_ADDRESS` like every other service. Until then, Gravitee email flows silently fail. **Out of scope** for this investigation; not part of the drop-database test.
 
 ### Finding 7 — Admin email mismatch
 
@@ -394,7 +394,7 @@ Two-layer pattern, matching the existing `DEFAULT_*` flow (`DEFAULT_ADMIN_EMAIL`
 
 **Domain agility (Finding 4):** zero new variables — relative `ui.baseURL`/`portal.baseURL` (gated on OQ4) + chart's `urls[]` array as fallback for absolute URLs from the api pod (gated on whether the api picks per-request — separate sub-question, see Finding 4). `X-Forwarded-Host` honour by api pod is **ruled out** by OQ6 — not a viable lever without an upstream patch.
 
-**SMTP (Finding 6):** out of scope — see [INVESTIGATE-service-email-smtp.md](INVESTIGATE-service-email-smtp.md). When that lands, the same `default-secrets.env` → per-namespace pattern applies to `DEFAULT_SMTP_HOST` → `GRAVITEE_SMTP_HOST` etc.
+**SMTP (Finding 6):** out of scope — see [INVESTIGATE-service-email-smtp.md](../backlog/INVESTIGATE-service-email-smtp.md). When that lands, the same `default-secrets.env` → per-namespace pattern applies to `DEFAULT_SMTP_HOST` → `GRAVITEE_SMTP_HOST` etc.
 
 ### Plumbing chain verification (2026-05-03)
 
@@ -443,7 +443,7 @@ OQ1 and OQ2 only matter as fallbacks if Finding 4's design constraint were relax
 - **In scope:** Findings 1, 2, 3, 4, 8 — each with a deploy-time-correct mechanism. The drop-database test is the gate. (Finding 5 was originally in-scope but Round 1.5 confirmed the audit's 503 does not reproduce — see Finding 5 for the demotion rationale.)
 - **Status (2026-05-04):** Findings 1 + 4-Console + 4-Portal + 8 shipped. Findings 2 + 3 + 4-api-side remain — all to be implemented via PLAN-001+ (org name first, DB-baked URLs second).
 - **Out of scope:**
-  - SMTP (Finding 6) — separate [INVESTIGATE-service-email-smtp.md](INVESTIGATE-service-email-smtp.md).
+  - SMTP (Finding 6) — separate [INVESTIGATE-service-email-smtp.md](../backlog/INVESTIGATE-service-email-smtp.md).
   - Admin email mismatch (Finding 7) — non-actionable, user config reflects intent.
   - Authentik OIDC integration (separate plan when prioritised).
   - License / EE feature unlock.

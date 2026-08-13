@@ -33,7 +33,7 @@ This PLAN is preserved in `completed/` as a record of the design path; no furthe
 
 **Last Updated**: 2026-05-07
 
-**Investigation**: [INVESTIGATE-system-platform-provisioning-layer.md](./INVESTIGATE-system-platform-provisioning-layer.md) — gap-analysis finding #1 (kubernetes-secrets.yml not applied).
+**Investigation**: [INVESTIGATE-system-platform-provisioning-layer.md](../backlog/INVESTIGATE-system-platform-provisioning-layer.md) — gap-analysis finding #1 (kubernetes-secrets.yml not applied).
 
 **Prerequisite (soft)**: [PLAN-001-aks-step1-verification.md](../completed/PLAN-001-aks-step1-verification.md) — natural order is verify Step 1 first, then extend with this parity fix. Not a hard dependency: the change here is a no-op when `kubernetes-secrets.yml` doesn't exist (warns + continues), and nginx in PLAN-001's verification doesn't need secrets.
 

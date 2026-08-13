@@ -514,7 +514,7 @@ Cluster's up but bare. This script does the post-provisioning setup.
 
 The current `02-post-apply.sh` skips applying `kubernetes-secrets.yml` (gap-analysis finding from 2026-05-07). For the nginx verification (Phase 8 below), this is fine — nginx doesn't need cluster secrets. For *any other* UIS service (postgresql, authentik, openwebui, postgrest), you'll either need to:
 
-1. Wait for [PLAN-platform-aks-002-secrets-apply-parity.md](./PLAN-platform-aks-002-secrets-apply-parity.md) to ship, or
+1. Wait for [PLAN-platform-aks-002-secrets-apply-parity.md](../completed/PLAN-platform-aks-002-secrets-apply-parity.md) to ship, or
 2. Manually apply the secrets after this script: `kubectl apply -f .uis.secrets/generated/kubernetes/kubernetes-secrets.yml` (after running `./uis secrets generate` once).
 
 ---

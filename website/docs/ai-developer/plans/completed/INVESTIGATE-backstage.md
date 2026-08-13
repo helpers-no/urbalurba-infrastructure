@@ -216,7 +216,7 @@ Add a Secret block to `00-master-secrets.yml.template` for the `backstage` names
 
 ### Authentication
 
-Currently using guest access (no authentication required). OIDC authentication via Authentik is a separate investigation — see [INVESTIGATE-service-backstage-auth.md](INVESTIGATE-service-backstage-auth.md).
+Currently using guest access (no authentication required). OIDC authentication via Authentik is a separate investigation — see [INVESTIGATE-service-backstage-auth.md](../backlog/INVESTIGATE-service-backstage-auth.md).
 
 ### PostgreSQL Database Setup
 
@@ -324,7 +324,7 @@ SCRIPT_CONSUMES_APIS=""         # comma-separated API names: "litellm-api"
 4. Update `all.yaml` to include API entity files
 5. Update static entities (tika) with `providesApis` if applicable
 
-**Details:** See [INVESTIGATE-service-backstage-enhancements.md](INVESTIGATE-service-backstage-enhancements.md) Enhancement 1.
+**Details:** See [INVESTIGATE-service-backstage-enhancements.md](../backlog/INVESTIGATE-service-backstage-enhancements.md) Enhancement 1.
 
 ### Grafana Plugin
 
@@ -351,7 +351,7 @@ metadata:
     grafana/loki-query: '{service_name="postgresql"}'  # Future — needs adding
 ```
 
-**Details:** See [INVESTIGATE-service-backstage-enhancements.md](INVESTIGATE-service-backstage-enhancements.md) Enhancement 2.
+**Details:** See [INVESTIGATE-service-backstage-enhancements.md](../backlog/INVESTIGATE-service-backstage-enhancements.md) Enhancement 2.
 
 ### Runtime Visibility: Deploy/Undeploy Awareness
 
@@ -643,7 +643,7 @@ This investigation produced completed plans and ongoing investigations:
 |------|-------|-----------------|--------|
 | [PLAN-001-backstage-metadata-and-generator.md](./PLAN-001-backstage-metadata-and-generator.md) | Add metadata fields + build catalog generator | No | **Complete** |
 | [PLAN-002-backstage-deployment.md](./PLAN-002-backstage-deployment.md) | Deploy RHDH with K8s plugin, catalog, guest auth | Yes | **Complete** |
-| [INVESTIGATE-service-backstage-enhancements.md](INVESTIGATE-service-backstage-enhancements.md) | API entities, Grafana plugin, Scaffolder, TechDocs | Varies | Backlog |
-| [INVESTIGATE-service-backstage-auth.md](INVESTIGATE-service-backstage-auth.md) | Authentik OIDC (optional, was PLAN-003) | Yes | Backlog |
+| [INVESTIGATE-service-backstage-enhancements.md](../backlog/INVESTIGATE-service-backstage-enhancements.md) | API entities, Grafana plugin, Scaffolder, TechDocs | Varies | Backlog |
+| [INVESTIGATE-service-backstage-auth.md](../backlog/INVESTIGATE-service-backstage-auth.md) | Authentik OIDC (optional, was PLAN-003) | Yes | Backlog |
 
 Sub-component extraction (Tika/OnlyOffice into standalone services) remains a separate backlog item — high risk, requires playbook refactoring and testing.

@@ -59,7 +59,7 @@ The investigation is about whether that target is right, what each wrapper actua
 
 ## Out of Scope
 
-- **Provisioning a cluster on `gke`/`eks`/`microk8s-vm`/RPi.** This investigation is AKS-only. Other platforms are governed by [INVESTIGATE-system-platform-provisioning-layer.md](./INVESTIGATE-system-platform-provisioning-layer.md) and [INVESTIGATE-system-migrate-hosts-to-platforms.md](./INVESTIGATE-system-migrate-hosts-to-platforms.md). The wrapper-command shape decided here can extend to those later, but the *first* concrete deliverable is AKS-only.
+- **Provisioning a cluster on `gke`/`eks`/`microk8s-vm`/RPi.** This investigation is AKS-only. Other platforms are governed by [INVESTIGATE-system-platform-provisioning-layer.md](../backlog/INVESTIGATE-system-platform-provisioning-layer.md) and [INVESTIGATE-system-migrate-hosts-to-platforms.md](../backlog/INVESTIGATE-system-migrate-hosts-to-platforms.md). The wrapper-command shape decided here can extend to those later, but the *first* concrete deliverable is AKS-only.
 - **Changing the underlying scripts** (`platforms/aks/scripts/00..03`). They stay as the implementation detail. Wrappers call them; novices stop reading them directly.
 - **Authentik / SSO / domain wiring.** That's a post-cluster concern; the novice flow stops at "deploy nginx, see it work."
 - **Switching AKS to AAD-integrated RBAC.** Today's `platforms/aks/tofu/main.tf` provisions AKS with local-account auth (no `azure_active_directory_role_based_access_control` block). That's why `az aks get-credentials` writes a cert-based kubeconfig and `kubectl` works without `kubelogin`. If we ever switch to AAD-integrated AKS — for per-user identity in audit logs, AD-group-based RBAC, and no shared cert credential — `kubelogin` becomes a hard dependency for every operator and CI runner, and the meta-installer would need to gain it. That's a real architectural decision worth its own investigation; the novice-onboarding wrappers should not pre-judge it.
@@ -80,7 +80,7 @@ The same per-target naming applies to the platform CLI verb: `./uis platform ini
 
 - **Q1. (Decided 2026-05-10)** Meta-tool name is `azure-aks`. Rationale: per-target naming leaves clean room for `azure-microk8s` (MicroK8s on Azure VM) and other Azure-flavored cluster targets later. Each `<provider>-<target>` meta-tool bundles whatever deps that specific target needs. Naming the meta-tool `azure` would have collided with the Azure-CLI-only sub-tool and forced a single shared dep set across all Azure targets.
 - **Q2. (Decided 2026-05-10)** `install-azure-aks.sh` is a regular tool-script that delegates inside `do_install`: `install_tool azure-cli && install_tool opentofu`. No new "meta-tool" concept in `tool-installation.sh`. The script appears in `./uis tools list` for free (the lister iterates `install-*.sh` and reads metadata), with `TOOL_CATEGORY="META"` for optional grouping. `TOOL_CHECK_COMMAND` is a compound: `command -v az >/dev/null && command -v tofu >/dev/null`. Meta-tool's `do_uninstall` is best-effort only — it prints "run uninstall on each component" rather than tearing down sub-tools that the user might want for other reasons.
-- **Q3. (Decided 2026-05-10)** On sub-install failure: stop, no rollback. Surface the error (loud failures now reliable after [PLAN-tool-installer-error-handling.md](../active/PLAN-tool-installer-error-handling.md) shipped), leave the partially-installed components in place, log clearly which step failed. Idempotent re-run via the wrapper's `is_tool_installed` short-circuit picks up where it left off.
+- **Q3. (Decided 2026-05-10)** On sub-install failure: stop, no rollback. Surface the error (loud failures now reliable after [PLAN-tool-installer-error-handling.md](./PLAN-tool-installer-error-handling.md) shipped), leave the partially-installed components in place, log clearly which step failed. Idempotent re-run via the wrapper's `is_tool_installed` short-circuit picks up where it left off.
 
 ### `./uis platform init azure-aks` (interactive wizard)
 
@@ -163,7 +163,7 @@ These are the most novice-hostile steps in today's flow, and **none of them have
 Sourced from the same scripts; calling these out so the new wizard avoids them:
 
 - **Hardcoded subscription / tenant IDs in source control.** `hosts/azure-aks/azure-aks-config.sh:7-8` checked in real Red Cross IDs. The new wizard discovers and writes IDs into `.uis.secrets/cloud-accounts/azure-default.env` (which is gitignored), never into source-controlled config.
-- **`|| true` masking errors.** `hosts/azure-aks/02-azure-aks-setup.sh:147-148` uses `helm repo add ... >/dev/null 2>&1 || true`. The wizard runs under `set -euo pipefail` and surfaces failures (consistent with [PLAN-tool-installer-error-handling.md](../active/PLAN-tool-installer-error-handling.md) shipped 2026-05-10).
+- **`|| true` masking errors.** `hosts/azure-aks/02-azure-aks-setup.sh:147-148` uses `helm repo add ... >/dev/null 2>&1 || true`. The wizard runs under `set -euo pipefail` and surfaces failures (consistent with [PLAN-tool-installer-error-handling.md](./PLAN-tool-installer-error-handling.md) shipped 2026-05-10).
 - **Regex/awk on JSON outputs.** `hosts/azure-microk8s/01-azure-vm-create-redcross-v2.sh:301-307` runs `'([0-9]{1,3}\.){3}[0-9]{1,3}'` on `--query 'value[0].message'` to extract a Tailscale IP. Brittle. Use `--query "..." -o tsv` directly on structured output, never grep/awk.
 - **Duplicated logic across scripts.** The PIM check is copy-pasted identically into `azure-aks/01-azure-aks-create.sh` and `azure-microk8s/01-azure-vm-create-redcross-v2.sh` — no shared library. The new wizard's helpers go in `provision-host/uis/lib/azure-discovery.sh` (or similar) so future `gke`/`eks` wizards can mirror the shape, and so the role check / login / sub-picker each have one home.
 
@@ -196,7 +196,7 @@ How this plays out per future target:
 - **microk8s-vm** (legacy `hosts/azure-microk8s/`): partial applicability. The "discover" steps simplify (no provider registration), but the manifest changes — "do you want to provision an Azure VM and install MicroK8s on it?" — so the per-platform `init.sh` has different wizard steps. Still fits the dispatcher + per-platform + shared-library shape.
 - **microk8s-rpi**: least applicable. Novice physically prepares an SD card; `init` becomes mostly a runbook + minimal config wizard rather than a full auto-pick flow. Probably exposes `up`/`down` against a Tailscale-reachable Pi; `init` is small and mostly informational.
 
-**Out of scope for this investigation**: actually building the GKE/EKS/microk8s-vm/microk8s-rpi wizards. Each lands as its own PLAN when a real consumer surfaces. AKS-first is established (per [INVESTIGATE-system-platform-provisioning-layer.md](./INVESTIGATE-system-platform-provisioning-layer.md)). This investigation only guarantees that the AKS wrapper's design doesn't paint future platforms into a corner.
+**Out of scope for this investigation**: actually building the GKE/EKS/microk8s-vm/microk8s-rpi wizards. Each lands as its own PLAN when a real consumer surfaces. AKS-first is established (per [INVESTIGATE-system-platform-provisioning-layer.md](../backlog/INVESTIGATE-system-platform-provisioning-layer.md)). This investigation only guarantees that the AKS wrapper's design doesn't paint future platforms into a corner.
 
 ### Q15 — Where does the doc-flow story land?
 
@@ -237,9 +237,9 @@ Doc rewrite (`azure-aks.md`) waits for #2 to land, per Q15.
 
 ## Related
 
-- [PLAN-platform-aks-001b-manual-setup.md](./PLAN-platform-aks-001b-manual-setup.md) — the current "how a human does it" reference. The wrappers automate this; the PLAN stays as the authoritative documentation of *what* gets automated.
+- [PLAN-platform-aks-001b-manual-setup.md](../backlog/PLAN-platform-aks-001b-manual-setup.md) — the current "how a human does it" reference. The wrappers automate this; the PLAN stays as the authoritative documentation of *what* gets automated.
 - [PLAN-platform-aks-002-secrets-apply-parity.md](./PLAN-platform-aks-002-secrets-apply-parity.md) — secrets-application parity for AKS. Related but orthogonal: that's about *running* on AKS, this is about *getting to* AKS.
-- [INVESTIGATE-system-platform-provisioning-layer.md](./INVESTIGATE-system-platform-provisioning-layer.md) — the broader `platforms/*` architecture. This investigation lives downstream of that one's "AKS-first focus" decision.
+- [INVESTIGATE-system-platform-provisioning-layer.md](../backlog/INVESTIGATE-system-platform-provisioning-layer.md) — the broader `platforms/*` architecture. This investigation lives downstream of that one's "AKS-first focus" decision.
 - [INVESTIGATE-active-cluster-visibility-ux.md](../completed/INVESTIGATE-active-cluster-visibility-ux.md) — once a novice has clusters across `rancher-desktop` + `azure-aks`, "which cluster am I about to touch?" becomes the next safety problem. Visibility UX dovetails with platform wrappers.
-- [PLAN-tool-installer-error-handling.md](../active/PLAN-tool-installer-error-handling.md) — prerequisite (shipped 2026-05-10 as PR #152). Makes per-tool installs fail loudly, which the meta-tool depends on.
+- [PLAN-tool-installer-error-handling.md](./PLAN-tool-installer-error-handling.md) — prerequisite (shipped 2026-05-10 as PR #152). Makes per-tool installs fail loudly, which the meta-tool depends on.
 - `provision-host/uis/manage/uis-cli.sh:1018` — `cmd_init` (UIS-level setup wizard). Reference for the wizard pattern; `cmd_platform_init` would parallel it.

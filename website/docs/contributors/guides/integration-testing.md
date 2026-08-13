@@ -71,7 +71,7 @@ The test plan is built automatically from service metadata:
 
 | Type | Services | Reason |
 |------|----------|--------|
-| **Always skipped** | Gravitee | Broken before migration — see [Gravitee investigation](../../ai-developer/plans/backlog/INVESTIGATE-gravitee-fix.md) |
+| **Always skipped** | Gravitee | Broken before migration — see [Gravitee investigation](../../ai-developer/plans/completed/INVESTIGATE-gravitee-fix.md) |
 | **Conditionally skipped** | Tailscale tunnel, Cloudflare tunnel | Require real OAuth credentials. Skipped if secrets contain placeholder values (`your-*`, `*-here`) |
 
 The conditional skip logic checks `.uis.secrets/secrets-config/00-common-values.env.template` for placeholder values.
