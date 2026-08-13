@@ -9,11 +9,11 @@
 **Shipped in**: PR #156 (the `up` + `down` bundle).
 **Verified end-to-end**: talk45 + talk46 — F9 safety branch later hardened in PR #157, all tester rounds green on CI-built `:latest`.
 
-**Goal**: Add `./uis platform down azure-aks` — a thin pass-through to the existing `03-destroy.sh` lifecycle script. **This is PLAN #4 of 4** spawned by [INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md) — the last and most trivial. Closes the AKS novice-onboarding sequence (`tools install` + `platform init` + `platform up` + `platform down`).
+**Goal**: Add `./uis platform down azure-aks` — a thin pass-through to the existing `03-destroy.sh` lifecycle script. **This is PLAN #4 of 4** spawned by [INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md) — the last and most trivial. Closes the AKS novice-onboarding sequence (`tools install` + `platform init` + `platform up` + `platform down`).
 
 **Last Updated**: 2026-05-11
 
-**Source**: [INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md). Implements Q8 (three-layer split), Q12 (leave env file in place after destroy), Q10 (always have output). `03-destroy.sh` already has TTY-guarded typed-name confirmation + `UIS_DESTROY_CONFIRM` escape hatch (PR #149), so the wrapper inherits all interactive safety for free.
+**Source**: [INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md). Implements Q8 (three-layer split), Q12 (leave env file in place after destroy), Q10 (always have output). `03-destroy.sh` already has TTY-guarded typed-name confirmation + `UIS_DESTROY_CONFIRM` escape hatch (PR #149), so the wrapper inherits all interactive safety for free.
 
 ---
 
@@ -42,7 +42,7 @@ Behaviour per Q12: `down` destroys cloud resources only — leaves `.uis.secrets
 ## Out of Scope
 
 - **The `clean` command** for wiping `.uis.secrets/cloud-accounts/azure-default.env` post-`down` — deferred per Q12 to a future "I want to fully reset and switch tenants" command. Not in this PR.
-- **Changing `03-destroy.sh`.** The wrapper calls it as-is. Any improvements (kubeconfig cleanup, state-RG handling) are governed by [PLAN-platform-aks-destroy-kubeconfig-cleanup.md](../backlog/PLAN-platform-aks-destroy-kubeconfig-cleanup.md) — separate PR.
+- **Changing `03-destroy.sh`.** The wrapper calls it as-is. Any improvements (kubeconfig cleanup, state-RG handling) are governed by [PLAN-platform-aks-destroy-kubeconfig-cleanup.md](./PLAN-platform-aks-destroy-kubeconfig-cleanup.md) — separate PR.
 - **Adding `--force` / `--yes` flags to skip the typed-name confirmation.** `03-destroy.sh` already has `UIS_DESTROY_CONFIRM=<cluster-name>` env-var support for non-interactive flows (PR #149). The wrapper passes the env through; no additional flag plumbing.
 - **`down` for other platforms** (`gke`/`eks`/`azure-microk8s`). The dispatcher infrastructure makes them cheap to add, but only AKS is in scope now.
 
@@ -227,9 +227,9 @@ PLAN #4 is low-risk regardless:
 
 ## Related
 
-- [INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md) — parent investigation. Q8, Q10, Q12 directly inform this PLAN. **Closes the four-PLAN sequence once this lands.**
+- [INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md) — parent investigation. Q8, Q10, Q12 directly inform this PLAN. **Closes the four-PLAN sequence once this lands.**
 - [PLAN-uis-tools-install-azure-aks.md](./PLAN-uis-tools-install-azure-aks.md) — PLAN #1 (PR #154, merged).
 - [PLAN-uis-platform-init-azure-aks.md](./PLAN-uis-platform-init-azure-aks.md) — PLAN #2 (PR #155, merged).
 - [PLAN-uis-platform-up-azure-aks.md](./PLAN-uis-platform-up-azure-aks.md) — PLAN #3 (PR #156, draft pending tester R2). `down` depends on a successful `up` for end-to-end verification.
-- [PLAN-platform-aks-destroy-kubeconfig-cleanup.md](../backlog/PLAN-platform-aks-destroy-kubeconfig-cleanup.md) — improvements to `03-destroy.sh` itself (kubeconfig cleanup post-destroy). Separate PR; doesn't block this one.
+- [PLAN-platform-aks-destroy-kubeconfig-cleanup.md](./PLAN-platform-aks-destroy-kubeconfig-cleanup.md) — improvements to `03-destroy.sh` itself (kubeconfig cleanup post-destroy). Separate PR; doesn't block this one.
 - **After this lands**: the `azure-aks.md` doc rewrite stashed on `docs/aks-self-contained` becomes shippable. The 596-line WIP collapses to a 5-command novice flow with "under the hood" sections explaining what each wrapper does. See Q15 of the parent investigation.

@@ -28,7 +28,7 @@
 **Source**: [INVESTIGATE-active-cluster-visibility-ux.md](./INVESTIGATE-active-cluster-visibility-ux.md) — design questions Q1–Q5 + implementation contracts C-1 through C-9, locked through three gap-and-contradiction sweeps. This PLAN drafts the implementation against those contracts; design decisions don't get revisited here.
 
 **Related (context)**:
-- [INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md) — sibling investigation that shipped `./uis platform init / up / status / down` via PRs #154–#159. This PLAN extends the `./uis platform` family with `list` + `use` and threads the banner through every cluster-touching command in the same image.
+- [INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md) — sibling investigation that shipped `./uis platform init / up / status / down` via PRs #154–#159. This PLAN extends the `./uis platform` family with `list` + `use` and threads the banner through every cluster-touching command in the same image.
 
 ---
 

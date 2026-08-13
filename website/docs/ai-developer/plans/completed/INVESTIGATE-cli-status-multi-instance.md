@@ -4,7 +4,7 @@
 **Created:** 2026-05-14
 **Updated:** 2026-05-15 (decisions locked in; root cause confirmed)
 **Surfaced by:** talk53 F5 (Tailscale CLI port verification) — tester noticed `railway-postgrest` deployment running healthily but absent from `./uis status` output.
-**Related to:** [INVESTIGATE-docs-customer-onboarding-database](INVESTIGATE-docs-customer-onboarding-database.md) (the Railway customer onboarding flow that motivated multi-instance PostgREST in the first place), PLAN-002 / customer-onboarding work expanding the `--app <name>` pattern to more services.
+**Related to:** [INVESTIGATE-docs-customer-onboarding-database](../backlog/INVESTIGATE-docs-customer-onboarding-database.md) (the Railway customer onboarding flow that motivated multi-instance PostgREST in the first place), PLAN-002 / customer-onboarding work expanding the `--app <name>` pattern to more services.
 
 ---
 
@@ -69,7 +69,7 @@ The talk53 evidence ("no postgrest row at all") likely reflects a pre-label stat
 
 For solo development the gap is cosmetic — the user knows what they deployed and can `kubectl` directly.
 
-For **customer onboarding** (per the [INVESTIGATE-docs-customer-onboarding-database](INVESTIGATE-docs-customer-onboarding-database.md) flow with the Railway customer) the gap is misleading in either failure mode:
+For **customer onboarding** (per the [INVESTIGATE-docs-customer-onboarding-database](../backlog/INVESTIGATE-docs-customer-onboarding-database.md) flow with the Railway customer) the gap is misleading in either failure mode:
 
 - If postgrest appears as one binary `✅ Healthy` row (the today-on-fresh-deploy case), the novice can't tell whether their `atlas-postgrest` is running, whether `railway-postgrest` is also there, or what string to type to expose theirs via Tailscale. The signal is technically accurate but operationally useless.
 - If postgrest doesn't appear at all (the talk53 case, attributable to a stale-label state), the novice assumes their deployment failed and starts debugging the wrong thing — same false-negative flavour as talk52 F4 ("Tailscale deploy reported FAILED but actually worked").

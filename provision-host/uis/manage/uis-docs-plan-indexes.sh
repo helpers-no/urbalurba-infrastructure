@@ -221,7 +221,7 @@ Implementation plans and investigations for the UIS platform. Plans follow the w
 
 ## Platform Roadmap
 
-See [STATUS-platform-roadmap.md](backlog/STATUS-platform-roadmap.md) for the prioritized list of open investigations and completed work.
+See [1PRIORITY.md](backlog/1PRIORITY.md) for the prioritized list of open investigations and completed work.
 HEADER
 
     log_info "  plans/index.md"

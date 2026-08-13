@@ -139,7 +139,7 @@ Welcome to the complete documentation for **Urbalurba Infrastructure** — a zer
 |----------|---------|
 | [Networking Services Overview](../services/networking/index.md) | Network services |
 | [Cloudflare tunnel](../networking/cloudflare.md) | Cloudflare tunnel (in-cluster `cloudflared`, `uis network ... cloudflare`) |
-| [Tailscale Tunnel](../services/networking/tailscale-tunnel.md) | Tailscale tunnel service |
+| [Tailscale Tunnel](../networking/tailscale-setup.md) | Tailscale tunnel service |
 
 ### Networking
 

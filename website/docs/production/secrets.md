@@ -32,7 +32,7 @@ trick UIS already uses for services.
 
 ## Why the store lives outside the cluster
 
-Beyond the general [production principles](./index#1-state-lives-outside-the-cluster):
+Beyond the general [production principles](./index.md#1-state-lives-outside-the-cluster):
 you need secrets to *start* a cluster, and to *rebuild* a dead one. A vault inside
 the cluster it protects is circular.
 

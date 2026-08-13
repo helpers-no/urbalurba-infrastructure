@@ -6,7 +6,7 @@
 
 ## Status: ✅ Completed (2026-05-11)
 
-**Note on path**: this PLAN scoped a manual-walkthrough verification (run the four lifecycle scripts directly, then `./uis deploy nginx`, then `03-destroy.sh`). The actual verification happened differently — by the time the cold cycle ran end-to-end (talk46 R3), the four-PLAN AKS novice-onboarding sequence ([INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md)) had also shipped, so verification ran through the new `uis platform up azure-aks` + `uis platform down azure-aks` wrappers instead of the raw scripts. The verification bar (`./uis deploy nginx` succeeds with the in-cluster connectivity tests passing, cluster cleanly torn down afterward) was met regardless. See the "Findings from first-run verification" subsection in [INVESTIGATE-system-platform-provisioning-layer.md](../backlog/INVESTIGATE-system-platform-provisioning-layer.md) for the full chronology.
+**Note on path**: this PLAN scoped a manual-walkthrough verification (run the four lifecycle scripts directly, then `./uis deploy nginx`, then `03-destroy.sh`). The actual verification happened differently — by the time the cold cycle ran end-to-end (talk46 R3), the four-PLAN AKS novice-onboarding sequence ([INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md)) had also shipped, so verification ran through the new `uis platform up azure-aks` + `uis platform down azure-aks` wrappers instead of the raw scripts. The verification bar (`./uis deploy nginx` succeeds with the in-cluster connectivity tests passing, cluster cleanly torn down afterward) was met regardless. See the "Findings from first-run verification" subsection in [INVESTIGATE-system-platform-provisioning-layer.md](../backlog/INVESTIGATE-system-platform-provisioning-layer.md) for the full chronology.
 
 **Goal**: Take the unverified `platforms/azure-aks/` OpenTofu drafts (merged 2026-04-09 via PR #120) through their first real end-to-end run against an Azure subscription, fix any gaps that surface, and earn the right to call AKS Step 1 *actually* shipped — by deploying `./uis deploy nginx` against the resulting cluster and watching its built-in connectivity tests pass.
 
@@ -22,7 +22,7 @@
 
 Beyond that, the dominant risk is *un-run risk*: bugs and small omissions only surface when scripts execute against real Azure resources for the first time. This plan reserves a phase for that iterative discovery.
 
-The other 2026-05-07 gap (missing `kubernetes-secrets.yml` apply step in `02-post-apply.sh`) is split out into [PLAN-platform-aks-002-secrets-apply-parity.md](../backlog/PLAN-platform-aks-002-secrets-apply-parity.md). The verification bar here is `./uis deploy nginx`, and nginx doesn't need cluster secrets — so the secrets-parity gap doesn't block this PLAN. It just means the cluster after this PLAN ships is verified for nginx but won't yet be ready for secret-using UIS services like postgresql. PLAN-002 closes that.
+The other 2026-05-07 gap (missing `kubernetes-secrets.yml` apply step in `02-post-apply.sh`) is split out into [PLAN-platform-aks-002-secrets-apply-parity.md](./PLAN-platform-aks-002-secrets-apply-parity.md). The verification bar here is `./uis deploy nginx`, and nginx doesn't need cluster secrets — so the secrets-parity gap doesn't block this PLAN. It just means the cluster after this PLAN ships is verified for nginx but won't yet be ready for secret-using UIS services like postgresql. PLAN-002 closes that.
 
 ---
 
@@ -82,7 +82,7 @@ The tester runs the full `platforms/azure-aks/` flow against an Azure subscripti
 
 - [x] 2.5 Run `platforms/azure-aks/scripts/01-apply.sh`. — ran successfully in talk46 R3 as step `▶ 2/3`. `tofu apply` created RG + Log Analytics workspace + AKS cluster (Standard_B2s_v2 × 1, k8s 1.34). Subscription-quota check now ported into the wizard (stronger than the originally-deferred plan).
 
-- [x] 2.6 Run `platforms/azure-aks/scripts/02-post-apply.sh`. — ran successfully in talk46 R3 as step `▶ 3/3`. Kubeconfig merged, storage class aliases applied, Traefik installed, external IP provisioned. `kubernetes-secrets.yml` apply gap closed separately by [PLAN-platform-aks-002-secrets-apply-parity.md](../backlog/PLAN-platform-aks-002-secrets-apply-parity.md) (PR #149).
+- [x] 2.6 Run `platforms/azure-aks/scripts/02-post-apply.sh`. — ran successfully in talk46 R3 as step `▶ 3/3`. Kubeconfig merged, storage class aliases applied, Traefik installed, external IP provisioned. `kubernetes-secrets.yml` apply gap closed separately by [PLAN-platform-aks-002-secrets-apply-parity.md](./PLAN-platform-aks-002-secrets-apply-parity.md) (PR #149).
 
 - [x] 2.7 Verify with `./uis deploy nginx`. — verified in talk46 R3: pod scheduled, service reachable, IngressRoute applied, in-cluster connectivity tests (steps 13 + 15 of `020-setup-nginx.yml`) both succeeded. Public smoke `curl http://<external-ip>/` returned the catch-all page end-to-end. The F7 cluster-aware banner (PR #157) also rendered the correct LB IP + curl --resolve hint for hostname routes.
 

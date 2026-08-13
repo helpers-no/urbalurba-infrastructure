@@ -9,11 +9,11 @@
 **Shipped in**: PR #155. Hardening fixes in PR #156 (F1 — env-file 4th var, write_env_atomically derives state-storage-account name) and PR #158 (F10 — `az` logged-in preflight in status; not strictly an `init` bug, surfaced in the same login path).
 **Verified end-to-end**: talk43 (`UIS_IMAGE=:local` cold run), talk44 (post-merge against `:latest`, F1 surfaced + fixed in #156), talk46 R3 (final cold run on the patched wizard, env file written correctly, end-to-end through up + deploy + down).
 
-**Goal**: Add an interactive `./uis platform init azure-aks` wizard that compresses today's most novice-hostile steps (sub discovery + role check + region pick + provider registration + env-file write) into one command. This is **PLAN #2 of 4** spawned by [INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md) — the big one. PLANs #3 (`up`) and #4 (`down`) follow once this lands.
+**Goal**: Add an interactive `./uis platform init azure-aks` wizard that compresses today's most novice-hostile steps (sub discovery + role check + region pick + provider registration + env-file write) into one command. This is **PLAN #2 of 4** spawned by [INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md) — the big one. PLANs #3 (`up`) and #4 (`down`) follow once this lands.
 
 **Last Updated**: 2026-05-11
 
-**Source**: [INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md) — all 15 design questions decided 2026-05-10. This PLAN implements Q1 (name `azure-aks`), Q4 (overwrite prompt y/N), Q5 (interactive only), Q6 (block on provider registration with per-poll output), Q7 (fail-fast role check inside `init`), Q8 (three-layer split), Q10 (always have output), Q13 (top-level `./uis platform` subcommand). Mines the legacy `hosts/azure-aks/` + `hosts/azure-microk8s/` per the investigation's "Mining the legacy scripts" section.
+**Source**: [INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md) — all 15 design questions decided 2026-05-10. This PLAN implements Q1 (name `azure-aks`), Q4 (overwrite prompt y/N), Q5 (interactive only), Q6 (block on provider registration with per-poll output), Q7 (fail-fast role check inside `init`), Q8 (three-layer split), Q10 (always have output), Q13 (top-level `./uis platform` subcommand). Mines the legacy `hosts/azure-aks/` + `hosts/azure-microk8s/` per the investigation's "Mining the legacy scripts" section.
 
 ---
 
@@ -426,9 +426,9 @@ End-to-end test against a real Azure subscription. The tester drives this since 
 
 ## Related
 
-- [INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md) — parent investigation. All 15 design questions decided 2026-05-10.
+- [INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md) — parent investigation. All 15 design questions decided 2026-05-10.
 - [PLAN-uis-tools-install-azure-aks.md](./PLAN-uis-tools-install-azure-aks.md) — PLAN #1 (PR #154, merged 2026-05-10). Provides `./uis tools install azure-aks` which `require_tools_or_die()` points the user at.
-- [PLAN-tool-installer-error-handling.md](../active/PLAN-tool-installer-error-handling.md) — PR #152, merged 2026-05-10. Establishes the `set -euo pipefail` + contract-block pattern this PLAN's library functions follow.
+- [PLAN-tool-installer-error-handling.md](./PLAN-tool-installer-error-handling.md) — PR #152, merged 2026-05-10. Establishes the `set -euo pipefail` + contract-block pattern this PLAN's library functions follow.
 - `hosts/azure-aks/01-azure-aks-create.sh:128-140` — `az login` + device-code fallback pattern that `az_login_if_needed()` mines.
 - `hosts/azure-aks/check-aks-quota.sh:56-170` — quota-validation pattern that `check_quota()` mines.
 - `hosts/azure-microk8s/01-azure-vm-create-redcross-v2.sh:36-83` — PIM portal link that the role-check failure message reuses (without the retry loop).

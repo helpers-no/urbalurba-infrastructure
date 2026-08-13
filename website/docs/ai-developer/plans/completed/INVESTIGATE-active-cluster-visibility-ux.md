@@ -10,7 +10,7 @@
 
 **Source**: Tester's UX proposal in `testing/uis1/talk/UX-active-cluster-visibility.md` (2026-05-09). Originally triggered by the AKS Tier A verification rounds, where stale kubectl contexts produced silent failures — operators couldn't tell from prompt or command output that they were acting against a dead/wrong cluster.
 
-**Scope expansion 2026-05-10**: this investigation originally covered only *visibility* (banner, PS1, status header). When the AKS novice-onboarding investigation ([INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md)) proposed `./uis platform up azure-aks` as a wrapper that ships clusters in 5 commands, "I now have rancher-desktop and azure-aks both running, how do I switch?" became the load-bearing follow-up. Switching folds in here because it shares the same source-of-truth question (Q1) and the same reachability-probe building block as the visibility layers; splitting the two would risk the investigations picking different definitions of "the active cluster".
+**Scope expansion 2026-05-10**: this investigation originally covered only *visibility* (banner, PS1, status header). When the AKS novice-onboarding investigation ([INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md)) proposed `./uis platform up azure-aks` as a wrapper that ships clusters in 5 commands, "I now have rancher-desktop and azure-aks both running, how do I switch?" became the load-bearing follow-up. Switching folds in here because it shares the same source-of-truth question (Q1) and the same reachability-probe building block as the visibility layers; splitting the two would risk the investigations picking different definitions of "the active cluster".
 
 ---
 
@@ -39,7 +39,7 @@ Beyond visibility, there's no first-class way to *change* the active cluster fro
 - **No switch verb.** Moving from rancher-desktop to azure-aks today means `kubectl config use-context azure-aks` (which doesn't flip cluster-config.sh's `TARGET_HOST`), plus a manual edit of cluster-config.sh to match. The two halves of "the active cluster" drift every time someone forgets the second step.
 - **No reachability gate on switch.** Switching to a destroyed cluster's stale context "succeeds" silently until the next `kubectl` call times out — same failure mode as the talk41 stale-port-forward incident, just triggered earlier.
 
-The platform wrappers ([INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md)) make this gap concrete: once `./uis platform up azure-aks` lands, every novice has 2+ clusters within their first session and immediately needs `list` + `use`.
+The platform wrappers ([INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md)) make this gap concrete: once `./uis platform up azure-aks` lands, every novice has 2+ clusters within their first session and immediately needs `list` + `use`.
 
 ---
 
@@ -517,7 +517,7 @@ Layer 4 + Layer 1 together deliver the "potential platforms + active visibility 
 - **Cross-cluster broadcasts** in a single `./uis` invocation (e.g. "deploy this to both local AND AKS"). UIS stays single-cluster-per-invocation; switching just makes it cheap to rotate which cluster that is.
 - **Production-vs-sandbox enforcement.** Once Layer 2's colour scheme is in, building actual confirmation prompts ("Type the cluster name to continue against PROD") is a natural follow-up but separate.
 - **Removing `cluster-config.sh` entirely.** Q4's lockstep-flip proposal bounds the source-of-truth question (kubectl context = truth for reads, `use` writes both atomically, `cluster-config.sh` is a derived projection). A larger refactor that removes `cluster-config.sh` outright (everything reads kubectl context, nothing reads `cluster-config.sh`) is a separate question. Mostly an Ansible-inventory-shape change rather than a UX one.
-- **Provisioning new clusters from `list`.** `list` shows what exists; provisioning is `./uis platform up <name>` (separate command, scoped in [INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md)). No "click to provision" affordance from inside `list`.
+- **Provisioning new clusters from `list`.** `list` shows what exists; provisioning is `./uis platform up <name>` (separate command, scoped in [INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md)). No "click to provision" affordance from inside `list`.
 - **Host-side kubectl integration (`k9s`, `lens`, raw `kubectl` from macOS Terminal).** The lockstep flip in Q4 updates the kubeconfig *inside the `uis-provision-host` container* (`kubeconf-all`), which is enough for every tool that runs inside the container — including everything UIS itself invokes. The host's `~/.kube/config` is **not** touched and host-side tools won't see the selected platform unless the user wires `KUBECONFIG` up themselves (e.g. by pointing at the bind-mounted copy under `.uis.secrets/generated/kubeconfig/`). Cross-boundary kubeconfig sync (e.g. an `./uis env` helper that emits `export KUBECONFIG=...` for host shells, or a host-side merge of UIS contexts into `~/.kube/config`) is its own design problem and outside this investigation. The decision: target only the in-container `kubeconf-all`; host-side is the user's environment to manage.
 
 ---
@@ -551,6 +551,6 @@ Remaining open question, deferred to the PLAN (not a blocker):
 
 ## Related
 
-- [INVESTIGATE-platform-aks-novice-onboarding.md](../backlog/INVESTIGATE-platform-aks-novice-onboarding.md) — proposes the `./uis platform <verb> <target>` shape this investigation extends with `list` + `use` verbs. The two investigations share Q1 (canonical signal) and the reachability-probe building block. Land Layer 4 alongside the platform-wrappers PRs so novices are never stuck after `./uis platform up azure-aks` with no way to see or rotate what they've created.
-- [PLAN-platform-aks-destroy-kubeconfig-cleanup.md](../backlog/PLAN-platform-aks-destroy-kubeconfig-cleanup.md) — fixes one source of the "stale kubectl context" problem this UX surfaces. Both plans address the same operator-safety concern from different angles.
+- [INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md) — proposes the `./uis platform <verb> <target>` shape this investigation extends with `list` + `use` verbs. The two investigations share Q1 (canonical signal) and the reachability-probe building block. Land Layer 4 alongside the platform-wrappers PRs so novices are never stuck after `./uis platform up azure-aks` with no way to see or rotate what they've created.
+- [PLAN-platform-aks-destroy-kubeconfig-cleanup.md](./PLAN-platform-aks-destroy-kubeconfig-cleanup.md) — fixes one source of the "stale kubectl context" problem this UX surfaces. Both plans address the same operator-safety concern from different angles.
 - Tester's original write-up: `testing/uis1/talk/UX-active-cluster-visibility.md` (2026-05-09).

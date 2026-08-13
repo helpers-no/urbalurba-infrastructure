@@ -11,7 +11,7 @@
 **Last Updated**: 2026-05-08
 
 **Related** (system-design context, *not* a prerequisite):
-- [INVESTIGATE-system-provision-host-tools-and-auth.md](./INVESTIGATE-system-provision-host-tools-and-auth.md) — bigger architecture investigation about how tools persist across rebuilds and how provider auth is wired. Tier 3, still deferred. This plan is scoped narrowly to the documentation gap and does not block on that work.
+- [INVESTIGATE-system-provision-host-tools-and-auth.md](../backlog/INVESTIGATE-system-provision-host-tools-and-auth.md) — bigger architecture investigation about how tools persist across rebuilds and how provider auth is wired. Tier 3, still deferred. This plan is scoped narrowly to the documentation gap and does not block on that work.
 
 ---
 
@@ -125,5 +125,5 @@ Pages that link to or mention the tools system today and need to point to the ne
 ## Implementation Notes
 
 - **Hand-maintained, not auto-generated.** The doc rebuild is small (8 tools), the auto-generation effort isn't justified at this size. If the inventory grows or drift recurs, revisit by extending `provision-host/uis/manage/uis-docs.sh` to emit this page from `install-*.sh` metadata. Tracked as a future enhancement, not part of this plan.
-- **Don't touch the system itself.** [INVESTIGATE-system-provision-host-tools-and-auth.md](./INVESTIGATE-system-provision-host-tools-and-auth.md) owns the questions about persistence (`enabled-tools.conf`), auth state (`.uis.secrets/cloud-accounts/`), and `target setup` integration. This plan is *only* about documentation; if either page tries to describe behaviour that doesn't yet exist, defer to that investigation rather than describing a future state.
+- **Don't touch the system itself.** [INVESTIGATE-system-provision-host-tools-and-auth.md](../backlog/INVESTIGATE-system-provision-host-tools-and-auth.md) owns the questions about persistence (`enabled-tools.conf`), auth state (`.uis.secrets/cloud-accounts/`), and `target setup` integration. This plan is *only* about documentation; if either page tries to describe behaviour that doesn't yet exist, defer to that investigation rather than describing a future state.
 - **Verify against `./uis tools list` output, not against assumptions.** The drift in the current `tools.md` came from describing what *should* be there. The fix is to describe what `./uis tools list` *does* show — generate the listing live in the container at write time, copy verbatim.

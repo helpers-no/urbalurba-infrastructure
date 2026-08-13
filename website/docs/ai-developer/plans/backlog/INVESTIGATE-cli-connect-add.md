@@ -17,7 +17,7 @@ This investigation is the **first concrete migration** under the umbrella gramma
 **Last Updated**: 2026-05-16
 
 **Related**:
-- [PLAN-002-uis-template-command.md](../active/PLAN-002-uis-template-command.md) — initial `uis connect` with 4 services (postgresql, mysql, redis, mongodb) landed here
+- [PLAN-002-uis-template-command.md](../completed/PLAN-002-uis-template-command.md) — initial `uis connect` with 4 services (postgresql, mysql, redis, mongodb) landed here
 - [PLAN-001-uis-configure-expose.md](../completed/PLAN-001-uis-configure-expose.md) — same pod-exec pattern used by `uis configure`
 
 ---

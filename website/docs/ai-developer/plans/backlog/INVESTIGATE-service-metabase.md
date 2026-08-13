@@ -193,7 +193,7 @@ Atlas (the first consumer) will use Metabase for three workflows:
 
 A single Metabase database connection (`atlas`, using `metabase_atlas_reader` role) gives access to both `raw.*` and `marts.*` schemas. Collection-level organisation keeps the workflows separate.
 
-Reference: the full data journey for one Atlas source is documented in [`~/learn/helpers/atlas/docs/stack/data-journey-ssb-08764.md`](~/learn/helpers/atlas/docs/stack/data-journey-ssb-08764.md). The corresponding source READMEs live in `~/learn/helpers/atlas/atlas-data-repo/ingest/src/sources/`.
+Reference: the full data journey for one Atlas source is documented in ``~/learn/helpers/atlas/docs/stack/data-journey-ssb-08764.md``. The corresponding source READMEs live in `~/learn/helpers/atlas/atlas-data-repo/ingest/src/sources/`.
 
 **What Metabase is *not* used for in Atlas:**
 - The public-facing Atlas portal (that is Next.js → Postgres direct).

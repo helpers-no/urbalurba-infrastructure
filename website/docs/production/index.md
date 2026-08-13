@@ -60,7 +60,7 @@ internet-adjacent — which is one command away.
 
 Production needs: generated per-install secrets, a store outside the cluster
 (see #1), encryption at rest, and a rotation path. See the
-[secrets guide](./secrets) for a working reference implementation.
+[secrets guide](./secrets.md) for a working reference implementation.
 
 ### 4. A backup is a hypothesis until you have restored it
 
@@ -189,7 +189,7 @@ components that are *not* Kubernetes services:
 |---|---|---|
 | **Database** | survivability, bootstrap, multi-cluster | in-cluster services still reach it by its usual name |
 | **Object storage** | reachable by workers outside the cluster | avoids ingress for internal consumers |
-| **Secret store** | bootstrap + recovery circularity | see [secrets](./secrets) |
+| **Secret store** | bootstrap + recovery circularity | see [secrets](./secrets.md) |
 | **Image/registry cache** | the cluster cannot pull the images that start the cluster | also fixes registry rate limits |
 | **Management plane** | must work when the cluster does not | holds kubeconfigs for all targets |
 | **Scheduler for infrastructure jobs** | a backup job must not depend on what it backs up | cluster CronJobs die with the cluster |
@@ -263,7 +263,7 @@ have no production story — and vice versa.
 
 | Platform | Platform support | Production guide |
 |---|---|---|
-| **Proxmox VE** | ❌ no host template — the cluster is built by hand | ✅ [Available](./proxmox) — the reference deployment |
+| **Proxmox VE** | ❌ no host template — the cluster is built by hand | ✅ [Available](./proxmox.md) — the reference deployment |
 | **Azure AKS** | ✅ OpenTofu + scripts + manifests; `uis platform up azure-aks` | ⏳ not yet |
 | **Azure (MicroK8s VM)** | ✅ documented host template | ⏳ not yet |
 | **Google Cloud** | 🟡 cloud-init template only — no platform implementation | ⏳ not yet |

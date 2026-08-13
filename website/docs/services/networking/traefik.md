@@ -67,4 +67,4 @@ helm list -n kube-system | grep traefik
 
 - [Networking services overview](./index.md)
 - [Cloudflare tunnel](/docs/networking/cloudflare) — outbound tunnel that complements Traefik for external HTTPS access.
-- [Tailscale Tunnel](./tailscale-tunnel.md) — Tailscale Funnel for protected services.
+- [Tailscale Tunnel](../../networking/tailscale-setup.md) — Tailscale Funnel for protected services.

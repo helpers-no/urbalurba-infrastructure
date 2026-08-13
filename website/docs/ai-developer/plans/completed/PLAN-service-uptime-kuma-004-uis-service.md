@@ -9,7 +9,7 @@
 **Goal**: `./uis deploy uptime-kuma` works like any other service, with the same
 metadata, lifecycle, verify tests and docs.
 
-**Investigation**: [INVESTIGATE-service-uptime-kuma.md](./INVESTIGATE-service-uptime-kuma.md)
+**Investigation**: [INVESTIGATE-service-uptime-kuma.md](../backlog/INVESTIGATE-service-uptime-kuma.md)
 **Supersedes**: the hand-written manifest from
 `PLAN-service-uptime-kuma-001-deploy.md`, which was applied directly with
 `kubectl` and is not reproducible through UIS.

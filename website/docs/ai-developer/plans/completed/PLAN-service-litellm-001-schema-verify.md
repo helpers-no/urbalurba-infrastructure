@@ -9,7 +9,7 @@
 **Goal**: `uis deploy litellm` must never report success when the database
 schema was not created.
 
-**Investigation**: [INVESTIGATE-service-litellm-install-reliability.md](./INVESTIGATE-service-litellm-install-reliability.md)
+**Investigation**: [INVESTIGATE-service-litellm-install-reliability.md](../backlog/INVESTIGATE-service-litellm-install-reliability.md)
 
 **Priority**: High
 
