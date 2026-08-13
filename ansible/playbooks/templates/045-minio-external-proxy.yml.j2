@@ -1,0 +1,89 @@
+{#
+  045-minio-external-proxy.yml.j2
+
+  Rendered INSTEAD of deploying MinIO in-cluster, when this installation declares
+  in .uis.extend/external-services.yaml that it already has one.
+
+  ⚠️ THE POINT IS THAT NOTHING DOWNSTREAM KNOWS THE DIFFERENCE - so this file
+  mirrors MinIO's OWN object shape, which is not PostgreSQL's:
+
+    * TWO ports, so two socat containers: the S3 API (9000) and the console
+      (9001). Consumers use the API; humans use the console. Proxying only the
+      first would leave the console silently dead.
+    * TWO Services - `minio` and `minio-console` - because that is what the real
+      deployment exposes and what consumers already resolve.
+    * selector `app: minio`, matching MinIO's chart, NOT the
+      `app.kubernetes.io/name` selector PostgreSQL uses. Both labels are set so
+      either selector finds the pod.
+    * first container is `minio/mc`, so `kubectl exec` into "the minio pod" gives
+      the client a person would expect, exactly as the postgres proxy gives psql.
+
+  That divergence is the reason this is a per-service template rather than one
+  generic one: a service's SHAPE is shipped knowledge mirroring its real chart,
+  while only its ADDRESS is per-installation. Parametrising labels, port lists and
+  client images would push shape into external-services.yaml, where it does not
+  belong.
+
+  Extra-vars:
+    _external_host   address of the real MinIO (prefer a backplane address)
+    _external_port   S3 API port (default 9000)
+    _console_port    console port (default 9001)
+    namespace        target namespace (default "default")
+-#}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: {{ namespace | default('default') }}
+  labels: { app: minio, app.kubernetes.io/name: minio }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: minio }
+  template:
+    metadata:
+      labels: { app: minio, app.kubernetes.io/name: minio }
+    spec:
+      containers:
+        # FIRST container = target of `kubectl exec`; provides the mc client.
+        - name: minio
+          image: minio/mc:latest
+          command: ["sleep","infinity"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+        # Backplane addresses (vmbr1, host-only). Not the tailnet address -
+        # see docs: odin-backplane-network.md
+        - name: socat-api
+          image: alpine/socat:1.8.0.0
+          args: ["TCP-LISTEN:{{ _external_port | default(9000) }},fork,reuseaddr","TCP:{{ _external_host }}:{{ _external_port | default(9000) }}"]
+          ports: [{ containerPort: {{ _external_port | default(9000) }}, name: s3 }]
+          readinessProbe:
+            tcpSocket: { port: {{ _external_port | default(9000) }} }
+            initialDelaySeconds: 3
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 300m, memory: 64Mi }
+        - name: socat-console
+          image: alpine/socat:1.8.0.0
+          args: ["TCP-LISTEN:{{ _console_port | default(9001) }},fork,reuseaddr","TCP:{{ _external_host }}:{{ _console_port | default(9001) }}"]
+          ports: [{ containerPort: {{ _console_port | default(9001) }}, name: console }]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 200m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: minio, namespace: {{ namespace | default('default') }}, labels: { app: minio } }
+spec:
+  type: ClusterIP
+  selector: { app: minio }
+  ports: [{ name: s3, port: {{ _external_port | default(9000) }}, targetPort: {{ _external_port | default(9000) }} }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: minio-console, namespace: {{ namespace | default('default') }}, labels: { app: minio } }
+spec:
+  type: ClusterIP
+  selector: { app: minio }
+  ports: [{ name: console, port: {{ _console_port | default(9001) }}, targetPort: {{ _console_port | default(9001) }} }]
