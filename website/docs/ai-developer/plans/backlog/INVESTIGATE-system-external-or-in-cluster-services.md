@@ -25,15 +25,22 @@ to skip building the in-cluster form.
 UIS's promise is that a developer on Rancher Desktop and a production install are
 the same platform: **identical interface, topology may differ.**
 
-Three components on the reference installation break that promise. They are
-absent from `/services` because they have no service definition, and they are
-absent from the platform because they were built by hand:
+A full enumeration of Odin (`pct list` / `qm list`) found **six** components, not
+the three originally reported. Two of them are further along than assumed, and one
+is not a service at all:
 
-| Component | Runs as | Service definition | Investigation | Documented |
+| Odin guest | Runs | Service definition | Proxy in `.uis.extend/` | Status |
 |---|---|---|---|---|
-| **OpenBao** | LXC on Odin (CT 108) | none | **none** | `production/secrets.md` |
-| **Registry cache** | own host | none | [system-registry-cache](INVESTIGATE-system-registry-cache.md) | `production/registry-cache.md` |
-| **Backup** (restic / pgBackRest) | hypervisor layer | none | [system-backup-and-scheduling](INVESTIGATE-system-backup-and-scheduling.md) | `production/proxmox.md` |
+| CT 105 `pg` | PostgreSQL 18 | ✅ `service-postgresql.sh` | ✅ `pg-external-proxy.yaml` | **unproductised**, not missing |
+| CT 107 `minio` | MinIO | ✅ `service-minio.sh` | ✅ `minio-external-proxy.yaml` | **unproductised**, not missing |
+| CT 108 `bao` | OpenBao | none | none | nothing exists |
+| CT 109 `registry` | **4×** `registry:2` mirrors — dockerhub, ghcr, quay, k8s | none | none | nothing exists |
+| CT 104 `nas` | Samba + NFS | none | none | needs a scope decision first |
+| CT 103 `ops` | Docker host running `uis-provision-host` | n/a | n/a | **not a service** — the machine UIS deploys *from* |
+| VM 106 `asgard` | the k3s cluster | n/a | n/a | not a service |
+
+*(Enumerated from `pct list` / `qm list` on Odin, 2026-08-13. Backup is absent from
+this table deliberately — it is not a guest. See EXT-F6.)*
 
 This is the state Alloy was in before it was made a real service. That commit
 said it plainly: *"I had helm-installed Alloy by hand. It had no service
@@ -121,6 +128,41 @@ machine, which would not survive a rebuild.
 writing it: the reference installation does *not* run PostgreSQL in-cluster. That
 `2/2 Running` pod is the proxy.
 
+### EXT-F6 — "Backup" is two unrelated things sharing a word
+
+Measured on Odin 2026-08-13. There is **no Velero** — not in the cluster, not in
+the repo. Backup is five mechanisms across three layers, none Kubernetes-aware:
+
+| Layer | Mechanism | Protects |
+|---|---|---|
+| Hypervisor | `vzdump` `backup-all-nightly`, 01:00 zstd, keep 7 daily / 3 weekly | whole guests |
+| Filesystem | `sanoid`, every 15 min | ZFS snapshots of `tank/tec`, `tank/public`, `tank/k8s` (36 hourly / 30 daily / 6 monthly) |
+| Filesystem | `syncoid` | ZFS replication |
+| Offsite | `restic`, `odin-backup.timer` 04:36 daily | *"Odin restic backup of tank → iMac"* |
+| Database | `pgBackRest` in CT 105 | Postgres PITR, aes-256-cbc |
+
+**None of these can run on Rancher Desktop.** vzdump needs Proxmox, sanoid and
+syncoid need ZFS, pgBackRest lives with the database. Principle 0 cannot be
+satisfied by porting them, and pretending otherwise would produce a laptop
+"backup" that shares nothing with the real one but its name.
+
+The word covers two different problems:
+
+1. **Host-layer protection** — guests, datasets, the database. Already correct,
+   already outside UIS, and should stay there. What it needs is to be
+   *documented and reproducible*: five hand-configured mechanisms on one machine.
+   This is [system-backup-and-scheduling](INVESTIGATE-system-backup-and-scheduling.md)'s
+   proper scope.
+2. **Cluster-layer protection** — namespaces, PVCs, secrets. **Nothing covers this
+   today.** `vzdump` captures the k8s VM wholesale, so the whole cluster can be
+   restored but a single namespace or PVC cannot. This gap is Velero-shaped, it
+   satisfies Principle 0 cleanly, and its real deliverable is a **restore test
+   that runs on a laptop** — the thing production can never safely rehearse.
+
+**This corrects the framing used earlier in this investigation**, which treated
+backup as one component to bring into UIS. Only (2) belongs in UIS at all, and it
+is not the thing Odin runs.
+
 ## Part 2: What the answer has to satisfy
 
 1. **In-cluster is the baseline; one interface across both.** Every service ships a
@@ -189,9 +231,12 @@ investigation exists to prevent.
    and it holds the recovery keys.
 3. **Registry cache as a UIS service** — folds in
    [system-registry-cache](INVESTIGATE-system-registry-cache.md).
-4. **Backup** — folds in
-   [system-backup-and-scheduling](INVESTIGATE-system-backup-and-scheduling.md).
-   Deploys and runs on a laptop like any other service, backing up the laptop's own
-   cluster, with the **restore path exercisable locally** — that local restore test
-   is the plan's real deliverable, because it is the part production can never
-   safely rehearse (EXT-F4).
+4. **Cluster backup** — a NEW plan, Velero-shaped, for namespaces/PVCs/secrets.
+   Runs on a laptop like any other service; the local **restore test** is its real
+   deliverable (EXT-F4, EXT-F6). Explicitly *not*
+   [system-backup-and-scheduling](INVESTIGATE-system-backup-and-scheduling.md),
+   which keeps the host-layer stack and stays outside UIS where it belongs.
+
+**MinIO is not a later migration.** It already has both halves (EXT-F5 table), so
+it is the cheapest available second proof that the proxy convention generalises
+beyond one service — and it is now in scope for plan 1 rather than deferred.

@@ -21,7 +21,7 @@ declared in `.uis.extend/` rather than hand-built.
 
 **Prerequisites**: none.
 
-**Blocks**: the OpenBao / registry-cache / backup service plans. All three need
+**Blocks**: the OpenBao / registry-mirror / cluster-backup service plans. All three need
 this convention, and three separate answers would never converge.
 
 **Priority**: High
@@ -158,12 +158,42 @@ PostgreSQL for consumers in both — and neither required a hand-written file.
 
 ---
 
+## Phase 5: Prove it generalises — MinIO
+
+One service proves the template works. Two prove it is a **convention** rather
+than a PostgreSQL-shaped accident, and MinIO is available immediately: it already
+has both halves — `service-minio.sh` and a hand-written
+`minio-external-proxy.yaml` following the same pattern against CT 107.
+
+Doing it here rather than "later" is deliberate. A convention validated on exactly
+one case is indistinguishable from a special case, and the differences MinIO
+brings are the useful part.
+
+### Tasks
+
+- [ ] 5.1 Diff `minio-external-proxy.yaml` against `pg-external-proxy.yaml` and
+      record what genuinely differs — ports, health path, whether a client-image
+      first container is needed at all. Those differences are what the template
+      must parametrise; anything else is accidental variation to remove
+- [ ] 5.2 Render MinIO from the same template with only declared values changed.
+      **If the template cannot express it without a special case, the template is
+      wrong** — fix it before adding a third consumer
+- [ ] 5.3 Declare it in `external-services.yaml` alongside postgresql
+- [ ] 5.4 Delete the hand-written `minio-external-proxy.yaml`
+
+### Validation
+
+Two services, one template, one declaration file, zero hand-written proxies on the
+reference installation. MinIO consumers unaffected.
+
+---
+
 ## Out of Scope
 
-- **MinIO**, which has the same hand-built proxy. Deliberately second: prove the
-  convention on one service, then migrate the other as its first real test.
-- OpenBao, registry cache, backup — they consume this convention, they do not
-  define it.
+- OpenBao, registry mirrors, cluster backup — they consume this convention, they
+  do not define it.
+- The **host-layer backup stack** (vzdump / sanoid / syncoid / restic /
+  pgBackRest). It is not a service and cannot run on a laptop — see EXT-F6.
 - The other 11 files in the reference installation's `.uis.extend/`.
 
 ---
