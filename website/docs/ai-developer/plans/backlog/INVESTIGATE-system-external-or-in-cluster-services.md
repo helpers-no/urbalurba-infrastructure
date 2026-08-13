@@ -100,6 +100,27 @@ exists, deploys, or can be tested. A plan must not use "it is only meaningful in
 production" as a reason to skip the in-cluster form; under the requirement above,
 that reasoning is not available.
 
+### EXT-F5 — The convention already exists, hand-built, and is better than a designed one
+
+Measured on the reference installation 2026-08-13.
+`.uis.extend/pg-external-proxy.yaml` deploys, into `default`, under the real
+service's name and labels: a `postgres:18` container sleeping (so playbooks that
+`kubectl exec` for `psql` work unchanged), a `socat` sidecar forwarding to the
+external database over the backplane, and a `Service/postgresql`.
+
+The effect is that `PGHOST=postgresql.default` resolves in both topologies and
+**every consumer is untouched** — openwebui, gravitee, temporal, unity-catalog,
+openmetadata. `SCRIPT_CHECK_COMMAND` and `uis list` also work unchanged, because
+the pod carries the real service's labels.
+
+`minio-external-proxy.yaml` is the same pattern applied a second time. So this is
+already a convention — an unowned one, existing as hand-written files on one
+machine, which would not survive a rebuild.
+
+**Corrects an earlier assumption in this investigation**, and a claim made while
+writing it: the reference installation does *not* run PostgreSQL in-cluster. That
+`2/2 Running` pod is the proxy.
+
 ## Part 2: What the answer has to satisfy
 
 1. **In-cluster is the baseline; one interface across both.** Every service ships a
@@ -157,9 +178,12 @@ investigation exists to prevent.
 
 ## Part 5: Proposed plans (ordered, to be drafted after the questions above are answered)
 
-1. **The convention** — declaring an externally-provided service, and how
-   consumers resolve its address. No new services; just the mechanism, proven by
-   retrofitting PostgreSQL, which already lives this way undeclared (EXT-F3).
+1. **The convention** — [PLAN-system-external-services-001-proxy-convention](./PLAN-system-external-services-001-proxy-convention.md)
+   *(drafted 2026-08-13)*. It turned out not to need designing: the reference
+   installation already runs a transparent proxy that keeps the real service's
+   name, labels and first container, so `PGHOST=postgresql.default` resolves
+   identically in both topologies and **no consumer changes at all**. The plan
+   ships that pattern instead of inventing one. See EXT-F5.
 2. **OpenBao as a UIS service** — in-cluster for dev, external on Odin. Highest
    value: it is the only one of the three with no investigation of its own today,
    and it holds the recovery keys.
