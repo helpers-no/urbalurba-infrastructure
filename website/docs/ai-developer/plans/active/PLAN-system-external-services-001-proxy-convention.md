@@ -173,20 +173,42 @@ proxy to an unreachable host is the same defect class as Grafana reporting
 
 ### Tasks
 
-- [ ] 4.1 **Rancher Desktop**: `uis deploy postgresql` → in-cluster database.
-      **NOT DONE — no Rancher Desktop is available here.** The obvious stand-in,
-      `assist`'s k3s, cannot run it either: its `cluster-config.sh` declares
-      `TARGET_HOST="rancher-desktop"` while the only contexts present are `asgard`
-      and `assist`, so any playbook pinning `context: {{ _target }}` fails there.
-      That stale config is a real defect in its own right, found while looking for
-      somewhere to run this test. **This is the remaining validation** and it
-      matters: it is the half of Principle 0 this plan has not exercised.
+- [~] 4.1 **Rancher Desktop**: partially validated on the M1 (`tecmacdev`), which
+      runs Rancher Desktop k3s v1.36.2 with a full UIS-shaped cluster — ai,
+      argocd, authentik, backstage, enonic, gravitee, jupyterhub, monitoring,
+      nextcloud, openmetadata, temporal, unity-catalog — and an **in-cluster**
+      `StatefulSet/postgresql`, 16 days old. See the validation note below for
+      what is proven and what is not.
 - [x] 4.2 **Reference installation**: migrated to the generated proxy
 - [x] 4.3 Hand-written `pg-external-proxy.yaml` retired (moved to `/tmp` on the
       host rather than deleted, so a rollback needs no git archaeology)
 - [x] 4.4 Rebuild-from-nothing test
 
 ### Validation
+
+**4.1 — interface identity proven on both topologies; the deploy path not yet.**
+
+The same question, asked the same way, on both installations:
+
+| | asgard (external) | M1 Rancher Desktop (in-cluster) |
+|---|---|---|
+| object | `Deployment` + socat proxy | `StatefulSet/postgresql`, 16d |
+| Service | `postgresql` :5432 | `postgresql` :5432 |
+| `select version()` through `postgresql.default` | answers — PG 18 on Odin CT 105 | answers — **PostgreSQL 18.3 on aarch64** |
+
+Consumers connect to the same name and get an answer in both. That is the claim
+Principle 0 makes, and it now holds on real hardware at both ends.
+
+**Still unproven: that `uis deploy postgresql` takes the in-cluster branch on
+Rancher Desktop.** The UIS container cannot start on the M1 — Rancher Desktop
+reports `containerEngine: moby` and Kubernetes enabled, but nothing is listening
+on `~/.rd/docker.sock` (the socket file dates from 9 July). Kubernetes works;
+the container engine does not. Fixing it means restarting Rancher Desktop, which
+would disturb a working dev cluster and a 16-day-old database, so it was not done
+uninvited.
+
+That gap is narrow but real: the branch is unit-tested (9/9) and the in-cluster
+*outcome* is demonstrated, but the two have not been observed in the same run.
 
 **4.2 — migration, with zero disruption.** `uis deploy postgresql` took the
 external path and reported `changed=0`: Kubernetes itself confirming the rendered
