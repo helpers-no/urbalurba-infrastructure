@@ -18,6 +18,38 @@ A UIS service consists of these pieces:
 
 The numbered prefix (`NNN`) comes from the manifest numbering convention for your service's category.
 
+## ⚠️ Requirement: it must run on a developer's laptop
+
+**Every UIS service MUST be deployable to Rancher Desktop / k3s with `uis deploy
+<id>` and nothing else.** No second machine, no hand-built prerequisite, no step
+the developer performs by hand.
+
+This is the platform's entire purpose — a complete datacenter environment on a
+laptop. A service that only works against a production topology is not a UIS
+service; it is infrastructure that happens to be documented here.
+
+Concretely, none of these are acceptable:
+
+- "deploy it on the hypervisor first"
+- "point it at the shared instance"
+- "it only makes sense in production"
+- anything that cannot be exercised end to end on one laptop
+
+Production **may** differ in topology — on the reference installation, state
+deliberately lives outside the cluster — but the **interface must be identical**.
+A service provided externally in production still ships an in-cluster form for
+development. The convention for declaring that is being settled in
+[INVESTIGATE-system-external-or-in-cluster-services](../../ai-developer/plans/backlog/INVESTIGATE-system-external-or-in-cluster-services.md).
+
+**If your service cannot meet this, say so in your plan before building it.**
+That is a platform decision, not a service one, and it needs to be made
+deliberately rather than discovered on a rebuild.
+
+> This requirement went unwritten for a long time, and the cost is visible:
+> Alloy was hand-installed with no service definition and would not have survived
+> a rebuild; OpenBao, the registry cache and the backup chain are still in that
+> state today. Nobody broke a rule — there wasn't one.
+
 ## Prerequisites
 
 Before starting, read these pages for context:
@@ -513,6 +545,11 @@ is a failure you have to look for.
 See **[Documentation Standards](../rules/documentation.md)** for page conventions.
 
 ## Testing
+
+**Test on Rancher Desktop first.** Not "also" — *first*. It is the environment
+every developer has, and the [requirement above](#️-requirement-it-must-run-on-a-developers-laptop)
+says your service must work there. A service proven only against a production
+cluster has not been proven against the environment it must support.
 
 Deploy, remove, and verify:
 
