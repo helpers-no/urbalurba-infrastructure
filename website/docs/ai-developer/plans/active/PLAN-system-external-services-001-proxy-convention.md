@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — Phases 1–4 done (4.1 outstanding: no Rancher Desktop available); Phase 5 open
+## Status: Active — all phases done and verified on both topologies
 
 **Goal**: `uis deploy postgresql` gives an in-cluster PostgreSQL on a laptop and a
 transparent proxy to the external one on a production installation — **same
@@ -173,12 +173,7 @@ proxy to an unreachable host is the same defect class as Grafana reporting
 
 ### Tasks
 
-- [~] 4.1 **Rancher Desktop**: partially validated on the M1 (`tecmacdev`), which
-      runs Rancher Desktop k3s v1.36.2 with a full UIS-shaped cluster — ai,
-      argocd, authentik, backstage, enonic, gravitee, jupyterhub, monitoring,
-      nextcloud, openmetadata, temporal, unity-catalog — and an **in-cluster**
-      `StatefulSet/postgresql`, 16 days old. See the validation note below for
-      what is proven and what is not.
+- [x] 4.1 **Rancher Desktop**: verified on the M1 with the shipped image
 - [x] 4.2 **Reference installation**: migrated to the generated proxy
 - [x] 4.3 Hand-written `pg-external-proxy.yaml` retired (moved to `/tmp` on the
       host rather than deleted, so a rollback needs no git archaeology)
@@ -186,29 +181,22 @@ proxy to an unreachable host is the same defect class as Grafana reporting
 
 ### Validation
 
-**4.1 — interface identity proven on both topologies; the deploy path not yet.**
+**4.1 — the same command, the same image, both topologies.**
 
-The same question, asked the same way, on both installations:
+Run on the M1 (`tecmacdev`) against Rancher Desktop k3s v1.36.2, using the
+CI-built image — not a patched container:
 
 | | asgard (external) | M1 Rancher Desktop (in-cluster) |
 |---|---|---|
 | object | `Deployment` + socat proxy | `StatefulSet/postgresql`, 16d |
-| Service | `postgresql` :5432 | `postgresql` :5432 |
-| `select version()` through `postgresql.default` | answers — PG 18 on Odin CT 105 | answers — **PostgreSQL 18.3 on aarch64** |
+| `uis list` | `🔗 External → 10.10.0.105:5432` | `✅ Deployed` |
+| `uis verify postgresql` | `Topology: EXTERNAL - proxied to 10.10.0.105` | `Topology: in-cluster` |
+| database answers | PASS — PG 18 on Odin CT 105 | PASS — **PostgreSQL 18.3** |
+| recap | `failed=0` | `failed=0` |
 
-Consumers connect to the same name and get an answer in both. That is the claim
-Principle 0 makes, and it now holds on real hardware at both ends.
-
-**Still unproven: that `uis deploy postgresql` takes the in-cluster branch on
-Rancher Desktop.** The UIS container cannot start on the M1 — Rancher Desktop
-reports `containerEngine: moby` and Kubernetes enabled, but nothing is listening
-on `~/.rd/docker.sock` (the socket file dates from 9 July). Kubernetes works;
-the container engine does not. Fixing it means restarting Rancher Desktop, which
-would disturb a working dev cluster and a 16-day-old database, so it was not done
-uninvited.
-
-That gap is narrow but real: the branch is unit-tested (9/9) and the in-cluster
-*outcome* is demonstrated, but the two have not been observed in the same run.
+With no declaration present the deploy path takes the in-cluster branch and
+reports it as such; with one, it proxies and says where the data lives. **Both
+halves of Principle 0 are now demonstrated on real hardware with shipped code.**
 
 **4.2 — migration, with zero disruption.** `uis deploy postgresql` took the
 external path and reported `changed=0`: Kubernetes itself confirming the rendered
@@ -254,15 +242,38 @@ brings are the useful part.
 
 ### Tasks
 
-- [ ] 5.1 Diff `minio-external-proxy.yaml` against `pg-external-proxy.yaml` and
-      record what genuinely differs — ports, health path, whether a client-image
-      first container is needed at all. Those differences are what the template
-      must parametrise; anything else is accidental variation to remove
-- [ ] 5.2 Render MinIO from the same template with only declared values changed.
-      **If the template cannot express it without a special case, the template is
-      wrong** — fix it before adding a third consumer
-- [ ] 5.3 Declare it in `external-services.yaml` alongside postgresql
-- [ ] 5.4 Delete the hand-written `minio-external-proxy.yaml`
+- [x] 5.1 Diffed. MinIO differs **structurally**, not just in values
+- [x] 5.2 `045-minio-external-proxy.yml.j2` — renders **semantically identical** to
+      the hand-written file (3 documents, 0 non-comment differences)
+- [x] 5.3 Declared alongside postgresql in `external-services.yaml`
+- [x] 5.4 Hand-written `minio-external-proxy.yaml` retired
+
+### What MinIO actually proved
+
+The plan said "if the template cannot express MinIO without a special case, the
+template is wrong". **The postgres template cannot express MinIO** — and the
+conclusion was the opposite of what that sentence assumed.
+
+| | postgres | minio |
+|---|---|---|
+| forwarded ports | 1 (5432) | **2** — S3 API 9000 *and* console 9001 |
+| socat containers | 1 | **2** |
+| Services | 1 | **2** — `minio`, `minio-console` |
+| selector label | `app.kubernetes.io/name` | `app` |
+| exec client | `postgres:18` (psql) | `minio/mc` |
+
+Forcing one generic template would mean parametrising labels, selectors, port
+lists and client images — pushing each service's **shape** into
+`external-services.yaml`, which is per-*installation* config. A service's shape is
+shipped knowledge mirroring its real chart; only its address varies by
+installation.
+
+**So the design is one template per service, sharing a documented shape.** What
+had to generalise was the shape, not the file — and MinIO proves it does, for a
+service with twice the ports, twice the Services and different labels.
+
+Doing this now rather than "later" is what surfaced it. One case looked like a
+convention; two showed which half was accidental.
 
 ### Validation
 
