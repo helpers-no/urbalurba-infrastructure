@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — Phases 1–2 done and verified; Phases 3–5 open
+## Status: Active — Phases 1–4 done (4.1 outstanding: no Rancher Desktop available); Phase 5 open
 
 **Goal**: `uis deploy postgresql` gives an in-cluster PostgreSQL on a laptop and a
 transparent proxy to the external one on a production installation — **same
@@ -155,10 +155,11 @@ misleading about the data. That is Phase 3's job.
 
 ### Tasks
 
-- [ ] 3.1 `uis list` / `uis status` distinguish in-cluster from external, showing
-      the target address
-- [ ] 3.2 `uis verify postgresql` proves the *database* answers, not that a pod is
-      Running — the proxy makes those two different claims, and only one matters
+- [x] 3.1 `uis list` shows `🔗 External → host:port` instead of `✅ Deployed`
+- [x] 3.2 `040-test-postgresql.yml` asks the database `select version()` through
+      `postgresql.<ns>`, exactly as consumers connect — the same test in both
+      topologies. Registered in **all three** dispatch places; the audit now reads
+      10 services, 0 broken
 
 ### Validation
 
@@ -172,19 +173,49 @@ proxy to an unreachable host is the same defect class as Grafana reporting
 
 ### Tasks
 
-- [ ] 4.1 **Rancher Desktop**: `uis deploy postgresql` → in-cluster database,
-      consumers work
-- [ ] 4.2 **Reference installation**: replace the hand-written file with the
-      generated one, redeploy, confirm consumers are unaffected
-- [ ] 4.3 Delete `.uis.extend/pg-external-proxy.yaml` once the generated form has
-      replaced it — two sources for one object is how they drift apart
-- [ ] 4.4 Rebuild-from-nothing test on the reference installation: the proxy comes
-      back from the declaration alone
+- [ ] 4.1 **Rancher Desktop**: `uis deploy postgresql` → in-cluster database.
+      **NOT DONE — no Rancher Desktop is available here.** The obvious stand-in,
+      `assist`'s k3s, cannot run it either: its `cluster-config.sh` declares
+      `TARGET_HOST="rancher-desktop"` while the only contexts present are `asgard`
+      and `assist`, so any playbook pinning `context: {{ _target }}` fails there.
+      That stale config is a real defect in its own right, found while looking for
+      somewhere to run this test. **This is the remaining validation** and it
+      matters: it is the half of Principle 0 this plan has not exercised.
+- [x] 4.2 **Reference installation**: migrated to the generated proxy
+- [x] 4.3 Hand-written `pg-external-proxy.yaml` retired (moved to `/tmp` on the
+      host rather than deleted, so a rollback needs no git archaeology)
+- [x] 4.4 Rebuild-from-nothing test
 
 ### Validation
 
-The same command, run on a laptop and on production, produces a working
-PostgreSQL for consumers in both — and neither required a hand-written file.
+**4.2 — migration, with zero disruption.** `uis deploy postgresql` took the
+external path and reported `changed=0`: Kubernetes itself confirming the rendered
+template is identical to what production was already running. Before and after
+are byte-identical —
+
+```
+deployment uid  3be1e368-...  unchanged
+pod             postgresql-585c789479-w89hd  restarts=0  uid unchanged
+clusterIP       10.43.219.89:5432  unchanged
+```
+
+The pod was never restarted. No consumer could have noticed the migration
+happening, which is the strongest form of "consumers are unaffected".
+
+**4.4 — rebuild from nothing.** The Deployment and Service were deleted outright,
+confirmed gone (`NotFound`), and rebuilt from the four-line declaration:
+
+```
+uis deploy postgresql    changed=1   failed=0   14 seconds
+```
+
+Then verified end to end: `uis verify postgresql` → *"Database answers a real
+query: PASS / Topology: EXTERNAL - proxied to 10.10.0.105"*, `uis list` →
+`🔗 External → 10.10.0.105:5432`, and **0 pods in crashloop across the cluster**.
+
+Before this plan, reconstructing that proxy meant someone remembering a
+hand-written file existed. It is now 14 seconds from a declaration that says what
+it is and why.
 
 ---
 

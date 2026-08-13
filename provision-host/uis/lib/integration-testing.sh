@@ -80,6 +80,7 @@ _build_skip_list() {
 # Services with a verify step (one per line, format: service_id:cli_args)
 VERIFY_SERVICES="
 alloy:alloy verify
+postgresql:postgresql verify
 argocd:argocd verify
 backstage:backstage verify
 enonic:enonic verify
