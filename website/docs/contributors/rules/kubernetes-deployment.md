@@ -16,6 +16,17 @@ For **file and resource naming patterns**, see:
 
 ## Core Principles
 
+0. **Every service runs on a developer's laptop.** A UIS service MUST be
+   deployable to Rancher Desktop / k3s with `uis deploy <id>` and nothing else —
+   no second machine, no hand-built prerequisite, no manual step. Production may
+   differ in **topology** (state deliberately lives outside the cluster there),
+   never in **interface**. A service provided externally in production still
+   ships an in-cluster form for development. This is principle zero because the
+   others describe *how* a service is built; this one decides whether it is a UIS
+   service at all. See
+   [adding-a-service](../guides/adding-a-service.md) and
+   [INVESTIGATE-system-external-or-in-cluster-services](../../ai-developer/plans/backlog/INVESTIGATE-system-external-or-in-cluster-services.md).
+
 1. **Declarative Service Metadata**: Each service is defined by a metadata file (`service-*.sh`) that declares its properties, deployment method, dependencies, and health check
 2. **CLI-Driven Deployment**: All deployments are performed through `./uis deploy` and `./uis undeploy` commands
 3. **Dependency Management**: Services declare their requirements via `SCRIPT_REQUIRES` and the system verifies dependencies before deploying

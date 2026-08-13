@@ -8,10 +8,15 @@
 
 ## Status: Backlog
 
-**Goal**: Decide how a service can be *provided externally* in one installation
-and *deployed in-cluster* in another, behind one identical `uis` interface — so
-the components currently hand-built on Odin become reproducible, and a developer
-on Rancher Desktop gets working equivalents.
+**Goal**: Make every UIS service deployable on a developer's laptop, including the
+three currently hand-built on Odin — then decide how an installation declares that
+it is *providing one externally instead*, behind an identical `uis` interface.
+
+**The requirement comes first and is not negotiable**: a service that cannot run on
+Rancher Desktop / k3s with `uis deploy <id>` and nothing else is not a UIS service.
+In-cluster is the baseline every service must meet. External provision is a
+production *variation* on top of it — never a substitute for it, and never a reason
+to skip building the in-cluster form.
 
 ---
 
@@ -74,25 +79,33 @@ That arrangement works today only because nobody wrote it down — it is convent
 by omission, and this investigation should capture it rather than invent a
 parallel mechanism for three new components.
 
-### EXT-F4 — "Runs on a laptop" is not equally meaningful for all three
+### EXT-F4 — All three must run on a laptop; what differs is what they protect
 
-- **OpenBao** — an in-cluster instance is a genuine equivalent. Dev secrets are
-  not production secrets, and that is fine.
-- **Registry cache** — a genuine equivalent, and arguably more valuable on a
-  laptop than in production, since a developer rebuilds clusters constantly.
-- **Backup** — **not equivalent, and the investigation must say so.** A backup
-  service running inside the cluster it backs up is not a backup. On Rancher
-  Desktop it can only be a functional stand-in that proves the interface and the
-  restore path, never the guarantee. Claiming parity here would be a lie the
-  platform tells its users.
+An earlier draft of this finding argued that backup "cannot have real parity" on a
+laptop. **That framing was wrong and is corrected here.** The requirement is that
+the service runs, deploys, and can be exercised end to end on Rancher Desktop —
+and all three can:
 
----
+- **OpenBao** — a genuine in-cluster equivalent. Dev secrets are not production
+  secrets, and that is the point, not a shortfall.
+- **Registry cache** — genuine, and arguably worth more on a laptop than in
+  production, since a developer rebuilds clusters constantly.
+- **Backup** — genuinely deployable and genuinely testable: it backs up the
+  laptop's own cluster, and the **restore path must be exercisable locally**. That
+  is the dev environment working correctly, not a stand-in.
+
+What differs between laptop and production is **what is being protected and the
+guarantee around it** — offsite copies, retention, scale. Not whether the service
+exists, deploys, or can be tested. A plan must not use "it is only meaningful in
+production" as a reason to skip the in-cluster form; under the requirement above,
+that reasoning is not available.
 
 ## Part 2: What the answer has to satisfy
 
-1. **One interface.** The same command works on both topologies. If a developer
-   learns `uis deploy openbao` and an operator does something unrecognisable, the
-   parity claim is false.
+1. **In-cluster is the baseline; one interface across both.** Every service ships a
+   form that runs on Rancher Desktop with `uis deploy <id>` alone. The same command
+   then works on both topologies — if a developer learns `uis deploy openbao` and an
+   operator does something unrecognisable, the parity claim is false.
 2. **Declaring "external" is per-installation, not per-service.** The service
    definition is shipped code; where *this* installation's OpenBao lives is local
    configuration. That is what `.uis.extend/` is for.
@@ -153,6 +166,8 @@ investigation exists to prevent.
 3. **Registry cache as a UIS service** — folds in
    [system-registry-cache](INVESTIGATE-system-registry-cache.md).
 4. **Backup** — folds in
-   [system-backup-and-scheduling](INVESTIGATE-system-backup-and-scheduling.md),
-   and must state in its own goal what a laptop deliverable is and is not
-   (EXT-F4).
+   [system-backup-and-scheduling](INVESTIGATE-system-backup-and-scheduling.md).
+   Deploys and runs on a laptop like any other service, backing up the laptop's own
+   cluster, with the **restore path exercisable locally** — that local restore test
+   is the plan's real deliverable, because it is the part production can never
+   safely rehearse (EXT-F4).
