@@ -220,12 +220,15 @@ investigation exists to prevent.
 
 ## Part 5: Proposed plans (ordered, to be drafted after the questions above are answered)
 
-1. **The convention** — [PLAN-system-external-services-001-proxy-convention](../active/PLAN-system-external-services-001-proxy-convention.md)
-   *(drafted 2026-08-13)*. It turned out not to need designing: the reference
+1. **The convention** — [PLAN-system-external-services-001-proxy-convention](../completed/PLAN-system-external-services-001-proxy-convention.md)
+   **SHIPPED 2026-08-14.** It turned out not to need designing: the reference
    installation already runs a transparent proxy that keeps the real service's
    name, labels and first container, so `PGHOST=postgresql.default` resolves
    identically in both topologies and **no consumer changes at all**. The plan
-   ships that pattern instead of inventing one. See EXT-F5.
+   shipped that pattern instead of inventing one (EXT-F5), and MinIO then proved it
+   generalises to a service with twice the ports and different labels. **Both
+   PostgreSQL and MinIO now run from the convention on the reference installation,
+   which has zero hand-written proxies left.**
 2. **OpenBao as a UIS service** — in-cluster for dev, external on Odin. Highest
    value: it is the only one of the three with no investigation of its own today,
    and it holds the recovery keys.

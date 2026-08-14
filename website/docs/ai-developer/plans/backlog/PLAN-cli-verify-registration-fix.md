@@ -18,7 +18,7 @@ forms, and correct the guide so the next service does not repeat the omission.
 **Investigation**: [INVESTIGATE-system-verification-playbooks-usage](./INVESTIGATE-system-verification-playbooks-usage.md)
 — this plan is one of the two concrete findings that promoted it to Tier 1.
 
-**Related**: [PLAN-service-alloy-verify-and-metadata-fix](./PLAN-service-alloy-verify-and-metadata-fix.md)
+**Related**: [PLAN-service-alloy-verify-and-metadata-fix](../completed/PLAN-service-alloy-verify-and-metadata-fix.md)
 — same defect, found first on Alloy.
 
 **Priority**: Medium — it silently disables E2E tests, which is exactly the class
