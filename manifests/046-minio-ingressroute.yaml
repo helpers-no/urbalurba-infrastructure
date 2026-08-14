@@ -53,7 +53,11 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: HostRegexp(`minio\..+`)
+    # Canonical: derives from the Service name, so the console answers on the
+    # SAME hostname in dev and in production. It previously matched `minio.*`
+    # here while production's Tailscale ingress used `minio-console.*` - one
+    # service with two names depending on topology.
+    - match: HostRegexp(`minio-console\..+`)
       kind: Rule
       services:
         - name: minio-console
@@ -74,6 +78,17 @@ spec:
   entryPoints:
     - web
   routes:
+    # Canonical: `minio.*` matches SCRIPT_ID and the Service name, so the same
+    # word means the same thing at every layer. It used to mean the API at the
+    # Service layer and the CONSOLE at the hostname layer.
+    - match: HostRegexp(`minio\..+`)
+      kind: Rule
+      services:
+        - name: minio
+          port: 9000
+    # Alias, kept deliberately: `s3.*` names the PROTOCOL rather than the
+    # implementation, so it survives replacing MinIO with another S3 provider.
+    # Applications should configure this one.
     - match: HostRegexp(`s3\..+`)
       kind: Rule
       services:

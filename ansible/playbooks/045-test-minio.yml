@@ -208,11 +208,28 @@
       ansible.builtin.debug:
         msg: "Test D: S3 bucket round-trip - PASSED (CRITICAL)"
 
-    # ===== Test E: Traefik routing (CRITICAL) =====
-    - name: "E1. Reach the S3 API through Traefik (Host: s3.localhost)"
+    # ===== Test E: routing =====
+    #
+    # ⚠️ ROUTING IS TOPOLOGY-SPECIFIC AND THIS TEST USED TO IGNORE THAT.
+    #
+    # It asserted `s3.localhost` and `minio.localhost` unconditionally, so it
+    # could never pass on a production installation, where services are exposed
+    # as Tailscale Ingress on real hostnames and no *.localhost route exists. A
+    # check that structurally cannot pass teaches people to ignore the whole
+    # suite - so it now tests whichever exposure this installation actually has.
+    - name: "E0. Which exposure does this installation use?"
+      ansible.builtin.shell: |
+        kubectl get ingressroute -n {{ minio_namespace }} -l app=minio -o name 2>/dev/null | wc -l
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: _traefik_routes
+      changed_when: false
+      failed_when: false
+
+    - name: "E1. Reach the S3 API through Traefik (Host: minio.localhost)"
       ansible.builtin.shell: |
         kubectl run minio-test-route-api-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ minio_namespace }} -- \
-          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" -H "Host: s3.localhost" http://{{ traefik_ip }}/minio/health/live
+          /bin/sh -c 'sleep 2; curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" -H "Host: minio.localhost" http://{{ traefik_ip }}/minio/health/live'
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: route_api_test
@@ -221,11 +238,12 @@
       until: "'HTTP_CODE:200' in route_api_test.stdout"
       failed_when: false
       changed_when: false
+      when: (_traefik_routes.stdout | default('0') | int) > 0
 
-    - name: "E2. Reach the console through Traefik (Host: minio.localhost)"
+    - name: "E2. Reach the console through Traefik (Host: minio-console.localhost)"
       ansible.builtin.shell: |
         kubectl run minio-test-route-ui-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ minio_namespace }} -- \
-          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" -H "Host: minio.localhost" http://{{ traefik_ip }}/
+          /bin/sh -c 'sleep 2; curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" -H "Host: minio-console.localhost" http://{{ traefik_ip }}/'
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: route_ui_test
@@ -234,25 +252,43 @@
       until: "'HTTP_CODE:200' in route_ui_test.stdout"
       failed_when: false
       changed_when: false
+      when: (_traefik_routes.stdout | default('0') | int) > 0
 
-    - name: "E3. Verify both IngressRoutes resolve"
+    - name: "E2b. Otherwise, report the exposure this installation does have"
+      ansible.builtin.shell: |
+        kubectl get ingress -n {{ minio_namespace }} -o jsonpath='{range .items[*]}{.metadata.name}={.status.loadBalancer.ingress[0].hostname} {end}' 2>/dev/null
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: _ts_ingress
+      changed_when: false
+      failed_when: false
+      when: (_traefik_routes.stdout | default('0') | int) == 0
+
+    - name: "E3. Verify routing"
       ansible.builtin.assert:
         that:
           - "'HTTP_CODE:200' in route_api_test.stdout"
           - "'HTTP_CODE:200' in route_ui_test.stdout"
         fail_msg: |
           CRITICAL: MinIO Traefik routing failed!
-          s3.localhost   -> {{ route_api_test.stdout | default('No output') }}
-          minio.localhost -> {{ route_ui_test.stdout | default('No output') }}
+          minio.localhost         -> {{ route_api_test.stdout | default('No output') }}
+          minio-console.localhost -> {{ route_ui_test.stdout | default('No output') }}
+
+          Both names derive from the Service names, so they are the same in dev
+          and production. `s3.*` remains as an alias for the API.
 
           Troubleshooting:
           - Check routes: kubectl get ingressroute -n {{ minio_namespace }} -l app=minio
           - Re-apply:     kubectl apply -f /mnt/urbalurbadisk/manifests/046-minio-ingressroute.yaml
         success_msg: "Test E PASSED: both MinIO IngressRoutes resolve through Traefik"
+      when: (_traefik_routes.stdout | default('0') | int) > 0
 
-    - name: "E4. Display routing test success"
+    - name: "E4. Display routing result"
       ansible.builtin.debug:
-        msg: "Test E: Traefik routing - PASSED (CRITICAL)"
+        msg: >-
+          {{ ((_traefik_routes.stdout | default('0') | int) > 0)
+             | ternary('Test E: Traefik routing - PASSED (CRITICAL)',
+                       'Test E: no Traefik routes here - this installation exposes MinIO another way: ' ~ (_ts_ingress.stdout | default('none found'))) }}
 
     # ===== Summary =====
     - name: "SUMMARY - Display all test results"
@@ -265,7 +301,9 @@
           B. Unauthenticated S3 access rejected:     PASS
           C. Console reachable (:9001):              PASS
           D. Bucket create/write/read/delete:        PASS
-          E. Traefik routing (s3.* and minio.*):     PASS
+          E. Routing: {{ ((_traefik_routes.stdout | default('0') | int) > 0)
+                  | ternary('Traefik (minio.* / minio-console.*)  PASS',
+                            'not via Traefik here - ' ~ (_ts_ingress.stdout | default('no ingress found'))) }}
 
           ALL TESTS PASSED - MinIO is healthy
           ===============================================
