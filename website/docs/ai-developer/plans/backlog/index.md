@@ -9,7 +9,9 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Plan: Registering a verify command is a three-place change](PLAN-cli-verify-registration-fix.md) | Make every registered verify playbook reachable from both invocation | 2026-08-14 |
 | [Investigate: services that run outside the cluster in production, and inside it on a laptop](INVESTIGATE-system-external-or-in-cluster-services.md) | Make every UIS service deployable on a developer's laptop, including the | 2026-08-14 |
+| [Investigate: OpenBao — deployable on a laptop, and the same interface in production](INVESTIGATE-service-openbao.md) | — | 2026-08-14 |
 | [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-08-14 |
 | [Plan: AKS Manual Setup — variable-by-variable runbook for first-run provisioning](PLAN-platform-aks-001b-manual-setup.md) | Provide a self-contained runbook for the first manual run-through of `platforms/azure-aks/` against an Azure subscription. Explains every config variable (what it is, where to find it, what changes if you change it), every authentication step, and every script in the order it must run. Companion to [PLAN-001-aks-step1-verification.md](../completed/PLAN-001-aks-step1-verification.md) — that plan's Phase 2 lists the eight scripts to run; this plan is the detailed *how* and *why* for someone doing it for the first time. | 2026-08-13 |
 | [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-08-13 |
@@ -26,8 +28,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Baseline alert rules, and somewhere for them to go](PLAN-system-observability-002-alert-baseline.md) | `uis stack install observability` produces a platform that **tells you | 2026-08-11 |
 | [Ship container logs to Loki](PLAN-system-observability-001-log-collection.md) | Logs from every pod are searchable in Grafana, automatically, so that | 2026-08-11 |
 | [Ship the monitor pipeline as part of the service](PLAN-service-uptime-kuma-005-ship-the-pipeline.md) | `uis deploy uptime-kuma` gives a watchdog that is **already monitoring | 2026-08-11 |
-| [Plan: Finish Alloy against the adding-a-service guide](../completed/PLAN-service-alloy-verify-and-metadata-fix.md) | Bring the Alloy service into actual compliance with | 2026-08-11 |
-| [Plan: Registering a verify command is a three-place change](PLAN-cli-verify-registration-fix.md) | Make every registered verify playbook reachable from both invocation | 2026-08-11 |
 | [Make the watchdog able to wake someone — and watch itself](PLAN-service-uptime-kuma-003-alerting.md) | An alert reaches a human away from home, and the watchdog's own death | 2026-08-10 |
 | [Ship an availability probe with every service](PLAN-system-observability-006-service-probes.md) | `uis deploy <service>` results in that service being monitored by the | 2026-08-09 |
 | [Declare external dependencies as shim Services](PLAN-system-dependencies-shim-services.md) | Every dependency UIS has on something outside the cluster is declared | 2026-08-09 |
