@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — implemented in the working tree, awaiting review
+## Status: Completed 2026-08-14 — all phases shipped and verified
 
 **Goal**: Bring the Alloy service into actual compliance with
 [adding-a-service.md](../../../contributors/guides/adding-a-service.md), so its
@@ -17,7 +17,7 @@ it appears on the website like every other service.
 
 ## Dependencies
 
-**Investigation**: [INVESTIGATE-system-verification-playbooks-usage](./INVESTIGATE-system-verification-playbooks-usage.md)
+**Investigation**: [INVESTIGATE-system-verification-playbooks-usage](../backlog/INVESTIGATE-system-verification-playbooks-usage.md)
 — defect A1 below is exactly the failure mode that investigation predicted.
 
 **Prerequisites**: none — Alloy is already deployed and collecting.
@@ -160,6 +160,6 @@ should still be run before merge.
 ## Out of Scope
 
 `uptime-kuma` had the same A1 defect. Now fixed and tested under
-[PLAN-cli-verify-registration-fix](./PLAN-cli-verify-registration-fix.md), which
+[PLAN-cli-verify-registration-fix](../backlog/PLAN-cli-verify-registration-fix.md), which
 also covers correcting the guide — two services missing the same step points at
 the instructions, not the contributors.

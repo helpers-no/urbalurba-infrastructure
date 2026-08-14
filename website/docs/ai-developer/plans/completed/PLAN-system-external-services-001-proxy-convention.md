@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — all phases done and verified on both topologies
+## Status: Completed 2026-08-14 — all five phases verified on both topologies
 
 **Goal**: `uis deploy postgresql` gives an in-cluster PostgreSQL on a laptop and a
 transparent proxy to the external one on a production installation — **same
