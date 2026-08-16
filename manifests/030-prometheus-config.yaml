@@ -239,8 +239,18 @@ serverFiles:
 
           # 15m, not 5m: long enough that an ordinary rollout does not page.
           - alert: PodNotReady
+            # ⚠️ EXCLUDE Succeeded/Failed PODS. A pod that has finished is reported
+            # not-ready forever, so any one-off pod that outlives its cleanup fires
+            # this alert permanently. That is not an incident - it is litter.
+            #
+            # This happened: a `kubectl run --rm` debug pod lost its attach (so --rm
+            # never ran), stayed Succeeded, and paged a phone every night for five
+            # days. The alert was correct about the condition and wrong about it
+            # mattering.
             expr: |
               kube_pod_status_ready{condition="false"} == 1
+              unless on(namespace, pod)
+              kube_pod_status_phase{phase=~"Succeeded|Failed"} == 1
             for: 15m
             labels: { severity: warning }
             annotations:
