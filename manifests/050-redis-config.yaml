@@ -12,9 +12,14 @@ auth:
   # Password will be set by the playbook using --set auth.password=<your-password>
 
 master:
+  # Redis in UIS is a CACHE (verified in production 2026-08-19: its entire
+  # keyspace was 3 authentik_cache:* keys with TTLs). Persistence added a 6Gi
+  # PVC that pinned redis to one node on multi-node clusters while protecting
+  # nothing - on restart Authentik simply repopulates the cache.
+  # No PVC also means redis can schedule on any node (storage strategy: apps
+  # talk to interfaces; a cache needs no durable disk).
   persistence:
-    enabled: true
-    size: 6Gi
+    enabled: false
 
 # Resources limits and requests
   resources:
