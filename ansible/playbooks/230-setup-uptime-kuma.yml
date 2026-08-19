@@ -312,6 +312,41 @@
       no_log: true
       changed_when: true
 
+    - name: "9.6 Seed the ntfy info channel (daytime severity)"
+      # Idempotent on name. Config is JSON on stdin so the topic never appears
+      # in a process list.
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf '%s' "$CFG" | kubectl exec -i -n {{ namespace }} {{ component_name }}-0 \
+          --kubeconfig {{ merged_kubeconf_file }} -- sh -c '
+            read -r C
+            sqlite3 /app/data/kuma.db <<SQL
+        insert into notification (name, active, user_id, is_default, config)
+        select "uis-info", 1, 1, 0, '"'"'$C'"'"'
+        where not exists (select 1 from notification where name = "uis-info");
+        SQL
+          '
+      args:
+        executable: /bin/bash
+      environment:
+        # ⚠️ Build a mapping and serialise with to_json. A hand-written JSON
+        # STRING here does not survive: Ansible sees something that looks like a
+        # Python literal, converts it to a dict, and str()s it back with single
+        # quotes - which sqlite then rejects as a syntax error. Verified.
+        CFG: >-
+          {{ {'name': 'uis-info',
+              'type': 'ntfy',
+              'ntfyserverurl': _ntfy_server,
+              'ntfytopic': _ntfy_topic,
+              'ntfyPriority': 3,
+              'ntfyAuthenticationMethod': 'none',
+              'ntfyIcon': '',
+              'isDefault': false,
+              'applyExisting': false} | to_json }}
+      when: _ntfy_topic | length > 0
+      no_log: true
+      changed_when: true
+
     - name: "9.6 Verify the channel is usable, not merely present"
       # A row existing is not the same as it working. Check the stored config
       # parses and carries the provider type Kuma dispatches on.

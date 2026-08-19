@@ -33,7 +33,8 @@ import sys
 # external watchdog CAN reach.
 POD_CIDRS = ["10.42.0.0/16", "10.244.0.0/16"]
 
-NOTIFICATION_NAME = "uis-alerts"
+NOTIFICATION_CRITICAL = "uis-alerts"  # ntfy priority 5 - breaks through evening DND
+NOTIFICATION_INFO = "uis-info"        # ntfy priority 3 - silenced by DND after hours
 
 
 # Two clusters, deliberately separate.
@@ -285,8 +286,12 @@ def render_monitor(name, kind, value, probe):
     the channel every ~5s forever. The setup playbook owns the channel and its
     attachments instead.
     """
+    sev = probe.get("severity", "info")
+    if sev not in ("critical", "info"):
+        return (f"{name}: severity must be 'critical' or 'info', got '{sev}'")
     o = {"name": name,
          "_notify": probe.get("notify", True),
+         "_severity": sev,
          "interval": int(probe.get("interval", 60)),
          "max_retries": int(probe.get("maxretries", 2)),
          "retry_interval": int(probe.get("retry_interval", 60)),
@@ -475,15 +480,26 @@ def attach_alerts(namespace, monitors, wait=180):
     Insert-only, so a channel a human attached by hand is never removed.
     """
     rows = kuma_sql(namespace,
-                    f"select id from notification where name='{NOTIFICATION_NAME}';")
+                    f"select id from notification where name='{NOTIFICATION_CRITICAL}';")
     if not rows:
-        print(f"\n  no '{NOTIFICATION_NAME}' channel - nothing will notify you.")
+        print(f"\n  no '{NOTIFICATION_CRITICAL}' channel - nothing will notify you.")
         print("  Set UPTIME_KUMA_NTFY_TOPIC and redeploy uptime-kuma.")
         return 0
-    nid = rows[0][0]
+    nid_crit = rows[0][0]
+    rows = kuma_sql(namespace,
+                    f"select id from notification where name='{NOTIFICATION_INFO}';")
+    if rows:
+        nid_info = rows[0][0]
+    else:
+        # Pre-severity install: everything pages at priority 5, as before.
+        print(f"  note: no '{NOTIFICATION_INFO}' channel yet (redeploy uptime-kuma "
+              "to seed it); all severities use the critical channel")
+        nid_info = nid_crit
+    chan = {"critical": nid_crit, "info": nid_info}
 
     # AutoKuma creates monitors asynchronously; wait for them rather than
     # attaching to a half-populated set.
+    sev_of = {m["name"]: m.get("_severity", "info") for m in monitors}
     want = {m["name"] for m in monitors if m.get("_notify", True)}
     import time
     deadline = time.time() + wait
@@ -494,16 +510,39 @@ def attach_alerts(namespace, monitors, wait=180):
         time.sleep(5)
 
     ids = {r[0]: r[1] for r in (kuma_sql(namespace, "select name, id from monitor;") or [])}
-    attached = {r[0] for r in (kuma_sql(
-        namespace,
-        "select m.name from monitor m join monitor_notification mn "
-        f"on mn.monitor_id=m.id where mn.notification_id={nid};") or [])}
-    added = 0
+    # what is attached to WHICH of our two channels (other channels are ignored:
+    # a channel a human attached by hand is never touched)
+    ours = {}
+    for r in (kuma_sql(
+            namespace,
+            "select m.name, mn.notification_id from monitor m "
+            "join monitor_notification mn on mn.monitor_id=m.id "
+            f"where mn.notification_id in ({nid_crit},{nid_info});") or []):
+        ours.setdefault(r[0], set()).add(r[1])
+    added = moved = 0
+    attached = set()
     for name in sorted(want):
-        if name in attached or name not in ids:
+        if name not in ids:
             continue
+        target = chan[sev_of.get(name, "info")]
+        have = ours.get(name, set())
+        if str(target) in {str(h) for h in have} or target in have:
+            attached.add(name)
+            # severity moved since last apply: drop the other channel of the pair
+            for h in have:
+                if str(h) != str(target):
+                    kuma_sql(namespace, "delete from monitor_notification "
+                                        f"where monitor_id={ids[name]} and notification_id={h};")
+                    moved += 1
+            continue
+        if have:
+            # attached to the wrong one of our channels: converge to severity
+            for h in have:
+                kuma_sql(namespace, "delete from monitor_notification "
+                                    f"where monitor_id={ids[name]} and notification_id={h};")
+            moved += 1
         kuma_sql(namespace, "insert into monitor_notification (monitor_id, "
-                            f"notification_id) values ({ids[name]}, {nid});")
+                            f"notification_id) values ({ids[name]}, {target});")
         added += 1
     # ⚠️ AutoKuma silently drops resend_interval for `port` and `push` monitors -
     # it lands for http/keyword and nowhere else. Verified 2026-08-10: 10 of 19
@@ -530,8 +569,11 @@ def attach_alerts(namespace, monitors, wait=180):
               f"(it drops resend_interval for port and push types)")
 
     missing = sorted(want - set(ids))
-    print(f"\n  alerting: {added} newly attached, {len(attached)} already, "
-          f"{len(monitors) - len(want)} deliberately silent")
+    n_crit = sum(1 for n in want if sev_of.get(n, "info") == "critical")
+    print(f"\n  alerting: {added} newly attached, {moved} moved between severities, "
+          f"{len(attached)} already right, {len(monitors) - len(want)} deliberately silent")
+    print(f"  severity: {n_crit} critical (page any hour), "
+          f"{len(want) - n_crit} info (daytime only)")
     if missing:
         # Loud: these were rendered but Kuma does not have them, so they cannot
         # be attached and are not being watched.
