@@ -20,6 +20,10 @@ documentation all read it from one place instead of each rediscovering it.
 consumes what this produces, and contains a factual error this plan corrects
 (see Implementation Notes).
 
+**Challenged**: [INVESTIGATE-system-roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md)
+asks for the "Endpoints are not reconciled" Implementation Note below to be
+amended before Phase 1 is built. Read it first if you are picking this up.
+
 **Priority**: Medium
 
 ---
@@ -219,7 +223,17 @@ sealed vault is useless even though the path is fine. The probe's
 `accepted_statuscodes` still has to encode that. Declaring the dependency does
 not remove the need to know what "healthy" means for it.
 
-**Endpoints are not reconciled.** A manually-managed `Endpoints` object is
+**Endpoints are not reconciled.** ⚠️ *Challenged 2026-08-21 — see
+[INVESTIGATE-system-roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md).
+The rejection of auto-discovery below is sound and stands. But as worded it also
+rules out a **declared ordered candidate list**, which is not discovery: the
+operator still writes down every address, in the one place this plan designates,
+and an address that is not declared is never used. The reference installation
+already depends on that distinction — both Ollama addresses committed to this
+repo were stale on 2026-08-21 and only an unproductised reconciler kept LiteLLM
+working. Resolve before building Phase 1.*
+
+A manually-managed `Endpoints` object is
 static. If an external host's address changes, the shim points at nothing and
 the failure is a connection timeout at the consumer. This is a real downgrade
 from a raw IP in config only in that it adds one indirection — but it is the

@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-13. Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-21. Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -56,6 +56,33 @@ shipped, so the triage view had drifted badly from the repo:
   `image-size` with no published patch — a floor, not a backlog item.
 - The first local build surfaced **pre-existing broken links and one broken
   anchor** in the docs. Warnings, not failures. Currently owned by nobody.
+---
+
+## What changed 2026-08-21
+
+- **New investigation landed: [roaming-dependency-addresses](INVESTIGATE-system-roaming-dependency-addresses.md)** (Tier 3 #26).
+  Arrived as a productisation request from ops for a running `ollama-endpoint-manager`,
+  and was answered rather than deferred: LiteLLM **partly** covers it. Ordered
+  address preference (`order`) and health-check-driven routing are native; the
+  fail-fast property is not, and upstream has explicitly chosen the opposite
+  (`"All deployments marked unhealthy by health checks, bypassing health filter"`
+  in `router.py`). Verdict: not an AI/ML component — it belongs to the dependency
+  layer, as an optional rendering of
+  [dependencies-shim-services](PLAN-system-dependencies-shim-services.md) Phase 1.
+- **That plan needs an amendment before anything is built on it.** Its
+  Implementation Note *"Do not add address auto-discovery"* is right about
+  discovery but, as worded, also forbids declared candidate lists — which are not
+  discovery. Flagged, not edited unilaterally.
+- **Evidence that static `Endpoints` drift is not hypothetical.** Both Ollama
+  addresses committed in `hosts/asgard/ollama-backends.yaml` are stale; read live
+  on asgard the same day, both hosts had moved and neither committed address was
+  in use. The reference installation only kept working because an unproductised
+  reconciler was absorbing it.
+- **[version-pinning](INVESTIGATE-system-version-pinning.md) (Tier 2 #9) gained a
+  concrete consumer.** The LiteLLM chart is unpinned, and `order` — the mechanism
+  the recipe half of the verdict depends on — was broken in v1.80.11
+  (BerriAI/litellm#18444) and silently degrades to round-robin across a dead
+  address when it regresses.
 
 ---
 
@@ -114,6 +141,7 @@ These have known prerequisites that are still open. Don't open them yet — the 
 | 23 | [dct-argocd-deploy](INVESTIGATE-service-argocd-dct-deploy.md) | argocd as a stable UIS service | The "deploy from inside DCT with one command" flow needs argocd to be the deployment substrate. ArgoCD has a manifest in UIS but isn't an everyday service yet; investigate this once argocd is operationally normal. |
 | 24 | [enonic-deployment](INVESTIGATE-service-enonic-deployment.md) | enonic-as-stable-service | Covers both apps (JAR pipeline — chosen-approach decided) and content (still open). Pull-based deployment design assumes Enonic XP is operationally stable in UIS. Merged from the two earlier app + content investigations on 2026-05-15. |
 | 25 | [email-smtp-service](INVESTIGATE-service-email-smtp.md) | product clarity (which services need email first?) | Cross-cutting platform service. Worth opening only when the first concrete consumer (Authentik password resets? a notification path?) is actually pulling on it. |
+| 26 | [roaming-dependency-addresses](INVESTIGATE-system-roaming-dependency-addresses.md) | M | [dependencies-shim-services](PLAN-system-dependencies-shim-services.md); version-pinning (Tier 2 #9) | **New 2026-08-21, and already carries its verdict** — it sits here for its *children*, not its research. The capability renders from the shim plan's Phase 1 dependency artifact, which does not exist yet; designing a candidate-address schema against an unbuilt artifact is the same rework #20 defers for. Q1 (does `order` behave as documented?) is unanswerable until the LiteLLM chart is pinned. Everything not blocked is already written down: the LiteLLM parity matrix, two DRAFT upstream suggestions for Terje, and the amendment the shim plan needs. |
 
 ## Tier 4 — ideas, not investigations
 
