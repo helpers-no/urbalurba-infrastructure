@@ -465,19 +465,69 @@ UIS did not deploy the Macs and cannot be expected to know about them.
   one `model_name`, `order: 1`/`order: 2`, `enable_health_check_routing`, and an
   honest account of the probe cost and the fail-fast caveat. That is general,
   has obvious second users, and belongs in the LiteLLM service docs.
-- **The DRAFT upstream suggestions in Part 5 stand**, and got stronger.
-  Independent corroboration: `tashfeenahmed/freellmapi` (19k stars, a mature
-  OpenAI-compatible proxy with six routing strategies and automatic failover)
-  fails over on **429/5xx only** — status codes. A backend that completes the TCP
-  handshake and then goes silent produces no status code, so it has the same
-  blind spot as LiteLLM. Two unrelated proxies, one shared gap: this is a
-  category-wide limitation, not a LiteLLM oversight, which is a better argument
-  for Draft B than "our Macs sleep."
+- **The DRAFT upstream suggestions in Part 5 stand**, on a corrected argument.
+
+  ⚠️ **Correction, 2026-08-21.** An earlier revision of this file claimed
+  `tashfeenahmed/freellmapi` fails over on "429/5xx only" and therefore shares
+  LiteLLM's blind spot. **That was wrong**, and it was wrong because it was read
+  off a README bullet rather than the source — the same standard RD-F1..F3 were
+  held to and this claim was not. Do not use the "two proxies, one shared gap"
+  line; it does not survive contact with the code.
+
+  What the source actually shows is more useful. `server/src/lib/error-classify.ts`
+  treats a first-byte timeout as a failover trigger — *"First-byte timeout
+  (#584): the grace budget expired before ANY byte reached the client, so the
+  next candidate can serve it invisibly"* — alongside a mid-stream inactivity
+  watchdog and raw transport faults (`ETIMEDOUT`, `EHOSTUNREACH`, `ECONNREFUSED`
+  …). A host that completes the handshake and then goes silent is exactly the
+  case that grace budget catches. `docs/architecture.md` confirms it: failover
+  fires on *"a 429, 5xx, **or times out**"*, bounded by a wall-clock retry
+  budget.
+
+  It also hit our exact busy-vs-absent problem and solved it. From the same
+  file: *"a slow local Ollama route timing out twice classified retryable →
+  recorded as a null-limit '429' → escalated 2m→10m→1h→24h and 429'd every
+  request while the server was merely busy generating (#592)."* That is ops'
+  "busy must queue, absent must fail" lesson, found independently, and fixed by
+  splitting quota signals from timeout signals.
+
+  **So freellmapi is a contrast case, not corroboration — and that is the
+  stronger argument.** A hobby-scale project with an explicit
+  personal-experimentation disclaimer implements a first-byte grace budget for
+  precisely this failure, including for local Ollama routes, while LiteLLM
+  bypasses its own health filter and dispatches into the hang. Prior art in a
+  comparable project is better upstream evidence than "our Macs sleep."
+
+  Honest limit on all of it: a grace budget still means *waiting out* the grace
+  period. It is fast failure, not the instant refusal that clearing a Service's
+  `Endpoints` gives. Neither proxy reproduces that property, which is what
+  Draft B asks for."
 - **The F7 connection to
   [PLAN-service-litellm-004-config-portability](./PLAN-service-litellm-004-config-portability.md)**
   — a probe-a-candidate-list approach would fix `host.docker.internal`
   portably. Noted there for whoever picks that plan up; it does not need this
   file.
+
+**Production evidence (ops, 2026-08-21).** Q1 from Part 3 is answered, and not
+by spike — by logs. The manager is genuinely reconciling, and the fail-fast
+property fired twice in one morning as the M4 slept and woke:
+
+```
+07:11:09 mac-ollama: NO address reachable -> endpoints cleared (fail fast)
+07:14:21 mac-ollama: now 192.168.68.75
+07:19:29 mac-ollama: NO address reachable -> endpoints cleared (fail fast)
+08:03:24 mac-ollama: now 192.168.68.75
+```
+
+The live candidate lists are `MAC_ADDRS: 192.168.68.75 100.115.97.90` and
+`M1_ADDRS: 192.168.68.89 100.127.6.20`, so the Endpoints read in Background were
+the manager's picks. The alternative hypothesis — that someone had been
+hand-patching Endpoints and the property was not in force — is dead.
+
+The drift had a simpler cause than assumed: ops updated the authoritative files
+on 20–21/8 and did not copy back, **not knowing the `hosts/asgard/` convention
+existed**. That is the round-trip failure predicted, with the mechanism named: a
+manual two-way copy depends on every actor knowing about it, and one did not.
 
 **Handed back to ops.** The manifests are already committed at `hosts/asgard/`,
 whose README says the authoritative copies live on `ops` and *"if you change it
