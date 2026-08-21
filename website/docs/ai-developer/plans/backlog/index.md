@@ -20,6 +20,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Fix: 21 playbooks declare a variable named `namespace`, which Ansible reserves](PLAN-system-ansible-reserved-var-names.md) | No playbook shadows an Ansible reserved name. | 2026-08-21 |
 | [Ship the monitor pipeline as part of the service](PLAN-service-uptime-kuma-005-ship-the-pipeline.md) | `uis deploy uptime-kuma` gives a watchdog that is **already monitoring | 2026-08-21 |
 | [Make the watchdog able to wake someone — and watch itself](PLAN-service-uptime-kuma-003-alerting.md) | An alert reaches a human away from home, and the watchdog's own death | 2026-08-21 |
+| [Fix: `configure postgrest` cannot tell "configured" from "was configured once"](PLAN-service-postgrest-configure-drift-detection.md) | A PostgREST instance whose database no longer carries its grants is | 2026-08-21 |
 | [Ship neko as an optional add-on — the honest case for and against](PLAN-service-neko-001-optional-addon.md) | — | 2026-08-21 |
 | [Fix: default LiteLLM config only works on Docker Desktop](PLAN-service-litellm-004-config-portability.md) | A first-time `uis deploy litellm` should produce a usable model list on | 2026-08-21 |
 | [Feature: let `uis undeploy` remove the database it created](PLAN-service-litellm-003-undeploy-purge.md) | Make a genuinely clean reinstall possible, so install bugs cannot hide | 2026-08-21 |
