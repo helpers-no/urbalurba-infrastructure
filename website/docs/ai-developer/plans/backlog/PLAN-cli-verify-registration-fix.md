@@ -9,7 +9,7 @@
 **Goal**: Make every registered verify playbook reachable from both invocation
 forms, and correct the guide so the next service does not repeat the omission.
 
-**Last Updated**: 2026-08-11
+**Last Updated**: 2026-08-21
 
 ---
 
@@ -112,6 +112,17 @@ the services leaves the trap armed for the next contributor.
 - [ ] 2.3 Consider a guard: have `test-all` (or a lint) fail loudly when a
       `VERIFY_SERVICES` entry does not dispatch, instead of reporting it as a
       service failure
+- [ ] 2.4 **A fourth hand-maintained list, added 2026-08-21.** `cmd_verify()`
+      prints its own usage list when called with no argument — separate from the
+      top-level help fixed in task 1.2, and separate from the dispatch `case`
+      immediately below it. It is **currently in sync** (all nine services plus
+      tailscale, cloudflare and postgresql), so this is drift-prevention rather
+      than a live defect. A service missing from it dispatches correctly and runs
+      correctly while being invisible to anyone who types `uis verify` to find out
+      what is verifiable. Same allowlist-that-new-things-never-join shape as the
+      secrets validator. Prefer **deriving it from `VERIFY_SERVICES`** over
+      documenting a fourth place to edit
+      — found while writing [PLAN-service-browserless-001-deploy](./PLAN-service-browserless-001-deploy.md)
 
 ### Validation
 

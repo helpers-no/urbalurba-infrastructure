@@ -22,6 +22,26 @@ This investigation should determine:
 
 ---
 
+## Finding (2026-08-21): the rules document is the propagation source
+
+The third finding — `kubectl run --rm -i` returning `rc=0` with empty stdout —
+has been treated as something found *in* playbooks. It is also **taught**:
+[`rules/provisioning.md`](../../../contributors/rules/provisioning.md) presents
+that exact idiom as the CORRECT pattern, in two separate sections, complete with
+the `until:` on stdout that turns the race into a false failure.
+
+That explains why the idiom "appears across other services' verify playbooks":
+contributors are following the documented rule. Fixing playbooks one at a time
+while the rule keeps generating new ones is the same shape this investigation
+already identified for verify registration — *"the guide's wording is the cause
+rather than carelessness."*
+
+Split out as [PLAN-docs-provisioning-unsafe-test-idiom](./PLAN-docs-provisioning-unsafe-test-idiom.md)
+so the source is fixed independently of this investigation's sweep. That plan
+produces the occurrence list and hands it back here; it deliberately fixes no
+individual service.
+
+
 ## Why This Matters
 
 UIS is infrastructure automation. A manifest applying or a Helm release succeeding is not enough on its own. A service is only really installed when:

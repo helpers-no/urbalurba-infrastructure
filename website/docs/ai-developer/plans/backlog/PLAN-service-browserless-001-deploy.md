@@ -4,13 +4,16 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — ⚠️ AWAITING TERJE'S APPROVAL of name, category and scope
+## Status: Backlog — ✅ APPROVED 2026-08-21, ships first
+
+**Terje approved** (2026-08-21): the two-service split, the `AUTOMATION`
+category, and **browserless ships before neko**. Names and manifest ranges as
+proposed below.
 
 **Decision already made (Terje, 2026-08-21)**: the browser platform becomes a UIS
 service. Not reopened here.
 
-**Proposed by the maintainer, for Terje to approve or change** — nothing in this
-plan is self-approved:
+As approved:
 
 | Decision | Proposal |
 |---|---|
@@ -18,15 +21,16 @@ plan is self-approved:
 | Category | **`AUTOMATION`** — new, this is its first service |
 | Manifest range | **400–429**, with 430–499 reserved for future automation services |
 | Priority | `25` (before uptime-kuma at 30) |
-| Scope | This plan ships **browserless only**. `neko` is a separate, separately-approvable plan |
+| Scope | This plan ships **browserless only** |
+| Order | **First.** [neko-001](./PLAN-service-neko-001-optional-addon.md) is planned and follows |
 
 **Handoff**: `ai-developer/for-uis-maintainer-browser-service.md` (home repo, ops
 → maintainer, 2026-08-21). Everything is built and proven on the reference
 installation; this plan productises it.
 
 **Companion**: [PLAN-service-neko-001-optional-addon](./PLAN-service-neko-001-optional-addon.md)
-— the second half of the platform, deliberately split out. Approve or decline
-independently.
+— the second half of the platform, also approved to plan, sequenced after this
+one. It depends on the `AUTOMATION` category that Phase 1 here creates.
 
 **Last Updated**: 2026-08-21
 

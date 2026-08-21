@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-21 (second refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-21 (third refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -56,6 +56,38 @@ shipped, so the triage view had drifted badly from the repo:
   `image-size` with no published patch — a floor, not a backlog item.
 - The first local build surfaced **pre-existing broken links and one broken
   anchor** in the docs. Warnings, not failures. Currently owned by nobody.
+---
+
+## What changed 2026-08-21 (third entry) — approvals, sequencing, and two bugs filed
+
+- **Terje approved** the two-service split, the `AUTOMATION` category, and
+  **neko as a planned service — with browserless shipping first**. Both plans
+  updated from "awaiting approval" to approved-and-sequenced.
+- **Both plans were rewritten from scratch** after Terje asked whether I had read
+  `adding-a-service.md` and the rules docs. I had not, well enough — they were
+  written from reading service definitions and inferring the rest. They missed
+  the category registry (`categories.sh`), `enabled-services.conf`, `stacks.sh`
+  and `sidebars.ts`; used `-config.yaml` for manifests that are not Helm values;
+  numbered an IngressRoute against the wrong playbook; and did not know
+  `SCRIPT_PLAYBOOK`/`SCRIPT_MANIFEST` are mutually exclusive. Recorded in the
+  browserless plan's Implementation Notes rather than quietly fixed, because
+  "wrote a plan from inference and it looked complete" is the failure worth
+  remembering.
+- **New: [provisioning-unsafe-test-idiom](PLAN-docs-provisioning-unsafe-test-idiom.md).**
+  `rules/provisioning.md` presents the `kubectl run --rm -i` + `until:` on stdout
+  idiom as the CORRECT pattern, in two sections. That is Tier 1 #2's third
+  finding, and this is its **propagation source** — it explains why the idiom
+  "appears across other services' verify playbooks." Recorded on the
+  investigation too; the plan fixes the source and hands the occurrence list back
+  rather than sweeping services itself.
+- **[verify-registration-fix](PLAN-cli-verify-registration-fix.md) gained task
+  2.4** — a *fourth* hand-maintained list, the usage text inside `cmd_verify()`.
+  Currently in sync, so drift-prevention rather than a live defect; better derived
+  from `VERIFY_SERVICES` than documented as a fourth place to edit.
+- **A process note worth keeping**: I cited `PLAN-cli-verify-registration-fix` by
+  filename in two plans without opening it, then reported its contents back as a
+  discovery. Search found the file; I did not read it. Citing is not reading.
+
 ---
 
 ## What changed 2026-08-21 (second entry) — the browser platform becomes a service

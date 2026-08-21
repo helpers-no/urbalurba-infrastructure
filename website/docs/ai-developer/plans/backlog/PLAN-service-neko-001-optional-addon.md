@@ -4,7 +4,16 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — ⚠️ AWAITING TERJE'S APPROVAL, and this one is a genuine judgement call
+## Status: Backlog — ✅ APPROVED to plan 2026-08-21; **browserless ships first**
+
+**Terje approved** (2026-08-21): neko is planned as a service. Sequencing is
+explicit — [browserless-001](./PLAN-service-browserless-001-deploy.md) ships
+first, and creates the `AUTOMATION` category this plan depends on.
+
+The case against in Part 1 stands as recorded — it was argued honestly and the
+decision went the other way, which is the point of writing it down. What it now
+governs is not *whether* neko ships but *how*: opt-in only, in no stack, security
+model in the deploy output.
 
 **Prerequisite**: [PLAN-service-browserless-001-deploy](./PLAN-service-browserless-001-deploy.md)
 must ship first — it opens the `AUTOMATION` category this service lives in.
@@ -18,7 +27,7 @@ priority `95`, **shipped but never in a default profile** — explicit opt-in on
 
 **Last Updated**: 2026-08-21
 
-**Priority**: Low — deliberately. See Part 1.
+**Priority**: Low — sequenced after browserless, not a judgement on its value.
 
 ---
 
@@ -61,9 +70,10 @@ was written to prevent.
   store and a backup is a second copy of the blast radius. Correct, and a caveat
   that must be re-explained to every user forever.
 
-### Recommendation
+### Recommendation — and what Terje decided
 
-**Ship it, but not bundled and not by default.** Specifically:
+**Ship it, but not bundled and not by default.** Approved 2026-08-21, with
+browserless first. Specifically:
 
 - a separate service, separately approvable (this plan)
 - **never in a default or "everything" profile** — see
@@ -77,8 +87,9 @@ has no other answer to it. The reason to gate it hard: nothing above establishes
 that a second installation *wants* it, and the failure mode of guessing wrong is
 a credential-bearing browser exposed on a network someone assumed was private.
 
-**If Terje declines this plan, browserless is unaffected** — that is why they are
-separate.
+*(Written before the decision: "if Terje declines this plan, browserless is
+unaffected — that is why they are separate." He did not decline; the split still
+did its job, by making the sequencing decidable separately from the scope one.)*
 
 ---
 
@@ -199,8 +210,8 @@ can tell which of the two services they need without asking.
 ## Acceptance Criteria
 
 - [ ] Terje has approved shipping neko at all, and the opt-in-only gating
-      — ⚠️ **still open**; the split and the category were approved 2026-08-21,
-      neko's own scope was not
+      — ✅ **approved 2026-08-21**, sequenced after browserless
+- [ ] browserless-001 has shipped and the `AUTOMATION` category exists
 - [ ] It meets the laptop requirement: `uis deploy neko` on Rancher Desktop,
       nothing else. (It does — the objection in Part 1 is about *purpose*, not
       deployability. `adding-a-service.md` asks that this be stated in the plan
@@ -230,9 +241,8 @@ weakness: `neko` is a common word and says nothing about what the service does �
 but inventing a name would break a convention that has held for all 34 existing
 services, and the category description carries the meaning.
 
-**If this plan is declined**, the Case-2 auth gap should be written down as a
-known UIS limitation rather than left silent. Users will hit it; better they meet
-a documented boundary than a puzzle.
+**The Case-2 auth gap is now answered rather than documented as a limitation** —
+that was the fallback had this plan been declined. It was not.
 
 ---
 
