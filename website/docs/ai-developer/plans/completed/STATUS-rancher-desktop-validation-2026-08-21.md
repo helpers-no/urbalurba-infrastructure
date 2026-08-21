@@ -34,7 +34,9 @@ VM: 3 CPU, ~7.8 GiB allocatable, 74 GiB free disk.
 
 ---
 
-## Results — six services, zero failures
+## Results — eleven services, zero failures
+
+### Batch 1 — deployed and left running
 
 | Service | Deploy | Verify | Notes |
 |---|---|---|---|
@@ -44,6 +46,54 @@ VM: 3 CPU, ~7.8 GiB allocatable, 74 GiB free disk.
 | `minio` | `ok=19 changed=3` | ✅ **5/5 E2E** | bucket create/write/read/delete |
 | `redis` | `ok=20 changed=9` | in-setup, 1 task | **no PVC** |
 | `uptime-kuma` | `ok=23 changed=6` | ✅ 4/4 | both invocation forms |
+
+### Batch 2 — via `uis test-all --only`, which also exercises removal
+
+Terje's point: the uninstall is a test too, and it gives the memory back.
+`test-all` does deploy → verify → undeploy in dependency order, so it covers both
+directions in one pass.
+
+| Service | Deploy | Undeploy |
+|---|---|---|
+| `mongodb` | PASS (1m 43s) | PASS (10s) |
+| `mysql` | PASS (1m 32s) | PASS (12s) |
+| `qdrant` | PASS (56s) | PASS (10s) |
+| `rabbitmq` | PASS (3m 56s) | PASS (13s) |
+
+8/8 operations passed. **Eleven services validated in total, zero failures.**
+
+`mysql` showed `Pending` briefly — transient scheduling, not the resource ceiling.
+Node at peak: cpu 960m requests (32%), memory 1972Mi requests / 5546Mi limits
+(24% / 69%). The box is comfortable at this batch size; the heavy services
+(`elasticsearch`, `openmetadata`) are still expected to change that.
+
+`rabbitmq` at 3m 56s is four times anything else, almost all of it Helm waiting on
+the StatefulSet.
+
+### Two warnings found, both filed
+
+Neither broke anything. Both recorded because the platform has twice paid for
+"silently wrong" over "loudly broken" — `kubectl run --rm -i` and `envsubst`.
+
+1. **`kubernetes<24.2.0 is not supported or tested`** →
+   [PLAN-system-k8s-client-version-pin](../backlog/PLAN-system-k8s-client-version-pin.md).
+   Measured in the container: Python client **12.0.1** against a **v1.36** API
+   server, and **not pinned anywhere** — it is whatever the base image carries.
+2. **`Found variable using reserved name: namespace`** →
+   [PLAN-system-ansible-reserved-var-names](../backlog/PLAN-system-ansible-reserved-var-names.md).
+   Not one playbook — **21**, counted by parsing `vars:` blocks. Concentrated in
+   the observability set and Traefik, i.e. the batch this run postponed, so it
+   will appear in volume when that runs.
+
+### Two coverage gaps in `test-all` itself
+
+- **`gravitee` is permanently skipped** — `SKIP_SERVICES_ALWAYS="gravitee"`,
+  commented *"broken or not testable"*, with no date and no linked issue. It will
+  never appear in a test run and nothing reports its absence.
+- **`SKIP_SERVICES_CONDITIONAL` is empty.** The mechanism for skipping services
+  whose credentials are still placeholders exists and has no entries, so such a
+  service will attempt to deploy with `LocalDev` values and fail as if broken.
+  Related to [INVESTIGATE-secrets-dev-to-production](../backlog/INVESTIGATE-secrets-dev-to-production.md).
 
 ### What this actually establishes
 
