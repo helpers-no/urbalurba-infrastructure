@@ -29,6 +29,12 @@
     backstage_appconfig_file: "{{ manifests_folder }}/654-backstage-app-config.yaml"
     backstage_helm_repo_url: "https://redhat-developer.github.io/rhdh-chart"
     backstage_helm_chart: "rhdh-chart/backstage"
+    # PINNED. Previously unpinned, so `helm upgrade --install` silently took
+    # whatever the repo served that day — while the *image* below was pinned to
+    # 1.9. A floating chart against a pinned image is the worst of both: the
+    # pairing is never the one that was tested, and it changes with no commit.
+    # Bump deliberately, then re-run `./uis test-all --only backstage --clean`.
+    backstage_helm_chart_version: "7.0.1"
     installation_timeout: 600
     pod_readiness_timeout: 300
 
@@ -271,6 +277,7 @@
     - name: 30. Deploy Backstage using RHDH Helm chart
       ansible.builtin.command: >
         helm upgrade --install backstage {{ backstage_helm_chart }}
+        --version {{ backstage_helm_chart_version }}
         -f {{ backstage_config_file }}
         --namespace {{ backstage_namespace }}
         --timeout {{ installation_timeout }}s

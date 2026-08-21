@@ -173,12 +173,37 @@ route:
   enabled: false
 
 # Dynamic plugins configuration (RHDH feature)
-# Plugins in dynamic-plugins.default.yaml are disabled by default.
-# List them here with disabled: false to enable.
+#
+# NOTE: `includes` is deliberately set to an EMPTY LIST, not omitted.
+#
+# Omitting it does nothing: `dynamic-plugins.default.yaml` is a *chart default*
+# (see `helm show values rhdh-chart/backstage`), and Helm merges maps — so a
+# missing key silently inherits the default. Only `includes: []` overrides it.
+# This cost a deploy cycle to learn; do not "tidy up" the empty list.
+#
+# That include makes install-dynamic-plugins resolve RHDH's entire default
+# plugin set from `quay.io/rhdh/plugin-catalog-index:next` — a FLOATING tag,
+# built outside the rhdh repo, listing plugins UIS neither enables nor wants.
+# References are resolved during merge, *before* `disabled` is honoured, so a
+# single unresolvable entry aborts the whole ConfigMap and the pod crash-loops
+# until Helm times out. One unrelated third-party entry can therefore break
+# `uis deploy backstage` with nothing changed on our side.
+#
+# That is not hypothetical. On 2026-08-21 the deploy failed on:
+#   oci://quay.io/rhdh/backstage-community-plugin-auth-backend-module-keycloak-provider:2.0.0--0.4.0
+#   unauthorized: access to the requested resource is not authorized
+# Red Hat hit the identical error in their own CI the same morning and excluded
+# the plugin — it is unpublished, i.e. not anonymously pullable. See
+# redhat-developer/rhdh#5289 (merged 2026-08-21) and RHDHBUGS-3678.
+#
+# UIS enables two Kubernetes plugins explicitly, listed below, and uses
+# Authentik rather than Keycloak. Nothing in the default set is wanted, so
+# nothing is resolved. To enable an RHDH default plugin, add it to `plugins:`
+# by its `./dynamic-plugins/dist/...` path — those ship inside the pinned image
+# and need no registry lookup.
 global:
   dynamic:
-    includes:
-      - dynamic-plugins.default.yaml
+    includes: []
     plugins:
       # Kubernetes backend plugin — serves /api/kubernetes
       - package: ./dynamic-plugins/dist/backstage-plugin-kubernetes-backend-dynamic
