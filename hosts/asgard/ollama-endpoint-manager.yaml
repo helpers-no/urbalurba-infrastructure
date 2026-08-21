@@ -2,8 +2,8 @@
 #
 # WHY THIS EXISTS
 # The Macs move between networks and sleep:
-#   - the M4 is on the LAN today (192.168.68.58, DHCP) and will be on Tailscale
-#     (100.115.97.90) after the holiday — a static Endpoints entry cannot span that
+#   - the M4 (MacWork) is DHCP-reserved on the LAN (192.168.68.75) when home and on
+#     Tailscale (100.115.97.90) at work — a static Endpoints entry cannot span that
 #   - a sleeping Mac still completes a TCP handshake, so requests HANG rather than
 #     fail, and the request that wakes the machine is always the one that dies
 #
@@ -73,8 +73,8 @@ data:
 
     : "${INTERVAL:=60}"
     : "${PROBE_TIMEOUT:=3}"
-    : "${MAC_ADDRS:=192.168.68.58 100.115.97.90}"
-    : "${M1_ADDRS:=192.168.68.70 100.127.6.20}"
+    : "${MAC_ADDRS:=192.168.68.75 100.115.97.90}"
+    : "${M1_ADDRS:=192.168.68.89 100.127.6.20}"
 
     log() { echo "$(date -u +%H:%M:%S) $*"; }
 
@@ -147,11 +147,12 @@ spec:
           env:
             - { name: INTERVAL,      value: "60" }
             - { name: PROBE_TIMEOUT, value: "3" }
-            # LAN first, Tailscale second. The M4's tailnet node is currently
-            # offline; it becomes the working path after the holiday and this
-            # picks that up with no config change.
-            - { name: MAC_ADDRS,     value: "192.168.68.58 100.115.97.90" }
-            - { name: M1_ADDRS,      value: "192.168.68.70 100.127.6.20" }
+            # LAN first, Tailscale second. M4 (MacWork): .75 reserved at home,
+            # .90-tailnet at work. M1 (tecMacDev): .89 wired at home, .20-tailnet
+            # as a safety net. The manager owns these addresses (not the static
+            # Endpoints in ollama-backends.yaml).
+            - { name: MAC_ADDRS,     value: "192.168.68.75 100.115.97.90" }
+            - { name: M1_ADDRS,      value: "192.168.68.89 100.127.6.20" }
           volumeMounts:
             - { name: scripts, mountPath: /scripts }
           resources:

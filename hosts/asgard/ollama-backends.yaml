@@ -24,7 +24,7 @@ metadata:
   namespace: ai
   labels: { app: mac-ollama }
   annotations:
-    urbalurba.io/description: "External Ollama on the M4 MacBook Pro (LAN)"
+    urbalurba.io/description: "External Ollama on the M4 (MacWork) — LAN .75 home / Tailscale away, managed"
     urbalurba.io/host: "MBP-J4G0G066W2.local"
 spec:
   ports:
@@ -41,9 +41,10 @@ metadata:
   labels: { app: mac-ollama }
 subsets:
   - addresses:
-      # M4 Pro — LAN only, DHCP, not on the tailnet. Verify with:
-      #   curl -m5 http://192.168.68.58:11434/api/version
-      - ip: 192.168.68.58
+      # M4 (MacWork) — DHCP-reserved .75 at home, Tailscale 100.115.97.90 at work.
+      # This is only a SEED: ollama-endpoint-manager owns this address live
+      # (LAN-first probe-and-pick). Verify: curl -m5 http://192.168.68.75:11434/api/version
+      - ip: 192.168.68.75
     ports:
       - name: http
         port: 11434
@@ -56,7 +57,7 @@ metadata:
   namespace: ai
   labels: { app: m1-ollama }
   annotations:
-    urbalurba.io/description: "External Ollama on the M1 Mac (Tailscale)"
+    urbalurba.io/description: "External Ollama on the M1 Mac (wired LAN, reserved)"
     urbalurba.io/host: "tecmacdev"
 spec:
   ports:
@@ -73,9 +74,12 @@ metadata:
   labels: { app: m1-ollama }
 subsets:
   - addresses:
-      # M1 tecMacDev — reached over Tailscale, so this address is stable.
-      # Its LAN address 192.168.68.70 is DHCP and deliberately not used.
-      - ip: 100.127.6.20
+      # M1 tecMacDev — wired via a USB gigabit dongle, DHCP-reserved so stable.
+      # Verify: curl -m5 http://192.168.68.89:11434/api/version
+      # Was Tailscale 100.127.6.20 (used while it was Wi-Fi/DHCP); the wired
+      # reserved LAN address is faster (no WireGuard) and home-only, which is
+      # fine — it only serves the cluster while at home. Revert = swap this line.
+      - ip: 192.168.68.89
     ports:
       - name: http
         port: 11434
