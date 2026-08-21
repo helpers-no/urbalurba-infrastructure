@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-21. Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-21 (second refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -56,6 +56,36 @@ shipped, so the triage view had drifted badly from the repo:
   `image-size` with no published patch — a floor, not a backlog item.
 - The first local build surfaced **pre-existing broken links and one broken
   anchor** in the docs. Warnings, not failures. Currently owned by nobody.
+---
+
+## What changed 2026-08-21 (second entry) — the browser platform becomes a service
+
+- **Terje decided the browser platform ships as a UIS service.** Not reopened.
+  What was open — name, category, scope — is proposed in two plans **awaiting his
+  approval**: [browserless-001](PLAN-service-browserless-001-deploy.md) and
+  [neko-001](PLAN-service-neko-001-optional-addon.md). Nothing is self-approved.
+- **Filed as two plans on purpose**, so scope can be approved by approving one
+  and not the other. browserless and neko have different second-user cases and
+  materially different blast radii; bundling them would hide that.
+- **browserless passes the second-user test on a fact, not a hope.** UIS already
+  ships Uptime Kuma; its `real-browser` monitor type calls
+  `chromium.connect(remoteBrowser.url)` and the image UIS deploys has no Chrome —
+  so that monitor type is **dead in every installation today**. browserless is
+  the missing piece, and serves the exact Playwright websocket route Uptime Kuma
+  connects to. Both facts verified in upstream source.
+- **A related gap this surfaced**: UIS's "E2E tests" are all API-level. Nothing
+  can currently assert that a *page renders*, for any of the ten-plus services
+  UIS ships with a web UI. OBS-F6 — the flaky Grafana E2E — is a test asserting
+  on API responses because asserting on the rendered dashboard was impossible.
+- **neko is argued both ways in its plan and gated hard.** It fails the purpose
+  test in the environment UIS calls baseline: on Rancher Desktop the human is
+  already where the cluster is, with a logged-in browser open. Recommended
+  shipped-but-never-default, because the Case-2 auth problem is real and UIS has
+  no other answer — but nothing establishes a second installation wants it.
+- **Proposes a new `AUTOMATION` category** (manifests 400–429, 430–499 reserved).
+  `OBSERVABILITY` was tempting and is wrong: browserless is a capability
+  observability *consumes*, not an observability tool.
+
 ---
 
 ## What changed 2026-08-21
