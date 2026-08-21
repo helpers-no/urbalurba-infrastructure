@@ -230,6 +230,37 @@ apply_secrets() {
 
     log_info "Applying secrets from: $secrets_file"
 
+    # Wait out any namespace still Terminating before applying.
+    #
+    # WHY: this file carries a Namespace and a urbalurba-secrets Secret for EVERY
+    # service. Kubernetes refuses new content in a namespace that is being
+    # deleted ("unable to create new content in namespace X because it is being
+    # terminated"), and one such rejection makes the whole `kubectl apply`
+    # non-zero — aborting the deploy even though every other namespace applied
+    # fine.
+    #
+    # This bites whenever a deploy follows an undeploy closely, which `test-all`
+    # does by design. Observed 2026-08-21: `undeploy backstage` returned in 9s,
+    # the backstage namespace was still Terminating, and the NEXT service
+    # (enonic) failed 4s in having done nothing. enonic was fine — it deployed
+    # and passed 6/6 verify tests once nothing was terminating. The failure
+    # names the wrong service, and which one depends on timing.
+    local waited=0
+    local terminating
+    while [[ $waited -lt 60 ]]; do
+        terminating=$(kubectl get namespaces --no-headers 2>/dev/null \
+            | awk '$2 == "Terminating" { print $1 }' | tr '\n' ' ')
+        [[ -z "${terminating// /}" ]] && break
+        [[ $waited -eq 0 ]] && log_info "Waiting for namespace(s) to finish terminating: ${terminating}"
+        sleep 3
+        waited=$((waited + 3))
+    done
+    if [[ -n "${terminating// /}" ]]; then
+        # Do not fail here: a namespace stuck Terminating for 60s is a separate
+        # problem, and the apply below may still succeed for every other one.
+        log_warn "Namespace(s) still terminating after ${waited}s: ${terminating}"
+    fi
+
     if ! kubectl apply -f "$secrets_file"; then
         log_error "Failed to apply secrets"
         return 1
