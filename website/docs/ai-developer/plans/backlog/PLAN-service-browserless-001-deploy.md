@@ -38,6 +38,48 @@ one. It depends on the `AUTOMATION` category that Phase 1 here creates.
 
 ---
 
+## Test environment: the iMac's Rancher Desktop, not asgard
+
+**Terje, 2026-08-21**: test on the iMac so the production cluster on Odin/tor is
+not disturbed. Verified suitable the same day — and it is the *right* target,
+not merely a safe one: the laptop requirement is specifically about Rancher
+Desktop, and this is Rancher Desktop. `assist` (the Pi) is bare k3s on **arm64**,
+where browserless's amd64-first images are a problem in themselves.
+
+| | iMac (`imac`, 100.84.7.57 / 192.168.68.55) |
+|---|---|
+| Arch | **x86_64** — matches browserless's published images |
+| Cluster | Rancher Desktop, k3s `v1.36.3+k3s1`, Ready 45d, docker runtime |
+| VM capacity | 4 CPU, **~11.7 GiB** allocatable, ~95 GiB ephemeral |
+| In use | 11 pods total — effectively empty |
+| UIS | installed and **initialised** (`.uis.secrets`, `.uis.extend` present) |
+
+### What has to happen before Phase 3 can run there
+
+- [ ] T.1 **`uptime-kuma` is not deployed on this cluster.** The headline
+      acceptance criterion — a green `real-browser` monitor — needs it.
+      `uis deploy uptime-kuma` there first. (It runs on `assist` today, a
+      different cluster; do not try to span the two)
+- [ ] T.2 **`docker` is not on the non-interactive PATH.** `./uis` fails over SSH
+      with `docker: command not found`; Rancher Desktop puts it in `~/.rd/bin`.
+      Every scripted run needs `export PATH=$HOME/.rd/bin:$PATH`. Small, and it
+      will bite every automated invocation until it is handled
+
+### Constraints to respect on that box
+
+- ⚠️ **Not a scratch cluster.** Namespace `ai` runs litellm, open-webui and tika,
+  up 19 days. browserless lands in namespace `browser`, so the blast radius is
+  small — but this is someone's working AI stack, not a throwaway
+- **Host RAM is tight**: 15 GiB total with ~5 GiB free; the Lima VM holds 12 GiB.
+  Inside the cluster there is room, but conservative browserless limits matter
+  more here than they would on a bigger box (task 2.11)
+- **Disk 74% used** (28 GiB free). The image is ~1 GiB and the docs build wants
+  ~1.7 GiB for `node_modules` + `build`. Fits; not roomy. Clean up after
+- **2011 i5-2400S, 4 cores.** Fine for correctness. **Not** a performance target
+  — do not draw conclusions about parallel-scrape throughput from this machine
+- **Powered off for long stretches.** Usable for hands-on testing, not as an
+  always-available CI target
+
 ## Problem
 
 ### UIS ships a service with a dependency it cannot satisfy
@@ -315,7 +357,8 @@ Docs build with no new broken-link warnings. A reader gets from
 - [ ] The image tag is pinned
 - [ ] No token literal anywhere in the repo
 - [ ] The verify playbook is registered and demonstrably runs
-- [ ] Nothing on the reference installation changed as a side effect
+- [ ] Nothing on the reference installation (Odin/asgard) changed as a side effect
+- [ ] The iMac's existing `ai` namespace is untouched
 
 ---
 

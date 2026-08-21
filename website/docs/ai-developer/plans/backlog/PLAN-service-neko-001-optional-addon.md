@@ -102,6 +102,14 @@ plan's Implementation Notes for what that cost.
 **Prerequisite**: the `AUTOMATION` category exists (browserless-001 Phase 1).
 This plan adds no category work.
 
+**Test environment**: the same iMac Rancher Desktop cluster as browserless-001 —
+see that plan's *Test environment* section for capacity, constraints and the two
+prerequisites. ⚠️ **One extra caution for neko specifically**: it holds live
+logins, and the exposure model differs per environment. On the iMac there is no
+Tailscale operator, so the tailnet-LB path used on the reference installation is
+**not reproducible there** — test the localhost/Traefik exposure, and do not
+conclude the tailnet path works from a green run on that box.
+
 ### Tasks
 
 - [ ] 1.1 **Step 2** — `provision-host/uis/services/automation/service-neko.sh`:
