@@ -22,6 +22,69 @@ This investigation should determine:
 
 ---
 
+## Finding (2026-08-21): tests are not missing — they are on the deploy gate
+
+Measured across all 34 services: registered verify (`VERIFY_SERVICES`) versus
+test tasks embedded in the **setup** playbook.
+
+| | Count | |
+|---|---|---|
+| Registered verify playbook | 10 | reachable from `uis verify` and `test-all` |
+| **Tests only inside the setup playbook** | **22** | run at deploy time, cannot be re-run |
+| No tests anywhere | 2 | `traefik`, `jupyterhub` |
+
+The 22 are not lightly tested. Ranked by test tasks on the deploy gate:
+
+```
+authentik 28   grafana 14   otel-collector 12   whoami 8   nginx 7   litellm 7
+loki 6   tempo 6   prometheus 5   elasticsearch 5   mongodb 4   unity-catalog 4
+mysql 3   pgadmin 3   gravitee 3   rabbitmq 3   redisinsight 3
+qdrant 2   openwebui 2   redis 1   spark 1   postgrest 1
+```
+
+**This inverts the assumption behind the earlier framing of this investigation.**
+The risk was stated as "verification playbooks present but not wired into active
+setup or test flows → deployments report success when no real validation
+happened." That is real. But the larger population is the opposite shape: real
+validation that runs **only** at deploy time, on the gate, where a flaky test
+fails the *deployment* rather than reporting a *test failure*.
+
+That is exactly OBS-F6. Grafana carries **14** test tasks on its deploy gate; one
+of them hit the `kubectl run --rm -i` race, and a healthy stack could not deploy
+Grafana. The defect was never Grafana.
+
+**Authentik is the same bomb, unexploded, at twice the size** — 28 test tasks on
+its deploy gate, and it is a dependency of several other services.
+
+Three services with a registered verify have **zero** in-setup tests — `enonic`,
+`nextcloud`, `openmetadata`. That is the shape the guide asks for
+([PLAN-service-grafana-deploy-gate-fix](./PLAN-service-grafana-deploy-gate-fix.md)
+Phase 4: *E2E belongs in `NNN-test-<id>.yml`, not the deploy gate*), and it
+already exists as a worked pattern to copy.
+
+### What this implies for the plans this investigation should produce
+
+Terje's direction, 2026-08-21: *"we should create verify for all services."*
+Refined by the measurement above, that is **two different jobs**, and conflating
+them would waste most of the work:
+
+1. **Move, don't write** — for the 22, the tests exist and are often thorough.
+   The job is relocating them into `NNN-test-<id>.yml`, registering them in the
+   three places, and leaving the deploy gate with readiness checks only. Start
+   with `authentik` (28) and `grafana` (14): highest blast radius, and Grafana
+   already has a plan open.
+2. **Write from nothing** — only `traefik` and `jupyterhub`, plus any of the 22
+   whose in-setup tests turn out to be readiness checks rather than E2E.
+
+Sequencing note: doing (1) *before*
+[PLAN-docs-provisioning-unsafe-test-idiom](./PLAN-docs-provisioning-unsafe-test-idiom.md)
+would relocate the broken `kubectl run --rm -i` idiom into 22 new files. Fix the
+idiom first, then move the tests, or the sweep has to happen twice.
+
+*Survey produced during the Rancher Desktop validation run — see
+[STATUS-rancher-desktop-validation-2026-08-21](../completed/STATUS-rancher-desktop-validation-2026-08-21.md).*
+
+
 ## Finding (2026-08-21): the rules document is the propagation source
 
 The third finding — `kubectl run --rm -i` returning `rc=0` with empty stdout —

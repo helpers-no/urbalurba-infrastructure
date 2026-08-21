@@ -1,0 +1,104 @@
+# Validation record: the summer's work on a clean Rancher Desktop, 21 August 2026
+
+## Status: Reference — a record of a test run, not a plan
+
+**What**: first end-to-end validation of the 18 July – 19 August work on a
+factory-reset Rancher Desktop cluster, on the iMac.
+**Why here**: [STATUS-summer-vacation-2026-07-18-to-08-19](./STATUS-summer-vacation-2026-07-18-to-08-19.md)
+recorded what was built. Nothing recorded whether it worked on a laptop, which is
+Principle 0. This is that.
+
+---
+
+## The environment, and one detour worth recording
+
+Rancher Desktop was factory-reset to get a clean cluster. **The fresh install came
+up on Kubernetes v1.25.16 and Traefik 2.10.5** — eleven minor versions behind the
+cluster it replaced (v1.36.3), and Traefik v2 rather than v3.
+
+A fresh Rancher Desktop profile picks its own defaults rather than what was there
+before. Corrected to v1.36.3 + Traefik 3.7.8 before any testing.
+
+**Had this not been caught, `whoami` and `nginx` would both have failed on the
+`traefik.io` CRD group and read as UIS regressions.** The old cluster carried
+*both* CRD groups (`traefik.containo.us` and `traefik.io`) from a v2→v3 upgrade in
+place, which masks the difference; a clean v3 install has only `traefik.io`.
+
+| | asgard (production) | iMac after correction |
+|---|---|---|
+| Kubernetes | `v1.36.2+k3s1` | `v1.36.3+k3s1` |
+| Traefik | v3 | `3.7.8` |
+| CRD groups | — | 25 × `traefik.io`, no `containo.us` |
+
+VM: 3 CPU, ~7.8 GiB allocatable, 74 GiB free disk.
+
+---
+
+## Results — six services, zero failures
+
+| Service | Deploy | Verify | Notes |
+|---|---|---|---|
+| `whoami` | `ok=18 changed=2` | in-setup, 8 tasks | IngressRoute live on Traefik v3 |
+| `nginx` | `ok=45 changed=13` | in-setup, 7 tasks | explicitly `traefik.io/v1alpha1` |
+| `postgresql` | `ok=8 changed=2` | ✅ registered | reports **`Topology: in-cluster`** |
+| `minio` | `ok=19 changed=3` | ✅ **5/5 E2E** | bucket create/write/read/delete |
+| `redis` | `ok=20 changed=9` | in-setup, 1 task | **no PVC** |
+| `uptime-kuma` | `ok=23 changed=6` | ✅ 4/4 | both invocation forms |
+
+### What this actually establishes
+
+**The external-services convention holds on the laptop side.** This was the
+summer's largest structural change and only the *production* half had ever been
+exercised — by construction, since the convention is about services running
+outside the cluster. `postgresql`'s verify detects its own topology and passes the
+identical test it passes against the external proxy on asgard:
+
+```
+A. Database answers a real query:  PASS
+B. Topology: in-cluster
+```
+
+**MinIO works in-cluster.** Flagged by Terje as never tested with UIS on Rancher
+Desktop. Deploy plus full E2E, first time.
+
+**Redis's PVC removal took** (19 Aug change). Worth recording because Redis has no
+registered verify, so nothing else would have caught a regression.
+
+**The verify-registration fix held.** Both `uis verify uptime-kuma` and
+`uis uptime-kuma verify` run — first clean-cluster proof that
+[PLAN-cli-verify-registration-fix](../backlog/PLAN-cli-verify-registration-fix.md)
+Phase 1 actually fixed the three-place defect.
+
+**Uptime Kuma warns about its own deployment** — *"If you have just deployed it
+onto the cluster you intend to monitor, it cannot tell you when that cluster is
+down."* Correct and well-placed. This instance is a functional test, not a usable
+watchdog.
+
+---
+
+## What this run does NOT establish
+
+- **The `kubectl run --rm -i` race is untested here.** It is load-dependent, and
+  six light services do not load a box. The steps most likely to trigger it —
+  observability and litellm — were deliberately postponed. A green sweep is not
+  evidence that defect is gone.
+- **Nothing about the postponed services**: the observability stack, litellm
+  (expect F7/F8 — no Ollama on the iMac, so a model will list and not answer),
+  and the 26 services not deployed at all.
+- **Not a resource test.** Six light services on 3 CPU / 7.8 GiB says nothing
+  about whether the full stack fits. It does not.
+
+---
+
+## Correction recorded deliberately
+
+The first report of this run described `whoami`, `nginx` and `redis` as having
+"no playbook". That was wrong, and Terje caught it: it conflated *"no registered
+verify playbook"* with *"not tested"*. `025-setup-whoami-testpod.yml` is titled
+**"Setup and Verify Whoami Test Application"** and carries 8 test tasks; nginx
+carries 7.
+
+Measuring properly produced a more useful finding than the original claim — see
+[INVESTIGATE-system-verification-playbooks-usage](../backlog/INVESTIGATE-system-verification-playbooks-usage.md),
+which now carries the full survey. The short version: tests are not missing, they
+are on the deploy gate.
