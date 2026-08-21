@@ -18,6 +18,14 @@ _UIS_INTEGRATION_TESTING_LOADED=1
 # ============================================================
 
 # Services always skipped (broken or not testable)
+#
+# postgrest is deliberately ABSENT from VERIFY_SERVICES rather than listed here,
+# and the distinction matters. It is not broken: it deploys, serves its schema
+# and refuses writes, verified 2026-08-22 via `uis verify postgrest --app`.
+# It is out of scope for an integration suite because it is only meaningful
+# alongside a consuming application - it needs `--app`, a prior `uis configure`,
+# AND a database created outside UIS by that app's own migration. There is
+# nothing for a standalone suite to point it at.
 SKIP_SERVICES_ALWAYS="gravitee"
 
 # Services skipped unless credentials are configured.

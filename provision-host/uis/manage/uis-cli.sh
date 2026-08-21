@@ -2040,6 +2040,7 @@ cmd_verify() {
         echo "  argocd          Run E2E health checks on ArgoCD server"
         echo "  backstage       Run E2E health checks on Backstage (RHDH)"
         echo "  enonic          Run E2E health checks on Enonic XP"
+        echo "  postgrest --app <name>  Verify one PostgREST instance serves its schema"
         echo "  minio           Run E2E health checks on MinIO object storage"
         echo "  nextcloud       Run E2E health checks on Nextcloud + OnlyOffice"
         echo "  openmetadata    Run E2E health checks on OpenMetadata"
@@ -2071,6 +2072,10 @@ cmd_verify() {
         enonic)
             cmd_enonic_verify
             ;;
+        postgrest)
+            shift
+            cmd_postgrest_verify "$@"
+            ;;
         minio)
             cmd_minio_verify
             ;;
@@ -2096,6 +2101,7 @@ cmd_verify() {
             echo "  argocd          Run E2E health checks on ArgoCD server"
             echo "  backstage       Run E2E health checks on Backstage (RHDH)"
             echo "  enonic          Run E2E health checks on Enonic XP"
+        echo "  postgrest --app <name>  Verify one PostgREST instance serves its schema"
             echo "  minio           Run E2E health checks on MinIO object storage"
             echo "  nextcloud       Run E2E health checks on Nextcloud + OnlyOffice"
             echo "  openmetadata    Run E2E health checks on OpenMetadata"
@@ -2366,6 +2372,28 @@ cmd_argocd_verify() {
 cmd_enonic_verify() {
     print_section "Verifying Enonic XP Deployment"
     ansible-playbook "$ANSIBLE_DIR/085-test-enonic.yml"
+}
+
+# PostgREST is multi-instance: one Deployment per consuming app, so there is no
+# single instance to verify. --app is required, exactly as it is for deploy.
+cmd_postgrest_verify() {
+    local app_name=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --app) app_name="${2:-}"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    if [[ -z "$app_name" ]]; then
+        log_error "Service 'postgrest' is multi-instance \u2014 --app <name> is required"
+        log_info "Example: uis verify postgrest --app atlas"
+        log_info "Instances: kubectl get deploy -n postgrest"
+        return "$EXIT_GENERAL_ERROR"
+    fi
+
+    print_section "Verifying PostgREST instance '$app_name'"
+    ansible-playbook "$ANSIBLE_DIR/088-test-postgrest.yml" -e "_app_name=$app_name"
 }
 
 # ============================================================
@@ -2866,6 +2894,18 @@ main() {
                     echo "Commands:"
                     echo "  alloy verify     Run E2E health checks on Alloy log collection"
                     exit "$EXIT_GENERAL_ERROR"
+                    ;;
+            esac
+            ;;
+        postgrest)
+            local subcmd="${1:-}"
+            shift 2>/dev/null || true
+            case "$subcmd" in
+                verify)
+                    cmd_postgrest_verify "$@"
+                    ;;
+                *)
+                    echo "  Use: ./uis postgrest verify --app <name>" >&2
                     ;;
             esac
             ;;
