@@ -404,8 +404,20 @@ def build(services_dir, extend_file=None, salt=None, watchdog="auto"):
         for entry in doc.get("monitors", []):
             m = dict(defaults)
             m.update(entry)
+            # ⚠️ SEVERITY MUST BE CARRIED HERE TOO.
+            # render_monitor() sets _severity for service-discovered probes, but
+            # extend-file entries are built by this explicit dict instead. When
+            # severity shipped it was added there and not here, so every
+            # monitors.yaml entry silently defaulted to "info" - which moved ten
+            # already-critical monitors to the daytime-only channel and would have
+            # left an overnight outage unpaged.
+            sev = m.get("severity", "info")
+            if sev not in ("critical", "info"):
+                sys.exit(f"ERROR: {m['name']}: severity must be 'critical' or "
+                         f"'info', got '{sev}'")
             o = {"name": m["name"], "type": m["type"],
                  "_notify": m.get("notify", True),
+                 "_severity": sev,
                  "interval": int(m.get("interval", 60)),
                  "max_retries": int(m.get("maxretries", 2)),
                  "retry_interval": int(m.get("retry_interval", 60)),
@@ -643,7 +655,8 @@ def main():
     if args.action == "apply":
         import base64
         # _notify is UIS bookkeeping; AutoKuma must not see it.
-        clean = [{k: v for k, v in m.items() if k != "_notify"} for m in monitors]
+        clean = [{k: v for k, v in m.items()
+                   if not k.startswith("_")} for m in monitors]
         data = {f"{m['name']}.json": base64.b64encode(
             json.dumps(m, indent=2).encode()).decode() for m in clean}
         secret = {"apiVersion": "v1", "kind": "Secret",
