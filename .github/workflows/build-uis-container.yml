@@ -27,6 +27,19 @@ on:
       - '.github/workflows/build-uis-container.yml'
   workflow_dispatch:  # Allow manual trigger
 
+# ⚠️ SERIALISE. Two merges seconds apart used to start two concurrent builds,
+# both pushing :latest - and the one that finished last won, regardless of which
+# commit it carried. On 2026-08-19 that published an image whose provision-host/
+# content matched the PARENT of the commit the build ran from, and it took an
+# hour of hashing files to work out why a merged fix was not in the image.
+#
+# cancel-in-progress is deliberately false: cancelling the older build would be
+# fine, but cancelling the NEWER one (which is what happens when a queued run is
+# superseded) would leave :latest on older content. Queue them instead.
+concurrency:
+  group: build-uis-container
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/uis-provision-host
@@ -81,6 +94,37 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # ⚠️ THE BUILD GOING GREEN DOES NOT MEAN :latest IS THIS COMMIT.
+      # Nothing else in this pipeline compares what shipped against what was
+      # built, which is how a wrong image survived undetected for two days. The
+      # sha tag is unambiguous - it can only have been pushed by this run - so
+      # :latest must resolve to the same digest.
+      - name: Verify :latest is the image this run just built
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          SHA_TAG="${GITHUB_SHA::7}"
+          IMAGE="${REGISTRY}/${IMAGE_NAME}"
+          # {{.Manifest.Digest}} does not resolve cleanly on a multi-arch index
+          # that carries attestations - it prints the attestation manifest. Read
+          # the index digest out of the JSON instead. Verified against the real
+          # registry before this was committed.
+          digest_of() {
+            docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' \
+              | jq -re '.digest'
+          }
+          sha_digest=$(digest_of "${IMAGE}:${SHA_TAG}")
+          latest_digest=$(digest_of "${IMAGE}:latest")
+          echo "  ${SHA_TAG}: ${sha_digest}"
+          echo "  latest : ${latest_digest}"
+          if [ "$sha_digest" != "$latest_digest" ]; then
+            echo "::error::':latest' does not point at the image built from ${GITHUB_SHA}."
+            echo "::error::Another build almost certainly raced this one. Re-run this workflow"
+            echo "::error::on main once the other has finished; do not assume the tag is correct."
+            exit 1
+          fi
+          echo "OK: :latest and :${SHA_TAG} are the same image."
 
       - name: Sync website/static/version.txt
         run: |
