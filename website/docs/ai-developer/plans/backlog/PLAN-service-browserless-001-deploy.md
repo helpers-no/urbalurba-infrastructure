@@ -101,18 +101,31 @@ the server.
 
 ## Phase 1: Open the AUTOMATION category
 
-browserless is its first inhabitant, so the category lands with it.
+⚠️ **Rewritten 2026-08-21 after reading
+[adding-a-service.md](../../../contributors/guides/adding-a-service.md).** The
+first draft of this plan invented its own step list. The guide is authoritative
+and the registry is `provision-host/uis/lib/categories.sh`, not the narrative
+lists in `CLAUDE.md`.
+
+browserless is the category's first inhabitant, so the category lands with it.
 
 ### Tasks
 
-- [ ] 1.1 Add `AUTOMATION` to the category list in `CLAUDE.md` and `AGENTS.md`,
-      with manifest range **400–429** (browserless), 430–499 reserved
-- [ ] 1.2 Add the category to `services.json` / the docs-site navigation and the
-      services page grouping
-- [ ] 1.3 Create `provision-host/uis/services/automation/`
-- [ ] 1.4 Write the category description: *"Browser automation, synthetic checks,
-      and agent tooling"* — the umbrella term "the browser platform" is a
-      **category description, not a service name**
+- [ ] 1.1 Add the row to `_CATEGORY_DATA` in `provision-host/uis/lib/categories.sh`.
+      Format is `ID|Display Name|Description|tags|icon|logo`:
+      `AUTOMATION|Automation|Browser automation, synthetic checks, and agent tooling|automation,browser,testing|robot|automation-logo.svg`
+- [ ] 1.2 Add `AUTOMATION` to the `CATEGORY_ORDER` array — **position controls
+      display order** (it becomes the generated `order` field), so place it
+      deliberately rather than appending. Suggested: after `ANALYTICS`
+- [ ] 1.3 Create `website/static/img/categories/automation-logo.svg` (plus the
+      `src/` variant if the other categories carry one) — the registry row
+      references a file that must exist
+- [ ] 1.4 Add the category row to the table in
+      `website/docs/contributors/guides/adding-a-service.md` (Step 1) —
+      **manifest range 400–429**, 430–499 reserved
+- [ ] 1.5 Add the same row to `website/docs/contributors/rules/kubernetes-deployment.md`
+- [ ] 1.6 Update the narrative category lists in `CLAUDE.md` and `AGENTS.md`
+- [ ] 1.7 Create `provision-host/uis/services/automation/`
 
 ### Validation
 
@@ -120,90 +133,178 @@ browserless is its first inhabitant, so the category lands with it.
 ./uis list                 # AUTOMATION appears, empty until Phase 2
 ```
 
-Docs site builds with the new category present and no broken links.
+Generated `services.json` contains the category with a sane `order` and a `logo`
+that resolves.
 
 ---
 
-## Phase 2: The service definition and manifests
+## Phase 2: The service, following the guide and the rules docs
+
+⚠️ **Second rewrite 2026-08-21**, after reading `rules/provisioning.md`,
+`rules/secrets-management.md`, `rules/kubernetes-deployment.md` and
+`architecture/manifests.md`. Corrections to the previous draft are noted inline —
+they were not cosmetic.
 
 ### Tasks
 
-- [ ] 2.1 `provision-host/uis/services/automation/service-browserless.sh` —
+- [ ] 2.1 **Step 2** — `provision-host/uis/services/automation/service-browserless.sh`:
       `SCRIPT_ID="browserless"`, `SCRIPT_CATEGORY="AUTOMATION"`,
       `SCRIPT_NAMESPACE="browser"`, `SCRIPT_PRIORITY="25"`,
-      `SCRIPT_KIND="Component"`, `SCRIPT_TYPE="service"`, `SCRIPT_REQUIRES=""`
-- [ ] 2.2 `manifests/400-browserless-config.yaml` — Deployment + Service,
-      **pinned image tag** (`ghcr.io/browserless/chromium`), no `:latest`
-- [ ] 2.3 Token from `urbalurba-secrets` via `secretKeyRef` only — never a
-      literal, never a default that ships as a real value
-- [ ] 2.4 LocalDev default for the token in `00-common-values`, so Rancher
-      Desktop is **zero-config**
-- [ ] 2.5 Resource requests/limits — a Chromium pool is memory-hungry and will
-      otherwise evict things on a laptop
-- [ ] 2.6 `SCRIPT_CHECK_COMMAND` against the pod, and a remove playbook
+      `SCRIPT_KIND="Component"`, `SCRIPT_TYPE="service"`, `SCRIPT_REQUIRES=""`,
+      `SCRIPT_PLAYBOOK="400-setup-browserless.yml"`,
+      `SCRIPT_REMOVE_PLAYBOOK="400-remove-browserless.yml"`, `SCRIPT_CHECK_COMMAND`,
+      website metadata, `SCRIPT_LOGO="browserless-logo.svg"`.
+      **Metadata contains no logic** — variable assignments only; all deployment
+      logic lives in the playbook (`rules/provisioning.md`, Metadata + Ansible)
+- [ ] 2.2 ⚠️ **`SCRIPT_PLAYBOOK` and `SCRIPT_MANIFEST` are mutually exclusive**
+      deployment methods. Use the playbook — the service needs two-stage readiness
+      checks and an IngressRoute, which a bare `kubectl apply` cannot do
+- [ ] 2.3 **Step 3** — `manifests/400-browserless-deployment.yaml`.
+      ⚠️ **Corrected**: `*-config.yaml` means *Helm values file* in this repo.
+      browserless has no Helm chart, so the Helm-less naming applies —
+      precedent `320-unity-catalog-deployment.yaml`, `230-uptime-kuma-statefulset.yaml`.
+      **Pinned image tag** (`ghcr.io/browserless/chromium`), never `:latest`
+- [ ] 2.4 **Step 4** — `manifests/400-browserless-ingressroute.yaml`.
+      ⚠️ **Corrected to 400, not 401**: *"manifest number must match the
+      corresponding Ansible playbook number"* (`architecture/manifests.md`).
+      Multiple manifests may share a prefix — uptime-kuma has four at `230`
+- [ ] 2.5 **Step 5/6** — `ansible/playbooks/400-setup-browserless.yml` and
+      `400-remove-browserless.yml`. Search `ansible/playbooks/` for an existing
+      playbook to extend before creating new ones, per the rules
+- [ ] 2.6 Playbook must follow `rules/provisioning.md`:
+      - use `_target` (`{{ target_host | default('rancher-desktop') }}`); never
+        reference `target_host` directly in the body
+      - **two-stage readiness**: wait for `Running`, then for
+        `containerStatuses[0].ready == true`
+      - progress feedback via Ansible `retries`/`delay`, not silent `kubectl wait`
+      - **never test `.localhost` from Ansible** — it resolves to the host, not
+        the cluster
+      - no `ignore_errors: true` on anything a later step depends on
+      - verify the IngressRoute exists after applying it
+- [ ] 2.7 **Step 7 — secrets, per `rules/secrets-management.md`**:
+      - secret name is **`urbalurba-secrets`** in namespace `browser` — never a
+        service-specific secret name
+      - define `BROWSERLESS_TOKEN` once in
+        `.uis.secrets/secrets-config/00-common-values.env.template`
+        (shipped template: `provision-host/uis/templates/secrets-templates/`)
+      - reference it as `BROWSERLESS_TOKEN: "${BROWSERLESS_TOKEN}"` in
+        `00-master-secrets.yml.template` under the `browser` namespace
+      - pod reads `secretKeyRef` only. **Never** a literal, never a real value
+        shipped as a default
+      - a LocalDev default keeps Rancher Desktop zero-config
+- [ ] 2.8 **Step 8** — N/A, no Helm chart and therefore no Helm repo
+- [ ] 2.9 **Step 9** — commented-out entry in
+      `provision-host/uis/templates/uis.extend/enabled-services.conf.default`.
+      (`./uis deploy browserless` auto-enables; the template documents availability)
+- [ ] 2.10 **Step 10** — `provision-host/uis/lib/stacks.sh`. Recommendation:
+      **no change**. browserless is a dependency of one optional monitor type,
+      not part of the metrics/logs/traces set; pulling a Chromium pool into every
+      `uis stack install observability` would be wrong
+- [ ] 2.11 Resource requests/limits — the heaviest thing in this category; on a
+      laptop already running the full stack, limits are not optional
 
 ### Validation
 
 ```bash
 ./uis deploy browserless
-./uis status browserless
+./uis status
+./uis list --category AUTOMATION
+./uis undeploy browserless        # three-tier removal via the remove playbook
 ```
 
-A first deploy on Rancher Desktop needs no secret setup and no manual step.
+First deploy on Rancher Desktop needs no secret setup and no manual step.
 
 ---
 
-## Phase 3: Prove both consumers
+## Phase 3: Verify playbook — and actually register it, in three places
 
-The two paths are different protocols on different routes; both must be shown to
-work or the service is half-delivered.
+**Step 5b.** The guide names two registration points. **There is a third**, and
+missing it is invisible: `cmd_verify()` in `uis-cli.sh` carries a hardcoded
+usage list of verifiable services. A service registered in the other two but
+absent there works, yet is undiscoverable — the same allowlist-that-new-things-
+never-join shape as the secrets validator.
+
+⚠️ **Report this gap back to the guide** — see Implementation Notes.
 
 ### Tasks
 
-- [ ] 3.1 **Playwright path** — register browserless as a Remote Browser in
-      Uptime Kuma and make one `real-browser` monitor go green against an
-      in-cluster service. This is the product story; it must be demonstrated,
-      not asserted
-- [ ] 3.2 **CDP path** — `@playwright/mcp --cdp-endpoint http://…:3000` connects
-      and drives a page (the agent-tooling story from the handoff)
-- [ ] 3.3 Verify playbook `NNN-test-browserless.yml`, reached through
-      `uis verify` — per [PLAN-service-grafana-deploy-gate-fix](./PLAN-service-grafana-deploy-gate-fix.md)
-      Phase 4, E2E belongs in a verify playbook, **not** on the deploy gate
-- [ ] 3.4 Confirm the verify playbook is actually registered and runs — the
-      exact defect [PLAN-cli-verify-registration-fix](./PLAN-cli-verify-registration-fix.md)
-      exists for. Do not repeat it here
+- [ ] 3.1 `ansible/playbooks/400-test-browserless.yml`. Reference implementations
+      per the guide: `025-test-argocd.yml`, `085-test-enonic.yml`,
+      `300-test-openmetadata.yml`
+- [ ] 3.2 Register in `VERIFY_SERVICES` in `provision-host/uis/lib/integration-testing.sh`
+- [ ] 3.3 Add the `browserless)` case to `cmd_verify()` in
+      `provision-host/uis/manage/uis-cli.sh`, implementing `cmd_browserless_verify()`
+- [ ] 3.4 **Add the line to the hardcoded help list inside `cmd_verify()`** — the
+      step the guide omits
+- [ ] 3.5 ⚠️ **Do not copy the connectivity-test idiom from `rules/provisioning.md`
+      verbatim.** It uses `kubectl run --rm -i` with
+      `until: rc == 0 and stdout.find('HTTP_CODE:200')`, and that call can return
+      `rc=0` with **empty stdout** when the container outlives the attach — so a
+      healthy service reads as failing after exhausting retries. This is the
+      defect in [INVESTIGATE-system-verification-playbooks-usage](./INVESTIGATE-system-verification-playbooks-usage.md);
+      the rules doc still teaches it. Assert on something that cannot be silently
+      empty
+- [ ] 3.6 **Prove both consumers** — different protocols on different routes,
+      both required or the service is half-delivered:
+      - **Playwright path**: register browserless as a Remote Browser in Uptime
+        Kuma; one `real-browser` monitor goes green against an in-cluster
+        service. This is the product story — demonstrate it, do not assert it
+      - **CDP path**: `@playwright/mcp --cdp-endpoint http://…:3000` drives a page
+- [ ] 3.7 Confirm it is reachable from `uis verify browserless` **and** from
+      `test-all` — uptime-kuma's verify was invisible to `test-all`
+- [ ] 3.8 E2E stays in the verify playbook, **not** on the deploy gate, per
+      [PLAN-service-grafana-deploy-gate-fix](./PLAN-service-grafana-deploy-gate-fix.md) Phase 4
 
 ### Validation
 
-Uptime Kuma shows a green browser-based monitor. `uis verify browserless` runs
-and reports real numbers.
+`uis verify` with no argument **lists browserless**. `uis verify browserless`
+runs and reports real numbers. `test-all` includes it. Uptime Kuma shows a green
+browser-based monitor.
 
 ---
 
-## Phase 4: Exposure, security and docs
+## Phase 4: Exposure, security and documentation
 
 ### Tasks
 
-- [ ] 4.1 Exposure differs by environment, the pod does not — same
+- [ ] 4.1 Exposure differs by environment, the pod does not — the same
       interfaces-over-backends rule as secrets. Rancher Desktop: localhost /
-      Traefik. Proxmox: keep the reference installation's manifest as the
-      documented example. Cloud: out of scope, say so
-- [ ] 4.2 Carry the security model over verbatim from `platform/browser/README.md`
+      Traefik. Proxmox: the reference installation's manifest as the documented
+      example. Cloud: **explicitly out of scope**, stated rather than inferred
+- [ ] 4.2 Security model carried verbatim from `platform/browser/README.md`
       (home repo): private-network-only, and **why**
-- [ ] 4.3 Service docs page: the tool-choice ladder (plain HTTP → browserless →
-      neko), so users pick the cheapest tool that works
-- [ ] 4.4 Document the Uptime Kuma Remote Browser recipe as the headline use
+- [ ] 4.3 **Step 11** — `website/docs/services/automation/browserless.md`, added
+      to `website/sidebars.ts` under the new category
+- [ ] 4.4 Document the Uptime Kuma Remote Browser recipe as the headline use, and
+      the tool-choice ladder (plain HTTP → browserless → neko)
+- [ ] 4.5 Create `website/static/img/services/browserless-logo.svg` (plus the
+      `src/` variant the other service logos carry)
+- [ ] 4.6 IngressRoute follows `rules/ingress-traefik.md` patterns — do not
+      invent routing conventions here
+- [ ] 4.7 Build the docs site **in the Node container** — neither the workstation
+      nor provision-host ships Node:
+      ```bash
+      cd website && docker run --rm -u $(id -u):$(id -g) \
+        -v "$PWD":/w -w /w -e HOME=/tmp -e CI=true node:20 \
+        sh -c 'npm ci && npm run build'
+      ```
+      ⚠️ **Read the warnings, not the exit code.** Broken links and anchors are
+      warnings; the build still exits 0 and CI does not fail on them
 
 ### Validation
 
-Docs build. A reader can go from `uis deploy browserless` to a green browser
-monitor without reading this plan.
+Docs build with no new broken-link warnings. A reader gets from
+`uis deploy browserless` to a green browser monitor without reading this plan.
 
 ---
 
 ## Acceptance Criteria
 
 - [ ] Terje has approved the name, category and scope **before** Phase 1 starts
+      — ✅ **approved 2026-08-21** (split into two services, category `AUTOMATION`)
+- [ ] The service meets the laptop requirement: `uis deploy browserless` on
+      Rancher Desktop, nothing else, no second machine, no hand-built step
+- [ ] The verify playbook is registered in **both** files and demonstrably runs
 - [ ] `uis deploy browserless` works on Rancher Desktop with no secret setup
 - [ ] An Uptime Kuma `real-browser` monitor runs green against an in-cluster service
 - [ ] `@playwright/mcp` connects over CDP
@@ -239,16 +340,59 @@ optional and belongs in documentation, which is why browserless sits at priority
 **Memory.** A Chromium pool is the heaviest thing in this category. On a laptop
 already running the full UIS stack, limits are not optional.
 
+**Two gaps found in the contributor docs while writing this plan.** Both are
+small, both cost someone a debugging session, and neither belongs to this
+service — they should be fixed in the docs, not worked around here:
+
+1. `adding-a-service.md` Step 5b says verify registration is **two files**. It is
+   three: `cmd_verify()` in `uis-cli.sh` also carries a hardcoded usage list, and
+   a service missing from it is undiscoverable while appearing to work.
+2. `rules/provisioning.md` teaches the connectivity test as `kubectl run --rm -i`
+   with `until: rc == 0 and stdout.find(...)`. That idiom is the subject of
+   [INVESTIGATE-system-verification-playbooks-usage](./INVESTIGATE-system-verification-playbooks-usage.md)
+   — the call can return `rc=0` with empty stdout, so a healthy service reads as
+   failing. The rules doc still recommends it.
+
+**What the first two drafts of this plan got wrong**, recorded so the pattern is
+visible rather than quietly fixed: it invented a step list instead of following
+`adding-a-service.md`; it missed the category registry (`categories.sh`) entirely
+and named only the narrative lists in `CLAUDE.md`; it missed `enabled-services.conf`,
+`stacks.sh`, `sidebars.ts` and the category logo; it used `-config.yaml` for a
+manifest that is not Helm values; and it numbered the IngressRoute `401` against
+a `400` playbook. Writing plans from inference rather than from the documented
+process produced a plan that looked complete and was not.
+
 ---
 
 ## Files to Modify
 
-- `CLAUDE.md`, `AGENTS.md` — the category list
+**Category (Phase 1)**
+- `provision-host/uis/lib/categories.sh` — `_CATEGORY_DATA` row + `CATEGORY_ORDER`
+- `website/static/img/categories/automation-logo.svg` (new)
+- `website/docs/contributors/guides/adding-a-service.md` — Step 1 category table
+- `website/docs/contributors/rules/kubernetes-deployment.md` — category table
+- `CLAUDE.md`, `AGENTS.md` — narrative category lists
+
+**Service (Phase 2)**
 - `provision-host/uis/services/automation/service-browserless.sh` (new)
-- `manifests/400-browserless-config.yaml` (new)
+- `manifests/400-browserless-deployment.yaml` (new — not `-config`; that suffix
+  means Helm values, and there is no chart)
+- `manifests/400-browserless-ingressroute.yaml` (new — same number as the playbook)
 - `ansible/playbooks/400-setup-browserless.yml`, `400-remove-browserless.yml` (new)
-- `ansible/playbooks/400-test-browserless.yml` (new, verify)
-- `provision-host/uis/templates/secrets-templates/` — the token key
-- `00-common-values` — LocalDev default
+- `provision-host/uis/templates/secrets-templates/00-common-values.env.template`
+  — `BROWSERLESS_TOKEN` defined once
+- `provision-host/uis/templates/secrets-templates/00-master-secrets.yml.template`
+  — `urbalurba-secrets` in namespace `browser`, referencing `${BROWSERLESS_TOKEN}`
+- `provision-host/uis/templates/uis.extend/enabled-services.conf.default`
+- `provision-host/uis/lib/stacks.sh` — see task 2.9 (recommendation: no change)
+
+**Verify (Phase 3)**
+- `ansible/playbooks/400-test-browserless.yml` (new)
+- `provision-host/uis/lib/integration-testing.sh` — `VERIFY_SERVICES`
+- `provision-host/uis/manage/uis-cli.sh` — `cmd_verify()` dispatch **and** its
+  hardcoded usage list (two edits in one file; the guide names only the first)
+
+**Docs (Phase 4)**
 - `website/docs/services/automation/browserless.md` (new)
-- `services.json` / docs navigation — the new category
+- `website/sidebars.ts`
+- `website/static/img/services/browserless-logo.svg` (+ `src/` variant) (new)
