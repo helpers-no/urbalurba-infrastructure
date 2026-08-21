@@ -6,7 +6,16 @@
 
 **Created**: 2026-08-21
 
-## Status: Backlog
+## Status: Closed — product question decided, LiteLLM findings retained
+
+**Decision (Terje, 2026-08-21)**: the `ollama-endpoint-manager` is **installation
+implementation, not UIS**. It is not productised, not named as a service, and not
+folded into the dependency layer. Reproducing it is ops' problem, tracked in the
+home repo.
+
+This file is kept because its LiteLLM findings (Part 1) are about LiteLLM and
+survive the decision unchanged. Its recommendation (Part 4) does not — see
+Part 6.
 
 **Goal**: Decide whether UIS should own a reconciler that points a shim
 `Endpoints` object at the first address in a declared candidate list that
@@ -280,7 +289,12 @@ boundary, ask before starting containers there.
 
 ---
 
-## Part 4: Recommendation
+## Part 4: Recommendation — SUPERSEDED 2026-08-21
+
+> ⚠️ **This section is retained for its reasoning, not as guidance.** Its
+> conclusion — fold the capability into UIS's dependency layer — was overruled.
+> See Part 6. What still stands from it: the LiteLLM recipe, and that this is
+> not an AI/ML component.
 
 **Do not ship `ollama-endpoint-manager` as a UIS service in the AI & ML area.**
 As written it is hardcoded to two `Endpoints` names, port 11434, Ollama's
@@ -402,3 +416,74 @@ any self-hosted backend, not just ours.
 > (`if self.allowed_fails_policy is not None: return healthy_deployments`). That
 > the two mechanisms are mutually exclusive is not obvious from the config, and
 > it is easy to enable both believing they compose.
+
+---
+
+## Part 6: Decision — not a UIS concern (2026-08-21)
+
+Terje's call, and it holds up better than Part 4 did.
+
+**The reasoning.** A UIS feature needs a second plausible user, not merely a
+generalisable mechanism. Part 4 established that nothing about candidate
+addresses is Ollama-specific and concluded the capability was therefore general
+enough to ship. That skipped a step. "The pattern generalises" and "another
+installation would use it" are different claims, and only the second justifies
+product surface. Two Macs that sleep and roam between one LAN and one tailnet is
+a single-installation topology.
+
+This is also the rule both repos already had written down, applied correctly:
+
+- `INVESTIGATE-system-external-or-in-cluster-services` — what stays
+  installation-specific is *"things UIS did not deploy and cannot be expected to
+  know about, which is the honest boundary."*
+- the home repo's `ai-developer/README.md` — *"If it would be useful to someone
+  else who installs UIS → urbalurba. If it only makes sense because we run an
+  i5-7400T in Asker → here."*
+
+UIS did not deploy the Macs and cannot be expected to know about them.
+
+**What this closes.**
+
+- No service name, no `uis deploy <name>`, no category. The question of what to
+  call it is moot.
+- No `endpoint-reconciler` rendered from the dependency artifact.
+- The challenge this file raised against
+  [PLAN-system-dependencies-shim-services](./PLAN-system-dependencies-shim-services.md)
+  is **withdrawn** — it was argued on the strength of a reconciler UIS is not
+  going to ship. That plan's "do not add address auto-discovery" note stands as
+  written. The distinction between *declared candidate lists* and *discovery* is
+  still a real one and is parked in that plan's notes, unresolved, for whoever
+  ever needs it.
+
+**What this does not close** — none of it was ever about the manager:
+
+- **Part 1 stands in full.** The LiteLLM parity findings describe LiteLLM, not
+  our reconciler. RD-F3 in particular — the router bypasses its own health filter
+  when every deployment is unhealthy — is a fact about LiteLLM that any UIS
+  installation with two backends inherits.
+- **The LiteLLM recipe is still worth writing** (RD-F1/RD-F2): two deployments,
+  one `model_name`, `order: 1`/`order: 2`, `enable_health_check_routing`, and an
+  honest account of the probe cost and the fail-fast caveat. That is general,
+  has obvious second users, and belongs in the LiteLLM service docs.
+- **The DRAFT upstream suggestions in Part 5 stand**, and got stronger.
+  Independent corroboration: `tashfeenahmed/freellmapi` (19k stars, a mature
+  OpenAI-compatible proxy with six routing strategies and automatic failover)
+  fails over on **429/5xx only** — status codes. A backend that completes the TCP
+  handshake and then goes silent produces no status code, so it has the same
+  blind spot as LiteLLM. Two unrelated proxies, one shared gap: this is a
+  category-wide limitation, not a LiteLLM oversight, which is a better argument
+  for Draft B than "our Macs sleep."
+- **The F7 connection to
+  [PLAN-service-litellm-004-config-portability](./PLAN-service-litellm-004-config-portability.md)**
+  — a probe-a-candidate-list approach would fix `host.docker.internal`
+  portably. Noted there for whoever picks that plan up; it does not need this
+  file.
+
+**Handed back to ops.** The manifests are already committed at `hosts/asgard/`,
+whose README says the authoritative copies live on `ops` and *"if you change it
+there, copy it back."* That convention demonstrably did not hold — see the
+Background section: both committed addresses are stale, and the live candidate
+list could not be read to compare. The open work is not *where* to store it,
+which was decided 2026-08-07, but how the round-trip stops depending on someone
+remembering — and recovering the running values before they are lost. That is
+ops' work, in the home repo, by the boundary rule above.

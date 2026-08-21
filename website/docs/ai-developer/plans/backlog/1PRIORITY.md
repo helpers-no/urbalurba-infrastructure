@@ -60,7 +60,7 @@ shipped, so the triage view had drifted badly from the repo:
 
 ## What changed 2026-08-21
 
-- **New investigation landed: [roaming-dependency-addresses](INVESTIGATE-system-roaming-dependency-addresses.md)** (Tier 3 #26).
+- **New investigation landed and closed the same day: [roaming-dependency-addresses](INVESTIGATE-system-roaming-dependency-addresses.md)** — not ranked, nothing to investigate next.
   Arrived as a productisation request from ops for a running `ollama-endpoint-manager`,
   and was answered rather than deferred: LiteLLM **partly** covers it. Ordered
   address preference (`order`) and health-check-driven routing are native; the
@@ -69,10 +69,21 @@ shipped, so the triage view had drifted badly from the repo:
   in `router.py`). Verdict: not an AI/ML component — it belongs to the dependency
   layer, as an optional rendering of
   [dependencies-shim-services](PLAN-system-dependencies-shim-services.md) Phase 1.
-- **That plan needs an amendment before anything is built on it.** Its
-  Implementation Note *"Do not add address auto-discovery"* is right about
-  discovery but, as worded, also forbids declared candidate lists — which are not
-  discovery. Flagged, not edited unilaterally.
+- **Decided the same day (Terje): the reconciler is installation implementation,
+  not UIS.** No service, no name, no dependency-layer rendering. A UIS feature
+  needs a second plausible user, not just a generalisable mechanism, and two
+  roaming sleeping Macs is a single-installation topology — the boundary both
+  repos already state. Reproducing it is ops' work, in the home repo.
+  **The challenge this raised against
+  [dependencies-shim-services](PLAN-system-dependencies-shim-services.md) is
+  withdrawn**; that plan is unaffected and the candidate-list-vs-discovery
+  distinction is parked in its notes rather than left open.
+- **What survives is entirely about LiteLLM, not about the reconciler**: the
+  parity findings, and one unwritten child — a LiteLLM recipe (two deployments,
+  one `model_name`, `order: 1`/`order: 2`, `enable_health_check_routing`, with an
+  honest account of the probe cost and the fail-fast caveat). That is general and
+  has obvious second users. **It is the only live thread left in that file**, and
+  the reason it sits in `backlog/` rather than `completed/`.
 - **Evidence that static `Endpoints` drift is not hypothetical.** Both Ollama
   addresses committed in `hosts/asgard/ollama-backends.yaml` are stale; read live
   on asgard the same day, both hosts had moved and neither committed address was
@@ -141,7 +152,6 @@ These have known prerequisites that are still open. Don't open them yet — the 
 | 23 | [dct-argocd-deploy](INVESTIGATE-service-argocd-dct-deploy.md) | argocd as a stable UIS service | The "deploy from inside DCT with one command" flow needs argocd to be the deployment substrate. ArgoCD has a manifest in UIS but isn't an everyday service yet; investigate this once argocd is operationally normal. |
 | 24 | [enonic-deployment](INVESTIGATE-service-enonic-deployment.md) | enonic-as-stable-service | Covers both apps (JAR pipeline — chosen-approach decided) and content (still open). Pull-based deployment design assumes Enonic XP is operationally stable in UIS. Merged from the two earlier app + content investigations on 2026-05-15. |
 | 25 | [email-smtp-service](INVESTIGATE-service-email-smtp.md) | product clarity (which services need email first?) | Cross-cutting platform service. Worth opening only when the first concrete consumer (Authentik password resets? a notification path?) is actually pulling on it. |
-| 26 | [roaming-dependency-addresses](INVESTIGATE-system-roaming-dependency-addresses.md) | M | [dependencies-shim-services](PLAN-system-dependencies-shim-services.md); version-pinning (Tier 2 #9) | **New 2026-08-21, and already carries its verdict** — it sits here for its *children*, not its research. The capability renders from the shim plan's Phase 1 dependency artifact, which does not exist yet; designing a candidate-address schema against an unbuilt artifact is the same rework #20 defers for. Q1 (does `order` behave as documented?) is unanswerable until the LiteLLM chart is pinned. Everything not blocked is already written down: the LiteLLM parity matrix, two DRAFT upstream suggestions for Terje, and the amendment the shim plan needs. |
 
 ## Tier 4 — ideas, not investigations
 

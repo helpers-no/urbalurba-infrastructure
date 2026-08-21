@@ -20,9 +20,9 @@ documentation all read it from one place instead of each rediscovering it.
 consumes what this produces, and contains a factual error this plan corrects
 (see Implementation Notes).
 
-**Challenged**: [INVESTIGATE-system-roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md)
-asks for the "Endpoints are not reconciled" Implementation Note below to be
-amended before Phase 1 is built. Read it first if you are picking this up.
+**Note**: [INVESTIGATE-system-roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md)
+briefly challenged the "Endpoints are not reconciled" note below. **Challenge
+withdrawn 2026-08-21** — this plan is unaffected and needs no amendment.
 
 **Priority**: Medium
 
@@ -223,23 +223,22 @@ sealed vault is useless even though the path is fine. The probe's
 `accepted_statuscodes` still has to encode that. Declaring the dependency does
 not remove the need to know what "healthy" means for it.
 
-**Endpoints are not reconciled.** ⚠️ *Challenged 2026-08-21 — see
-[INVESTIGATE-system-roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md).
-The rejection of auto-discovery below is sound and stands. But as worded it also
-rules out a **declared ordered candidate list**, which is not discovery: the
-operator still writes down every address, in the one place this plan designates,
-and an address that is not declared is never used. The reference installation
-already depends on that distinction — both Ollama addresses committed to this
-repo were stale on 2026-08-21 and only an unproductised reconciler kept LiteLLM
-working. Resolve before building Phase 1.*
-
-A manually-managed `Endpoints` object is
+**Endpoints are not reconciled.** A manually-managed `Endpoints` object is
 static. If an external host's address changes, the shim points at nothing and
 the failure is a connection timeout at the consumer. This is a real downgrade
 from a raw IP in config only in that it adds one indirection — but it is the
 indirection that makes the address knowable and monitorable, and the probe on
 the shim is exactly what detects it. Do not add address auto-discovery; it
 would reintroduce the coupling this removes.
+
+*Parked, not a request (2026-08-21).* A **declared ordered candidate list** is
+arguably a different thing from discovery — the operator still writes down every
+address here, and one that is not declared is never used. That distinction was
+raised by
+[INVESTIGATE-system-roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md)
+and then withdrawn: the reconciler motivating it was ruled installation-specific,
+so nothing in UIS currently needs it. Recorded so the argument does not have to
+be rediscovered, not as an open item. The note above stands as written.
 
 **Why not `ExternalName`.** `ExternalName` returns a CNAME and requires the
 target to have a resolvable DNS name. The reference installation's dependencies
