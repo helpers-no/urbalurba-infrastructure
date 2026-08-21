@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-21 (third refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-21 (fourth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -56,6 +56,37 @@ shipped, so the triage view had drifted badly from the repo:
   `image-size` with no published patch — a floor, not a backlog item.
 - The first local build surfaced **pre-existing broken links and one broken
   anchor** in the docs. Warnings, not failures. Currently owned by nobody.
+---
+
+## What changed 2026-08-21 (fourth entry) — validation run, three fixes, three plans
+
+Eighteen services validated on a factory-reset Rancher Desktop. Four bugs found
+and three fixed the same day; see
+[STATUS-rancher-desktop-validation-2026-08-21](../completed/STATUS-rancher-desktop-validation-2026-08-21.md).
+
+- **Fixed and pushed**: the Backstage catalog generator emitting invalid
+  ConfigMap keys from a trailing comment (`3aa3ef2`); Backstage resolving a
+  floating third-party plugin index, plus its chart pinned (`c7dae01`); and a
+  deploy following an undeploy dying on the terminating namespace (`91fd276`).
+- **New: [helm-chart-version-pinning](PLAN-system-helm-chart-version-pinning.md).**
+  Terje's call after Backstage broke on a floating dependency. **Measured: 16 of
+  24 Helm-based services have no `--version`** — two thirds of the observability
+  stack among them. Backstage was the worst shape of all: image pinned, chart
+  floating, so the pairing that ran was never the pairing that was tested. Phase
+  3 records the wider lesson — *a pinned chart is not a pinned deploy*, since
+  Backstage's actual failure was an artefact the chart fetched at install time.
+- **New: [test-all-coverage-and-dry-run](PLAN-cli-test-all-coverage-and-dry-run.md).**
+  `--dry-run` omits the clean phase, so it shows the constructive half of the plan
+  and hides the destructive half. Plus `gravitee` skipped permanently with no
+  date or issue, and `SKIP_SERVICES_CONDITIONAL` empty.
+- **The recurring shape, now three-for-three**: the failure names the wrong
+  service. OBS-F6 blamed Grafana; the namespace race blamed enonic; Backstage
+  went through two wrong causes. Each cost a wrong theory first, because the
+  obvious next step — investigate the service named — is always wrong.
+- **Counter-evidence for `test-all`**: it *found* the namespace race, which
+  nothing else would have. An argument for running it more, and therefore for it
+  being honest about what it skips.
+
 ---
 
 ## What changed 2026-08-21 (third entry) — approvals, sequencing, and two bugs filed

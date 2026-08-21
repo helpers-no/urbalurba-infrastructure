@@ -34,7 +34,7 @@ VM: 3 CPU, ~7.8 GiB allocatable, 74 GiB free disk.
 
 ---
 
-## Results — eleven services, zero failures
+## Results — eighteen services, zero outstanding failures
 
 ### Batch 1 — deployed and left running
 
@@ -120,6 +120,64 @@ Practical consequences:
   "reports success while missing the case" shape this repo keeps paying for.
 
 Otherwise not a defect; the precondition is defensible.
+
+### Batch 3 — the four with registered verify playbooks
+
+| Service | Deploy | Verify | Undeploy |
+|---|---|---|---|
+| `temporal` | PASS | PASS | PASS |
+| `argocd` | PASS | PASS (4/4 critical) | PASS |
+| `backstage` | PASS (3m 43s) | PASS | PASS |
+| `enonic` | PASS | PASS (6/6 critical) | — |
+
+**18 services validated, zero outstanding failures.**
+
+ArgoCD and Enonic both verify that authentication *rejects* a wrong password, not
+only that it accepts a right one. Enonic additionally does a repository
+read-back. These are the strongest tests in the repo after Authentik's.
+
+### Backstage: three causes, two of them ours
+
+Backstage was undeployable. Three attempts, each ~10m 43s, each ending
+`context deadline exceeded` — which read like a slow box and was not.
+
+1. **The catalog generator emitted an invalid ConfigMap key.** One trailing
+   comment in `service-postgrest.sh` became three catalog entities named `#`,
+   `TODO(backstage):` and `<app>-rest`. `kubectl create configmap --from-file`
+   uses filenames as keys, `#` is invalid, and the *whole* ConfigMap is rejected.
+   Fixed in the generator, not the comment — commit `3aa3ef2`.
+2. **A floating third-party index.** `includes: dynamic-plugins.default.yaml`
+   makes the installer resolve RHDH's entire default plugin set from
+   `quay.io/rhdh/plugin-catalog-index:next`, and one unpublished entry aborts
+   everything. Red Hat hit the identical error in their own CI the same morning
+   (redhat-developer/rhdh#5289, RHDHBUGS-3678). Fixed by `includes: []` and
+   pinning the chart — commit `c7dae01`.
+3. **My first attempt at (2) was a no-op.** Removing the `includes` key does
+   nothing: it is a *chart default*, and Helm merges maps. The file parsed, the
+   copy landed, and the rendered ConfigMap still had it. Only reading what the
+   cluster actually received revealed it.
+
+The 600s Helm timeout was never the problem — **3m 43s** once the init container
+stopped crash-looping.
+
+### The namespace-termination race — found by running the suite
+
+`enonic` reported FAIL four times. It was never broken: on a quiet cluster it
+deploys clean and passes 6/6 verify tests. `undeploy backstage` returned in 9s
+while its namespace was still `Terminating`, and `apply_secrets` — one
+`kubectl apply` over a file carrying a namespace and secret for *every* service —
+was rejected by the dying namespace and returned non-zero, aborting the next
+deploy.
+
+Fixed in commit `91fd276`: wait for terminating namespaces, up to 60s, then warn
+and proceed. Verified by reproducing the exact condition.
+
+**This is the third failure today that named the wrong service.** OBS-F6 blamed
+Grafana, this blamed enonic, and the Backstage diagnosis went through two wrong
+causes first. Timing- and load-dependent failures that accuse an innocent
+component appear to be this platform's characteristic bug shape, and they are
+expensive because the obvious next step — investigate the named service — is
+always wrong.
 
 ### Two coverage gaps in `test-all` itself
 
