@@ -209,10 +209,18 @@ extract_all_metadata() {
             SCRIPT_PROVIDES_APIS=*)
                 _provides_apis="${line#SCRIPT_PROVIDES_APIS=}"
                 _provides_apis="${_provides_apis//\"/}"; _provides_apis="${_provides_apis//\'/}"
+                # Strip inline comments, then trailing whitespace. NOT "%% *" like
+                # the scalar fields above: this is a space-separated LIST, and
+                # truncating at the first space would silently drop every entry
+                # after the first.
+                _provides_apis="${_provides_apis%%#*}"
+                _provides_apis="${_provides_apis%"${_provides_apis##*[![:space:]]}"}"
                 ;;
             SCRIPT_CONSUMES_APIS=*)
                 _consumes_apis="${line#SCRIPT_CONSUMES_APIS=}"
                 _consumes_apis="${_consumes_apis//\"/}"; _consumes_apis="${_consumes_apis//\'/}"
+                _consumes_apis="${_consumes_apis%%#*}"
+                _consumes_apis="${_consumes_apis%"${_consumes_apis##*[![:space:]]}"}"
                 ;;
         esac
     done < "$script_file"
