@@ -53,8 +53,18 @@ That is exactly OBS-F6. Grafana carries **14** test tasks on its deploy gate; on
 of them hit the `kubectl run --rm -i` race, and a healthy stack could not deploy
 Grafana. The defect was never Grafana.
 
-**Authentik is the same bomb, unexploded, at twice the size** — 28 test tasks on
-its deploy gate, and it is a dependency of several other services.
+~~**Authentik is the same bomb, unexploded, at twice the size**~~ — ⚠️ **retracted
+2026-08-21, same day, after actually running it.** Authentik's 28 tasks are not
+brittle assertions on a gate. They stand up a protected test app, deploy four SSO
+blueprints, and verify the auth redirect flow end to end — external and internal
+302s, then an E2E auth suite. `deploy authentik — PASS (10m 43s)` on a clean
+Rancher Desktop cluster.
+
+It is arguably the most thorough test in the repo, not the most fragile.
+**Task count is not a proxy for risk.** Counting task names instead of reading
+them produced a confident wrong answer here, and had already produced one for
+Redis in the same survey. Treat every number in the table above as an upper
+bound on *what exists*, and no evidence at all about *what it is worth*.
 
 Three services with a registered verify have **zero** in-setup tests — `enonic`,
 `nextcloud`, `openmetadata`. That is the shape the guide asks for

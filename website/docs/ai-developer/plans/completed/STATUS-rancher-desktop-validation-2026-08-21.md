@@ -85,6 +85,42 @@ Neither broke anything. Both recorded because the platform has twice paid for
    the observability set and Traefik, i.e. the batch this run postponed, so it
    will appear in volume when that runs.
 
+### `test-all` cannot be used incrementally
+
+Attempting `./uis test-all --only authentik` against a cluster already running
+`postgresql` and `redis` refused to start:
+
+```
+✗ Cluster is not in a clean state. The following services are deployed:
+  - postgresql
+  - redis
+Run with --clean to undeploy all services first
+```
+
+⚠️ **Corrected after observing an actual `--clean` run.** The first version of
+this note claimed `--clean` tears down the whole cluster. **It does not.** Both
+the precondition check and `--clean` are scoped to the test plan: with
+`--only authentik`, the check flagged only `postgresql` and `redis` (its
+foundation) and ignored `minio`, `nginx`, `whoami` and `uptime-kuma`, which ran
+throughout and survived untouched.
+
+So `test-all` **can** be used incrementally. What it insists on is *owning* the
+services in its own plan — it will not test against an instance it did not create.
+
+Practical consequences:
+
+- Every batch redeploys its foundation (`postgresql` ~33s, `redis` ~44s) even
+  when already running and healthy, because it will not adopt them.
+- You cannot test against a *pre-existing* dependency, only one this run built.
+  For a service whose behaviour depends on that dependency's state, that is a
+  different test.
+- The `--dry-run` output does **not** show the clean step. It printed 6
+  operations; the real run began with two undeploys. **This one is worth fixing**
+  — a dry-run that omits the destructive half of its plan is the same
+  "reports success while missing the case" shape this repo keeps paying for.
+
+Otherwise not a defect; the precondition is defensible.
+
 ### Two coverage gaps in `test-all` itself
 
 - **`gravitee` is permanently skipped** — `SKIP_SERVICES_ALWAYS="gravitee"`,
