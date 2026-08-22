@@ -44,6 +44,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [INVESTIGATE: Provision-Host Tools and Provider Authentication](INVESTIGATE-system-provision-host-tools-and-auth.md) | — | 2026-08-22 |
 | [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-08-22 |
 | [Investigate: Observability — the stack deploys, but the signals don't arrive](INVESTIGATE-system-observability.md) | Make a UIS deployment actually observable. The observability stack | 2026-08-22 |
+| [Investigate: the Alloy decision promised 5 components → 4, and delivered 6](INVESTIGATE-system-observability-alloy-collector-overlap.md) | Decide whether Alloy should absorb the OTel Collector's role, keep them | 2026-08-22 |
 | [Investigate: should a service bring its own availability probe, and can Uptime Kuma accept one?](INVESTIGATE-system-monitor-definitions-with-services.md) | Decide how the external watchdog's monitors get created and stay in | 2026-08-22 |
 | [Investigate: migrate `hosts/*` to `platforms/*` (or formally retire)](INVESTIGATE-system-migrate-hosts-to-platforms.md) | — | 2026-08-22 |
 | [Investigate: services that run outside the cluster in production, and inside it on a laptop](INVESTIGATE-system-external-or-in-cluster-services.md) | Make every UIS service deployable on a developer's laptop, including the | 2026-08-22 |
