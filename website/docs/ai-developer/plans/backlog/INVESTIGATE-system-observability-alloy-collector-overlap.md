@@ -8,9 +8,14 @@
 
 ## Status: Backlog
 
-**Goal**: Decide whether Alloy should absorb the OTel Collector's role, keep them
-separate deliberately, or something else — and act on the consequences the
-original decision recorded and nobody followed up.
+**Goal**: Act on the consequences the Alloy decision recorded and nobody followed
+up — and settle the collector's future against the multi-cloud requirement rather
+than against a component count.
+
+**Recommendation already reached (2026-08-22, with Terje): KEEP the collector.**
+The consolidation should be **abandoned deliberately**, not honoured. Reasoning in
+*The recommendation* below. What remains open is the work it implies, not the
+direction.
 
 **Why now** (Terje, 2026-08-22): Alloy was added over the summer by an agent
 without oversight. Reviewing it
@@ -19,8 +24,12 @@ showed the *choice* was sound and well-evidenced. This file is about the part
 that was written down and never done.
 
 **Parent**: [INVESTIGATE-system-observability](./INVESTIGATE-system-observability.md)
-**Related**: [PLAN-system-observability-001-log-collection](./PLAN-system-observability-001-log-collection.md),
-[PLAN-system-observability-005-app-telemetry](./PLAN-system-observability-005-app-telemetry.md)
+**Related**: [PLAN-system-observability-001-log-collection](./PLAN-system-observability-001-log-collection.md)
+
+⚠️ **`PLAN-system-observability-005-app-telemetry` does not exist.** The parent
+investigation lists it as a planned child; 001, 002, 003, 004 and 006 were
+written and 005 never was. An earlier revision of this file cited it as though it
+existed. It is the missing piece this investigation most needs — see Q6.
 
 **Priority**: Medium
 
@@ -103,16 +112,64 @@ separately.
 
 ---
 
+## The recommendation: the collector is the portability seam
+
+Terje, 2026-08-22: *"we must also peek into the future. As the plan is to get uis
+working on azure kubernetes and use their logs systems. The developer that write
+code should be able to run his code on rancher during development and in azure,
+google, aws in production."*
+
+That requirement decides this, and it decides it the opposite way to a
+component-count argument.
+
+**What must not change is what the developer's code talks to.** An application
+emits OTLP to a fixed in-cluster endpoint. That endpoint is identical on Rancher
+Desktop, AKS, GKE and EKS. Only what the collector *forwards to* differs:
+
+```
+app ──OTLP──▶ otel-collector.monitoring:4317 ──┬─▶ tempo/loki/prometheus   (Rancher Desktop)
+                    ▲                          ├─▶ Azure Monitor           (AKS)
+         never changes                         ├─▶ Cloud Trace/Logging     (GKE)
+                                               └─▶ CloudWatch / X-Ray      (EKS)
+```
+
+This is the rule UIS already applies to PostgreSQL and MinIO — **the interface
+must be identical; the topology may differ.** The collector is where that
+topology difference is absorbed, and it is the only component that can absorb it
+*without touching application code*.
+
+### The two components answer different questions, and should diverge
+
+| | Concern | Likely on AKS |
+|---|---|---|
+| **alloy** | *infrastructure* logs — scraping container stdout | **replaced** by Container Insights or the cloud's own agent |
+| **otel-collector** | *application* telemetry — the OTLP contract | **stays**; only its exporters change |
+
+Merging them would be actively harmful to the cloud plan:
+
+- it couples the application's telemetry endpoint to a **DaemonSet**, when the
+  portable thing is a stable Service name;
+- it fuses an **environment-specific** concern (infra log scraping, which the
+  cloud provider may do for you) with an **environment-invariant** one (the OTLP
+  contract apps are written against);
+- on AKS you would plausibly drop Alloy and keep the collector. That is
+  impossible if they are the same component.
+
+**So "5 components to 4" is withdrawn.** It was a reasonable prediction made
+before the multi-cloud requirement existed. Making it true now would trade a
+portability seam for one fewer Deployment.
+
+---
+
 ## Open questions
 
 - **Q1. Does anything actually send OTLP to the collector today?** If no
   application emits telemetry, the collector is running for a use case that does
   not yet exist. Check the reference installation as well as a dev cluster —
   `urbalurba-platform` is Temporal-based and may.
-- **Q2. Should Alloy receive OTLP instead?** Not a config tweak. Alloy is a
-  **DaemonSet** (per-node); the collector is a **central gateway**. Making Alloy
-  the receiver means every app talks to a node-local agent rather than one
-  endpoint — different failure modes, different scaling, different app config.
+- **Q2. ~~Should Alloy receive OTLP instead?~~ ANSWERED: no.** See the
+  recommendation above. Kept in the list because the *reasoning* matters more
+  than the answer: it is architectural, not cosmetic.
 - **Q3. Is grafana's dependency on otel-collector real?** Grafana needs
   datasources: prometheus, loki, tempo. It is not obvious why it needs the
   collector at all. If the dependency is spurious, the `--skip-optional` defect
@@ -123,30 +180,42 @@ separately.
 - **Q5. What does removal cost, and does anything gain?** Requests/limits for
   both, on a stack that must fit a laptop. If Alloy absorbs OTLP the saving is
   one Deployment; if not, there is no saving to have.
-- **Q6. Does PLAN-005 assume the collector?** The dev→prod app-telemetry story is
-  exactly what the collector serves. Answering Q2 without reading that plan would
-  settle its architecture by accident.
+- **Q6. PLAN-005 must be written, and this investigation is now its input.** The
+  dev→prod app-telemetry story does not exist as a plan. It should define: the
+  OTLP endpoint applications code against, per-environment exporter config living
+  in `.uis.extend/` the way external services already do, and what a developer
+  changes when moving from Rancher Desktop to AKS (ideally: nothing).
 
 ---
 
 ## What this investigation must produce
 
-- A decision on Q2 with its reasoning, since it is architectural rather than
-  cosmetic
-- A fix for the `--skip-optional` defect consistent with that decision
-- An answer to Q4, and either updated dashboards/alerts or a statement that none
-  are affected
-- If removal is chosen: a plan, not a deletion. otel-collector is a deployed
-  service on the reference installation
+In order:
+
+1. **PLAN-005 — app telemetry.** The OTLP contract and the per-environment
+   exporter story. Everything else depends on it.
+2. **Fix grafana's dependency on otel-collector.** Grafana needs prometheus, loki
+   and tempo as *datasources*; it is not obvious it needs the collector at all
+   (Q3). If spurious, removing it fixes `--skip-optional` and makes the collector
+   genuinely optional for a logs-only install — which is the right shape once the
+   cloud may supply the backend.
+3. **Answer Q4** — what reads collector metrics — and either update the
+   dashboards/alerts or state that none are affected.
+4. **Document Alloy as environment-specific**, not universal. It is the piece
+   most likely to be replaced by a cloud provider's own agent.
+
+**Not produced: a removal plan.** The collector stays.
 
 ---
 
 ## Notes
 
 **Do not treat "the agent said 4 components" as a commitment to honour.** The
-sentence was a prediction about a consolidation nobody performed. The question is
-whether the consolidation is a good idea *now*, judged on its merits — not
-whether to make an old sentence true retroactively.
+sentence was a prediction about a consolidation nobody performed. Judged on its
+merits *now*, against a requirement that did not exist when it was written, the
+consolidation is the wrong move. The prediction is withdrawn rather than
+outstanding — which is a better outcome than either doing it or leaving it to be
+rediscovered as debt every time someone counts the components.
 
 **The pattern worth naming.** A decision recorded its own consequences honestly,
 and the consequences were never scheduled. The decision doc is not wrong; it is
