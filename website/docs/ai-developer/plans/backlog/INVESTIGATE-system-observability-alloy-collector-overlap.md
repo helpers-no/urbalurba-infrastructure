@@ -1,4 +1,4 @@
-# Investigate: the Alloy decision promised 5 components → 4, and delivered 6
+# Investigate: Alloy and the OTel Collector — the consequences nobody scheduled
 
 > **IMPLEMENTATION RULES:** Before implementing this plan, read and follow:
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
@@ -31,7 +31,8 @@ investigation lists it as a planned child; 001, 002, 003, 004 and 006 were
 written and 005 never was. An earlier revision of this file cited it as though it
 existed. It is the missing piece this investigation most needs — see Q6.
 
-**Priority**: Medium
+**Priority**: Medium — raised in practice by the inversion below, which is broken
+on Rancher Desktop **today** and is not gated on any cloud work.
 
 ---
 
@@ -61,11 +62,25 @@ redundant:
 | **alloy** | Kubernetes pod log files | loki |
 
 `manifests/031-alloy-config.yaml` has **no OTLP receivers** — only
-`loki.process` / `loki.write`. Alloy *could* do the collector's job; as
-configured it does not.
+`loki.process` / `loki.write`. That part is measured.
+
+That Alloy *could* do the collector's job is **not** measured here: it follows
+from Alloy being an OTel Collector distribution upstream, and was not verified
+against the chart version UIS deploys or its `otelcol.*` component surface.
+Since the recommendation is not to do it, this does not need resolving — but it
+should not be quoted as established.
 
 So the stack went from 5 components to **6**, not 4, and both run on every
 install.
+
+⚠️ **The "5 → 4" arithmetic was never checked, including by this file, which
+quoted it twice as evidence.** Counting the stack before Alloy — prometheus,
+tempo, loki, otel-collector, grafana — gives 5. Alloy replacing the collector
+gives prometheus, tempo, loki, alloy, grafana, which is **5, not 4**. Either the
+original "5" counted something not visible in the stack definition, or the claim
+never added up. Not load-bearing now that the prediction is withdrawn, but worth
+knowing that the number was repeated rather than verified — by the original
+decision and then by this investigation.
 
 ### Consequence 2 — the metrics
 
@@ -105,10 +120,11 @@ Verified by removing otel-collector and deploying grafana:
 ✗ Dependency error: Required service 'otel-collector' is not deployed
 ```
 
-A documented flag on a documented stack, guaranteed to fail. This is independent
-of the consolidation question and can be fixed either way — but *which* fix is
-right depends on the answer below, so it is recorded here rather than filed
-separately.
+A documented flag on a documented stack, guaranteed to fail.
+
+*(An earlier revision said which fix is right "depends on the answer below". It
+no longer does — the inversion section settles it. Kept here rather than filed
+separately because the fix is one change to the same two files.)*
 
 ---
 
@@ -176,8 +192,16 @@ opposite of what it should.
 
 | | Status in every environment | Delivered by UIS |
 |---|---|---|
-| **otel-collector** | **REQUIRED** — it *is* the interface | always |
+| **otel-collector** | **REQUIRED** — an OTLP endpoint must exist | ⚠️ see below |
 | prometheus, loki, tempo, grafana | **OPTIONAL** — the environment may already provide them | Rancher Desktop + Proxmox yes; cloud maybe not |
+
+⚠️ **"UIS always delivers the collector" is an assumption, not something Terje
+said.** The requirement stated was that all logging goes via OTLP and that on
+cloud *"we might not deliver the grafana, loki stuff"*. Whether UIS **ships** a
+collector on AKS, or points applications at an OTLP endpoint the customer already
+runs, is undecided — a production Azure tenant with an existing observability
+stack plausibly has one. What is settled is that **an OTLP endpoint at a stable
+address must exist in every environment**; who provides it is Q7.
 
 What is configured today:
 
@@ -221,10 +245,13 @@ Nothing here should invent a second one.
 
 ## Open questions
 
-- **Q1. Does anything actually send OTLP to the collector today?** If no
-  application emits telemetry, the collector is running for a use case that does
-  not yet exist. Check the reference installation as well as a dev cluster —
-  `urbalurba-platform` is Temporal-based and may.
+- **Q1. Does anything actually send OTLP to the collector today?** Asked for
+  **sizing and priority**, not as a removal argument — the collector is the
+  contract whether or not anything uses it yet, so a "nothing does" answer does
+  not reverse the recommendation. It does tell us how urgent PLAN-005 is and
+  whether the current resource allocation is right. Check the reference
+  installation as well as a dev cluster; `urbalurba-platform` is Temporal-based
+  and may already emit.
 - **Q2. ~~Should Alloy receive OTLP instead?~~ ANSWERED: no.** See the
   recommendation above. Kept in the list because the *reasoning* matters more
   than the answer: it is architectural, not cosmetic.
@@ -235,9 +262,13 @@ Nothing here should invent a second one.
 - **Q4. What reads collector metrics?** Consequence 2, unanswered. Enumerate
   shipped dashboards and alert rules; anything keyed on collector-specific series
   breaks if the collector goes, and may already be stale.
-- **Q5. What does removal cost, and does anything gain?** Requests/limits for
-  both, on a stack that must fit a laptop. If Alloy absorbs OTLP the saving is
-  one Deployment; if not, there is no saving to have.
+- **Q5. ~~What does removal cost, and does anything gain?~~ MOOT.** Answered by
+  Q2: removal is not on the table, and by its own terms there was no saving to
+  have unless Alloy absorbed OTLP. Kept struck through rather than deleted so the
+  question is not re-asked.
+- **Q7. On cloud, does UIS ship a collector or use the customer's?** See the
+  ⚠️ above. Stage-3 work, recorded now so the assumption is visible rather than
+  inherited. Affects nothing at stages 1–2, where UIS delivers everything.
 - **Q6. PLAN-005 must be written, and this investigation is now its input.** The
   dev→prod app-telemetry story does not exist as a plan. It should define: the
   OTLP endpoint applications code against, per-environment exporter config living
