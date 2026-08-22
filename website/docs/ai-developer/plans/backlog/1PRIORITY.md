@@ -253,7 +253,7 @@ These are sketches / parking-lot entries, not concrete research targets. Don't o
 | # | Item | What to do |
 |---|---|---|
 | 26 | [espocrm](INVESTIGATE-service-espocrm.md) | Currently four URLs and zero analysis. Either promote to a real INVESTIGATE (with a goal + comparison against alternatives) or delete. |
-| 27 | [dagster](INVESTIGATE-service-dagster.md) | Broad research file, not a concrete platform decision. Wait for the data-orchestration use case (atlas's deployment-pipeline INVESTIGATE on the atlas side waits on UIS for this signal) to materialise into a real consumer; then open as a focused investigation. |
+| 27 | [dagster](INVESTIGATE-service-dagster.md) | ✅ **Trigger met 2026-08-22 — no longer deferred.** This row said to wait for "the data-orchestration use case to materialise into a real consumer". It has: Terje decided Dagster becomes a reusable UIS service, and Atlas is done and waiting — 41 sources, 40 Pipes-enabled, code-location image publishing on every commit. Build plan filed as [PLAN-service-dagster-001-deploy](PLAN-service-dagster-001-deploy.md), awaiting Terje's approval of name/category/chart/sizing. The investigation stays here as the design record; it is four months stale on source counts but its structural decisions held. |
 | 28 | [metabase](INVESTIGATE-service-metabase.md) | Similar to #24 — internal BI / data exploration tool selection. Hold until there's a concrete first consumer driving the requirements. |
 | 29 | [customer-onboarding-database](INVESTIGATE-docs-customer-onboarding-database.md) | **Newly triaged.** Self-described as "Draft / not yet scheduled." Leave as a sketch until there is a real customer-onboarding flow to design against. |
 

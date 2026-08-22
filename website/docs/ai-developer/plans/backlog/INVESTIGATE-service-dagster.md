@@ -4,7 +4,20 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog
+## Status: Backlog — design still owns this; build plan filed 2026-08-22
+
+⚠️ **This file is four months old (last updated 2026-04-21) and is stale in
+places.** It still owns the *design*, and the design held up — OSS not Dagster+,
+official Helm chart, dedicated namespace, code-locations-as-tenants, shared
+Postgres with a separate metadata database, Traefik ingress, no auth day 1.
+
+What has changed: Terje decided Dagster becomes a reusable UIS service, and Atlas
+arrived as a real consumer with 41 sources (not the ~24 recorded here), 40 already
+Dagster-Pipes-enabled and waiting. The build plan is
+[PLAN-service-dagster-001-deploy](./PLAN-service-dagster-001-deploy.md), which
+reconciles this file against the consumer requirement and lists the six points
+where they diverged. Read the plan first; use this for the reasoning behind the
+options.
 
 **Goal**: Deploy Dagster as the data orchestration platform in UIS, providing scheduling, observability, and lineage for data pipelines across applications — starting with Atlas, with reusability for future apps.
 
