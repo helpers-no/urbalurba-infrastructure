@@ -137,6 +137,14 @@ it passes. Test data that outlives its test is what tripped Alloy's assertion.
 A fresh stack install leaves no probe data that another service's verify can
 mistake for its own.
 
+**Measured on asgard (ops, 2026-08-22): the leftover does NOT manifest there.**
+Loki's `job` values are only `["loki.source.kubernetes.pods"]` — no
+`loki-validation`. Either retention aged it out or that installation's probe path
+differs. So this is a Rancher-Desktop-visible problem rather than a universal one,
+which lowers its priority but does not make it wrong: the Alloy assertion fix is
+still the right general fix, and a fresh install is exactly where a contributor
+would meet it.
+
 ---
 
 ## Acceptance Criteria

@@ -243,25 +243,114 @@ Nothing here should invent a second one.
 
 ---
 
+## ANSWERED on the running Proxmox stack (ops, 2026-08-22)
+
+Measured live on asgard — prometheus API, the collector's `:8888`, live
+ConfigMaps. Full reply: `ai-developer/for-assist-observability-collector-answers.md`
+in the home repo.
+
+### Q1 ⭐ — OTLP has a **validated-but-dormant** consumer
+
+```
+otelcol_receiver_accepted_log_records{receiver="otlp",transport="http"}   223
+otelcol_receiver_accepted_spans{receiver="otlp",transport="grpc"}         160
+otelcol_receiver_accepted_metric_points{receiver="otlp",transport="grpc"}   5
+otelcol_process_uptime                                                  ≈ 17.5 days
+```
+
+And the pipeline **fanned it out correctly** — 223 logs to `otlphttp/loki`, 160
+spans to `otlp/tempo`, 5 metric points to `prometheusremotewrite`.
+
+**Neither branch I offered was right.** Two samples 35 s apart were identical, and
+those totals over 17.5 days are tiny — so this is not a climbing stream, and not
+"correct-but-unused" either. Real spans and logs went in and reached Tempo and
+Loki. The OTLP contract is **proven end-to-end, with no continuous producer**.
+
+Consequence: **PLAN-005 is not urgent — but it is validated rather than
+speculative.** That is a stronger footing than "nobody uses it", and a weaker
+urgency than "something depends on it now". Safe to wait for Proxmox to settle.
+
+*(ops could not identify the emitter from counters alone; gRPC spans + HTTP logs
+suggest an instrumented app. A deeper dig if it ever matters.)*
+
+### Q4 — nothing reads `otelcol_*`, and it is worse than stale
+
+- **Prometheus does not scrape the collector at all** on asgard — zero
+  `otelcol_*` series, no matching scrape target.
+- **No ConfigMap, dashboard or rule references `otelcol_*`** anywhere; no
+  PrometheusRule CRDs either.
+
+So changing the collector's role affects **zero** dashboards and **zero** alerts.
+The Consequence-2 caveat turns out to have had nothing to act on — the metrics
+nobody updated were also metrics nobody collected.
+
+> ⚠️ **Side-finding worth its own attention: the collector's health is
+> unmonitored.** If it silently stops receiving OTLP, nothing alerts — only pod
+> liveness would notice, and a running collector that accepts nothing looks
+> identical to a running collector with no traffic. Given Q1 shows exactly that
+> state today, there is no way to tell "dormant" from "broken" from the outside.
+> Independent of PLAN-005 and of this investigation's direction.
+
+### Q3 — runtime confirms Grafana does not need the collector
+
+Grafana's datasources are prometheus, loki and tempo. Traces reach Tempo *via*
+the collector, but **Grafana reads Tempo, not the collector**. Dropping
+`otel-collector` from `SCRIPT_REQUIRES` breaks nothing observable.
+
+⚠️ **Caveat ops correctly refused to close**: asgard shows runtime behaviour, not
+*history*. If the dependency was added as deploy-ordering glue for some past
+reason, only the code history would show it. My "spurious" assumption survives
+contact with the running system; it has not been proven about the original
+intent.
+
+### Both distrust-checks — CONFIRMED
+
+- **"Alloy has no OTLP receivers"** ✅ asgard's live `monitoring/alloy` ConfigMap
+  contains only `loki.source` / `loki.process` / `loki.write`. No `otelcol.*`.
+  The "they do different jobs" finding stands on the production stack, not just a
+  laptop.
+- **"`--skip-optional` is inverted"** ✅ present on asgard too, not worked around
+  locally.
+
+### The `.uis.extend/` pattern — generalises, with one limit I had missed
+
+I suggested asgard's per-environment config pattern was the shape PLAN-005 needs.
+ops confirmed the **mechanism** transfers — a declarative per-environment file,
+with `why`/`role` fields that force intent and keep it auditable — and then
+corrected the part I got wrong:
+
+> ⚠️ `prometheus-targets.yaml` is a **pull / scrape-targets** pattern. PLAN-005's
+> per-environment exporters for Azure Monitor is a **push** model. The per-env-file
+> mechanism transfers; pull-vs-push does not. **Scrape-targets and push-exporters
+> are siblings, not the same knob.**
+
+That distinction belongs in PLAN-005 from the start. Assuming one config shape
+covers both would have produced a design that fits Proxmox and breaks on Azure.
+
+⚠️ Also flagged: ops could not trace **how `prometheus-targets.yaml` is injected**
+into Prometheus in one pass. The declarative-per-env-file *idea* is the reusable
+part; confirm the injection mechanism before copying it.
+
+### Loki's probe leftover — not present on asgard
+
+Loki's `job` values there are only `["loki.source.kubernetes.pods"]` — no
+`loki-validation`. Either retention aged it out or asgard's probe path differs.
+The collector's OTLP logs carry resource attributes rather than a `job` label, so
+they would not collide regardless. The Alloy assertion fix remains right for the
+general case; the leftover simply does not manifest on that installation.
+
+---
+
 ## Open questions
 
-- **Q1. Does anything actually send OTLP to the collector today?** Asked for
-  **sizing and priority**, not as a removal argument — the collector is the
-  contract whether or not anything uses it yet, so a "nothing does" answer does
-  not reverse the recommendation. It does tell us how urgent PLAN-005 is and
-  whether the current resource allocation is right. Check the reference
-  installation as well as a dev cluster; `urbalurba-platform` is Temporal-based
-  and may already emit.
+- **Q1. ~~Does anything send OTLP?~~ ANSWERED — validated-but-dormant.** See above.
 - **Q2. ~~Should Alloy receive OTLP instead?~~ ANSWERED: no.** See the
   recommendation above. Kept in the list because the *reasoning* matters more
   than the answer: it is architectural, not cosmetic.
-- **Q3. Why does grafana declare a dependency on otel-collector?** Its
-  datasources are prometheus, loki and tempo. Establish whether anything real is
-  behind it before removing it — the inversion above assumes it is spurious, and
-  that assumption should be checked rather than inherited.
-- **Q4. What reads collector metrics?** Consequence 2, unanswered. Enumerate
-  shipped dashboards and alert rules; anything keyed on collector-specific series
-  breaks if the collector goes, and may already be stale.
+- **Q3. ~~Why does grafana declare a dependency?~~ ANSWERED at runtime — it does
+  not need one.** History still unchecked; see the caveat above.
+- **Q4. ~~What reads collector metrics?~~ ANSWERED — nothing.** See above. Left a
+  new finding behind it: collector health is unmonitored.
 - **Q5. ~~What does removal cost, and does anything gain?~~ MOOT.** Answered by
   Q2: removal is not on the table, and by its own terms there was no saving to
   have unless Alloy absorbed OTLP. Kept struck through rather than deleted so the
@@ -279,19 +368,23 @@ Nothing here should invent a second one.
 
 ## What this investigation must produce
 
-In order:
+In order — **resequenced 2026-08-22 on ops' evidence.** The inversion fix is now
+confirmed safe (Q4: nothing depends on the collector's current role) and repairs a
+command broken today; PLAN-005 is confirmed *not* urgent (Q1: no continuous
+producer). So the small certain thing goes first:
 
-1. **PLAN-005 — app telemetry.** The OTLP contract and the per-environment
-   exporter story. Everything else depends on it.
-2. **Correct the required/optional inversion** — see above. Three changes:
+1. **Correct the required/optional inversion** — see above. Three changes:
    `otel-collector` becomes required in the stack; `grafana` drops
    `otel-collector` from `SCRIPT_REQUIRES` (it needs datasources, not a
    collector — Q3); prometheus/loki/tempo/grafana become optional. This fixes
    `--skip-optional` as a side effect and makes the cloud shape expressible.
-3. **Answer Q4** — what reads collector metrics — and either update the
-   dashboards/alerts or state that none are affected.
+2. **PLAN-005 — app telemetry.** Not urgent, and now written against a *proven*
+   architecture. Must carry the pull-vs-push distinction from the start.
+3. **Monitor the collector.** New, from Q4's side-finding — there is currently no
+   way to distinguish a dormant collector from a broken one.
 4. **Document Alloy as environment-specific**, not universal. It is the piece
    most likely to be replaced by a cloud provider's own agent.
+5. ~~Answer Q4~~ — done; nothing depends on collector metrics.
 
 **Not produced: a removal plan.** The collector stays.
 
