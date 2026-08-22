@@ -161,6 +161,64 @@ portability seam for one fewer Deployment.
 
 ---
 
+## The required/optional flags are inverted
+
+Terje, 2026-08-22, stating it as a requirement rather than a preference:
+
+> *"No one will ever write directly, all logging will go otlp. That is a
+> requirement. For rancher desktop and proxmox we deliver everything. But on
+> azure, google, aws we go into production and there will probably already be
+> existing logging systems. So in the case for cloud providers we will log via
+> otel, but we might not deliver the grafana, loki stuff."*
+
+That fixes each component's status, and the current configuration says the
+opposite of what it should.
+
+| | Status in every environment | Delivered by UIS |
+|---|---|---|
+| **otel-collector** | **REQUIRED** — it *is* the interface | always |
+| prometheus, loki, tempo, grafana | **OPTIONAL** — the environment may already provide them | Rancher Desktop + Proxmox yes; cloud maybe not |
+
+What is configured today:
+
+```
+stack definition:   5. otel-collector (optional)
+service-grafana.sh: SCRIPT_REQUIRES="prometheus loki tempo otel-collector"
+```
+
+**Both backwards.** The one component that must exist everywhere is flagged
+skippable, and the components UIS may not ship on Azure are treated as
+mandatory. Verified by removing otel-collector and deploying grafana:
+
+```
+✗ Dependency error: Required service 'otel-collector' is not deployed
+```
+
+### This is stage-1 work, not stage-3
+
+The sequencing is Rancher Desktop → Proxmox → cloud, and the cloud story is
+deliberately not being designed yet. But these flags are wrong **today**, on
+Rancher Desktop, and `--skip-optional` is broken **today**. Correcting them is
+not designing for Azure; it is describing what the stack already is.
+
+After the correction, `uis stack install observability --skip-optional` stops
+being a broken command and becomes **exactly the cloud shape**: collector up,
+backend absent.
+
+### The mechanism for "backend provided externally" already exists
+
+UIS does not need new machinery for the cloud case. It is the same convention
+PostgreSQL and MinIO use — a Service carrying the real name and labels, so
+consumers cannot tell whether the thing runs in-cluster or elsewhere. On Azure,
+`loki-gateway.monitoring` could front Azure Monitor exactly as
+`postgresql.default` fronts the external database.
+
+That pattern is owned by
+[PLAN-system-dependencies-shim-services](./PLAN-system-dependencies-shim-services.md).
+Nothing here should invent a second one.
+
+---
+
 ## Open questions
 
 - **Q1. Does anything actually send OTLP to the collector today?** If no
@@ -170,10 +228,10 @@ portability seam for one fewer Deployment.
 - **Q2. ~~Should Alloy receive OTLP instead?~~ ANSWERED: no.** See the
   recommendation above. Kept in the list because the *reasoning* matters more
   than the answer: it is architectural, not cosmetic.
-- **Q3. Is grafana's dependency on otel-collector real?** Grafana needs
-  datasources: prometheus, loki, tempo. It is not obvious why it needs the
-  collector at all. If the dependency is spurious, the `--skip-optional` defect
-  dissolves and the collector becomes genuinely optional.
+- **Q3. Why does grafana declare a dependency on otel-collector?** Its
+  datasources are prometheus, loki and tempo. Establish whether anything real is
+  behind it before removing it — the inversion above assumes it is spurious, and
+  that assumption should be checked rather than inherited.
 - **Q4. What reads collector metrics?** Consequence 2, unanswered. Enumerate
   shipped dashboards and alert rules; anything keyed on collector-specific series
   breaks if the collector goes, and may already be stale.
@@ -194,11 +252,11 @@ In order:
 
 1. **PLAN-005 — app telemetry.** The OTLP contract and the per-environment
    exporter story. Everything else depends on it.
-2. **Fix grafana's dependency on otel-collector.** Grafana needs prometheus, loki
-   and tempo as *datasources*; it is not obvious it needs the collector at all
-   (Q3). If spurious, removing it fixes `--skip-optional` and makes the collector
-   genuinely optional for a logs-only install — which is the right shape once the
-   cloud may supply the backend.
+2. **Correct the required/optional inversion** — see above. Three changes:
+   `otel-collector` becomes required in the stack; `grafana` drops
+   `otel-collector` from `SCRIPT_REQUIRES` (it needs datasources, not a
+   collector — Q3); prometheus/loki/tempo/grafana become optional. This fixes
+   `--skip-optional` as a side effect and makes the cloud shape expressible.
 3. **Answer Q4** — what reads collector metrics — and either update the
    dashboards/alerts or state that none are affected.
 4. **Document Alloy as environment-specific**, not universal. It is the piece
