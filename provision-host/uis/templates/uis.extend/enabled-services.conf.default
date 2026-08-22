@@ -29,5 +29,10 @@ nginx
 # rabbitmq
 # temporal
 
+# === Analytics ===
+# Dagster orchestrates DATA ASSETS (lineage, freshness, dbt). Temporal above
+# orchestrates DURABLE PROCESSES. They are not alternatives - see the docs.
+# dagster
+
 # === Applications ===
 # nextcloud

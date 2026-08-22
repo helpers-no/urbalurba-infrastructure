@@ -21,6 +21,7 @@
         # Loki, Tempo and Alloy all come from here.
         - { name: 'grafana', url: 'https://grafana.github.io/helm-charts' }
         - { name: 'temporal', url: 'https://go.temporal.io/helm-charts' }
+        - { name: 'dagster', url: 'https://dagster-io.github.io/helm' }
       register: helm_repo_result
 
     - name: 01. Print playbook description

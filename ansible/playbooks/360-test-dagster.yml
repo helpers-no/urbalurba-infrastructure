@@ -1,0 +1,149 @@
+---
+# 360-test-dagster.yml
+# E2E verification for Dagster.
+#
+# ⚠️ THIS ASKS THE ORCHESTRATOR WHETHER IT CAN ORCHESTRATE.
+#
+# 360-setup-dagster.yml ends when both pods report Ready, which proves two
+# containers started. It does not prove Dagster can reach its metadata database,
+# and it does not prove the DAEMON is doing its job.
+#
+# The daemon is the load-bearing part: it runs schedules and the run queue. A
+# daemon pod can be Running with a stalled heartbeat — in which case every
+# schedule silently stops firing while `uis status` stays green and the UI keeps
+# serving. That failure is invisible from the outside and is exactly why this
+# playbook exists.
+#
+# Usage:
+#   ansible-playbook 360-test-dagster.yml -e "target_host=rancher-desktop"
+#   ./uis verify dagster
+
+- name: Verify Dagster can orchestrate
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    dagster_ns: "dagster"
+    postgres_ns: "default"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    probe: "dagster-verify-{{ 99999 | random }}"
+
+  tasks:
+    # --- Test A: the webserver answers, not merely runs ---
+    - name: "A1. Query the webserver's GraphQL API"
+      # Runs a pod, waits for a terminal phase, then reads logs — deliberately
+      # NOT `kubectl run --rm -i`, which can return rc=0 with empty stdout when
+      # the container outlives the attach and would read a healthy service as
+      # failing. See INVESTIGATE-system-verification-playbooks-usage.
+      ansible.builtin.shell: |
+        set -e
+        kubectl run {{ probe }} --image=curlimages/curl --restart=Never \
+          -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- curl -s -m 20 -X POST \
+          -H 'Content-Type: application/json' \
+          -d '{"query":"{ version }"}' \
+          http://dagster-dagster-webserver:80/graphql >/dev/null
+        for i in $(seq 1 30); do
+          phase=$(kubectl get pod {{ probe }} -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ] && break
+          sleep 2
+        done
+        kubectl logs {{ probe }} -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod {{ probe }} -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
+      register: _gql
+      changed_when: false
+      failed_when: false
+      retries: 5
+      delay: 6
+      until: _gql.stdout is search('version')
+
+    - name: "A2. Assert the webserver served its GraphQL API"
+      ansible.builtin.assert:
+        that: _gql.stdout is search('version')
+        fail_msg: >-
+          The Dagster webserver did not answer a GraphQL query. The pod may be
+          Running while unable to reach its metadata database. Response:
+          {{ _gql.stdout | default('<empty>') | truncate(200) }}
+        success_msg: "Webserver answered GraphQL."
+
+    # --- Test B: the metadata store is real ---
+    - name: "B1. Read the admin password"
+      ansible.builtin.shell: >
+        kubectl get secret urbalurba-secrets -n {{ postgres_ns }} --context {{ _target }}
+        --kubeconfig {{ merged_kubeconf_file }} -o jsonpath="{.data.PGPASSWORD}" | base64 -d
+      register: _pgpw
+      changed_when: false
+      no_log: true
+
+    - name: "B2. Count the tables Dagster migrated into its own database"
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_ns }} postgresql-0 --
+        bash -c "PGPASSWORD='{{ _pgpw.stdout }}'
+        psql -h postgresql.{{ postgres_ns }} -U postgres -d dagster -tAc
+        \"SELECT count(*) FROM pg_tables WHERE schemaname='public';\""
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: _tables
+      changed_when: false
+      failed_when: false
+
+    - name: "B3. Assert the schema is present"
+      ansible.builtin.assert:
+        that: (_tables.stdout | default('0') | trim | int) > 10
+        fail_msg: >-
+          The `dagster` database has {{ _tables.stdout | default('?') | trim }}
+          tables. Dagster migrates ~20 on first start; too few means it never
+          reached the database, and run history is going nowhere.
+        success_msg: "Metadata schema present ({{ _tables.stdout | default('?') | trim }} tables)."
+
+    # --- Test C: the daemon is ALIVE, not merely scheduled ---
+    - name: "C1. Ask the daemon for its own health"
+      # `dagster-daemon liveness-check` reports whether the daemon's heartbeat is
+      # fresh — which is a different question from whether its pod is Running.
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ dagster_ns }} deploy/dagster-daemon --
+        dagster-daemon liveness-check
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: _daemon
+      changed_when: false
+      failed_when: false
+      retries: 5
+      delay: 6
+      until: _daemon.rc == 0
+
+    - name: "C2. Assert the daemon is healthy"
+      ansible.builtin.assert:
+        that: _daemon.rc == 0
+        fail_msg: >-
+          The Dagster daemon is not healthy ({{ _daemon.stdout | default('') | trim }}
+          {{ _daemon.stderr | default('') | trim }}). Its pod may be Running with a
+          stalled heartbeat — in which case NO SCHEDULE IS FIRING and nothing else
+          reports it. This is the failure this test exists for.
+        success_msg: "Daemon heartbeat is fresh — schedules and the run queue are live."
+
+    # --- Test D: code locations, if any tenant has registered ---
+    - name: "D1. List registered code locations"
+      ansible.builtin.shell: >
+        kubectl get deploy -n {{ dagster_ns }} --context {{ _target }}
+        --kubeconfig {{ merged_kubeconf_file }}
+        -l app.kubernetes.io/component=user-deployments -o name
+      register: _locations
+      changed_when: false
+      failed_when: false
+
+    - name: "SUMMARY"
+      ansible.builtin.debug:
+        msg:
+          - "A. Webserver serves its GraphQL API:      PASS"
+          - "B. Metadata schema present in `dagster`:  PASS ({{ _tables.stdout | default('?') | trim }} tables)"
+          - "C. Daemon heartbeat fresh (schedules live): PASS"
+          - ""
+          - "D. Code locations registered: {{ (_locations.stdout_lines | default([]) | length) }}"
+          - "{{ (_locations.stdout_lines | default([]) | length) == 0 | ternary('   None yet — expected on a fresh platform. UIS ships the orchestrator; tenants register themselves. See /docs/services/analytics/dagster.', '   ' ~ (_locations.stdout_lines | default([]) | join(', '))) }}"
+          - ""
+          - "A Dagster that passes A and B but fails C looks healthy and runs nothing."

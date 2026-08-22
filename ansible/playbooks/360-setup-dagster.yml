@@ -1,0 +1,348 @@
+---
+# 360-setup-dagster.yml
+# Deploy Dagster — the UIS data-asset orchestrator — to Kubernetes.
+#
+# Dagster's metadata (run history, event log, schedule state, asset catalogue)
+# lives in its OWN database on the shared UIS PostgreSQL. Deliberately not inside
+# a tenant's database: platform state has a different lifecycle, backup
+# expectation and owner than the data a tenant orchestrates.
+#
+# The chart version is PINNED. A code-location image pins its own `dagster~=X.Y`,
+# and a platform-only bump can break the gRPC handshake with it, so platform and
+# tenants move together as a co-ordinated change.
+#
+# Usage:
+#   ansible-playbook 360-setup-dagster.yml -e "target_host=rancher-desktop"
+
+- name: Set up Dagster data orchestrator on Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    manifests_folder: "/mnt/urbalurbadisk/manifests"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    dagster_namespace: "dagster"
+    postgres_namespace: "default"
+    component_name: "dagster"
+
+    # 900s: a code-location image can be 1.5-2 GiB and a cold pull on a slow node
+    # takes minutes. Too tight a timeout reports a pull as a failure.
+    installation_timeout: 900
+
+    # Helm chart references — PINNED, see header.
+    dagster_release_name: "dagster"
+    dagster_chart: "dagster/dagster"
+    dagster_chart_version: "1.13.19"   # chart version tracks the Dagster version
+    dagster_repo_url: "https://dagster-io.github.io/helm"
+
+    # Config files
+    dagster_config_file: "{{ manifests_folder }}/360-dagster-config.yaml"
+    dagster_ingressroute_file: "{{ manifests_folder }}/360-dagster-ingressroute.yaml"
+
+  tasks:
+    - name: "1. Display deployment information"
+      ansible.builtin.debug:
+        msg: |
+          Deploying Dagster
+            cluster:    {{ _target }}
+            namespace:  {{ dagster_namespace }}
+            chart:      {{ dagster_chart }} {{ dagster_chart_version }} (pinned)
+            metadata:   dagster database on postgresql.{{ postgres_namespace }}
+
+    - name: "2. Ensure the dagster namespace exists"
+      kubernetes.core.k8s:
+        name: "{{ dagster_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+
+    # ============= PHASE 1: DEPENDENCIES =============
+
+    - name: "3. Verify the shared PostgreSQL service is reachable"
+      kubernetes.core.k8s_info:
+        kind: Service
+        name: postgresql
+        namespace: "{{ postgres_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: pg_service
+
+    - name: "4. Fail clearly if PostgreSQL is missing"
+      ansible.builtin.fail:
+        msg: >-
+          Dagster stores its run history in PostgreSQL and cannot start without
+          it. Deploy it first: ./uis deploy postgresql
+      when: pg_service.resources | length == 0
+
+    - name: "5. Get the PostgreSQL pod"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ postgres_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name=postgresql"
+        field_selectors:
+          - status.phase=Running
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: pg_pods
+
+    - name: "6. Fail if no PostgreSQL pod is running"
+      ansible.builtin.fail:
+        msg: "PostgreSQL Service exists but no pod is Running. Check: kubectl get pods -n {{ postgres_namespace }}"
+      when: pg_pods.resources | length == 0
+
+    - name: "7. Set the PostgreSQL pod name"
+      ansible.builtin.set_fact:
+        pg_pod: "{{ pg_pods.resources[0].metadata.name }}"
+
+    - name: "8. Read the postgres superuser password"
+      ansible.builtin.shell: >
+        kubectl get secret urbalurba-secrets -n {{ postgres_namespace }}
+        --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        -o jsonpath="{.data.PGPASSWORD}" | base64 -d
+      register: pg_admin_pw
+      changed_when: false
+      no_log: true
+
+    - name: "9. Read the Dagster metadata DB password"
+      ansible.builtin.shell: >
+        kubectl get secret urbalurba-secrets -n {{ dagster_namespace }}
+        --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        -o jsonpath="{.data.DAGSTER_POSTGRES_PASSWORD}" | base64 -d
+      register: dagster_db_pw
+      changed_when: false
+      no_log: true
+
+    - name: "10. Fail early when the Dagster DB credential is missing"
+      ansible.builtin.fail:
+        msg: >-
+          No DAGSTER_POSTGRES_PASSWORD in dagster/urbalurba-secrets. Run
+          './uis secrets generate && ./uis secrets apply' before deploying.
+      when: dagster_db_pw.stdout | default('') | length == 0
+
+    # ============= PHASE 2: METADATA DATABASE =============
+    # Idempotent: safe to re-run. Creates the role and database if absent,
+    # refreshes the password if present.
+
+    - name: "11. Check whether the dagster role exists"
+      # Connects over the SERVICE (-h postgresql.<ns>), not the pod's local
+      # socket. A socket connection authenticates differently in the Bitnami
+      # image and the superuser password does not apply, so omitting -h fails
+      # with "password authentication failed for user postgres" against a
+      # database that is perfectly healthy.
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ pg_pod }} --
+        bash -c "PGPASSWORD='{{ pg_admin_pw.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -tAc
+        \"SELECT 1 FROM pg_roles WHERE rolname='dagster';\"" | grep -q 1
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: role_check
+      changed_when: false
+      ignore_errors: true
+      no_log: true
+
+    - name: "12. Create the dagster role if missing"
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ pg_pod }} --
+        bash -c "PGPASSWORD='{{ pg_admin_pw.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -c
+        \"CREATE ROLE dagster WITH LOGIN PASSWORD '{{ dagster_db_pw.stdout }}';\""
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: role_check.rc != 0
+      changed_when: true
+      no_log: true
+
+    - name: "13. Keep the role password in step with the secret"
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ pg_pod }} --
+        bash -c "PGPASSWORD='{{ pg_admin_pw.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -c
+        \"ALTER ROLE dagster WITH PASSWORD '{{ dagster_db_pw.stdout }}';\""
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: role_check.rc == 0
+      changed_when: true
+      no_log: true
+
+    - name: "14. Check whether the dagster database exists"
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ pg_pod }} --
+        bash -c "PGPASSWORD='{{ pg_admin_pw.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -tAc
+        \"SELECT 1 FROM pg_database WHERE datname='dagster';\"" | grep -q 1
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: db_check
+      changed_when: false
+      ignore_errors: true
+      no_log: true
+
+    - name: "15. Create the dagster database if missing"
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ pg_pod }} --
+        bash -c "PGPASSWORD='{{ pg_admin_pw.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -c
+        \"CREATE DATABASE dagster OWNER dagster;\""
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: db_check.rc != 0
+      changed_when: true
+      no_log: true
+
+    - name: "16. Grant privileges on the dagster database"
+      ansible.builtin.shell: >-
+        kubectl exec -n {{ postgres_namespace }} {{ pg_pod }} --
+        bash -c "PGPASSWORD='{{ pg_admin_pw.stdout }}'
+        psql -h postgresql.{{ postgres_namespace }} -U postgres -d dagster -c
+        \"GRANT ALL PRIVILEGES ON DATABASE dagster TO dagster; GRANT ALL ON SCHEMA public TO dagster;\""
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      changed_when: true
+      no_log: true
+
+    - name: "17. Report the database bootstrap"
+      ansible.builtin.debug:
+        msg: "Metadata database ready: dagster@postgresql.{{ postgres_namespace }} (role and database present)"
+
+    # ============= PHASE 3: THE CHART'S PASSWORD SECRET =============
+    # generatePostgresqlPasswordSecret is false in the values, so the chart
+    # expects this secret to exist under global.postgresqlSecretName.
+
+    - name: "18. Create the secret the chart reads the DB password from"
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: dagster-postgresql-secret
+            namespace: "{{ dagster_namespace }}"
+            labels:
+              app: dagster
+          type: Opaque
+          stringData:
+            postgresql-password: "{{ dagster_db_pw.stdout }}"
+      no_log: true
+
+    # ============= PHASE 4: INGRESS + HELM =============
+
+    - name: "19. Apply the Dagster IngressRoute (internal only)"
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ dagster_ingressroute_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+
+    - name: "20. Check existing Helm repositories"
+      ansible.builtin.command: helm repo list
+      register: helm_repo_list
+      changed_when: false
+      ignore_errors: true
+
+    - name: "21. Add the Dagster Helm repository if needed"
+      kubernetes.core.helm_repository:
+        name: "dagster"
+        repo_url: "{{ dagster_repo_url }}"
+      when: "'dagster-io.github.io' not in helm_repo_list.stdout"
+
+    - name: "22. Update the Dagster Helm repository"
+      ansible.builtin.command: helm repo update dagster
+      changed_when: false
+
+    - name: "23. Deploy Dagster via Helm (chart version pinned)"
+      ansible.builtin.command: >
+        helm upgrade --install {{ dagster_release_name }} {{ dagster_chart }}
+        --version {{ dagster_chart_version }}
+        -f {{ dagster_config_file }}
+        --namespace {{ dagster_namespace }}
+        --timeout {{ installation_timeout }}s
+        --wait
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: dagster_helm_result
+      changed_when: true
+
+    # ============= PHASE 5: READINESS =============
+
+    - name: "24. Wait for the webserver to be Ready"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ dagster_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/instance={{ dagster_release_name }}"
+          - "component=dagster-webserver"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: webserver_pods
+      until: >
+        webserver_pods.resources | length > 0 and
+        webserver_pods.resources[0].status.containerStatuses is defined and
+        webserver_pods.resources[0].status.containerStatuses | length > 0 and
+        webserver_pods.resources[0].status.containerStatuses[0].ready == true
+      retries: 30
+      delay: 10
+
+    - name: "25. Wait for the daemon to be Ready"
+      # The daemon is the load-bearing component: it runs schedules and the run
+      # queue. A Dagster install without it is a UI over nothing, so this is
+      # asserted rather than assumed.
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ dagster_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/instance={{ dagster_release_name }}"
+          - "component=dagster-daemon"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: daemon_pods
+      until: >
+        daemon_pods.resources | length > 0 and
+        daemon_pods.resources[0].status.containerStatuses is defined and
+        daemon_pods.resources[0].status.containerStatuses | length > 0 and
+        daemon_pods.resources[0].status.containerStatuses[0].ready == true
+      retries: 30
+      delay: 10
+
+    - name: "26. Verify the IngressRoute was created"
+      kubernetes.core.k8s_info:
+        api_version: traefik.io/v1alpha1
+        kind: IngressRoute
+        namespace: "{{ dagster_namespace }}"
+        name: dagster
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: ingress_check
+      retries: 5
+      delay: 2
+      until: ingress_check.resources | length > 0
+
+    - name: "27. Success summary"
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          DAGSTER READY — data orchestrator deployed
+          ===============================================
+
+          Chart:      {{ dagster_chart }} {{ dagster_chart_version }} (pinned)
+          Namespace:  {{ dagster_namespace }}
+          Metadata:   dagster@postgresql.{{ postgres_namespace }}
+          UI:         http://dagster.localhost   (internal only, no auth)
+          Concurrency cap: 4 simultaneous run pods (platform policy)
+
+          NO CODE LOCATIONS ARE REGISTERED YET — that is expected.
+          UIS ships the orchestrator; applications register themselves as
+          tenants. To add one, append an entry to
+          `dagster-user-deployments.deployments[]` in
+          manifests/360-dagster-config.yaml and re-run this playbook.
+          See /docs/services/analytics/dagster for the tenant contract.
+
+          Verify:  ./uis verify dagster
+          ===============================================

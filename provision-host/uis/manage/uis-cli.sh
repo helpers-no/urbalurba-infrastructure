@@ -2039,6 +2039,7 @@ cmd_verify() {
         echo "  alloy           Run E2E health checks on Alloy log collection"
         echo "  argocd          Run E2E health checks on ArgoCD server"
         echo "  backstage       Run E2E health checks on Backstage (RHDH)"
+        echo "  dagster         Verify Dagster orchestrates (webserver, metadata, daemon)"
         echo "  enonic          Run E2E health checks on Enonic XP"
         echo "  postgrest --app <name>  Verify one PostgREST instance serves its schema"
         echo "  minio           Run E2E health checks on MinIO object storage"
@@ -2068,6 +2069,9 @@ cmd_verify() {
             ;;
         backstage)
             cmd_backstage_verify
+            ;;
+        dagster)
+            cmd_dagster_verify
             ;;
         enonic)
             cmd_enonic_verify
@@ -2100,7 +2104,8 @@ cmd_verify() {
             echo "  alloy           Run E2E health checks on Alloy log collection"
             echo "  argocd          Run E2E health checks on ArgoCD server"
             echo "  backstage       Run E2E health checks on Backstage (RHDH)"
-            echo "  enonic          Run E2E health checks on Enonic XP"
+            echo "  dagster         Verify Dagster orchestrates (webserver, metadata, daemon)"
+        echo "  enonic          Run E2E health checks on Enonic XP"
         echo "  postgrest --app <name>  Verify one PostgREST instance serves its schema"
             echo "  minio           Run E2E health checks on MinIO object storage"
             echo "  nextcloud       Run E2E health checks on Nextcloud + OnlyOffice"
@@ -2376,6 +2381,11 @@ cmd_enonic_verify() {
 
 # PostgREST is multi-instance: one Deployment per consuming app, so there is no
 # single instance to verify. --app is required, exactly as it is for deploy.
+cmd_dagster_verify() {
+    print_section "Verifying Dagster Data Orchestrator"
+    ansible-playbook "$ANSIBLE_DIR/360-test-dagster.yml"
+}
+
 cmd_postgrest_verify() {
     local app_name=""
     while [[ $# -gt 0 ]]; do
@@ -2894,6 +2904,18 @@ main() {
                     echo "Commands:"
                     echo "  alloy verify     Run E2E health checks on Alloy log collection"
                     exit "$EXIT_GENERAL_ERROR"
+                    ;;
+            esac
+            ;;
+        dagster)
+            local subcmd="${1:-}"
+            shift 2>/dev/null || true
+            case "$subcmd" in
+                verify)
+                    cmd_dagster_verify
+                    ;;
+                *)
+                    echo "  Use: ./uis dagster verify" >&2
                     ;;
             esac
             ;;

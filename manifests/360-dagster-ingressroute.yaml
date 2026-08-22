@@ -1,0 +1,39 @@
+# File: manifests/360-dagster-ingressroute.yaml
+#
+# Description:
+# Traefik IngressRoute for the Dagster webserver — INTERNAL ONLY.
+#
+# The Dagster UI is an operator tool: it is how a failed data refresh gets
+# diagnosed. It is deliberately not public on any installation, and there is no
+# requirement for it ever to be. On Rancher Desktop this resolves at
+# http://dagster.localhost; on a Proxmox installation it is reached over the
+# tailnet.
+#
+# Dagster OSS has no built-in authentication. Access control is therefore
+# network-level today. Authentik OIDC via a Traefik forwardAuth middleware is the
+# documented next step and is deliberately not day-1 work.
+#
+# Applied by: ansible/playbooks/360-setup-dagster.yml
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: dagster
+  namespace: dagster
+  labels:
+    app: dagster
+  annotations:
+    urbalurba.io/description: "Dagster webserver — internal operator UI, no public exposure"
+spec:
+  entryPoints:
+    - web
+  routes:
+    # HostRegexp so the same route works on dagster.localhost, a tailnet name,
+    # or any hostname a given installation puts in front of Traefik — the same
+    # pattern the other UIS services use.
+    - match: HostRegexp(`dagster\..+`)
+      kind: Rule
+      priority: 10
+      services:
+        - name: dagster-dagster-webserver
+          port: 80

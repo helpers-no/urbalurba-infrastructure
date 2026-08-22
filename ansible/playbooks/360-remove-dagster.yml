@@ -1,0 +1,101 @@
+---
+# 360-remove-dagster.yml
+# Remove Dagster from the cluster.
+#
+# ⚠️ WHAT THIS DOES **NOT** REMOVE: the `dagster` metadata DATABASE on the shared
+# PostgreSQL. Run history, asset materialisation records and schedule state
+# survive an undeploy, so a redeploy resumes with its history intact.
+#
+# That is deliberate — losing months of lineage because someone redeployed the
+# service would be a nasty surprise. Dropping it is a separate, explicit act:
+#
+#   kubectl exec -n default postgresql-0 -- \
+#     env PGPASSWORD=<pw> psql -U postgres -c "DROP DATABASE dagster"
+#
+# Usage:
+#   ansible-playbook 360-remove-dagster.yml -e "target_host=rancher-desktop"
+
+- name: Remove Dagster from Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    dagster_namespace: "dagster"
+    dagster_release_name: "dagster"
+
+  tasks:
+    - name: "1. Check for the Dagster Helm release"
+      ansible.builtin.command: >
+        helm list -n {{ dagster_namespace }} -q
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: helm_releases
+      changed_when: false
+      failed_when: false
+
+    - name: "2. Uninstall the Dagster Helm release"
+      ansible.builtin.command: >
+        helm uninstall {{ dagster_release_name }} -n {{ dagster_namespace }} --wait
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: dagster_release_name in (helm_releases.stdout | default(''))
+      changed_when: true
+
+    - name: "3. Wait for Dagster pods to terminate"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ dagster_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/instance={{ dagster_release_name }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: remaining_pods
+      until: remaining_pods.resources | length == 0
+      retries: 20
+      delay: 5
+      failed_when: false
+
+    - name: "4. Remove the IngressRoute"
+      kubernetes.core.k8s:
+        state: absent
+        api_version: traefik.io/v1alpha1
+        kind: IngressRoute
+        name: dagster
+        namespace: "{{ dagster_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      failed_when: false
+
+    - name: "5. Remove the chart's PostgreSQL password secret"
+      # Regenerated on redeploy from urbalurba-secrets. Not the metadata itself.
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: dagster-postgresql-secret
+        namespace: "{{ dagster_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      failed_when: false
+
+    - name: "6. Removal summary"
+      ansible.builtin.debug:
+        msg: |
+          Dagster removed.
+
+          Removed:
+            - the Helm release (webserver, daemon, any code-location deployments)
+            - the IngressRoute
+            - the chart's PostgreSQL password secret
+
+          PRESERVED — on purpose:
+            - the `dagster` DATABASE on postgresql.default, with all run history,
+              asset records and schedule state. A redeploy resumes with it.
+            - urbalurba-secrets in the namespace
+            - the namespace itself
+
+          To discard the history as well:
+            psql -U postgres -c "DROP DATABASE dagster"
