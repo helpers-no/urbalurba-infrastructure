@@ -51,11 +51,25 @@
       # deploy and grows Loki's index without bound. The log source adds it by
       # default; the config blanks it. If this regresses, Loki degrades slowly
       # and silently rather than breaking.
+      #
+      # SCOPED TO ALLOY'S OWN STREAMS, deliberately.
+      #
+      # This used to query /loki/api/v1/labels - Loki's GLOBAL label set - and
+      # fail if `instance` appeared anywhere in it. That attributes every other
+      # shipper's labels to Alloy. It produced a confident false failure on a
+      # healthy stack (2026-08-22): the only stream carrying `instance` was
+      # {job="loki-validation", instance="test-pod"}, which is Loki's OWN
+      # deploy-gate probe, left behind after 032-setup-loki.yml passes.
+      #
+      # Alloy's streams all carry `namespace`; that probe does not. Matching on
+      # it selects exactly the streams Alloy produces, so this now tests Alloy
+      # rather than the cluster.
       ansible.builtin.shell: >
         kubectl run alloy-verify-{{ 999 | random }} -n {{ namespace }}
         --rm -i --restart=Never --quiet --context {{ _target }}
         --image=curlimages/curl:latest --
-        curl -s "http://loki-gateway.{{ namespace }}.svc.cluster.local/loki/api/v1/labels"
+        curl -s -G "http://loki-gateway.{{ namespace }}.svc.cluster.local/loki/api/v1/series"
+        --data-urlencode 'match[]={namespace=~".+"}'
         < /dev/null
       register: labels
       changed_when: false
