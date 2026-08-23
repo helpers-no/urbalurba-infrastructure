@@ -4,7 +4,47 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — ⚠️ AWAITING TERJE'S APPROVAL of name, category, chart version and sizing
+## Status: Active — service built, tested and merged to `main` (2026-08-23)
+
+**Approved** (Terje via ops, 2026-08-22): all five decisions as proposed — name
+`dagster`, category `ANALYTICS`, number 360 / priority 56, chart
+`dagster/dagster` OSS pinned, concurrency cap 4 in chart values. The
+two-orchestrators rule is accepted as the working answer.
+
+**Built and verified on Rancher Desktop**, every command in
+[adding-a-service.md](../../../contributors/guides/adding-a-service.md)'s Testing
+section:
+
+| | |
+|---|---|
+| `deploy` | `ok=23 failed=0` |
+| `verify` | `ok=9 failed=0` — webserver, 22-table metadata schema, **daemon heartbeat** |
+| `undeploy` | `ok=8`, orphaned tenant deployments cleared |
+| `list` | appears under ANALYTICS |
+| `test-all --only dagster` | **5/5 ALL PASSED** |
+| `npm run build` | clean, no broken-link warnings |
+
+Tenant mechanism tested across five cases: no extend file, `tag: latest`
+(rejected), missing `why:` (rejected), a valid tenant (registered and counted),
+and back to stock.
+
+Commits: `37c5ebd` (plan), `b46a8a5` (service), `798f495` (tenant model, docs,
+logo), `2d6a4c9` (guide), `c1358e8` (official brand mark).
+
+### ⚠️ This landed directly on `main`, and should not have
+
+[WORKFLOW.md](../../WORKFLOW.md) says to ask about a feature branch before
+implementing and recommends one, with a PR for review. That was not done — the
+session's direct-to-main pattern was carried over from backlog documents to
+~1,400 lines of new service code without pausing to ask.
+
+Terje's call (2026-08-23): leave it, since the work is tested and reverting a
+working service to re-land it identically buys process rather than safety.
+**The next piece of work goes through a branch and a PR** — the Atlas
+registration, or the chart-pinning sweep, whichever comes first.
+
+Recorded here rather than in a commit message because the next person to
+implement a plan should meet it.
 
 **Decision already taken (Terje, 2026-08-22)**: Dagster becomes a **reusable UIS
 orchestrator**, not an Atlas-bundled component. Atlas is the first consumer, not
