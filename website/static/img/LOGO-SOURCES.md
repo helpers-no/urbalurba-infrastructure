@@ -28,11 +28,18 @@ Service logos sourced from official project websites and icon repositories. SVG 
 - **Simple Icons**: grafana, postgresql, mysql, mongodb, redis, rabbitmq, elasticsearch, nginx, spark, jupyterhub, cloudflare, tailscale, traefik, ollama, minio, temporal
 - **Official GitHub**: authentik, litellm, qdrant, loki (PNG), openwebui (PNG), pgadmin (PNG), unity-catalog (PNG)
 - **Created (Heroicons style)**: gravitee, redisinsight, tempo, tika
-- **Official GitHub (mark-only icon)**: dagster — `js_modules/ui-components/src/icon-svgs/dagster_solid.svg`
+- **Official GitHub (mark-only icon)**: dagster — `js_modules/ui-components/src/icon-svgs/dagster_primary.svg`
   from [dagster-io/dagster](https://github.com/dagster-io/dagster) (Apache-2.0).
-  Simple Icons does not carry Dagster, so the project's own icon is used per the
-  fallback above. Recoloured to `currentColor`; upstream ships `#030615`, which
-  is invisible on a dark background.
+  Simple Icons does not carry Dagster, so the project's own **primary brand mark**
+  is used per the fallback above. Brand colours preserved as upstream ships them
+  (`#4F43DD`, `#352D8E`, `#030615`).
+
+  ⚠️ Note for future logos: that repo also ships `dagster_solid.svg`, a
+  single-colour **UI icon** for its own interface chrome — not the brand mark.
+  Prefer `*_primary` / the `.github/` README assets when a project offers both,
+  and **keep the brand colours**. Recolouring a mark to `currentColor` makes it
+  render as a silhouette and matches no other service here: Spark keeps
+  `#E25A1C`, and every Simple Icons logo carries its brand fill.
 
 ### Core Infrastructure
 | Logo ID | Service | Source | License |

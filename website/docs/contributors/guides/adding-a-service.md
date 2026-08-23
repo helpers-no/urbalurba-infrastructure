@@ -588,8 +588,13 @@ Every service has one, and `SCRIPT_LOGO` in your service definition names it.
 3. Save to **both** `website/static/img/services/<id>-logo.svg` **and**
    `website/static/img/services/src/<id>-logo.svg`.
 4. **Record where you got it** in `LOGO-SOURCES.md`, including the licence.
-5. If the upstream SVG hard-codes a dark fill, recolour to `currentColor` so it
-   is visible in both light and dark themes.
+5. **Keep the brand colours.** Do not recolour to `currentColor` — every other
+   service logo here carries its own fill (Spark `#E25A1C`, and every Simple
+   Icons mark its brand colour), and a recoloured logo renders as a silhouette.
+6. If a project ships several SVGs, take the **brand mark**, not a UI icon.
+   Names like `*_primary`, or the assets in the project's `.github/` README, are
+   usually the brand; names like `*_solid` are often single-colour interface
+   chrome. Dagster ships both, and the difference is easy to miss.
 
 ## Testing
 
