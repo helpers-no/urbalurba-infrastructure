@@ -4,7 +4,49 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed — 2026-08-23
+## Status: Completed — 2026-08-23, independently verified
+
+**Verified by the UIS tester (imac) on a prod-matched cluster**, k8s 1.36 /
+Traefik 3.7, across three rounds. Not self-certified — see below.
+
+| Round | Outcome |
+|---|---|
+| 1 | 6/6 scripted tests PASS, **6 defects returned** (D1–D6) |
+| 2 | 4 fixed; **D2 partial, D5 not fixed** |
+| 3 | **PASS — all six closed, no regressions** |
+
+### What the separation caught that I did not
+
+Every defect below passed my own testing first. They are recorded because the
+pattern matters more than the individual bugs.
+
+- **D3** — my verify counted Kubernetes Deployments and called it "code locations
+  registered". A tenant in `ImagePullBackOff` has a Deployment and loads nothing;
+  Dagster's workspace said `DagsterUserCodeUnreachableError` while my test
+  reported `1` and exited 0. That is the counted-instead-of-asked failure *inside
+  the playbook written to catch it*.
+- **D2** — took **three attempts**, and the first two were worse than no fix
+  because both reported `ok` while the orphan stayed up: pruned before the Helm
+  upgrade (Helm recreated it), then deleted by the wrong identifier (deleting a
+  non-existent object succeeds). The residual — that the prune was unreachable in
+  a *failed* deploy, which is what creates orphans — was the tester's diagnosis
+  from reading `helm history`, not mine.
+- **D5** — I matched `kubectl` stderr against substrings I had invented rather
+  than observed. The sharpest catch was that my stated PASS string appeared in
+  **both** branches, so the criterion could not fail. That is why my verification
+  passed while the fix did not work.
+
+**The through-line**: I checked whether my *task* succeeded; the tester checked
+whether the *system was in the right state*. Those diverge exactly where the real
+defects are.
+
+### Process notes worth keeping
+
+- Round 2's handoff **raced the CI build** — the tester pulled an image predating
+  the fixes. Correct order: push code → wait for the container build → then hand
+  off. The router fires within 10 minutes, the build takes ~9.
+- This work landed **directly on `main`** without the feature branch WORKFLOW.md
+  asks for. Terje's call was to leave it; the next piece of work uses a branch.
 
 **Approved** (Terje via ops, 2026-08-22): all five decisions as proposed — name
 `dagster`, category `ANALYTICS`, number 360 / priority 56, chart
