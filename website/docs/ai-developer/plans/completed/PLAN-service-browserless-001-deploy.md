@@ -4,7 +4,31 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Built — handed to the independent tester 2026-08-23
+## Status: ✅ COMPLETE — independently verified 2026-08-23
+
+**Tester verdict: PASS on all four criteria, first attempt, no defects returned.**
+
+Shipped in PR #257, merged as `748a258a4324`. The AUTOMATION category is live and
+`browserless` is a fully supported UIS service: deploy, undeploy, verify, docs
+page, generated site data, category logo and service logo.
+
+| | |
+|---|---|
+| Verified by | the independent imac tester, on a prod-matched cluster |
+| Criteria | 4/4 PASS |
+| Defects returned | none |
+| Rounds | 1 |
+
+The two defects in this service were both found and fixed **during the build**,
+by my own smoke checks — not by the tester. Both had the same shape: the service
+looked healthy and could not do its job. That is the whole reason the verify
+renders a real page instead of polling `/pressure`, and why the assertion was
+checked against the bug before handover rather than assumed to work.
+
+**Next**: [neko-001](../backlog/PLAN-service-neko-001-optional-addon.md), which
+depends on the AUTOMATION category this plan created.
+
+### Build record
 
 **Build complete on branch `feature/browserless-automation-category`.** All four
 phases done: AUTOMATION category, service definition, manifests, setup/remove/test

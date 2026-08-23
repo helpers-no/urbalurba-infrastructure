@@ -191,6 +191,15 @@
       register: _ws
       changed_when: false
       failed_when: false
+      # A location that is still importing is not a defect — give it time to
+      # settle rather than reporting a transient state as a failure. Matched on
+      # the raw text deliberately: parsing JSON inside `until:` throws on the
+      # very responses (empty, truncated) the retry exists to ride out.
+      retries: 10
+      delay: 6
+      until:
+        - _ws.stdout is search('locationEntries')
+        - _ws.stdout is not search('"loadStatus"\\s*:\\s*"LOADING"')
 
     - name: "D2. Separate the healthy locations from the broken ones"
       ansible.builtin.set_fact:
@@ -198,9 +207,36 @@
       failed_when: false
 
     - name: "D3. Compute the split"
+      # ⚠️ `locationOrLoadError` is a GraphQL UNION, populated in BOTH outcomes:
+      #   RepositoryLocation -> loaded and reachable
+      #   PythonError        -> failed to load
+      #   null               -> neither; still LOADING
+      #
+      # This previously split on nullness, which is wrong in the worst possible
+      # direction: a HEALTHY location is non-null, so it landed in `_bad` and D4
+      # failed. `./uis verify dagster` could not pass while any tenant was
+      # working. Found by the independent tester (2026-08-23) against the first
+      # real tenant, atlas-data — LOADED, 0 restarts, 112 assets queryable, and
+      # reported as "cannot be reached".
+      #
+      # It survived two prior rounds because it was only ever exercised with
+      # ZERO locations and with a BROKEN one. Both pass a null-based split. The
+      # positive case — the one users actually hit — was never run. A check that
+      # can fail correctly but cannot pass is not verified; see D5's lesson.
       ansible.builtin.set_fact:
-        _ok: "{{ _entries | default([]) | selectattr('locationOrLoadError', 'none') | map(attribute='name') | list }}"
-        _bad: "{{ _entries | default([]) | rejectattr('locationOrLoadError', 'none') | map(attribute='name') | list }}"
+        _ok: "{{ _entries | default([])
+                 | selectattr('locationOrLoadError.__typename', 'defined')
+                 | selectattr('locationOrLoadError.__typename', 'equalto', 'RepositoryLocation')
+                 | map(attribute='name') | list }}"
+        _bad: "{{ _entries | default([])
+                 | selectattr('locationOrLoadError', 'defined')
+                 | rejectattr('locationOrLoadError', 'none')
+                 | rejectattr('locationOrLoadError.__typename', 'equalto', 'RepositoryLocation')
+                 | map(attribute='name') | list }}"
+        _loading: "{{ _entries | default([])
+                 | selectattr('loadStatus', 'defined')
+                 | selectattr('loadStatus', 'equalto', 'LOADING')
+                 | map(attribute='name') | list }}"
       failed_when: false
 
     - name: "D4. A declared code location that cannot be reached is a FAILURE"
@@ -208,16 +244,83 @@
       # all: the platform reports it as registered while none of its assets,
       # jobs or schedules exist.
       ansible.builtin.assert:
-        that: (_bad | default([]) | length) == 0
+        that:
+          - (_bad | default([]) | length) == 0
+          - (_loading | default([]) | length) == 0
         fail_msg: >-
-          Code location(s) {{ _bad | default([]) | join(', ') }} are declared but
-          Dagster cannot reach them — their gRPC server is not answering. Usual
-          cause: the image tag does not exist or cannot be pulled. Check
+          {% if (_bad | default([]) | length) > 0 %}Code location(s)
+          {{ _bad | default([]) | join(', ') }} are declared but Dagster cannot
+          reach them — their gRPC server is not answering. Usual cause: the image
+          tag does not exist or cannot be pulled. Check
           `kubectl get pods -n {{ dagster_ns }}` and the tag in
           .uis.extend/dagster-code-locations.yaml. None of their assets,
           schedules or jobs exist while this is true.
+          {% else %}Code location(s) {{ _loading | default([]) | join(', ') }} are
+          still LOADING after the retry budget. That is neither loaded nor failed:
+          Dagster has not finished importing their definitions. A slow module
+          import at startup is the usual cause. Re-run the verify; if it persists,
+          check the location pod's logs.{% endif %}
         success_msg: >-
           {{ (_ok | default([]) | length) }} code location(s) loaded and reachable.
+
+
+    - name: "D5. Can each loaded tenant hydrate the platform's run storage?"
+      # A code location can load perfectly and still be unable to execute a
+      # single step.
+      #
+      # Run pods are launched from the TENANT's image, and the platform's
+      # instance uses Postgres storage — so the tenant's Python environment must
+      # be able to import `dagster_postgres.run_storage` before any step runs.
+      # Without it a run reaches LaunchRunSuccess, the pod starts, and dies in
+      # ~5s with stepsSucceeded=0 and a CheckError. The location stays LOADED and
+      # green throughout, and D1-D4 all pass.
+      #
+      # Found against the first real tenant (atlas-data, 2026-08-23). The tenant
+      # met every documented requirement — the requirement was undocumented and
+      # nothing pre-flighted it. Both halves are now fixed: the contract states
+      # it (see the service docs and the code-locations template) and this check
+      # catches it before a user discovers it as a mystery run failure.
+      ansible.builtin.shell: |
+        missing=""
+        for t in {{ _ok | default([]) | join(' ') }}; do
+          pod=$(kubectl get pods -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} \
+            -l deployment=$t -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+          [ -z "$pod" ] && continue
+          if ! kubectl exec -n {{ dagster_ns }} "$pod" --context {{ _target }} \
+               --kubeconfig {{ merged_kubeconf_file }} -- \
+               python -c "import dagster_postgres.run_storage" >/dev/null 2>&1; then
+            missing="$missing $t"
+          fi
+        done
+        echo "MISSING:$missing"
+      register: _pgcheck
+      changed_when: false
+      failed_when: false
+      when: (_ok | default([]) | length) > 0
+
+    - name: "D5b. Record which tenants cannot run"
+      ansible.builtin.set_fact:
+        _tenant_missing_pg: "{{ (_pgcheck.stdout | default('MISSING:') | regex_replace('^.*MISSING:', '') | trim).split() }}"
+      failed_when: false
+
+    - name: "D5c. A tenant that cannot hydrate run storage is a FAILURE"
+      ansible.builtin.assert:
+        that: (_tenant_missing_pg | default([]) | length) == 0
+        fail_msg: >-
+          Code location(s) {{ _tenant_missing_pg | join(', ') }} loaded fine but
+          CANNOT EXECUTE ANY RUN: their image cannot import
+          `dagster_postgres.run_storage`, which every run pod must hydrate before
+          its first step. A run will reach LaunchRunSuccess, start a pod, and die
+          in about 5 seconds with stepsSucceeded=0 — while the location keeps
+          reporting LOADED and this platform keeps reporting healthy.
+          Fix in the TENANT image: add `dagster-postgres` matching the platform's
+          Dagster line ({{ dagster_chart_version | default('1.13.19') }} ->
+          dagster-postgres 0.29.x). See the code-location contract in
+          /docs/services/analytics/dagster.
+        success_msg: >-
+          {{ (_ok | default([]) | length) }} tenant(s) can hydrate run storage.
+      when: (_ok | default([]) | length) > 0
 
     - name: "SUMMARY"
       ansible.builtin.debug:
@@ -227,8 +330,11 @@
           - "C. Daemon heartbeat fresh (schedules live): PASS"
           - ""
           - "D. Code locations LOADED (asked Dagster, not kubectl): {{ (_ok | default([]) | length) }}"
-          - "{{ (_ok | default([]) | length) == 0 | ternary('   None — expected on a fresh platform. UIS ships the orchestrator; tenants register themselves. See /docs/services/analytics/dagster.', '   ' ~ (_ok | default([]) | join(', '))) }}"
+          - "{{ ((_ok | default([]) | length) == 0) | ternary('   None — expected on a fresh platform. UIS ships the orchestrator; tenants register themselves. See /docs/services/analytics/dagster.', '   ' ~ (_ok | default([]) | join(', '))) }}"
+          - ""
+          - "{{ ((_ok | default([]) | length) > 0) | ternary('   All can hydrate run storage (D5) — runs will execute.', '') }}"
           - ""
           - "A Dagster that passes A and B but fails C looks healthy and runs nothing."
+          - "A tenant that passes D4 but fails D5 loads perfectly and executes nothing."
           - "D asks the orchestrator whether locations LOADED — a Deployment that exists"
           - "and serves nothing is a failure, not a registration."

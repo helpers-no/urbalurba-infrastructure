@@ -565,6 +565,7 @@
           UI:         http://dagster.localhost   (internal only, no auth)
           Concurrency cap: 4 simultaneous run pods (platform policy)
 
+          {% if (_code_locations | default([]) | length) == 0 %}
           NO CODE LOCATIONS ARE REGISTERED YET — that is expected.
           UIS ships the orchestrator; applications register themselves as
           tenants. To add one, declare it in
@@ -572,6 +573,13 @@
               .uis.extend/dagster-code-locations.yaml
 
           then re-run `./uis deploy dagster`.
+          {% else %}
+          Code locations declared: {{ _code_locations | default([]) | length }}
+              {{ _code_locations | default([]) | map(attribute='name') | join(', ') }}
+
+          Declared is not the same as loaded. Confirm Dagster can actually reach
+          them — and that they can execute runs — with `./uis verify dagster`.
+          {% endif %}
 
           ⚠️ Do NOT edit manifests/360-dagster-config.yaml — that is product
           config, ships to every installation, and bypasses the validation that

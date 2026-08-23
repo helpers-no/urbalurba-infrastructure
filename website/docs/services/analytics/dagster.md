@@ -166,6 +166,30 @@ ingest this way.
 | Port | `4000` |
 | Dagster version | must match the platform's **minor** line (`1.13.x` today) |
 | Module | must import cheaply — every run pod cold-starts by importing it, so open no database connections at module scope |
+| **Run storage** | must include **`dagster-postgres`** (`0.29.x` for the `1.13.x` line) |
+
+:::danger `dagster-postgres` is required, and its absence is invisible until a run
+Run pods are launched from **your** image, and this platform stores runs in
+Postgres — so your environment must be able to import
+`dagster_postgres.run_storage` before a single step executes.
+
+Without it, everything looks fine: the location loads, reports `LOADED`, serves
+its assets and schedules, and the pod sits at 0 restarts. Then the first run
+reaches `LaunchRunSuccess`, starts a pod, and **dies in about 5 seconds with
+`stepsSucceeded: 0`** and:
+
+```
+CheckError: Failure condition: Couldn't import module dagster_postgres.run_storage
+when attempting to load the configurable class
+dagster_postgres.run_storage.PostgresRunStorage
+```
+
+This row was missing from this table until 2026-08-23. The first real tenant met
+every requirement that *was* documented and still could not execute anything —
+the requirement was real, undocumented, and unchecked. `./uis verify dagster` now
+pre-flights it (check D5) so it surfaces at verify time rather than as a mystery
+run failure.
+:::
 
 :::caution Version bumps are co-ordinated
 The platform and every code location must stay on the same Dagster minor line; a

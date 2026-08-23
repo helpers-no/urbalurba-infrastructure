@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-21 (fourth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-23 (fifth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -56,6 +56,48 @@ shipped, so the triage view had drifted badly from the repo:
   `image-size` with no published patch — a floor, not a backlog item.
 - The first local build surfaced **pre-existing broken links and one broken
   anchor** in the docs. Warnings, not failures. Currently owned by nobody.
+---
+
+## What changed 2026-08-23 (fifth entry) — browserless shipped, Dagster shipped
+
+Both were built through the new **build/verify-separated** loop: assist builds,
+the imac tester verifies independently on a prod-matched cluster. Two very
+different results, and the difference is the point.
+
+- **[browserless-001](../completed/PLAN-service-browserless-001-deploy.md) shipped
+  — PASS on all four criteria, first attempt, zero defects returned.** The
+  `AUTOMATION` category is live; browserless is the first service in it. This is
+  the fix for the gap noted in the 2026-08-21 (second entry) below: Uptime Kuma's
+  `real-browser` monitor type was dead in every installation because no Chrome
+  existed to connect to. It now has one.
+- **[dagster-001](../completed/PLAN-service-dagster-001-deploy.md) shipped — but
+  took three rounds and six defects.** Row 27 in Tier 4 is updated accordingly.
+- **The difference between one round and three was where the bugs were found.**
+  browserless had two defects of exactly the same class as Dagster's — but both
+  were caught by the builder's own smoke checks *before* handover, because the
+  build ran a real render rather than reading a health endpoint. Dagster's D2, D3
+  and D5 all reached the tester because the verify checked *whether a command
+  succeeded* rather than *whether the system reached the right state*.
+- **Concretely**: browserless spent part of its build `1/1 Running`, zero
+  restarts, with `/pressure` reporting `"isAvailable": true` — and every render
+  failing. A volume mount had shadowed the browser's data directory. No health
+  signal moved. Its verify therefore renders a page and asserts a marker comes
+  back, and **that assertion was tested against the bug** before handover:
+  reintroducing the mount makes it fail while the pod stays healthy.
+- **This is the third independent confirmation for Tier 1 #2**
+  ([verification-playbooks-usage](INVESTIGATE-system-verification-playbooks-usage.md)),
+  now arriving from a service that had no verify playbook at all until this week.
+  The investigation predicted "deployments report success when no real validation
+  happened"; a green `/pressure` on a browser that cannot render is precisely that.
+- **New: [uis-docs-writes-outside-repo](PLAN-cli-uis-docs-writes-outside-repo.md).**
+  `./uis docs` run from a workstation checkout writes to `/mnt/urbalurbadisk/…`,
+  prints `✓ Generated … (34 services)` and exits 0 while leaving the repo
+  untouched — so a newly added service silently never reaches `services.json`.
+  Found the hard way here. Same family as Tier 1 #2 and the `test-all` gap: a
+  command reporting on its own execution rather than on the state it produced.
+- **Still open**: neko-001 is next and depends on the AUTOMATION category this
+  created.
+
 ---
 
 ## What changed 2026-08-21 (fourth entry) — validation run, three fixes, three plans
@@ -125,7 +167,7 @@ and three fixed the same day; see
 
 - **Terje decided the browser platform ships as a UIS service.** Not reopened.
   What was open — name, category, scope — is proposed in two plans **awaiting his
-  approval**: [browserless-001](../active/PLAN-service-browserless-001-deploy.md) and
+  approval**: [browserless-001](../completed/PLAN-service-browserless-001-deploy.md) and
   [neko-001](PLAN-service-neko-001-optional-addon.md). Nothing is self-approved.
 - **Filed as two plans on purpose**, so scope can be approved by approving one
   and not the other. browserless and neko have different second-user cases and
@@ -253,7 +295,7 @@ These are sketches / parking-lot entries, not concrete research targets. Don't o
 | # | Item | What to do |
 |---|---|---|
 | 26 | [espocrm](INVESTIGATE-service-espocrm.md) | Currently four URLs and zero analysis. Either promote to a real INVESTIGATE (with a goal + comparison against alternatives) or delete. |
-| 27 | [dagster](INVESTIGATE-service-dagster.md) | ✅ **Trigger met 2026-08-22 — no longer deferred.** This row said to wait for "the data-orchestration use case to materialise into a real consumer". It has: Terje decided Dagster becomes a reusable UIS service, and Atlas is done and waiting — 41 sources, 40 Pipes-enabled, code-location image publishing on every commit. Build plan filed as [PLAN-service-dagster-001-deploy](../completed/PLAN-service-dagster-001-deploy.md), awaiting Terje's approval of name/category/chart/sizing. The investigation stays here as the design record; it is four months stale on source counts but its structural decisions held. |
+| 27 | [dagster](INVESTIGATE-service-dagster.md) | ✅ **Trigger met 2026-08-22 — no longer deferred.** This row said to wait for "the data-orchestration use case to materialise into a real consumer". It has: Terje decided Dagster becomes a reusable UIS service, and Atlas is done and waiting — 41 sources, 40 Pipes-enabled, code-location image publishing on every commit. **Shipped 2026-08-23** as [PLAN-service-dagster-001-deploy](../completed/PLAN-service-dagster-001-deploy.md) — approved, built, and independently verified after three rounds and six defects. The investigation stays here as the design record; it is four months stale on source counts but its structural decisions held. |
 | 28 | [metabase](INVESTIGATE-service-metabase.md) | Similar to #24 — internal BI / data exploration tool selection. Hold until there's a concrete first consumer driving the requirements. |
 | 29 | [customer-onboarding-database](INVESTIGATE-docs-customer-onboarding-database.md) | **Newly triaged.** Self-described as "Draft / not yet scheduled." Leave as a sketch until there is a real customer-onboarding flow to design against. |
 

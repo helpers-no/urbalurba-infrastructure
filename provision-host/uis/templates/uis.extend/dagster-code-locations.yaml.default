@@ -14,6 +14,21 @@
 # loads its asset definitions over gRPC. dagster-pipes means the work itself can
 # be in any language — the image only has to speak the gRPC handshake.
 #
+# ⚠️ WHAT THE IMAGE MUST CONTAIN — the full contract is in
+#    /docs/services/analytics/dagster, but one requirement is worth repeating
+#    here because its absence is invisible:
+#
+#      the image MUST be able to `import dagster_postgres.run_storage`
+#      (pip install dagster-postgres — 0.29.x for the 1.13.x line)
+#
+#    Run pods are launched from YOUR image and this platform stores runs in
+#    Postgres. Without that module the location still loads, reports LOADED,
+#    serves its assets and schedules, and sits at 0 restarts — and then every
+#    run dies in ~5 seconds having executed zero steps.
+#
+#    `./uis verify dagster` pre-flights this (check D5). It caught the first real
+#    tenant, which met every other requirement.
+#
 # After changing this file:  ./uis deploy dagster
 #
 # Remove or comment out everything below for an installation with no tenants;
