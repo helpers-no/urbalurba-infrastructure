@@ -122,7 +122,7 @@ the services leaves the trap armed for the next contributor.
       what is verifiable. Same allowlist-that-new-things-never-join shape as the
       secrets validator. Prefer **deriving it from `VERIFY_SERVICES`** over
       documenting a fourth place to edit
-      — found while writing [PLAN-service-browserless-001-deploy](../active/PLAN-service-browserless-001-deploy.md)
+      — found while writing [PLAN-service-browserless-001-deploy](../completed/PLAN-service-browserless-001-deploy.md)
 
 ### Validation
 
