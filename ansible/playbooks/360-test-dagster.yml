@@ -101,6 +101,34 @@
         success_msg: "Metadata schema present ({{ _tables.stdout | default('?') | trim }} tables)."
 
     # --- Test C: the daemon is ALIVE, not merely scheduled ---
+    - name: "C0. Read the daemon Deployment's replica state"
+      # ⚠️ Ask Kubernetes, do not parse kubectl's stderr.
+      #
+      # Round 2 selected the failure message by matching stderr against
+      # 'not found|no such|NotFound|scaled' — substrings I guessed instead of
+      # observing. `--replicas=0` actually emits "error: timed out waiting for
+      # the condition", which matches none of them, so a daemon with ZERO
+      # replicas was reported as "running but unhealthy". The tester called that
+      # worse than the opaque message it replaced: confidently wrong, and it
+      # sends the operator to look at heartbeats rather than the replica count.
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ dagster_ns }}"
+        name: dagster-daemon
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _daemon_deploy
+      failed_when: false
+
+    - name: "C0b. Classify what state the daemon is actually in"
+      ansible.builtin.set_fact:
+        _daemon_state: >-
+          {{ 'absent'   if (_daemon_deploy.resources | default([]) | length) == 0
+             else 'scaled-to-zero' if ((_daemon_deploy.resources[0].spec.replicas | default(0)) | int) == 0
+             else 'no-available'   if ((_daemon_deploy.resources[0].status.availableReplicas | default(0)) | int) == 0
+             else 'running' }}
+
     - name: "C1. Ask the daemon for its own health"
       # `dagster-daemon liveness-check` reports whether the daemon's heartbeat is
       # fresh — which is a different question from whether its pod is Running.
@@ -120,12 +148,17 @@
       ansible.builtin.assert:
         that: _daemon.rc == 0
         fail_msg: >-
-          {{ (_daemon.stderr | default('') is search('not found|no such|NotFound|scaled'))
-             | ternary('THE DAGSTER DAEMON IS NOT RUNNING AT ALL — no deployment or zero replicas. NO SCHEDULE IS FIRING.',
-                       'The Dagster daemon is running but reports unhealthy: ' ~ (_daemon.stdout | default('') | trim) ~ ' ' ~ (_daemon.stderr | default('') | trim) ~ ' — its heartbeat is stale, so NO SCHEDULE IS FIRING.') }}
+          {{ {'absent':         'THE DAGSTER DAEMON DEPLOYMENT DOES NOT EXIST. No schedule can fire.',
+              'scaled-to-zero': 'THE DAGSTER DAEMON IS SCALED TO ZERO REPLICAS (spec.replicas=0). It is not running at all, so NO SCHEDULE IS FIRING. This is a replica-count problem, not a heartbeat problem — do not go looking at heartbeats.',
+              'no-available':   'THE DAGSTER DAEMON HAS NO AVAILABLE REPLICAS — the pod exists but is not Ready. NO SCHEDULE IS FIRING.',
+              'running':        'The Dagster daemon pod is running and Ready, but its heartbeat is stale: ' ~ (_daemon.stdout | default('') | trim) ~ ' ' ~ (_daemon.stderr | default('') | trim) ~ ' — so NO SCHEDULE IS FIRING despite the pod looking healthy.'
+             }[_daemon_state] }}
           Nothing else in the platform detects this: `uis status` stays green and
-          the UI keeps serving pages. Check:
-          kubectl get deploy -n dagster dagster-daemon
+          the UI keeps serving pages.
+          Observed state: {{ _daemon_state }}
+          (spec.replicas={{ _daemon_deploy.resources[0].spec.replicas | default('n/a') }},
+          availableReplicas={{ _daemon_deploy.resources[0].status.availableReplicas | default(0) }}).
+          Check: kubectl get deploy -n dagster dagster-daemon
         success_msg: "Daemon heartbeat is fresh — schedules and the run queue are live."
 
     # --- Test D: code locations, if any tenant has registered ---

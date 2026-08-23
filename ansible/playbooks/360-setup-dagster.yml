@@ -387,7 +387,14 @@
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: dagster_helm_result
       changed_when: true
-
+      # ⚠️ Deliberately does NOT fail here. The reconcile below must run even —
+      # especially — when this fails, because a failed upgrade is what CREATES
+      # the orphans it prunes. Task 23f fails the play afterwards, so a failed
+      # upgrade is still a failed deploy, just not one that skips cleanup.
+      # (Tester D2 residual, 2026-08-23: with the prune after an unguarded helm
+      # task, one unpullable tenant blocked reconciliation for every other
+      # tenant on the platform.)
+      failed_when: false
     - name: "23b. Prune code-location objects Helm will not prune itself"
       # ⚠️ Helm three-way-merges against the last SUCCESSFUL release, not the
       # previous one. So a resource created by a FAILED revision is invisible to
@@ -458,6 +465,10 @@
       register: _after_prune
 
     - name: "23e. Assert only declared code locations remain"
+      # Skipped when Helm failed: the cluster is legitimately mid-flight then,
+      # and asserting here would replace Helm's real error with a confusing one.
+      # Task 23f reports the Helm failure instead.
+      when: dagster_helm_result.rc | default(1) == 0
       ansible.builtin.assert:
         that:
           - (_after_prune.resources | default([]) | map(attribute='metadata.labels.deployment') | list | sort)
@@ -472,6 +483,20 @@
         success_msg: >-
           Code locations reconciled: {{ (_code_locations | default([]) | length) }} declared,
           {{ (_after_prune.resources | default([]) | length) }} present.
+    - name: "23f. Fail the play if the Helm upgrade failed"
+      # Runs AFTER the reconcile, so cleanup has already happened.
+      ansible.builtin.fail:
+        msg: |
+          Helm upgrade failed (rc={{ dagster_helm_result.rc | default('?') }}).
+
+          {{ (dagster_helm_result.stderr | default('') | trim) or (dagster_helm_result.stdout | default('') | trim) }}
+
+          Code-location reconciliation still ran, so no undeclared tenant has
+          been left behind. If the error mentions a timeout, check the ⚠️
+          registry pre-flight warnings earlier in this run — an image tag that
+          cannot be pulled makes Helm wait out its full
+          {{ installation_timeout }}s.
+      when: dagster_helm_result.rc | default(1) != 0
 
     # ============= PHASE 5: READINESS =============
 
