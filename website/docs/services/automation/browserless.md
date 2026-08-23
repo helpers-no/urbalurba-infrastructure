@@ -127,10 +127,22 @@ carrying a marker and checks the marker comes back.
 
 `./uis verify browserless` proves the routes **exist**. This proves they **work**:
 
-| | Check |
-|---|---|
-| A | `chromium.connect()` to the Playwright route, navigate, read the title and DOM back |
-| B | `@playwright/mcp --cdp-endpoint` against the CDP route: list tools, `browser_navigate`, `browser_snapshot` |
+| | Check | Detects a dead browser? |
+|---|---|---|
+| A | `chromium.connect()` to the Playwright route, navigate, read the title and DOM back | **yes** |
+| B1 | `@playwright/mcp` over CDP: `tools/list` | no — wiring only |
+| B2 | `browser_navigate` accepted | no — wiring only |
+| B3 | `browser_snapshot` returns content **containing** the marker | **yes** |
+
+:::warning B1 and B2 pass with no browser running
+Measured, not assumed: with browserless scaled to zero replicas, `tools/list` and
+`browser_navigate` both still pass. `tools/list` is answered by the MCP server
+itself, and "navigate accepted" means only that the JSON-RPC call was accepted.
+
+**B3 is the only check on the MCP side that notices a dead browser** — it asserts
+the snapshot *contains* the marker, which cannot happen without a live page. If
+you are tempted to simplify these checks, B3 is the one to keep.
+:::
 
 The distinction matters because the fast verify's endpoint test asserts the
 Playwright route answers **400 rather than 404** — that proves a route is
@@ -162,6 +174,22 @@ kubectl logs -n browser -l app=browserless --tail=50
 the container default of 64 MB is not enough. The deployment mounts 512 MB at
 `/dev/shm` for this reason; if that mount is removed, pages die partway through
 with no error from browserless itself.
+
+**You experimented with `kubectl set env` and now nothing authenticates.**
+`kubectl set env deploy/browserless --from=secret/urbalurba-secrets` does **not**
+undo an earlier `kubectl set env … TOKEN=…`: it *adds* a `BROWSERLESS_TOKEN`
+variable and leaves the overridden `TOKEN` in place, so the pod keeps using the
+wrong value with nothing to show for it. Redeploy instead:
+
+```bash
+./uis undeploy browserless && ./uis deploy browserless
+```
+
+That restores `TOKEN` to its `secretKeyRef`. Confirm with:
+
+```bash
+kubectl get deploy browserless -n browser   -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="TOKEN")]}'
+```
 
 **Callers time out under load.** Check whether the pool is saturated:
 

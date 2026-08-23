@@ -127,7 +127,22 @@
                         npm install --silent --no-audit --no-fund \
                           playwright-core@{{ playwright_client_version }} \
                           @playwright/mcp@{{ mcp_version }}
-                        exec node /scripts/session-test.js
+                        # Run the script from where its modules live.
+                        #
+                        # `node /scripts/session-test.js` fails with
+                        # MODULE_NOT_FOUND: workingDir does NOT affect CommonJS
+                        # resolution. Node walks up from the SCRIPT's own path
+                        # (/scripts/node_modules, then /node_modules) and never
+                        # looks in /work/node_modules. The ConfigMap mount makes
+                        # it worse — the real path is a symlinked
+                        # ..2026_08_23_20_41_01.3260557931/ directory.
+                        #
+                        # Copying is preferred over NODE_PATH: NODE_PATH is a
+                        # legacy escape hatch that does not cover every
+                        # resolution path, whereas co-locating the script with
+                        # node_modules is just how Node expects to find them.
+                        cp /scripts/session-test.js /work/session-test.js
+                        exec node /work/session-test.js
                     volumeMounts:
                       - { name: scripts, mountPath: /scripts }
                       - { name: work, mountPath: /work }
@@ -181,6 +196,10 @@
         success_msg: "Playwright: a real session navigated and read the page back."
 
     - name: "7. B1. MCP server connected and exposes browser tools"
+      # ⚠️ A WIRING CHECK, NOT A LIVENESS CHECK. Measured with browserless
+      # scaled to zero replicas: this PASSES with no browser running at all,
+      # because tools/list is answered by the MCP server itself. Only B3 below
+      # detects a dead browser on this side.
       ansible.builtin.assert:
         that: _joblog.stdout is search('B1_PASS')
         fail_msg: >-
@@ -190,6 +209,10 @@
         success_msg: "MCP: connected over CDP and listed browser tools."
 
     - name: "8. B2/B3. MCP navigated and read live page content back"
+      # B2 is acceptance of the JSON-RPC call — it too passes with the browser
+      # scaled to zero. B3 is the load-bearing one: it asserts the snapshot
+      # CONTAINS the marker, which cannot happen without a live page. Do not
+      # collapse these into one check or drop B3 as redundant.
       ansible.builtin.assert:
         that:
           - _joblog.stdout is search('B2_PASS')
@@ -222,10 +245,14 @@
     - name: "SUMMARY"
       ansible.builtin.debug:
         msg:
-          - "A.  Playwright connect() drove a page:        PASS"
-          - "B1. MCP connected over CDP, tools listed:     PASS"
-          - "B2. MCP browser_navigate:                     PASS"
-          - "B3. MCP browser_snapshot returned live DOM:   PASS"
+          - "A.  Playwright connect() drove a page:        PASS  (liveness)"
+          - "B1. MCP connected over CDP, tools listed:     PASS  (wiring only)"
+          - "B2. MCP browser_navigate accepted:            PASS  (wiring only)"
+          - "B3. MCP browser_snapshot returned live DOM:   PASS  (liveness)"
+          - ""
+          - "B1 and B2 pass even with browserless scaled to ZERO replicas —"
+          - "measured, not assumed. B3 is the only B check that detects a dead"
+          - "browser, and A is the only one on the Playwright side."
           - ""
           - "These use two different endpoints on port 3000. `./uis verify"
           - "browserless` proves the routes EXIST; this proves they WORK."
