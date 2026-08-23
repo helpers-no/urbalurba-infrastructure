@@ -1,0 +1,151 @@
+# 401-browserless-session-test.yaml
+#
+# The script behind `./uis browserless verify-session`.
+#
+# WHY THIS EXISTS SEPARATELY FROM 400-test-browserless.yml
+#
+# The main verify proves browserless RENDERS (it POSTs to /content and checks a
+# marker comes back) and that both protocol endpoints are REGISTERED — the
+# Playwright route answers 400-not-404 to a synthetic handshake.
+#
+# "The route is registered" is not "a session can drive a page". A driven
+# session opens a websocket, negotiates a protocol version, allocates a browser
+# context from the pool, navigates, and reads back DOM state. Every one of those
+# can fail while /content still renders and the route still answers.
+#
+# This is kept out of the main verify — and out of `test-all` — on purpose: it
+# installs npm packages at run time, so it needs egress to the npm registry.
+# Folding it into the fast verify would make `test-all` fail whenever npmjs has
+# a bad day, for reasons that have nothing to do with UIS.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: browserless-session-test
+  namespace: browser
+  labels:
+    app: browserless
+    role: verify
+data:
+  session-test.js: |
+    // Two checks against a DEPLOYED browserless:
+    //   A. Playwright  — chromium.connect() to the Playwright server route,
+    //                    navigate, read the page title back.
+    //   B. MCP         — @playwright/mcp --cdp-endpoint against the CDP route:
+    //                    list tools, browser_navigate, browser_snapshot.
+    //
+    // A and B use DIFFERENT endpoints on the same port. Proving one says
+    // nothing about the other, which is the usual first mistake with
+    // browserless — so both are exercised.
+    'use strict';
+    const { spawn } = require('child_process');
+
+    const HOST   = process.env.BROWSERLESS_HOST || 'browserless.browser.svc.cluster.local:3000';
+    const TOKEN  = process.env.BROWSERLESS_TOKEN;
+    const MARKER = 'UIS-BROWSERLESS-SESSION-OK';
+    const PAGE   = 'data:text/html,<html><head><title>' + MARKER +
+                   '</title></head><body><h1 id="m">' + MARKER + '</h1></body></html>';
+
+    const PW_WS  = 'ws://' + HOST + '/chromium/playwright?token=' + TOKEN;
+    const CDP_WS = 'ws://' + HOST + '?token=' + TOKEN;
+
+    const fail = (label, err) => {
+      console.log(label + '_FAIL ' + (err && err.message ? err.message : String(err)));
+      process.exitCode = 1;
+    };
+
+    async function checkPlaywright() {
+      const { chromium } = require('playwright-core');
+      let browser;
+      try {
+        browser = await chromium.connect(PW_WS, { timeout: 60000 });
+        const page = await browser.newPage();
+        await page.goto(PAGE, { timeout: 45000 });
+        const title = await page.title();
+        const text  = await page.textContent('#m');
+        if (title !== MARKER) throw new Error('title was ' + JSON.stringify(title));
+        if (text  !== MARKER) throw new Error('DOM text was ' + JSON.stringify(text));
+        console.log('A_PASS session drove a page; title and DOM both read back as ' + MARKER);
+      } catch (e) {
+        fail('A', e);
+      } finally {
+        if (browser) { try { await browser.close(); } catch (_) {} }
+      }
+    }
+
+    // Minimal MCP stdio client. Messages are newline-delimited JSON-RPC.
+    function mcpClient(proc) {
+      let buf = '';
+      const waiters = new Map();
+      proc.stdout.on('data', chunk => {
+        buf += chunk.toString();
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (!line) continue;
+          let msg; try { msg = JSON.parse(line); } catch (_) { continue; }
+          if (msg.id && waiters.has(msg.id)) { waiters.get(msg.id)(msg); waiters.delete(msg.id); }
+        }
+      });
+      const send = (obj) => proc.stdin.write(JSON.stringify(obj) + '\n');
+      const call = (id, method, params) => new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error(method + ' timed out after 60s')), 60000);
+        waiters.set(id, m => { clearTimeout(t); m.error ? reject(new Error(method + ': ' + JSON.stringify(m.error))) : resolve(m.result); });
+        send({ jsonrpc: '2.0', id, method, params });
+      });
+      return { send, call };
+    }
+
+    async function checkMcp() {
+      let proc;
+      try {
+        // The binary installed by the Job, not `npx` — npx would re-resolve
+        // over the network mid-test and turn a registry hiccup into a
+        // browserless failure.
+        const MCP_BIN = process.env.MCP_BIN || '/work/node_modules/.bin/playwright-mcp';
+        proc = spawn(MCP_BIN, ['--cdp-endpoint', CDP_WS],
+                     { stdio: ['pipe', 'pipe', 'pipe'], env: process.env });
+        let stderr = '';
+        proc.stderr.on('data', d => { stderr += d.toString(); });
+        proc.on('exit', c => { if (c) console.log('B_NOTE mcp server exited rc=' + c + ' stderr=' + stderr.slice(-400)); });
+
+        const mcp = mcpClient(proc);
+        await mcp.call(1, 'initialize', {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'uis-browserless-verify', version: '1.0.0' },
+        });
+        mcp.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+
+        const tools = await mcp.call(2, 'tools/list', {});
+        const names = (tools.tools || []).map(t => t.name);
+        if (!names.length) throw new Error('tools/list returned no tools');
+        for (const required of ['browser_navigate', 'browser_snapshot']) {
+          if (!names.includes(required)) throw new Error('missing tool ' + required + '; got ' + names.join(','));
+        }
+        console.log('B1_PASS tools/list returned ' + names.length + ' tools including browser_navigate and browser_snapshot');
+
+        await mcp.call(3, 'tools/call', { name: 'browser_navigate', arguments: { url: PAGE } });
+        console.log('B2_PASS browser_navigate accepted');
+
+        const snap = await mcp.call(4, 'tools/call', { name: 'browser_snapshot', arguments: {} });
+        const blob = JSON.stringify(snap);
+        if (!blob.includes(MARKER)) {
+          throw new Error('snapshot did not contain ' + MARKER + '; first 300 chars: ' + blob.slice(0, 300));
+        }
+        console.log('B3_PASS browser_snapshot returned live page content containing ' + MARKER);
+      } catch (e) {
+        fail('B', e);
+      } finally {
+        if (proc) { try { proc.kill('SIGKILL'); } catch (_) {} }
+      }
+    }
+
+    (async () => {
+      if (!TOKEN) { console.log('SETUP_FAIL BROWSERLESS_TOKEN is empty'); process.exit(1); }
+      await checkPlaywright();
+      await checkMcp();
+      console.log(process.exitCode ? 'RESULT: FAIL' : 'RESULT: ALL_PASS');
+      process.exit(process.exitCode || 0);
+    })();
