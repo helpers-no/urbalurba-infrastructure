@@ -304,6 +304,40 @@
       loop: "{{ _code_locations | default([]) }}"
       loop_control: { label: "{{ item.name | default('<unnamed>') }}" }
 
+    - name: "22d2. Pre-flight: can each declared image actually be pulled?"
+      # Without this a bad tag costs the full --timeout 900s before Helm gives
+      # up (tester D4). A manifest HEAD against the registry answers in seconds.
+      # Best-effort only: a private registry legitimately returns 401 here, so
+      # this WARNS and never blocks — the deploy still fails later if the pull
+      # really is impossible, just less cheaply.
+      ansible.builtin.shell: |
+        img="{{ item.image }}:{{ item.tag }}"
+        repo="{{ item.image }}"; host="${repo%%/*}"; path="${repo#*/}"
+        case "$host" in *.*|localhost*) ;; *) host="registry-1.docker.io"; path="{{ item.image }}" ;; esac
+        tok=$(curl -sf "https://${host}/token?scope=repository:${path}:pull&service=${host}" 2>/dev/null \
+              | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+        code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${tok}" \
+               -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+               "https://${host}/v2/${path}/manifests/{{ item.tag }}" 2>/dev/null)
+        echo "$code"
+      register: _imgcheck
+      changed_when: false
+      failed_when: false
+      loop: "{{ _code_locations | default([]) }}"
+      loop_control: { label: "{{ item.image }}:{{ item.tag }}" }
+
+    - name: "22d3. Warn early when an image looks unpullable"
+      ansible.builtin.debug:
+        msg: >-
+          ⚠️ {{ item.item.image }}:{{ item.item.tag }} — registry returned
+          {{ item.stdout | default('?') }} for that tag. If this is a public
+          image the tag probably does not exist, and Helm will spend
+          {{ installation_timeout }}s discovering that. Check the tag before
+          waiting. (A 401 is normal for a private registry.)
+      when: item.stdout | default('') not in ['200', '']
+      loop: "{{ _imgcheck.results | default([]) }}"
+      loop_control: { label: "{{ item.item.name | default('?') }}" }
+
     - name: "22e. Render the tenant values overlay"
       # A second -f rather than editing the base values: the platform manifest
       # stays generic and this file is regenerated from the declaration each run.
@@ -353,6 +387,91 @@
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: dagster_helm_result
       changed_when: true
+
+    - name: "23b. Prune code-location objects Helm will not prune itself"
+      # ⚠️ Helm three-way-merges against the last SUCCESSFUL release, not the
+      # previous one. So a resource created by a FAILED revision is invisible to
+      # the merge and survives every later upgrade:
+      #
+      #   rev 1  deployed   no tenants
+      #   rev 2  FAILED     tenant created (--wait timed out on a bad image)
+      #   rev 3  deployed   merges against rev 1 -> never prunes rev 2's object
+      #
+      # Reported by the independent tester (D2, 2026-08-23) and reachable by an
+      # ordinary sequence: declare a tenant whose image cannot be pulled, then
+      # remove the declaration. The Deployment keeps running with nothing behind
+      # it. Reconcile explicitly against what IS declared.
+      #
+      # ⚠️ THIS MUST RUN *AFTER* THE HELM UPGRADE, NOT BEFORE.
+      # My first attempt pruned at task 22, before task 23's upgrade — Helm then
+      # recreated the object from the failed revision's state, so the delete
+      # succeeded and the Deployment was still there afterwards. Reconcile
+      # against the cluster Helm has just finished producing.
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ dagster_namespace }}"
+        label_selectors:
+          - "component=user-deployments"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _existing_locations
+      failed_when: false
+
+    - name: "23c. Delete any that are no longer declared"
+      # ⚠️ Two DIFFERENT identifiers, and confusing them makes this a silent no-op:
+      #   metadata.name             = dagster-dagster-user-deployments-<tenant>
+      #   metadata.labels.deployment = <tenant>            (matches the declaration)
+      # Compare on the LABEL, delete by the NAME. My first version did both with
+      # the label, so it deleted a Deployment that never existed — and `state:
+      # absent` on a non-existent object succeeds, so the task reported ok while
+      # the orphan stayed up.
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ dagster_namespace }}"
+        name: "{{ item.metadata.name }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+        wait: true
+        wait_timeout: 60
+      loop: >-
+        {{ _existing_locations.resources | default([])
+           | rejectattr('metadata.labels.deployment', 'in',
+                        _code_locations | default([]) | map(attribute='name') | list)
+           | list }}
+      loop_control:
+        label: "{{ item.metadata.name }} (tenant '{{ item.metadata.labels.deployment | default('?') }}' no longer declared)"
+
+    - name: "23d. Confirm the prune actually happened"
+      # Because 23c reporting `ok` is not evidence: deleting a non-existent
+      # object also reports ok. Check the cluster, not the task result.
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ dagster_namespace }}"
+        label_selectors:
+          - "component=user-deployments"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _after_prune
+
+    - name: "23e. Assert only declared code locations remain"
+      ansible.builtin.assert:
+        that:
+          - (_after_prune.resources | default([]) | map(attribute='metadata.labels.deployment') | list | sort)
+            == (_code_locations | default([]) | map(attribute='name') | list | sort)
+        fail_msg: >-
+          After the upgrade the cluster has code-location deployments
+          {{ _after_prune.resources | default([]) | map(attribute='metadata.labels.deployment') | list }}
+          but .uis.extend/dagster-code-locations.yaml declares
+          {{ _code_locations | default([]) | map(attribute='name') | list }}.
+          A Deployment left behind by a failed Helm revision is invisible to
+          Helm's three-way merge and must be pruned explicitly.
+        success_msg: >-
+          Code locations reconciled: {{ (_code_locations | default([]) | length) }} declared,
+          {{ (_after_prune.resources | default([]) | length) }} present.
 
     # ============= PHASE 5: READINESS =============
 
@@ -423,9 +542,15 @@
 
           NO CODE LOCATIONS ARE REGISTERED YET — that is expected.
           UIS ships the orchestrator; applications register themselves as
-          tenants. To add one, append an entry to
-          `dagster-user-deployments.deployments[]` in
-          manifests/360-dagster-config.yaml and re-run this playbook.
+          tenants. To add one, declare it in
+
+              .uis.extend/dagster-code-locations.yaml
+
+          then re-run `./uis deploy dagster`.
+
+          ⚠️ Do NOT edit manifests/360-dagster-config.yaml — that is product
+          config, ships to every installation, and bypasses the validation that
+          rejects `latest` tags and missing `why:` fields.
           See /docs/services/analytics/dagster for the tenant contract.
 
           Verify:  ./uis verify dagster

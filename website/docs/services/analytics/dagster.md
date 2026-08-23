@@ -117,7 +117,23 @@ passes it to Helm. Nothing in the product changes.
 | `tag` | required | an immutable tag — **`latest` is rejected** |
 | `module` | required | Python module exposing `definitions` |
 | `why` | required | what this installation loses if it stops running |
-| `env_secrets` | optional | secrets in the `dagster` namespace to expose to the pods |
+| `env_secrets` | optional | secrets **in the `dagster` namespace** to expose to the pods — see below |
+
+### Creating a secret for `env_secrets`
+
+`env_secrets` names secrets that must already exist **in the `dagster`
+namespace**. UIS does not create them for you — your application's installer
+does, the same way it writes the declaration:
+
+```bash
+kubectl create secret generic myapp-database-url \
+  --namespace dagster \
+  --from-literal=MYAPP_DATABASE_URL='postgresql://user:pass@postgresql.default:5432/myapp'
+```
+
+Every key in the secret becomes an environment variable in the code-location pod
+**and in every run pod it spawns**. If the secret is missing the pods will not
+start, and `./uis verify dagster` reports the location as unreachable.
 
 ### Why two of those are enforced rather than advised
 
@@ -214,18 +230,24 @@ Dagster Labs; UIS turns it off. Nothing leaves an installation uninvited.
 ./uis verify dagster
 ```
 
-Three assertions, and the third is the reason the others are not enough:
+Four checks, and C is the reason the first two are not enough:
 
 | | |
 |---|---|
 | **A** | the webserver answers a GraphQL query — not merely that its pod is Running |
 | **B** | Dagster migrated its schema into the `dagster` database |
 | **C** | the **daemon's heartbeat is fresh** |
+| **D** | every declared code location **loaded** — asked of Dagster, not of Kubernetes |
 
 C matters most. A daemon pod can be `1/1 Running` with a stalled heartbeat, and
 then **no schedule fires** while `./uis status` stays green and the UI keeps
 serving pages. Nothing else in the platform detects that. If you are relying on
 Dagster to keep data fresh, this is the check that tells you it still is.
+
+D asks **Dagster's workspace**, not Kubernetes. A code location whose image
+cannot be pulled still has a running Deployment — counting pods would call that
+"registered" while none of its assets, jobs or schedules exist. An unreachable
+location is reported as a **failure**, not a count.
 
 ## Troubleshooting
 
@@ -234,7 +256,7 @@ kubectl get pods -n dagster                       # webserver + daemon
 kubectl logs -n dagster deploy/dagster-daemon     # schedules and the run queue
 kubectl exec -n dagster deploy/dagster-daemon -- dagster-daemon liveness-check
 kubectl get deploy -n dagster \
-  -l component=user-deployments                   # registered code locations
+  -l component=user-deployments                   # code-location PODS (not proof they loaded)
 ```
 
 **A code location will not load.** Check the gRPC entrypoint, that the port is
@@ -246,3 +268,9 @@ Pod status will not tell you.
 
 **A first deploy seems to hang.** A polyglot code-location image can be 1.5–2 GiB;
 a cold pull takes minutes before anything else happens.
+
+**A deploy hangs for 15 minutes and then fails.** Almost always a tenant image
+tag that does not exist. Helm waits out its full `--timeout 900s` before giving
+up. The deploy now pre-flights each declared image against the registry and warns
+in seconds — check the top of the output for a `⚠️ registry returned 404` line
+before waiting.
