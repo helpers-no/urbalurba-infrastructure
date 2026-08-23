@@ -193,3 +193,16 @@ All category icons use SovereignSky brand colors:
 - development-logo (Code)
 
 When updating these, consider updating both projects for consistency.
+
+- **Official GitHub (mark extracted from the wordmark)**: browserless —
+  `assets/logo.svg` from [browserless/browserless](https://github.com/browserless/browserless).
+  Simple Icons does not carry browserless, so the project's own logo is used per
+  the fallback above. That file is a **wordmark** (mark + the word "browserless"
+  in one `<path>`, 156×41); every other service here ships a mark, so only the
+  first subpath — the bracket glyph — was extracted. Nothing was redrawn or
+  recoloured: the brand mark is monochrome black upstream (they ship a separate
+  `logo-white.svg` for dark backgrounds), same as `ollama-logo.svg`.
+
+  ⚠️ Note for future logos: when a project only publishes a wordmark, take the
+  mark out of it rather than shrinking the whole lockup — at the 64px the service
+  cards render, a wordmark's text is illegible and reads as a smudge.

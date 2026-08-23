@@ -4,7 +4,28 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — ✅ APPROVED 2026-08-21, ships first
+## Status: Built — handed to the independent tester 2026-08-23
+
+**Build complete on branch `feature/browserless-automation-category`.** All four
+phases done: AUTOMATION category, service definition, manifests, setup/remove/test
+playbooks, secrets, docs page and logo. Awaiting the imac tester's verdict; this
+plan moves to `completed/` on PASS, not before.
+
+Two defects were found and fixed **by my own smoke checks during the build**, both
+of the same shape — the service looked healthy and could not do its job:
+
+| Defect | Symptom | Cause |
+|---|---|---|
+| Probe on a token-gated route | Restart loop while the HTTP server was fine | `httpGet /pressure` got 401; liveness killed the container |
+| `DATA_DIR` destroyed by a mount | Pod `1/1 Ready`, `/pressure` `isAvailable: true`, **every render failed** | `emptyDir` at `/tmp` replaced the image's `/tmp`, so `/tmp/browserless` vanished |
+
+The second is why `400-test-browserless.yml` renders a real page rather than
+polling health. That assertion was checked against the bug: reintroducing the
+`/tmp` mount makes test A fail with browserless's own error
+(`"/tmp/browserless" Directory doesn't exist`) while the pod stays `1/1 Running`.
+A verify that only reads `/pressure` passes throughout.
+
+### Status: Backlog — ✅ APPROVED 2026-08-21, ships first
 
 **Terje approved** (2026-08-21): the two-service split, the `AUTOMATION`
 category, and **browserless ships before neko**. Names and manifest ranges as
@@ -22,17 +43,17 @@ As approved:
 | Manifest range | **400–429**, with 430–499 reserved for future automation services |
 | Priority | `25` (before uptime-kuma at 30) |
 | Scope | This plan ships **browserless only** |
-| Order | **First.** [neko-001](./PLAN-service-neko-001-optional-addon.md) is planned and follows |
+| Order | **First.** [neko-001](../backlog/PLAN-service-neko-001-optional-addon.md) is planned and follows |
 
 **Handoff**: `ai-developer/for-uis-maintainer-browser-service.md` (home repo, ops
 → maintainer, 2026-08-21). Everything is built and proven on the reference
 installation; this plan productises it.
 
-**Companion**: [PLAN-service-neko-001-optional-addon](./PLAN-service-neko-001-optional-addon.md)
+**Companion**: [PLAN-service-neko-001-optional-addon](../backlog/PLAN-service-neko-001-optional-addon.md)
 — the second half of the platform, also approved to plan, sequenced after this
 one. It depends on the `AUTOMATION` category that Phase 1 here creates.
 
-**Last Updated**: 2026-08-21
+**Last Updated**: 2026-08-23
 
 **Priority**: Medium
 
@@ -129,7 +150,7 @@ possible.
 ## The second-user test
 
 Applying the rule from
-[INVESTIGATE-system-roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md):
+[INVESTIGATE-system-roaming-dependency-addresses](../backlog/INVESTIGATE-system-roaming-dependency-addresses.md):
 *"the pattern generalises" ≠ "another installation would use it."*
 
 **browserless passes, and not on speculation.** The argument does not rest on
@@ -287,7 +308,7 @@ never-join shape as the secrets validator.
       `until: rc == 0 and stdout.find('HTTP_CODE:200')`, and that call can return
       `rc=0` with **empty stdout** when the container outlives the attach — so a
       healthy service reads as failing after exhausting retries. This is the
-      defect in [INVESTIGATE-system-verification-playbooks-usage](./INVESTIGATE-system-verification-playbooks-usage.md);
+      defect in [INVESTIGATE-system-verification-playbooks-usage](../backlog/INVESTIGATE-system-verification-playbooks-usage.md);
       the rules doc still teaches it. Assert on something that cannot be silently
       empty
 - [ ] 3.6 **Prove both consumers** — different protocols on different routes,
@@ -299,7 +320,7 @@ never-join shape as the secrets validator.
 - [ ] 3.7 Confirm it is reachable from `uis verify browserless` **and** from
       `test-all` — uptime-kuma's verify was invisible to `test-all`
 - [ ] 3.8 E2E stays in the verify playbook, **not** on the deploy gate, per
-      [PLAN-service-grafana-deploy-gate-fix](./PLAN-service-grafana-deploy-gate-fix.md) Phase 4
+      [PLAN-service-grafana-deploy-gate-fix](../backlog/PLAN-service-grafana-deploy-gate-fix.md) Phase 4
 
 ### Validation
 
@@ -396,7 +417,7 @@ service — they should be fixed in the docs, not worked around here:
    a service missing from it is undiscoverable while appearing to work.
 2. `rules/provisioning.md` teaches the connectivity test as `kubectl run --rm -i`
    with `until: rc == 0 and stdout.find(...)`. That idiom is the subject of
-   [INVESTIGATE-system-verification-playbooks-usage](./INVESTIGATE-system-verification-playbooks-usage.md)
+   [INVESTIGATE-system-verification-playbooks-usage](../backlog/INVESTIGATE-system-verification-playbooks-usage.md)
    — the call can return `rc=0` with empty stdout, so a healthy service reads as
    failing. The rules doc still recommends it.
 

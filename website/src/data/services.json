@@ -147,6 +147,25 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "browserless",
+    "name": "Browserless",
+    "description": "Headless Chromium pool for synthetic checks and agent tooling",
+    "category": "AUTOMATION",
+    "tags": ["automation", "browser", "chromium", "headless", "playwright", "synthetic-monitoring", "scraping", "testing"],
+    "abstract": "A pool of headless Chromium browsers for browser-based checks and page automation",
+    "logo": "browserless-logo.svg",
+    "website": "https://www.browserless.io/"
+    ,"summary": "browserless runs a pool of headless Chromium instances that anything in the cluster can drive over a websocket - many isolated browsers in parallel, each starting blank. It is what lets Uptime Kuma run a real-browser monitor (log in, assert the dashboard renders) rather than only checking that an HTTP endpoint returns 200, and what lets an agent read a page that only exists after JavaScript runs. It exposes two protocols on one port: Playwrights server protocol for tools that speak connect(), and CDP for tools that speak connectOverCDP() - which are different endpoints, and picking the wrong one is the usual first mistake."
+    ,"docs": "/docs/services/automation/browserless"
+    ,"playbook": "400-setup-browserless.yml"
+    ,"priority": 25
+    ,"checkCommand": "kubectl get pods -n browser -l app=browserless --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "400-remove-browserless.yml"
+    ,"namespace": "browser"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "elasticsearch",
     "name": "Elasticsearch",
     "description": "Distributed search and analytics engine",

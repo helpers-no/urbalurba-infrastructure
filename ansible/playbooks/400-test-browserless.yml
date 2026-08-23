@@ -1,0 +1,192 @@
+---
+# 400-test-browserless.yml
+# E2E verification for browserless.
+#
+# ⚠️ THIS MAKES A REAL BROWSER RENDER A REAL PAGE.
+#
+# It deliberately does NOT rest on /pressure. During this service's own build,
+# a misconfigured DATA_DIR left browserless unable to render anything at all —
+# while the pod was 1/1 Running with zero restarts and /pressure answered 200
+# with `"isAvailable": true`. Every health signal was green and the service
+# could not do its job.
+#
+# So test A renders a page carrying a known marker and checks the marker comes
+# back. That assertion would have caught it on the first run; /pressure never
+# would.
+#
+# Usage:
+#   ansible-playbook 400-test-browserless.yml -e "target_host=rancher-desktop"
+#   ./uis verify browserless
+
+- name: Verify browserless can actually drive a browser
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    ns: "browser"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    marker: "UIS-BROWSERLESS-VERIFY-OK"
+
+  tasks:
+    - name: "0.1 Find the browserless pod"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ ns }}"
+        label_selectors:
+          - "app=browserless"
+        field_selectors:
+          - status.phase=Running
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _pods
+
+    - name: "0.2 Fail clearly if it is not running"
+      ansible.builtin.fail:
+        msg: "No Running browserless pod in {{ ns }}. Deploy it: ./uis deploy browserless"
+      when: _pods.resources | default([]) | length == 0
+
+    - name: "0.3 Read the token consumers use"
+      ansible.builtin.shell: >
+        kubectl get secret urbalurba-secrets -n {{ ns }} --context {{ _target }}
+        --kubeconfig {{ merged_kubeconf_file }}
+        -o jsonpath="{.data.BROWSERLESS_TOKEN}" | base64 -d
+      register: _tok
+      changed_when: false
+      no_log: true
+
+    - name: "0.4 Fail if the token is missing"
+      ansible.builtin.fail:
+        msg: >-
+          No BROWSERLESS_TOKEN in {{ ns }}/urbalurba-secrets. browserless refuses
+          every request without it.
+      when: _tok.stdout | default('') | length == 0
+
+    # --- Test A: a real browser renders a real page ---
+    # Runs through the SERVICE (browserless.{{ ns }}), the way every consumer
+    # reaches it — not via kubectl exec into the pod, which would skip the
+    # Service and prove less.
+    - name: "A1. Ask browserless to render a page carrying a marker"
+      ansible.builtin.shell: >
+        kubectl exec -n {{ ns }} {{ _pods.resources[0].metadata.name }}
+        --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} --
+        curl -s -m 60 -X POST -H 'Content-Type: application/json'
+        -d '{"url":"data:text/html,<html><body><h1 id=marker>{{ marker }}</h1></body></html>"}'
+        "http://browserless.{{ ns }}.svc.cluster.local:3000/content?token={{ _tok.stdout }}"
+      register: _render
+      changed_when: false
+      failed_when: false
+      retries: 3
+      delay: 10
+      until: _render.stdout is search(marker)
+      no_log: true
+
+    - name: "A2. Assert Chromium returned the rendered marker"
+      ansible.builtin.assert:
+        that: _render.stdout is search(marker)
+        fail_msg: >-
+          browserless did not render. The pod may be Running and /pressure may be
+          green while the browser cannot start — that exact state was caused
+          during this service's build by a DATA_DIR whose directory did not
+          exist. Check `kubectl logs -n {{ ns }} -l app=browserless` for a
+          "Directory doesn't exist" error, and check /dev/shm is mounted.
+          Response was: {{ _render.stdout | default('<empty>') | truncate(200) }}
+        success_msg: "A real browser rendered a real page."
+
+    # --- Test B: the pool reports itself able to accept work ---
+    - name: "B1. Query /pressure"
+      ansible.builtin.shell: >
+        kubectl exec -n {{ ns }} {{ _pods.resources[0].metadata.name }}
+        --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} --
+        curl -s -m 15 "http://browserless.{{ ns }}.svc.cluster.local:3000/pressure?token={{ _tok.stdout }}"
+      register: _pressure
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: "B2. Assert the pool is available"
+      ansible.builtin.assert:
+        that:
+          - _pressure.stdout is search('"isAvailable"')
+          - _pressure.stdout is search('"isAvailable":\s*true')
+        fail_msg: >-
+          /pressure did not report an available pool. If test A passed, the
+          browser works but the pool is saturated or shutting down. Response:
+          {{ _pressure.stdout | default('<empty>') | truncate(200) }}
+        success_msg: "Pool reports itself available."
+
+    # --- Test C: BOTH protocol endpoints are registered ---
+    # Uptime Kuma calls chromium.connect() -> the Playwright endpoint.
+    # Agent tooling calls chromium.connectOverCDP() -> the CDP endpoint.
+    # Different endpoints on the same port; testing one proves nothing about the
+    # other, and picking the wrong one is the usual first mistake.
+    - name: "C1. Probe both websocket endpoints"
+      ansible.builtin.shell: |
+        set -e
+        P={{ _pods.resources[0].metadata.name }}
+        K=AAAAAAAAAAAAAAAAAAAAAA==
+        pw=$(kubectl exec -n {{ ns }} $P --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} -- \
+          curl -s -o /dev/null -w '%{http_code}' -m 10 \
+          -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+          -H 'Sec-WebSocket-Version: 13' -H "Sec-WebSocket-Key: $K" \
+          "http://browserless.{{ ns }}.svc.cluster.local:3000/chromium/playwright?token={{ _tok.stdout }}")
+        cdp=$(kubectl exec -n {{ ns }} $P --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} -- \
+          curl -s -o /dev/null -w '%{http_code}' -m 10 \
+          "http://browserless.{{ ns }}.svc.cluster.local:3000/json/version?token={{ _tok.stdout }}")
+        echo "playwright=$pw cdp=$cdp"
+      register: _endpoints
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: "C2. Assert both are registered"
+      # The Playwright route is a websocket: a synthetic handshake gets 400
+      # (route exists, handshake incomplete) rather than 101. What distinguishes
+      # "registered" from "absent" is 400-vs-404, not 101 — asserting on 101
+      # here would be asserting on something curl cannot produce.
+      ansible.builtin.assert:
+        that:
+          - _endpoints.stdout is search('playwright=(?!404)')
+          - _endpoints.stdout is search('cdp=200')
+        fail_msg: >-
+          An endpoint is missing ({{ _endpoints.stdout | default('?') }}).
+          playwright=404 means Uptime Kuma's real-browser monitor has nothing to
+          connect to; cdp!=200 means agent tooling does not. These are separate
+          routes and one working does not imply the other.
+        success_msg: "Both protocol endpoints registered ({{ _endpoints.stdout | default('') | trim }})."
+
+    # --- Test D: anonymous access is REFUSED ---
+    - name: "D1. Request without a token"
+      ansible.builtin.shell: >
+        kubectl exec -n {{ ns }} {{ _pods.resources[0].metadata.name }}
+        --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} --
+        curl -s -o /dev/null -w '%{http_code}' -m 15
+        "http://browserless.{{ ns }}.svc.cluster.local:3000/pressure"
+      register: _anon
+      changed_when: false
+      failed_when: false
+
+    - name: "D2. Assert it was rejected"
+      # The token is the ENTIRE access control. browserless will fetch any URL it
+      # is given, so an unauthenticated pool is an open proxy with a JavaScript
+      # engine. If someone loosens this, every deploy still passes and nothing
+      # else notices — same reason PostgREST's verify asserts writes are refused.
+      ansible.builtin.assert:
+        that: _anon.stdout | trim == '401'
+        fail_msg: >-
+          An unauthenticated request returned {{ _anon.stdout | default('?') | trim }},
+          not 401. browserless is accepting anonymous work — it will fetch any URL
+          any pod asks for. Check TOKEN is set from urbalurba-secrets.
+        success_msg: "Anonymous requests are refused (401)."
+
+    - name: "SUMMARY"
+      ansible.builtin.debug:
+        msg:
+          - "A. A real browser rendered a real page:     PASS"
+          - "B. Pool reports itself available:           PASS"
+          - "C. Both protocol endpoints registered:      PASS  ({{ _endpoints.stdout | default('') | trim }})"
+          - "D. Anonymous requests refused (401):        PASS"
+          - ""
+          - "A is the load-bearing one. During this service's build the pod was"
+          - "1/1 Running with /pressure green while it could not render anything."

@@ -37,10 +37,11 @@ _CATEGORY_DATA=(
     "NETWORKING|Networking|VPN tunnels and network access|network,vpn|globe|core-logo.svg"
     "STORAGE|Storage|Platform storage infrastructure|storage,persistent|hard-drive|core-logo.svg"
     "INTEGRATION|Integration|Messaging, API gateways, and event streams|integration,messaging|inbox|queues-logo.svg"
+    "AUTOMATION|Automation|Browser automation, synthetic checks, and agent tooling|automation,browser,testing|robot|automation-logo.svg"
 )
 
 # Category display order (just the IDs)
-CATEGORY_ORDER=(OBSERVABILITY AI ANALYTICS IDENTITY DATABASES MANAGEMENT APPLICATIONS NETWORKING STORAGE INTEGRATION)
+CATEGORY_ORDER=(OBSERVABILITY AI ANALYTICS AUTOMATION IDENTITY DATABASES MANAGEMENT APPLICATIONS NETWORKING STORAGE INTEGRATION)
 
 # Internal: Find category data by ID
 # Usage: _find_category_data "OBSERVABILITY"

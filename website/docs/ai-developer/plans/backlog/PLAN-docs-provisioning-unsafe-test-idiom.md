@@ -10,7 +10,7 @@
 that reports healthy services as failing.
 
 **Created**: 2026-08-21 — found while writing
-[PLAN-service-browserless-001-deploy](./PLAN-service-browserless-001-deploy.md),
+[PLAN-service-browserless-001-deploy](../active/PLAN-service-browserless-001-deploy.md),
 by reading the rules docs the adding-a-service guide lists as prerequisites.
 
 **Investigation**: [INVESTIGATE-system-verification-playbooks-usage](./INVESTIGATE-system-verification-playbooks-usage.md)

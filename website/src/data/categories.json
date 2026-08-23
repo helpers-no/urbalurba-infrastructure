@@ -27,9 +27,18 @@
     }
 ,
     {
+      "id": "AUTOMATION",
+      "name": "Automation",
+      "order": 3,
+      "description": "Browser automation, synthetic checks, and agent tooling",
+      "icon": "robot",
+      "logo": "automation-logo.svg"
+    }
+,
+    {
       "id": "IDENTITY",
       "name": "Identity",
-      "order": 3,
+      "order": 4,
       "description": "Identity and access management",
       "icon": "shield",
       "logo": "authentication-logo.svg"
@@ -38,7 +47,7 @@
     {
       "id": "DATABASES",
       "name": "Databases",
-      "order": 4,
+      "order": 5,
       "description": "Data storage and caching services",
       "icon": "database",
       "logo": "databases-logo.svg"
@@ -47,7 +56,7 @@
     {
       "id": "MANAGEMENT",
       "name": "Management",
-      "order": 5,
+      "order": 6,
       "description": "Admin tools, GitOps, and test services",
       "icon": "cog",
       "logo": "management-logo.svg"
@@ -56,7 +65,7 @@
     {
       "id": "APPLICATIONS",
       "name": "Applications",
-      "order": 6,
+      "order": 7,
       "description": "End-user applications and collaboration platforms",
       "icon": "briefcase",
       "logo": "development-logo.svg"
@@ -65,7 +74,7 @@
     {
       "id": "NETWORKING",
       "name": "Networking",
-      "order": 7,
+      "order": 8,
       "description": "VPN tunnels and network access",
       "icon": "globe",
       "logo": "core-logo.svg"
@@ -74,7 +83,7 @@
     {
       "id": "STORAGE",
       "name": "Storage",
-      "order": 8,
+      "order": 9,
       "description": "Platform storage infrastructure",
       "icon": "hard-drive",
       "logo": "core-logo.svg"
@@ -83,7 +92,7 @@
     {
       "id": "INTEGRATION",
       "name": "Integration",
-      "order": 9,
+      "order": 10,
       "description": "Messaging, API gateways, and event streams",
       "icon": "inbox",
       "logo": "queues-logo.svg"

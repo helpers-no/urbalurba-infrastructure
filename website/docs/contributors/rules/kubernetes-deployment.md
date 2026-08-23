@@ -212,6 +212,7 @@ Services are organized into 10 categories (defined in `provision-host/uis/lib/ca
 | `OBSERVABILITY` | Observability | Metrics, logs, and tracing | 030-039 |
 | `AI` | AI & ML | AI and machine learning services | 200-229 |
 | `ANALYTICS` | Analytics | Data science and analytics platforms | 300-399 |
+| `AUTOMATION` | Automation | Browser automation, synthetic checks, and agent tooling | 400-429 |
 | `IDENTITY` | Identity | Identity and access management | 070-079 |
 | `DATABASES` | Databases | Data storage and caching services | 040-044, 050-069 |
 | `MANAGEMENT` | Management | Admin tools, GitOps, and test services | 600-799 |

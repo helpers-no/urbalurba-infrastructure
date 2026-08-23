@@ -7,7 +7,7 @@
 ## Status: Backlog — ✅ APPROVED to plan 2026-08-21; **browserless ships first**
 
 **Terje approved** (2026-08-21): neko is planned as a service. Sequencing is
-explicit — [browserless-001](./PLAN-service-browserless-001-deploy.md) ships
+explicit — [browserless-001](../active/PLAN-service-browserless-001-deploy.md) ships
 first, and creates the `AUTOMATION` category this plan depends on.
 
 The case against in Part 1 stands as recorded — it was argued honestly and the
@@ -15,7 +15,7 @@ decision went the other way, which is the point of writing it down. What it now
 governs is not *whether* neko ships but *how*: opt-in only, in no stack, security
 model in the deploy output.
 
-**Prerequisite**: [PLAN-service-browserless-001-deploy](./PLAN-service-browserless-001-deploy.md)
+**Prerequisite**: [PLAN-service-browserless-001-deploy](../active/PLAN-service-browserless-001-deploy.md)
 must ship first — it opens the `AUTOMATION` category this service lives in.
 
 **Handoff**: `ai-developer/for-uis-maintainer-browser-service.md` (home repo).

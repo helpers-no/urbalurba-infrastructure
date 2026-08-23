@@ -21,6 +21,8 @@ Urbalurba Infrastructure is a zero-friction developer platform that provides a c
 4. **Authentication** (070-079): Authentik with blueprints for SSO
 5. **Observability** (030-039, 230-239): Grafana, Prometheus, Loki, Tempo
 6. **Management** (600-799): pgAdmin, ArgoCD, Cloudflare tunnels
+7. **Analytics** (300-399): Spark, JupyterHub, Unity Catalog, OpenMetadata, Dagster
+8. **Automation** (400-429): browserless (430-499 reserved)
 
 ## Common Development Commands
 
