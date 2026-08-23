@@ -516,7 +516,9 @@ See **[Kubernetes Deployment Rules](../rules/kubernetes-deployment.md)** for sta
 
 1. Create `website/docs/services/<category>/myservice.md`
 2. Add the page to `website/sidebars.ts` under the appropriate category
-3. Build the site to verify no broken links
+3. Add a service logo — see [Step 11b](#step-11b-add-a-logo)
+4. **Regenerate the site's data** — see [Step 11a](#step-11a-regenerate-servicesjson-do-not-skip-this)
+5. Build the site to verify no broken links
 
 ```bash
 cd website && npm run build
@@ -543,6 +545,51 @@ them either. A green build with `[WARNING] Docusaurus found broken links` in it
 is a failure you have to look for.
 
 See **[Documentation Standards](../rules/documentation.md)** for page conventions.
+
+### Step 11a: Regenerate `services.json` — do not skip this
+
+```bash
+./uis docs
+```
+
+`website/src/data/services.json` is **generated** from the `SCRIPT_*` metadata in
+every service definition. The website's service listings, category pages and
+search read that file — not your Markdown page and not `sidebars.ts`.
+
+**Until you run this, your service does not exist on the site.** The docs page
+will build fine, the sidebar entry will work, `npm run build` will exit 0 with no
+warnings, and the service will simply be absent from every listing. Nothing in
+the deploy, the verify or the docs build tells you.
+
+> This has now happened twice. **Alloy** (Aug 2026): *"Docs page, sidebar entry
+> and stack membership were all added, but `services.json` and `stacks.json` are
+> generated and were never regenerated — so the site had no Alloy entry."*
+> **Dagster** (Aug 2026): same omission, same cause — this step was not in the
+> guide.
+
+`./uis docs` regenerates all four data files (`services.json`, `categories.json`,
+`stacks.json`, `tools.json`). Commit the changed JSON with your service.
+
+Verify your service is actually there before moving on:
+
+```bash
+grep '"id": "myservice"' website/src/data/services.json
+```
+
+### Step 11b: Add a logo
+
+Every service has one, and `SCRIPT_LOGO` in your service definition names it.
+
+1. Source it per **[LOGO-SOURCES.md](https://github.com/helpers-no/urbalurba-infrastructure/blob/main/website/static/img/LOGO-SOURCES.md)**:
+   **Simple Icons** first (CC0), then the project's **official GitHub** if Simple
+   Icons does not carry it, then a Heroicons-style icon you create.
+2. Prefer a **mark-only** SVG, not a wordmark with the project name — service
+   logos render small and square.
+3. Save to **both** `website/static/img/services/<id>-logo.svg` **and**
+   `website/static/img/services/src/<id>-logo.svg`.
+4. **Record where you got it** in `LOGO-SOURCES.md`, including the licence.
+5. If the upstream SVG hard-codes a dark fill, recolour to `currentColor` so it
+   is visible in both light and dark themes.
 
 ## Testing
 
@@ -575,6 +622,22 @@ Deploy, remove, and verify:
 # Build the docs site to check for broken links
 cd website && npm run build
 ```
+
+**Run all of them, including `undeploy`.** It is the one most often skipped and
+the one that most often breaks: two separate defects found on 2026-08-23 lived in
+removal paths — a service that left orphaned resources behind while reporting
+success, and a `helm uninstall` that did not cover everything the install created.
+A service whose uninstall has never been executed is not finished, however well
+its deploy works.
+
+**A verify that only ever ran against a healthy, empty install proves less than it
+looks.** Exercise it against the states it is supposed to *detect*: with the
+service broken, and — if it counts anything — with something actually present. A
+count that has only been observed returning zero has not been tested; it has been
+watched agreeing with itself. (Found this way on 2026-08-23: a verify that
+reported "0 registered" on a platform that had one, because its label selector was
+wrong. The docs carried the same wrong selector, so the two agreed with each other
+and disagreed with the cluster.)
 
 If you created a verify playbook, make sure it is registered in both `integration-testing.sh` (VERIFY_SERVICES) and `uis-cli.sh` (cmd_verify) as described in Step 5b.
 
