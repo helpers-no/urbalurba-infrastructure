@@ -106,6 +106,7 @@ const sidebars: SidebarsConfig = {
             id: 'services/analytics/index',
           },
           items: [
+            'services/analytics/dagster',
             'services/analytics/jupyterhub',
             'services/analytics/openmetadata',
             'services/analytics/spark',

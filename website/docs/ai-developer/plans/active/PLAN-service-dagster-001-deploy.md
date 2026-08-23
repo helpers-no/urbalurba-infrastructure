@@ -22,7 +22,7 @@ the owner. Not reopened here.
 | Priority | `56` — after `temporal` (55), both being postgresql-dependent orchestrators |
 | Concurrency ceiling | **4** simultaneous run pods (ops' open question 3) |
 
-**Investigation**: [INVESTIGATE-service-dagster](./INVESTIGATE-service-dagster.md)
+**Investigation**: [INVESTIGATE-service-dagster](../backlog/INVESTIGATE-service-dagster.md)
 — owns the design. Written 2026-04-21, four months stale in places; reconciled below.
 
 **Consumer requirement**: `ai-developer/for-ops-atlas-dagster-requirement.md` in
@@ -92,7 +92,7 @@ stale.
 | # | Investigation (2026-04-21) | Requirement (2026-08-22) | Resolution |
 |---|---|---|---|
 | 1 | "~24 public data sources" | **41 sources**, 40 already Pipes-enabled | Requirement wins — investigation is four months stale |
-| 2 | No chart version named | **`1.13.x`**, and the code-location image pins `dagster~=1.13` | **Pin it.** An unpinned chart against a pinned image is the exact shape that broke Backstage — see [PLAN-system-helm-chart-version-pinning](./PLAN-system-helm-chart-version-pinning.md) |
+| 2 | No chart version named | **`1.13.x`**, and the code-location image pins `dagster~=1.13` | **Pin it.** An unpinned chart against a pinned image is the exact shape that broke Backstage — see [PLAN-system-helm-chart-version-pinning](../backlog/PLAN-system-helm-chart-version-pinning.md) |
 | 3 | Ingress `dagster.sovereignsky.no` | **Internal-only, no public ingress ever** | Requirement wins. Traefik IngressRoute, `dagster.localhost` on Rancher Desktop, tailnet on Proxmox |
 | 4 | Silent on run concurrency | Asks for a ceiling; 41 sources would stampede the shared Postgres | **Propose 4** — see below |
 | 5 | Silent on image size | **1.5–2 GiB** polyglot image | Real for the laptop profile. Must be called out in docs, not discovered |
@@ -114,7 +114,7 @@ change it without a tenant rebuild.
    bump can break the gRPC handshake, so the pin is what makes the co-ordination
    possible rather than incidental.
 2. **Image-tag bump flow** — **manual `helm upgrade` is fine for v1.** ArgoCD is a
-   separate open decision ([INVESTIGATE-service-argocd-dct-deploy](./INVESTIGATE-service-argocd-dct-deploy.md))
+   separate open decision ([INVESTIGATE-service-argocd-dct-deploy](../backlog/INVESTIGATE-service-argocd-dct-deploy.md))
    and coupling them would block Dagster on it. Revisit when ArgoCD is
    operationally normal.
 3. **Concurrency ceiling** — **4 simultaneous run pods.** Conservative on purpose:
@@ -211,7 +211,7 @@ the gap Atlas is trying to close.
 - [ ] 3.3 Add the `dagster)` case to `cmd_verify()` **and** the main command case
 - [ ] 3.4 Add the line to the hardcoded usage list inside `cmd_verify()`
 - [ ] 3.5 ⚠️ **Do not use `kubectl run --rm -i` with an `until:` on stdout** — see
-      [PLAN-docs-provisioning-unsafe-test-idiom](./PLAN-docs-provisioning-unsafe-test-idiom.md).
+      [PLAN-docs-provisioning-unsafe-test-idiom](../backlog/PLAN-docs-provisioning-unsafe-test-idiom.md).
       A worked safe example is `088-test-postgrest.yml`
 
 ### Validation

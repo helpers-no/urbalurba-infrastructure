@@ -128,10 +128,15 @@
 
     # --- Test D: code locations, if any tenant has registered ---
     - name: "D1. List registered code locations"
+      # NOTE the label is `component=user-deployments`, NOT
+      # `app.kubernetes.io/component=...`. The chart sets both a prefixed and an
+      # unprefixed label set, and only the unprefixed one carries `component`.
+      # Getting this wrong reports "0 code locations" on a platform that has
+      # tenants — a false negative in the test meant to catch false positives.
       ansible.builtin.shell: >
         kubectl get deploy -n {{ dagster_ns }} --context {{ _target }}
         --kubeconfig {{ merged_kubeconf_file }}
-        -l app.kubernetes.io/component=user-deployments -o name
+        -l component=user-deployments -o name
       register: _locations
       changed_when: false
       failed_when: false

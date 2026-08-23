@@ -14,7 +14,7 @@ Postgres with a separate metadata database, Traefik ingress, no auth day 1.
 What has changed: Terje decided Dagster becomes a reusable UIS service, and Atlas
 arrived as a real consumer with 41 sources (not the ~24 recorded here), 40 already
 Dagster-Pipes-enabled and waiting. The build plan is
-[PLAN-service-dagster-001-deploy](./PLAN-service-dagster-001-deploy.md), which
+[PLAN-service-dagster-001-deploy](../active/PLAN-service-dagster-001-deploy.md), which
 reconciles this file against the consumer requirement and lists the six points
 where they diverged. Read the plan first; use this for the reasoning behind the
 options.

@@ -1,0 +1,47 @@
+# .uis.extend/dagster-code-locations.yaml
+#
+# WHICH APPLICATIONS THIS INSTALLATION ORCHESTRATES WITH DAGSTER.
+#
+# UIS ships the orchestrator; applications register themselves here. This file
+# is per-installation and is NOT part of the UIS product — the same way
+# prometheus-targets.yaml holds this installation's scrape targets.
+#
+# ⚠️ An application's own installer should write its entry here. Editing the
+# platform's manifests/360-dagster-config.yaml instead would put one tenant's
+# configuration inside the product, and the next installation would inherit it.
+#
+# A "code location" is a container image the application publishes; Dagster
+# loads its asset definitions over gRPC. dagster-pipes means the work itself can
+# be in any language — the image only has to speak the gRPC handshake.
+#
+# After changing this file:  ./uis deploy dagster
+#
+# Remove or comment out everything below for an installation with no tenants;
+# an empty file and a missing file are both fine.
+
+code_locations: []
+
+# Worked example — an application called `atlas`:
+#
+# code_locations:
+#   - name: atlas-data
+#     image: ghcr.io/terchris/atlas-data
+#     tag: v20260822-abc1234        # NEVER `latest` — see below
+#     module: atlas_data.definitions
+#     why: "Ingests 41 Norwegian public-data sources, then dbt builds marts.* and api_v1.*"
+#     env_secrets:
+#       - atlas-database-url        # supplies ATLAS_DATABASE_URL to the pods
+#
+# Fields:
+#   name        required  the code-location name Dagster shows in its UI
+#   image       required  repository, without the tag
+#   tag         required  an immutable tag. `latest` is REJECTED: Helm needs the
+#                         image field to CHANGE to roll the pod, so `latest`
+#                         silently keeps serving old code after a "successful"
+#                         deploy
+#   module      required  python module exposing `definitions`
+#   why         required  what this installation loses if it stops running.
+#                         Same rule as prometheus-targets.yaml — a tenant nobody
+#                         can justify is one nobody maintains
+#   env_secrets optional  secrets in the `dagster` namespace to expose to the
+#                         code-location pod and its run pods

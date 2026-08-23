@@ -28,6 +28,11 @@ Service logos sourced from official project websites and icon repositories. SVG 
 - **Simple Icons**: grafana, postgresql, mysql, mongodb, redis, rabbitmq, elasticsearch, nginx, spark, jupyterhub, cloudflare, tailscale, traefik, ollama, minio, temporal
 - **Official GitHub**: authentik, litellm, qdrant, loki (PNG), openwebui (PNG), pgadmin (PNG), unity-catalog (PNG)
 - **Created (Heroicons style)**: gravitee, redisinsight, tempo, tika
+- **Official GitHub (mark-only icon)**: dagster — `js_modules/ui-components/src/icon-svgs/dagster_solid.svg`
+  from [dagster-io/dagster](https://github.com/dagster-io/dagster) (Apache-2.0).
+  Simple Icons does not carry Dagster, so the project's own icon is used per the
+  fallback above. Recoloured to `currentColor`; upstream ships `#030615`, which
+  is invisible on a dark background.
 
 ### Core Infrastructure
 | Logo ID | Service | Source | License |

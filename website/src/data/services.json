@@ -43,6 +43,27 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "dagster",
+    "name": "Dagster",
+    "description": "Data-asset orchestrator with lineage, freshness and dbt-native pipelines",
+    "category": "ANALYTICS",
+    "tags": ["orchestration", "data", "pipelines", "dbt", "etl", "scheduling", "lineage", "analytics"],
+    "abstract": "Orchestrates data pipelines as assets — scheduling, lineage, freshness and dbt",
+    "logo": "dagster-logo.svg",
+    "website": "https://dagster.io/"
+    ,"summary": "Dagster is a data orchestrator built around assets rather than tasks: you declare the tables, files and models your pipelines produce, and Dagster schedules them, tracks their lineage and freshness, and re-materialises what is stale. Applications register with the platform as code locations, and dagster-pipes lets a code location be written in any language - so a TypeScript ingest and a dbt project can sit in one asset graph. UIS ships it alongside Temporal, which solves a different problem: Temporal orchestrates durable processes, Dagster orchestrates data."
+    ,"docs": "/docs/services/analytics/dagster"
+    ,"playbook": "360-setup-dagster.yml"
+    ,"priority": 56
+    ,"checkCommand": "kubectl get pods -n dagster -l app.kubernetes.io/instance=dagster --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "360-remove-dagster.yml"
+    ,"requires": ["postgresql"]
+    ,"helmChart": "dagster/dagster"
+    ,"namespace": "dagster"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "jupyterhub",
     "name": "JupyterHub",
     "description": "Multi-user Jupyter notebook server",

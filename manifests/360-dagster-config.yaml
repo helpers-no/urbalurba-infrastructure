@@ -86,19 +86,19 @@ dagsterWebserver:
 # TypeScript, Python or anything else and still be orchestrated here. That
 # property is why Dagster is a UIS SERVICE rather than one application's tool.
 #
-# EMPTY ON PURPOSE. UIS ships the orchestrator; tenants register themselves.
-# To add one, append an entry — see website/docs/services/analytics/dagster.md:
+# ⚠️ DO NOT ADD TENANTS HERE. This file is the PRODUCT's platform config and
+# ships to every installation. Code locations are per-installation and are
+# declared in:
 #
-#   deployments:
-#     - name: <app>-data
-#       image:
-#         repository: ghcr.io/<owner>/<app>-data
-#         tag: v20260822-abc1234      # NEVER `latest` — Helm needs a changed
-#         pullPolicy: IfNotPresent    # image field to roll the pod
-#       dagsterApiGrpcArgs: ["--module-name", "<app>_data.definitions"]
-#       port: 4000
-#       envSecrets:
-#         - name: <app>-database-url
+#     .uis.extend/dagster-code-locations.yaml
+#
+# 360-setup-dagster.yml reads that file, validates each entry, and renders an
+# overlay passed to Helm as a second `-f`. An application's own installer writes
+# its entry there — the same way prometheus-targets.yaml holds this
+# installation's scrape targets rather than the product's.
+#
+# The empty list below is the correct shipped state: a UIS installation with no
+# data applications orchestrates nothing.
 dagster-user-deployments:
   enabled: true
   deployments: []

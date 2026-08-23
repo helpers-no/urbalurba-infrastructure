@@ -44,6 +44,18 @@
       when: dagster_release_name in (helm_releases.stdout | default(''))
       changed_when: true
 
+    - name: "3a. Find any code-location deployments still present"
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ dagster_namespace }}"
+        label_selectors:
+          - "component=user-deployments"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _orphans
+      failed_when: false
+
     - name: "3. Wait for Dagster pods to terminate"
       kubernetes.core.k8s_info:
         kind: Pod
@@ -56,6 +68,26 @@
       until: remaining_pods.resources | length == 0
       retries: 20
       delay: 5
+      failed_when: false
+
+    - name: "3b. Remove any code-location resources Helm left behind"
+      # `helm uninstall` can leave user-deployment resources orphaned when a
+      # previous install failed mid-way — observed 2026-08-23 after a deploy
+      # whose tenant image could not be pulled: `helm list -a` showed no
+      # release, and the code-location Deployment was still running.
+      #
+      # Task 3 above waits for pods and is `failed_when: false`, so it gave up
+      # quietly and the undeploy reported success with a pod still up. This
+      # deletes them explicitly rather than hoping the release removal covered it.
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ dagster_namespace }}"
+        name: "{{ item }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      loop: "{{ _orphans.resources | default([]) | map(attribute='metadata.name') | list }}"
       failed_when: false
 
     - name: "4. Remove the IngressRoute"

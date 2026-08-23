@@ -22,6 +22,7 @@
   vars:
     _target: "{{ target_host | default('rancher-desktop') }}"
     manifests_folder: "/mnt/urbalurbadisk/manifests"
+    uis_extend_dir: "/mnt/urbalurbadisk/.uis.extend"
     merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
     dagster_namespace: "dagster"
     postgres_namespace: "default"
@@ -257,11 +258,94 @@
       ansible.builtin.command: helm repo update dagster
       changed_when: false
 
+    # ---- code locations (tenants) --------------------------------------------
+    # Read from .uis.extend/, never from the product manifest. An application's
+    # own installer writes its entry there; putting it in
+    # manifests/360-dagster-config.yaml would ship one tenant's config to every
+    # installation. Same rule as prometheus-targets.yaml.
+    - name: "22a. Read the code locations this installation declares"
+      ansible.builtin.slurp:
+        src: "{{ uis_extend_dir }}/dagster-code-locations.yaml"
+      register: _cl_raw
+      failed_when: false
+
+    - name: "22b. Parse them"
+      ansible.builtin.set_fact:
+        _code_locations: "{{ (_cl_raw.content | b64decode | from_yaml).code_locations | default([]) }}"
+      when: _cl_raw.content is defined
+
+    - name: "22c. Require the fields a code location cannot work without"
+      ansible.builtin.assert:
+        that:
+          - item.name is defined and (item.name | trim | length) > 0
+          - item.image is defined and (item.image | trim | length) > 0
+          - item.tag is defined and (item.tag | trim | length) > 0
+          - item.module is defined and (item.module | trim | length) > 0
+          - item.why is defined and (item.why | trim | length) > 0
+        fail_msg: >-
+          Code location '{{ item.name | default("<unnamed>") }}' in
+          .uis.extend/dagster-code-locations.yaml is missing a required field
+          (name, image, tag, module, why). `why` is required for the same reason
+          prometheus-targets.yaml requires it: a tenant nobody can justify is one
+          nobody maintains.
+      loop: "{{ _code_locations | default([]) }}"
+      loop_control: { label: "{{ item.name | default('<unnamed>') }}" }
+
+    - name: "22d. Reject `latest` — it makes a successful deploy change nothing"
+      # Helm rolls the code-location pod only when the image field CHANGES. With
+      # `latest` the values are identical every time, Helm does nothing, and the
+      # platform silently keeps serving the previous code while reporting success.
+      ansible.builtin.assert:
+        that:
+          - item.tag | trim | lower != 'latest'
+        fail_msg: >-
+          Code location '{{ item.name }}' uses tag `latest`. Use an immutable tag
+          (e.g. v20260822-abc1234) so Helm can tell that the image changed.
+      loop: "{{ _code_locations | default([]) }}"
+      loop_control: { label: "{{ item.name | default('<unnamed>') }}" }
+
+    - name: "22e. Render the tenant values overlay"
+      # A second -f rather than editing the base values: the platform manifest
+      # stays generic and this file is regenerated from the declaration each run.
+      ansible.builtin.copy:
+        dest: "/tmp/dagster-code-locations.generated.yaml"
+        mode: "0644"
+        content: |
+          dagster-user-deployments:
+            enabled: true
+            deployments:
+          {% for cl in _code_locations | default([]) %}
+              - name: {{ cl.name }}
+                image:
+                  repository: {{ cl.image }}
+                  tag: "{{ cl.tag }}"
+                  pullPolicy: IfNotPresent
+                dagsterApiGrpcArgs:
+                  - "--module-name"
+                  - "{{ cl.module }}"
+                port: 4000
+          {% if cl.env_secrets is defined and cl.env_secrets | length > 0 %}
+                envSecrets:
+          {% for s in cl.env_secrets %}
+                  - name: {{ s }}
+          {% endfor %}
+          {% endif %}
+          {% endfor %}
+      when: (_code_locations | default([]) | length) > 0
+
+    - name: "22f. Report what will be registered"
+      ansible.builtin.debug:
+        msg: >-
+          {{ (_code_locations | default([]) | length) }} code location(s)
+          declared in .uis.extend/dagster-code-locations.yaml
+          {{ (_code_locations | default([]) | map(attribute='name') | list) | join(', ') }}
+
     - name: "23. Deploy Dagster via Helm (chart version pinned)"
       ansible.builtin.command: >
         helm upgrade --install {{ dagster_release_name }} {{ dagster_chart }}
         --version {{ dagster_chart_version }}
         -f {{ dagster_config_file }}
+        {{ ((_code_locations | default([]) | length) > 0) | ternary('-f /tmp/dagster-code-locations.generated.yaml', '') }}
         --namespace {{ dagster_namespace }}
         --timeout {{ installation_timeout }}s
         --wait
