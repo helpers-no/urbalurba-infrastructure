@@ -115,6 +115,17 @@ const sidebars: SidebarsConfig = {
         },
         {
           type: 'category',
+          label: 'Automation',
+          link: {
+            type: 'doc',
+            id: 'services/automation/index',
+          },
+          items: [
+            'services/automation/browserless',
+          ],
+        },
+        {
+          type: 'category',
           label: 'Identity',
           link: {
             type: 'doc',

@@ -1,0 +1,37 @@
+# File: manifests/400-browserless-ingressroute.yaml
+#
+# Description:
+# Traefik IngressRoute for browserless — INTERNAL ONLY.
+#
+# ⚠️ SECURITY: browserless will fetch any URL it is asked to. The token is the
+# only control, and a browser pool reachable from outside is an open proxy with
+# a JavaScript engine. There is no public-facing case for this service on any
+# installation — it exists to be driven by other services inside the cluster
+# (Uptime Kuma's real-browser monitors, agent tooling).
+#
+# Most consumers should NOT use this route at all: they reach browserless at
+# browserless.browser.svc.cluster.local:3000 directly. This route exists so an
+# operator can check /pressure and the docs UI from a browser on the cluster's
+# own network.
+#
+# Applied by: ansible/playbooks/400-setup-browserless.yml
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: browserless
+  namespace: browser
+  labels:
+    app: browserless
+  annotations:
+    urbalurba.io/description: "browserless operator UI — internal only, token-gated"
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: HostRegexp(`browserless\..+`)
+      kind: Rule
+      priority: 10
+      services:
+        - name: browserless
+          port: 3000

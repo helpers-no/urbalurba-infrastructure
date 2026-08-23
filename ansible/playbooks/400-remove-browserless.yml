@@ -1,0 +1,103 @@
+---
+# 400-remove-browserless.yml
+# Remove browserless from the cluster.
+#
+# browserless is stateless — no PVC, no database, nothing to preserve. Every
+# session is throwaway by design, so removal is genuinely complete rather than
+# leaving state behind the way a stateful service does.
+#
+# ⚠️ What this does NOT do: repoint anything that was USING it. An Uptime Kuma
+# real-browser monitor configured against this instance will start failing, and
+# will report the monitored site as down rather than reporting that its browser
+# is gone. Check for dependent monitors before removing.
+#
+# Usage:
+#   ansible-playbook 400-remove-browserless.yml -e "target_host=rancher-desktop"
+
+- name: Remove browserless from Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    browser_namespace: "browser"
+
+  tasks:
+    - name: "1. Remove the IngressRoute"
+      kubernetes.core.k8s:
+        state: absent
+        api_version: traefik.io/v1alpha1
+        kind: IngressRoute
+        name: browserless
+        namespace: "{{ browser_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      failed_when: false
+
+    - name: "2. Remove the Service"
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Service
+        name: browserless
+        namespace: "{{ browser_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      failed_when: false
+
+    - name: "3. Remove the Deployment"
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apps/v1
+        kind: Deployment
+        name: browserless
+        namespace: "{{ browser_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+        wait: true
+        wait_timeout: 120
+      failed_when: false
+
+    - name: "4. Confirm the pods are actually gone"
+      # Not a formality. A remove playbook that reports success while a pod is
+      # still running is a defect this repo has shipped before — check the
+      # cluster, not the task result.
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ browser_namespace }}"
+        label_selectors:
+          - "app=browserless"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: remaining
+      until: remaining.resources | default([]) | length == 0
+      retries: 20
+      delay: 5
+      failed_when: false
+
+    - name: "5. Report anything left behind"
+      ansible.builtin.assert:
+        that: (remaining.resources | default([]) | length) == 0
+        fail_msg: >-
+          browserless pods are still present after removal:
+          {{ remaining.resources | default([]) | map(attribute='metadata.name') | list }}.
+          The Deployment was deleted, so these are orphans — check for a second
+          ReplicaSet or a stuck finalizer.
+        success_msg: "All browserless pods are gone."
+
+    - name: "6. Removal summary"
+      ansible.builtin.debug:
+        msg: |
+          browserless removed.
+
+          Removed: Deployment, Service, IngressRoute.
+          Nothing preserved — the service is stateless by design.
+
+          ⚠️ Anything that was USING it is now broken, not repointed. An Uptime
+          Kuma real-browser monitor pointed at this instance will now report the
+          site it watches as DOWN, rather than reporting that its browser is
+          missing. Check dependent monitors.
+
+          The `browser` namespace and urbalurba-secrets are left in place.

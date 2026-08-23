@@ -1,7 +1,7 @@
 ---
 title: Analytics
 sidebar_label: Analytics
-description: Data science with Spark, JupyterHub, Unity Catalog, and OpenMetadata
+description: Data science and orchestration with Dagster, Spark, JupyterHub, Unity Catalog, and OpenMetadata
 ---
 
 # Analytics
@@ -12,6 +12,7 @@ The analytics package provides data science and analytics platforms for interact
 
 | Service | Description | Deploy |
 |---------|-------------|--------|
+| [Dagster](./dagster.md) | Data-asset orchestration: scheduling, lineage, freshness | `./uis deploy dagster` |
 | [JupyterHub](./jupyterhub.md) | Multi-user Jupyter notebooks with PySpark | `./uis deploy jupyterhub` |
 | [OpenMetadata](./openmetadata.md) | Data discovery, governance, and metadata platform | `./uis deploy openmetadata` |
 | [Apache Spark](./spark.md) | Kubernetes-native distributed processing | `./uis deploy spark` |

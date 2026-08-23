@@ -2039,6 +2039,7 @@ cmd_verify() {
         echo "  alloy           Run E2E health checks on Alloy log collection"
         echo "  argocd          Run E2E health checks on ArgoCD server"
         echo "  backstage       Run E2E health checks on Backstage (RHDH)"
+        echo "  browserless     Verify browserless renders a real page"
         echo "  dagster         Verify Dagster orchestrates (webserver, metadata, daemon)"
         echo "  enonic          Run E2E health checks on Enonic XP"
         echo "  postgrest --app <name>  Verify one PostgREST instance serves its schema"
@@ -2069,6 +2070,9 @@ cmd_verify() {
             ;;
         backstage)
             cmd_backstage_verify
+            ;;
+        browserless)
+            cmd_browserless_verify
             ;;
         dagster)
             cmd_dagster_verify
@@ -2104,7 +2108,8 @@ cmd_verify() {
             echo "  alloy           Run E2E health checks on Alloy log collection"
             echo "  argocd          Run E2E health checks on ArgoCD server"
             echo "  backstage       Run E2E health checks on Backstage (RHDH)"
-            echo "  dagster         Verify Dagster orchestrates (webserver, metadata, daemon)"
+            echo "  browserless     Verify browserless renders a real page"
+        echo "  dagster         Verify Dagster orchestrates (webserver, metadata, daemon)"
         echo "  enonic          Run E2E health checks on Enonic XP"
         echo "  postgrest --app <name>  Verify one PostgREST instance serves its schema"
             echo "  minio           Run E2E health checks on MinIO object storage"
@@ -2381,6 +2386,11 @@ cmd_enonic_verify() {
 
 # PostgREST is multi-instance: one Deployment per consuming app, so there is no
 # single instance to verify. --app is required, exactly as it is for deploy.
+cmd_browserless_verify() {
+    print_section "Verifying browserless (renders a real page)"
+    ansible-playbook "$ANSIBLE_DIR/400-test-browserless.yml"
+}
+
 cmd_dagster_verify() {
     print_section "Verifying Dagster Data Orchestrator"
     ansible-playbook "$ANSIBLE_DIR/360-test-dagster.yml"
@@ -2905,6 +2915,14 @@ main() {
                     echo "  alloy verify     Run E2E health checks on Alloy log collection"
                     exit "$EXIT_GENERAL_ERROR"
                     ;;
+            esac
+            ;;
+        browserless)
+            local subcmd="${1:-}"
+            shift 2>/dev/null || true
+            case "$subcmd" in
+                verify) cmd_browserless_verify ;;
+                *) echo "  Use: ./uis browserless verify" >&2 ;;
             esac
             ;;
         dagster)

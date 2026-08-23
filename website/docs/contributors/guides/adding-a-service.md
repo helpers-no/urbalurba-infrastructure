@@ -75,6 +75,7 @@ Services are organized into categories. Pick the one that fits:
 | `NETWORKING` | 800-820 | Tailscale, Cloudflare tunnels |
 | `STORAGE` | 000-009, 045-046 | Storage classes, MinIO |
 | `INTEGRATION` | 080-091 | RabbitMQ, Gravitee |
+| `AUTOMATION` | 400-429 | browserless (430-499 reserved) |
 
 Pick an unused number within your category's range for the manifest prefix.
 
@@ -517,7 +518,7 @@ See **[Kubernetes Deployment Rules](../rules/kubernetes-deployment.md)** for sta
 1. Create `website/docs/services/<category>/myservice.md`
 2. Add the page to `website/sidebars.ts` under the appropriate category
 3. Add a service logo — see [Step 11b](#step-11b-add-a-logo)
-4. **Regenerate the site's data** — see [Step 11a](#step-11a-regenerate-servicesjson-do-not-skip-this)
+4. **Regenerate the site's data** — see [Step 11a](#step-11a-regenerate-servicesjson-before-you-preview)
 5. Build the site to verify no broken links
 
 ```bash
@@ -549,8 +550,26 @@ See **[Documentation Standards](../rules/documentation.md)** for page convention
 ### Step 11a: Regenerate `services.json` before you preview
 
 ```bash
-./uis docs
+bash provision-host/uis/manage/uis-docs.sh
 ```
+
+:::danger Run the script, not `./uis docs`
+`./uis docs` resolves its output path through `paths.sh`, which points at
+`/mnt/urbalurbadisk/website/...` — the path *inside the provision-host
+container*. Run from a checkout on your workstation it writes there instead of
+into your repo, reports `✓ Generated ... (34 services)` and exits 0, and your
+service is still missing from `website/src/data/`. Nothing warns you.
+
+Invoking the script directly is also exactly what CI does
+(`run: bash provision-host/uis/manage/uis-docs.sh`), so what you get locally is
+what `main` will get.
+
+Confirm it actually landed instead of trusting the ✓:
+
+```bash
+git status --short website/src/data/     # must show services.json modified
+```
+:::
 
 `website/src/data/services.json` is **generated** from the `SCRIPT_*` metadata in
 every service definition. The website's service listings, category pages and
@@ -562,7 +581,7 @@ commits the result — those `chore: regenerate UIS documentation` commits.
 
 **Before you push, it is stale.** So:
 
-- if you build the site locally to check your page, run `./uis docs` first or
+- if you build the site locally to check your page, regenerate first or
   your service will be missing from every listing while the build still exits 0
   with no warnings;
 - on a feature branch, the workflow does not run at all — it is `main`-only.

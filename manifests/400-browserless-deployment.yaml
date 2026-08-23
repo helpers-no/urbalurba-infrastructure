@@ -1,0 +1,170 @@
+# File: manifests/400-browserless-deployment.yaml
+#
+# Description:
+# browserless — a pool of headless Chromium instances, the first service in the
+# AUTOMATION category.
+#
+# ⚠️ NOT `-config.yaml`: that suffix means a Helm VALUES file in this repo.
+# browserless has no official Helm chart, so this is a plain Deployment +
+# Service, following the Helm-less pattern (see 320-unity-catalog-deployment.yaml).
+#
+# TWO PROTOCOLS, ONE PORT — and confusing them is the usual first mistake:
+#
+#   Playwright server   ws://browserless.browser.svc.cluster.local:3000/chromium/playwright?token=…
+#                       Uptime Kuma's `real-browser` monitor uses this
+#                       (it calls chromium.connect(), NOT connectOverCDP)
+#   CDP                 http://browserless.browser.svc.cluster.local:3000?token=…
+#                       @playwright/mcp and agent tooling use this
+#
+# SECURITY: the token is the only thing between any pod in the cluster and a
+# browser that will fetch arbitrary URLs. Private-network only — there is no
+# public-facing case for this service on any installation.
+#
+# Applied by: ansible/playbooks/400-setup-browserless.yml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browserless
+  namespace: browser
+  labels:
+    app: browserless
+  annotations:
+    urbalurba.io/description: "Headless Chromium pool — Playwright + CDP endpoints"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: browserless
+  template:
+    metadata:
+      labels:
+        app: browserless
+    spec:
+      containers:
+        - name: browserless
+          # PINNED to the current stable (checked against the GHCR tag list,
+          # 2026-08-23). `latest` on a browser pool means the Chromium version
+          # can change under a passing test suite; a synthetic check that
+          # silently starts driving a different browser is not a check.
+          # Bump deliberately — a browser version change can alter what a
+          # real-browser monitor sees.
+          image: ghcr.io/browserless/chromium:v2.38.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            # Token auth. Read from urbalurba-secrets — never a literal, and
+            # never a default that ships as a working value.
+            - name: TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: urbalurba-secrets
+                  key: BROWSERLESS_TOKEN
+            # A browser that never exits leaks memory across sessions; a browser
+            # that exits too eagerly kills long page loads. 60s is the upstream
+            # default and has held on the reference installation.
+            - name: TIMEOUT
+              value: "60000"
+            # Bounded queue rather than unbounded: a burst of checks should wait,
+            # not exhaust the node. CONCURRENT is deliberately low for the laptop
+            # profile — each concurrent session is a real Chromium process.
+            - name: CONCURRENT
+              value: "3"
+            - name: QUEUED
+              value: "10"
+            # Chromium writes profile data per session; keeping it in the
+            # container's own filesystem avoids a PVC this service does not need.
+            - name: DATA_DIR
+              value: /tmp/browserless
+          resources:
+            # ⚠️ The heaviest thing in this category. Each concurrent Chromium
+            # session is a browser process; the limit is what stops a burst of
+            # synthetic checks evicting other services on a laptop.
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          # ⚠️ EXEC probes, not httpGet — deliberately.
+          #
+          # /pressure is the right readiness signal: it reports whether the pool
+          # can accept more work, and answers without starting a browser. But it
+          # is TOKEN-GATED, and an httpGet probe cannot authenticate without
+          # putting the token in this manifest, which the secrets rules forbid.
+          #
+          # An unauthenticated httpGet gets 401, the liveness probe kills the
+          # container, and it restart-loops with the HTTP server working
+          # perfectly. Observed exactly that on the first deploy: `Running`,
+          # never Ready, restartCount climbing, exit 143.
+          #
+          # The alternative was httpGet on /docs, which is the only
+          # unauthenticated route (200). Rejected: /docs proves the HTTP server
+          # is up and says nothing about whether the browser pool can work — the
+          # returns-200-but-does-nothing trap.
+          #
+          # exec + curl reads TOKEN from the container's own environment, so the
+          # secret stays in urbalurba-secrets and the probe tests the real thing.
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'curl -sf -m 5 "http://127.0.0.1:3000/pressure?token=$TOKEN" >/dev/null'
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 8
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'curl -sf -m 5 "http://127.0.0.1:3000/pressure?token=$TOKEN" >/dev/null'
+            initialDelaySeconds: 45
+            periodSeconds: 30
+            timeoutSeconds: 8
+            failureThreshold: 3
+          volumeMounts:
+            # ⚠️ Mounted at /tmp/browserless, NOT /tmp.
+            #
+            # Mounting an emptyDir at /tmp REPLACES the image's /tmp, which
+            # destroys the DATA_DIR the container expects. The result is a pod
+            # that passes readiness — /pressure answers 200 with
+            # `isAvailable: true` — and fails every actual render with
+            #   Error: "/tmp/browserless" Directory doesn't exist
+            # A health check that is green while the service cannot do its job.
+            # Observed on the first deploy of this manifest, 2026-08-23.
+            - name: tmp
+              mountPath: /tmp/browserless
+            # Chromium needs more than the default 64MB of shared memory or it
+            # crashes on pages with many tabs/iframes — a classic headless
+            # failure that looks like a page problem rather than a memory one.
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: browserless
+  namespace: browser
+  labels:
+    app: browserless
+spec:
+  type: ClusterIP
+  selector:
+    app: browserless
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP

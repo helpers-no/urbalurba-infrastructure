@@ -34,5 +34,10 @@ nginx
 # orchestrates DURABLE PROCESSES. They are not alternatives - see the docs.
 # dagster
 
+# === Automation ===
+# browserless is what makes Uptime Kuma's `real-browser` monitor type usable —
+# without it that monitor type has no browser to connect to.
+# browserless
+
 # === Applications ===
 # nextcloud
