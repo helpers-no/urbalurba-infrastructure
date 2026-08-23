@@ -119,6 +119,36 @@ directory that no longer existed behind a volume mount. Health endpoints answere
 normally throughout; every render failed. The verify therefore renders a page
 carrying a marker and checks the marker comes back.
 
+### The deeper check: a real session
+
+```bash
+./uis browserless verify-session
+```
+
+`./uis verify browserless` proves the routes **exist**. This proves they **work**:
+
+| | Check |
+|---|---|
+| A | `chromium.connect()` to the Playwright route, navigate, read the title and DOM back |
+| B | `@playwright/mcp --cdp-endpoint` against the CDP route: list tools, `browser_navigate`, `browser_snapshot` |
+
+The distinction matters because the fast verify's endpoint test asserts the
+Playwright route answers **400 rather than 404** — that proves a route is
+registered and nothing about whether a session can be established through it. A
+protocol-version mismatch, an exhausted pool, or a broken context allocation all
+leave the route answering 400 while every real session fails.
+
+It is deliberately **not** part of `./uis verify browserless` or `./uis test-all`:
+it installs npm packages inside the cluster at run time, so it needs egress to
+the npm registry. A dependency on npmjs being up does not belong in the fast
+path.
+
+:::note Client version must match
+browserless `v2.38.1` ships `playwright-core` **1.56.1** on the default route,
+and the check pins the same. A mismatched client fails at `connect()` with a
+message about the websocket, which reads like the service being down.
+:::
+
 ## Troubleshooting
 
 **Every render fails, but the pod is healthy.** Almost always the browser cannot

@@ -2040,6 +2040,7 @@ cmd_verify() {
         echo "  argocd          Run E2E health checks on ArgoCD server"
         echo "  backstage       Run E2E health checks on Backstage (RHDH)"
         echo "  browserless     Verify browserless renders a real page"
+        echo "                  (deep: ./uis browserless verify-session — real Playwright + MCP session)"
         echo "  dagster         Verify Dagster orchestrates (webserver, metadata, daemon)"
         echo "  enonic          Run E2E health checks on Enonic XP"
         echo "  postgrest --app <name>  Verify one PostgREST instance serves its schema"
@@ -2109,6 +2110,7 @@ cmd_verify() {
             echo "  argocd          Run E2E health checks on ArgoCD server"
             echo "  backstage       Run E2E health checks on Backstage (RHDH)"
             echo "  browserless     Verify browserless renders a real page"
+        echo "                  (deep: ./uis browserless verify-session — real Playwright + MCP session)"
         echo "  dagster         Verify Dagster orchestrates (webserver, metadata, daemon)"
         echo "  enonic          Run E2E health checks on Enonic XP"
         echo "  postgrest --app <name>  Verify one PostgREST instance serves its schema"
@@ -2386,6 +2388,13 @@ cmd_enonic_verify() {
 
 # PostgREST is multi-instance: one Deployment per consuming app, so there is no
 # single instance to verify. --app is required, exactly as it is for deploy.
+cmd_browserless_verify_session() {
+    print_section "Verifying a real browser session (Playwright + MCP)"
+    echo "  Deep check — installs npm packages in-cluster, needs npm registry egress."
+    echo "  Deliberately NOT part of test-all; see 401-test-browserless-session.yml."
+    ansible-playbook "$ANSIBLE_DIR/401-test-browserless-session.yml"
+}
+
 cmd_browserless_verify() {
     print_section "Verifying browserless (renders a real page)"
     ansible-playbook "$ANSIBLE_DIR/400-test-browserless.yml"
@@ -2922,7 +2931,8 @@ main() {
             shift 2>/dev/null || true
             case "$subcmd" in
                 verify) cmd_browserless_verify ;;
-                *) echo "  Use: ./uis browserless verify" >&2 ;;
+                verify-session) cmd_browserless_verify_session ;;
+                *) echo "  Use: ./uis browserless verify | verify-session" >&2 ;;
             esac
             ;;
         dagster)

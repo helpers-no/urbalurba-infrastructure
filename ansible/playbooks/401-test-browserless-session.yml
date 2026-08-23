@@ -1,0 +1,231 @@
+---
+# 401-test-browserless-session.yml
+#
+# Deep verification for browserless: does a REAL SESSION drive a page, over
+# both protocols consumers actually use?
+#
+# ⚠️ NOT part of `./uis verify browserless` and NOT part of `test-all`.
+#     Run it with:  ./uis browserless verify-session
+#
+# It installs npm packages at run time, so it needs egress to the npm registry.
+# Folding it into the fast verify would make every `test-all` depend on npmjs
+# being up, which would produce UIS failures for reasons that are not UIS.
+#
+# WHAT THIS ADDS OVER 400-test-browserless.yml
+#
+# The fast verify proves browserless RENDERS (POST /content returns a marker)
+# and that both routes are REGISTERED (the Playwright route answers 400 rather
+# than 404 to a synthetic handshake).
+#
+# "Registered" is not "usable". A driven session opens a websocket, negotiates a
+# protocol version, allocates a context from the pool, navigates, and reads DOM
+# state back. All of that can fail while /content still renders and the route
+# still answers 400 — which is exactly the gap this closes.
+#
+#   A. Playwright  chromium.connect() -> goto -> read title AND DOM text
+#   B. MCP         @playwright/mcp --cdp-endpoint -> tools/list ->
+#                  browser_navigate -> browser_snapshot containing the marker
+#
+# A and B use DIFFERENT endpoints on the same port. Uptime Kuma's real-browser
+# monitor uses A; agent tooling uses B. Proving one says nothing about the other.
+
+- name: Verify a real browser session can be driven through browserless
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    ns: "browser"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    job_name: "browserless-session-test"
+    # Must match what browserless ships, or chromium.connect() fails on a
+    # protocol mismatch that reads like the service being down.
+    # browserless v2.38.1 -> playwright-core 1.56.1 (default route).
+    playwright_client_version: "1.56.1"
+    mcp_version: "0.0.79"
+    job_timeout_s: 600
+
+  tasks:
+    - name: "0.1 browserless must be deployed"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ ns }}"
+        label_selectors: ["app=browserless"]
+        field_selectors: ["status.phase=Running"]
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _pods
+
+    - name: "0.2 Fail clearly if it is not"
+      ansible.builtin.fail:
+        msg: "No Running browserless pod in {{ ns }}. Deploy it first: ./uis deploy browserless"
+      when: _pods.resources | default([]) | length == 0
+
+    - name: "0.3 Remove any Job left by a previous run"
+      # Jobs are immutable once created; a leftover would make this run report
+      # the PREVIOUS run's result.
+      kubernetes.core.k8s:
+        state: absent
+        api_version: batch/v1
+        kind: Job
+        namespace: "{{ ns }}"
+        name: "{{ job_name }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+        wait: true
+        wait_timeout: 120
+
+    - name: "1. Install the session-test script"
+      kubernetes.core.k8s:
+        state: present
+        src: "/mnt/urbalurbadisk/manifests/401-browserless-session-test.yaml"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+
+    - name: "2. Run the session test as a Job"
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+        definition:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: "{{ job_name }}"
+            namespace: "{{ ns }}"
+            labels: { app: browserless, role: verify }
+          spec:
+            backoffLimit: 0          # one attempt; a retry would mask a flake
+            ttlSecondsAfterFinished: 600
+            template:
+              metadata:
+                labels: { app: browserless, role: verify }
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: session-test
+                    image: node:20-alpine
+                    workingDir: /work
+                    env:
+                      - name: BROWSERLESS_TOKEN
+                        valueFrom:
+                          secretKeyRef: { name: urbalurba-secrets, key: BROWSERLESS_TOKEN }
+                      - name: BROWSERLESS_HOST
+                        value: "browserless.{{ ns }}.svc.cluster.local:3000"
+                      # We drive a REMOTE browser; downloading local browser
+                      # binaries would add ~300MB and prove nothing.
+                      - name: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+                        value: "1"
+                      - name: PLAYWRIGHT_SKIP_BROWSER_GC
+                        value: "1"
+                    command: ["sh", "-c"]
+                    args:
+                      - |
+                        set -e
+                        npm init -y >/dev/null 2>&1
+                        npm install --silent --no-audit --no-fund \
+                          playwright-core@{{ playwright_client_version }} \
+                          @playwright/mcp@{{ mcp_version }}
+                        exec node /scripts/session-test.js
+                    volumeMounts:
+                      - { name: scripts, mountPath: /scripts }
+                      - { name: work, mountPath: /work }
+                volumes:
+                  - name: scripts
+                    configMap: { name: browserless-session-test }
+                  - name: work
+                    emptyDir: {}
+
+    - name: "3. Wait for the Job to finish"
+      # Waits on the JOB's own conditions, not on `kubectl run -i` stdout.
+      # `kubectl run --rm -i` returns rc=0 with EMPTY stdout when the container
+      # outlives the attach, so any assertion on its output can pass or fail for
+      # reasons unrelated to the test. See PLAN-docs-provisioning-unsafe-test-idiom.
+      ansible.builtin.shell: |
+        kubectl wait --for=condition=complete job/{{ job_name }} -n {{ ns }} \
+          --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --timeout={{ job_timeout_s }}s >/dev/null 2>&1 && echo COMPLETE && exit 0
+        kubectl wait --for=condition=failed job/{{ job_name }} -n {{ ns }} \
+          --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --timeout=10s >/dev/null 2>&1 && echo FAILED && exit 0
+        echo TIMEOUT
+      register: _jobstate
+      changed_when: false
+      failed_when: false
+
+    - name: "4. Collect the Job's output"
+      ansible.builtin.shell: >
+        kubectl logs job/{{ job_name }} -n {{ ns }}
+        --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} --tail=200
+      register: _joblog
+      changed_when: false
+      failed_when: false
+
+    - name: "5. Show what the session test reported"
+      ansible.builtin.debug:
+        msg: "{{ (_joblog.stdout | default('<no output>')).split('\n') }}"
+
+    - name: "6. A. Playwright session drove a page"
+      ansible.builtin.assert:
+        that: _joblog.stdout is search('A_PASS')
+        fail_msg: >-
+          chromium.connect() could not drive a page through
+          {{ '/chromium/playwright' }}. This is the endpoint Uptime Kuma's
+          real-browser monitor uses, so that monitor type is broken while this
+          fails — even though `./uis verify browserless` may still pass, because
+          rendering via POST /content uses a different path entirely.
+          A protocol-version mismatch is the usual cause: browserless v2.38.1
+          ships playwright-core 1.56.1 and this test pins
+          {{ playwright_client_version }}. Job state: {{ _jobstate.stdout | trim }}.
+        success_msg: "Playwright: a real session navigated and read the page back."
+
+    - name: "7. B1. MCP server connected and exposes browser tools"
+      ansible.builtin.assert:
+        that: _joblog.stdout is search('B1_PASS')
+        fail_msg: >-
+          @playwright/mcp could not connect over CDP or returned no usable
+          tools. Agent tooling reaches browserless this way. Job state:
+          {{ _jobstate.stdout | trim }}.
+        success_msg: "MCP: connected over CDP and listed browser tools."
+
+    - name: "8. B2/B3. MCP navigated and read live page content back"
+      ansible.builtin.assert:
+        that:
+          - _joblog.stdout is search('B2_PASS')
+          - _joblog.stdout is search('B3_PASS')
+        fail_msg: >-
+          MCP listed its tools but could not drive the browser through them.
+          browser_snapshot returning content that does NOT contain the marker
+          means the tool answered without a live page behind it — the same
+          class of failure as a green /pressure on a browser that cannot
+          render. Job state: {{ _jobstate.stdout | trim }}.
+        success_msg: "MCP: browser_navigate and browser_snapshot returned live page content."
+
+    - name: "9. Overall result"
+      ansible.builtin.assert:
+        that: "_joblog.stdout is search('RESULT: ALL_PASS')"
+        fail_msg: "The session test did not report ALL_PASS. Job state: {{ _jobstate.stdout | trim }}."
+        success_msg: "browserless is driveable end to end, over both protocols."
+
+    - name: "10. Clean up the Job"
+      kubernetes.core.k8s:
+        state: absent
+        api_version: batch/v1
+        kind: Job
+        namespace: "{{ ns }}"
+        name: "{{ job_name }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+        wait: false
+
+    - name: "SUMMARY"
+      ansible.builtin.debug:
+        msg:
+          - "A.  Playwright connect() drove a page:        PASS"
+          - "B1. MCP connected over CDP, tools listed:     PASS"
+          - "B2. MCP browser_navigate:                     PASS"
+          - "B3. MCP browser_snapshot returned live DOM:   PASS"
+          - ""
+          - "These use two different endpoints on port 3000. `./uis verify"
+          - "browserless` proves the routes EXIST; this proves they WORK."
