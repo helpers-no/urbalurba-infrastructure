@@ -546,7 +546,7 @@ is a failure you have to look for.
 
 See **[Documentation Standards](../rules/documentation.md)** for page conventions.
 
-### Step 11a: Regenerate `services.json` — do not skip this
+### Step 11a: Regenerate `services.json` before you preview
 
 ```bash
 ./uis docs
@@ -556,25 +556,28 @@ See **[Documentation Standards](../rules/documentation.md)** for page convention
 every service definition. The website's service listings, category pages and
 search read that file — not your Markdown page and not `sidebars.ts`.
 
-**Until you run this, your service does not exist on the site.** The docs page
-will build fine, the sidebar entry will work, `npm run build` will exit 0 with no
-warnings, and the service will simply be absent from every listing. Nothing in
-the deploy, the verify or the docs build tells you.
+**On `main`, CI does this for you.** `.github/workflows/generate-uis-docs.yml`
+runs `uis-docs.sh` on every push touching `provision-host/uis/services/**` and
+commits the result — those `chore: regenerate UIS documentation` commits.
 
-> This has now happened twice. **Alloy** (Aug 2026): *"Docs page, sidebar entry
-> and stack membership were all added, but `services.json` and `stacks.json` are
-> generated and were never regenerated — so the site had no Alloy entry."*
-> **Dagster** (Aug 2026): same omission, same cause — this step was not in the
-> guide.
+**Before you push, it is stale.** So:
 
-`./uis docs` regenerates all four data files (`services.json`, `categories.json`,
-`stacks.json`, `tools.json`). Commit the changed JSON with your service.
+- if you build the site locally to check your page, run `./uis docs` first or
+  your service will be missing from every listing while the build still exits 0
+  with no warnings;
+- on a feature branch, the workflow does not run at all — it is `main`-only.
 
-Verify your service is actually there before moving on:
+Verify before moving on:
 
 ```bash
 grep '"id": "myservice"' website/src/data/services.json
 ```
+
+> Related but **not** the same failure: Alloy shipped in Aug 2026 with no
+> `SCRIPT_ABSTRACT`, `SCRIPT_SUMMARY`, `SCRIPT_TAGS`, `SCRIPT_LOGO`,
+> `SCRIPT_WEBSITE` or `SCRIPT_DOCS` at all, and its generated entry was
+> correspondingly empty. Generation cannot invent metadata you did not write —
+> fill in Step 2 properly and this step is mechanical.
 
 ### Step 11b: Add a logo
 

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — service built, tested and merged to `main` (2026-08-23)
+## Status: Completed — 2026-08-23
 
 **Approved** (Terje via ops, 2026-08-22): all five decisions as proposed — name
 `dagster`, category `ANALYTICS`, number 360 / priority 56, chart
