@@ -11,4 +11,3 @@ Plans currently being implemented. Maximum 1-2 at a time.
 |------|------|---------|
 | [Define what the watchdog watches](PLAN-service-uptime-kuma-002-monitors.md) | — | 2026-08-23 |
 | [Deploy Uptime Kuma as an external watchdog](PLAN-service-uptime-kuma-001-deploy.md) | — | 2026-08-23 |
-| [Ship Dagster as a UIS service — the platform data orchestrator](PLAN-service-dagster-001-deploy.md) | — | 2026-08-23 |

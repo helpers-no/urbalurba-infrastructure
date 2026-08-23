@@ -26,6 +26,7 @@ All completed plans and investigations, sorted by date. Kept for reference.
 | [Plan: ship the external-service proxy that production already runs by hand](PLAN-system-external-services-001-proxy-convention.md) | `uis deploy postgresql` gives an in-cluster PostgreSQL on a laptop and a | 2026-08-23 |
 | [Package Uptime Kuma as a first-class UIS service](PLAN-service-uptime-kuma-004-uis-service.md) | `./uis deploy uptime-kuma` works like any other service, with the same | 2026-08-23 |
 | [Fix: verify the LiteLLM database schema, repair it, and fail loudly](PLAN-service-litellm-001-schema-verify.md) | `uis deploy litellm` must never report success when the database | 2026-08-23 |
+| [Ship Dagster as a UIS service — the platform data orchestrator](PLAN-service-dagster-001-deploy.md) | — | 2026-08-23 |
 | [Plan: Finish Alloy against the adding-a-service guide](PLAN-service-alloy-verify-and-metadata-fix.md) | Bring the Alloy service into actual compliance with | 2026-08-23 |
 | [PLAN: Rename "Packages" to "Services" in Documentation](PLAN-rename-packages-to-services.md) | — | 2026-08-23 |
 | [Feature: PostgREST `--schemas` flag with wipe-and-rewrite reconciliation](PLAN-postgrest-multi-schema-reconciliation.md) | Extend `./uis configure postgrest` to expose multiple PostgreSQL schemas via a single PostgREST instance, with deterministic reconfigure semantics. | 2026-08-23 |
