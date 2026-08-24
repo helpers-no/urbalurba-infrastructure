@@ -42,6 +42,15 @@
     # Must match what browserless ships, or chromium.connect() fails on a
     # protocol mismatch that reads like the service being down.
     # browserless v2.38.1 -> playwright-core 1.56.1 (default route).
+    #
+    # ⚠️ DO NOT DROP THIS INSTALL on the grounds that @playwright/mcp already
+    # depends on playwright-core. Measured by the tester (2026-08-24): with only
+    # @playwright/mcp installed, playwright-core resolves transitively at
+    # 1.63.0-alpha and check A fails with
+    #     WebSocket error: ws://…/chromium/playwright 428 Precondition Required
+    # while B3 still passes, because the CDP route tolerates the newer client
+    # and the Playwright server protocol does not. A 428 looks nothing like a
+    # version problem, so this would be expensive to re-diagnose.
     playwright_client_version: "1.56.1"
     mcp_version: "0.0.79"
     job_timeout_s: 600
@@ -65,6 +74,16 @@
     - name: "0.3 Remove any Job left by a previous run"
       # Jobs are immutable once created; a leftover would make this run report
       # the PREVIOUS run's result.
+      #
+      # ⚠️ propagationPolicy is REQUIRED here. Deleting a Job through the API
+      # without it ORPHANS its pods — the Job disappears and its pods keep
+      # running under no owner. `kubectl delete` hides this by defaulting to
+      # --cascade=background; this module does not.
+      #
+      # The orphans then carry app=browserless, so `./uis undeploy browserless`
+      # found pods it could not account for and failed for the ten minutes of
+      # ttlSecondsAfterFinished, blaming a stuck finalizer that did not exist.
+      # Found by the independent tester (2026-08-24).
       kubernetes.core.k8s:
         state: absent
         api_version: batch/v1
@@ -75,6 +94,8 @@
         context: "{{ _target }}"
         wait: true
         wait_timeout: 120
+        delete_options:
+          propagationPolicy: Background
 
     - name: "1. Install the session-test script"
       kubernetes.core.k8s:
@@ -231,7 +252,11 @@
         fail_msg: "The session test did not report ALL_PASS. Job state: {{ _jobstate.stdout | trim }}."
         success_msg: "browserless is driveable end to end, over both protocols."
 
-    - name: "10. Clean up the Job"
+    - name: "10. Clean up the Job and its pods"
+      # wait: true and Background propagation, so this playbook leaves NOTHING
+      # behind. Previously it fired and forgot, the pods were orphaned rather
+      # than collected, and the next `./uis undeploy browserless` tripped over
+      # them.
       kubernetes.core.k8s:
         state: absent
         api_version: batch/v1
@@ -240,7 +265,10 @@
         name: "{{ job_name }}"
         kubeconfig: "{{ merged_kubeconf_file }}"
         context: "{{ _target }}"
-        wait: false
+        wait: true
+        wait_timeout: 120
+        delete_options:
+          propagationPolicy: Background
 
     - name: "SUMMARY"
       ansible.builtin.debug:
