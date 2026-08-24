@@ -108,14 +108,37 @@
       when: _tok.stdout | default('') | length == 0
 
     - name: "B1. CDP answers through the Service, WITH the token"
-      ansible.builtin.shell: >
-        kubectl run neko-cdp-probe --rm --restart=Never --image=curlimages/curl
-        -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
-        --command -- curl -s -m 15 -H "X-Neko-Token: {{ _tok.stdout }}"
-        http://{{ svc }}:9222/json/version
+      ansible.builtin.shell: |
+        set -e
+        P=neko-cdp-probe
+        kubectl delete pod $P -n {{ ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --ignore-not-found >/dev/null 2>&1
+        # ⚠️ NO `--rm`. `kubectl run --rm` without `-i` is REJECTED BEFORE THE
+        # CONTAINER RUNS ("--rm should only be used for attached containers"),
+        # so the probe never executes and the assertion below matches nothing —
+        # which reads as the service being broken. And `--rm -i` is the idiom
+        # that silently returns rc=0 with empty stdout when the container
+        # outlives the attach. Create, wait, read logs, delete: the pattern from
+        # 360-test-dagster.yml.
+        kubectl run $P --image=curlimages/curl --restart=Never \
+          -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- curl -s -m 15 -H "X-Neko-Token: {{ _tok.stdout }}" http://{{ svc }}:9222/json/version >/dev/null
+        for i in $(seq 1 30); do
+          phase=$(kubectl get pod $P -n {{ ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ] && break
+          sleep 2
+        done
+        kubectl logs $P -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod $P -n {{ ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
       register: _cdpver
       changed_when: false
       failed_when: false
+      # Keeps the token out of the log. The diagnosis lives in the assertion
+      # below, which now prints stderr too — that is where kubectl's own errors
+      # go, and reading only stdout is what made a broken probe look like a
+      # broken service.
       no_log: true
 
     - name: "B2. Assert CDP is reachable"
@@ -123,9 +146,12 @@
         that: _cdpver.stdout is search('webSocketDebuggerUrl')
         fail_msg: >-
           CDP did not answer on {{ svc }}:9222. Chromium binds the debug port to
-          127.0.0.1 and refuses non-local binds, so the `cdp` socat sidecar is
-          what exposes it — check that container, not the browser. Response:
-          {{ _cdpver.stdout | default('<empty>') | truncate(200) }}
+          127.0.0.1 and refuses non-local binds, so the `cdp` NGINX AUTH PROXY
+          sidecar is what exposes it — check that container, not the browser. If
+          it answers 401 instead, the token is wrong rather than the service
+          being down.
+          stdout: {{ _cdpver.stdout | default('<empty>') | truncate(200) }}
+          stderr: {{ _cdpver.stderr | default('<empty>') | truncate(300) }}
         success_msg: "CDP reachable through the Service."
 
     # --- C. the trap ---
@@ -145,12 +171,24 @@
           --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} -- \
           sh -c 'cat /etc/chromium/policies/managed/policies.json' \
           | tr -d " \n" | grep -o "\"DeveloperToolsAvailability\":[0-9]" || true
-        kubectl run neko-attach-probe --rm --restart=Never --image=curlimages/curl \
+        P=neko-attach-probe
+        kubectl delete pod $P -n {{ ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --ignore-not-found >/dev/null 2>&1
+        kubectl run $P --image=curlimages/curl --restart=Never \
           -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
           --command -- sh -c '
             T=$(curl -s -m 10 -H "X-Neko-Token: {{ _tok.stdout }}" http://{{ svc }}:9222/json 2>/dev/null | head -c 4000)
             echo "$T" | grep -q "\"type\": *\"page\"" && echo TARGETS_PRESENT || echo NO_TARGETS
-          '
+          ' >/dev/null
+        for i in $(seq 1 30); do
+          phase=$(kubectl get pod $P -n {{ ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ] && break
+          sleep 2
+        done
+        kubectl logs $P -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod $P -n {{ ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
       register: _attach
       changed_when: false
       failed_when: false
@@ -176,7 +214,8 @@
           chromium may have failed to start its initial window:
           kubectl logs -n {{ ns }} -l app=neko -c neko --tail=50
           {% endif %}
-          Observed: {{ _attach.stdout | default('<empty>') | trim }}
+          Observed stdout: {{ _attach.stdout | default('<empty>') | trim }}
+          stderr: {{ _attach.stderr | default('<empty>') | truncate(300) }}
         success_msg: "DevTools policy override live, and CDP lists page targets."
 
     # --- D. the persistent identity ---
@@ -255,12 +294,24 @@
       # reading is "any device on the LAN is logged into everything this browser
       # is logged into".
       ansible.builtin.shell: |
-        kubectl run neko-anon-probe --rm --restart=Never --image=curlimages/curl \
+        P=neko-anon-probe
+        kubectl delete pod $P -n {{ ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --ignore-not-found >/dev/null 2>&1
+        kubectl run $P --image=curlimages/curl --restart=Never \
           -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
           --command -- sh -c '
             echo "NOHDR=$(curl -s -o /dev/null -w %{http_code} -m 15 http://{{ svc }}:9222/json/version)"
             echo "BADTOK=$(curl -s -o /dev/null -w %{http_code} -m 15 -H "X-Neko-Token: definitely-not-the-token" http://{{ svc }}:9222/json/version)"
-          '
+          ' >/dev/null
+        for i in $(seq 1 30); do
+          phase=$(kubectl get pod $P -n {{ ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ] && break
+          sleep 2
+        done
+        kubectl logs $P -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod $P -n {{ ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
       register: _anon
       changed_when: false
       failed_when: false
@@ -272,7 +323,8 @@
           - _anon.stdout is search('BADTOK=401')
         fail_msg: >-
           CDP did NOT refuse an unauthenticated request
-          ({{ _anon.stdout | default('?') | trim | replace('\n', '  ') }}).
+          (stdout: {{ _anon.stdout | default('?') | trim | replace('\n', '  ') }}
+           stderr: {{ _anon.stderr | default('<empty>') | truncate(200) }}).
           Expected 401 for both no-header and wrong-token. This port is
           reachable on the LAN and carries full browser control including the
           logged-in human's cookies, so anything that can reach it is logged in
