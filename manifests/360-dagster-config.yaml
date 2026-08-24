@@ -74,6 +74,27 @@ dagsterDaemon:
     requests: { cpu: 100m, memory: 512Mi }
     limits:   { cpu: 500m, memory: 1Gi }
 
+  # Run monitoring — the daemon fails runs that never start.
+  runMonitoring:
+    enabled: true
+    # Chart default is 300. Raised because a run's ENTIRE EXECUTION PLAN is
+    # constructed and persisted over gRPC BEFORE the run pod is created, so a
+    # job with a very large plan can exhaust this while everything is healthy.
+    #
+    # The first real tenant hit it: a job planning 711 events (645 of them asset
+    # checks) died with RunFailureReason.START_TIMEOUT before its pod existed.
+    # Not resources, not the code location — that was healthy and small jobs on
+    # it ran fine. The symptom is misleading: "start timeout" reads as a
+    # scheduling or image-pull problem, and neither was involved.
+    #
+    # ⚠️ THIS IS MARGIN, NOT A CURE. The durable fix is on the tenant side —
+    # splitting a monolithic job so no single plan is that large — and it is
+    # proceeding separately. Raising this further would hide the next instance
+    # of the same problem for longer rather than fixing it, so do not treat a
+    # future START_TIMEOUT as a reason to raise it again without asking what the
+    # plan size is.
+    startTimeoutSeconds: 900
+
 dagsterWebserver:
   replicaCount: 1
   resources:
