@@ -90,14 +90,33 @@
         success_msg: "Web view healthy (/health on 8080)."
 
     # --- B. the agent's door, through the Service ---
-    - name: "B1. CDP answers through the Service"
+    - name: "B0. Read the CDP token"
+      ansible.builtin.shell: >
+        kubectl get secret urbalurba-secrets -n {{ ns }} --context {{ _target }}
+        --kubeconfig {{ merged_kubeconf_file }}
+        -o jsonpath="{.data.NEKO_CDP_TOKEN}" | base64 -d
+      register: _tok
+      changed_when: false
+      no_log: true
+
+    - name: "B0b. Fail if there is no token"
+      ansible.builtin.fail:
+        msg: >-
+          No NEKO_CDP_TOKEN in {{ ns }}/urbalurba-secrets. The CDP proxy cannot
+          start without it, which is deliberate — see the security note in
+          410-neko-deployment.yaml. Run `./uis secrets apply`.
+      when: _tok.stdout | default('') | length == 0
+
+    - name: "B1. CDP answers through the Service, WITH the token"
       ansible.builtin.shell: >
         kubectl run neko-cdp-probe --rm --restart=Never --image=curlimages/curl
         -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
-        --command -- curl -s -m 15 http://{{ svc }}:9222/json/version
+        --command -- curl -s -m 15 -H "X-Neko-Token: {{ _tok.stdout }}"
+        http://{{ svc }}:9222/json/version
       register: _cdpver
       changed_when: false
       failed_when: false
+      no_log: true
 
     - name: "B2. Assert CDP is reachable"
       ansible.builtin.assert:
@@ -129,12 +148,13 @@
         kubectl run neko-attach-probe --rm --restart=Never --image=curlimages/curl \
           -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
           --command -- sh -c '
-            T=$(curl -s -m 10 http://{{ svc }}:9222/json 2>/dev/null | head -c 4000)
+            T=$(curl -s -m 10 -H "X-Neko-Token: {{ _tok.stdout }}" http://{{ svc }}:9222/json 2>/dev/null | head -c 4000)
             echo "$T" | grep -q "\"type\": *\"page\"" && echo TARGETS_PRESENT || echo NO_TARGETS
           '
       register: _attach
       changed_when: false
       failed_when: false
+      no_log: true
 
     - name: "C2. Assert the DevTools policy override is live"
       ansible.builtin.assert:
@@ -220,10 +240,52 @@
           Media path consistent —
           {{ _webrtc.stdout | default('') | trim | replace('\n', '  ') }}
 
+    # --- F. the guard that replaced tailnet-only ---
+    - name: "F1. An ANONYMOUS CDP request must be refused"
+      # ⚠️ THE SECURITY CHECK. On the reference installation the guard was the
+      # network: CDP was tailnet-only. UIS exposes neko on the LAN so agents,
+      # other services and the test harness can reach it without a Tailscale
+      # operator — so the network is no longer a guard, and the token is.
+      #
+      # A NetworkPolicy could not do this job: it cannot distinguish an
+      # authorised LAN device from any other LAN device.
+      #
+      # What is behind this port is full browser control including the logged-in
+      # human's cookies. If this check ever passes anonymously, the correct
+      # reading is "any device on the LAN is logged into everything this browser
+      # is logged into".
+      ansible.builtin.shell: |
+        kubectl run neko-anon-probe --rm --restart=Never --image=curlimages/curl \
+          -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- sh -c '
+            echo "NOHDR=$(curl -s -o /dev/null -w %{http_code} -m 15 http://{{ svc }}:9222/json/version)"
+            echo "BADTOK=$(curl -s -o /dev/null -w %{http_code} -m 15 -H "X-Neko-Token: definitely-not-the-token" http://{{ svc }}:9222/json/version)"
+          '
+      register: _anon
+      changed_when: false
+      failed_when: false
+
+    - name: "F2. Assert anonymous and wrong-token requests get 401"
+      ansible.builtin.assert:
+        that:
+          - _anon.stdout is search('NOHDR=401')
+          - _anon.stdout is search('BADTOK=401')
+        fail_msg: >-
+          CDP did NOT refuse an unauthenticated request
+          ({{ _anon.stdout | default('?') | trim | replace('\n', '  ') }}).
+          Expected 401 for both no-header and wrong-token. This port is
+          reachable on the LAN and carries full browser control including the
+          logged-in human's cookies, so anything that can reach it is logged in
+          as that human. Check the `cdp` container is the nginx auth proxy and
+          that NEKO_CDP_TOKEN reached it — a plain forwarder here means no guard
+          at all.
+        success_msg: "CDP refuses anonymous and wrong-token requests (401)."
+
     - name: "SUMMARY"
       ansible.builtin.debug:
         msg:
           - "A. Web view healthy (the human's door):        PASS"
+          - "F. CDP refuses anonymous + wrong token (401):   PASS   <- the guard"
           - "B. CDP reachable through the Service:          PASS"
           - "C. DevTools policy override live + targets:    PASS   <- the invisible one"
           - "D. Profile volume bound and writable:          PASS"
@@ -235,3 +297,8 @@
           - ""
           - "This verify does NOT prove a human can see video — that needs a real"
           - "WebRTC client. E proves the values are consistent, not that media flows."
+          - ""
+          - "F replaced tailnet-only as the CDP guard. neko is LAN-reachable by"
+          - "design so agents and the test harness need no Tailscale operator;"
+          - "the token is therefore the ONLY thing standing in front of full"
+          - "browser control over the logged-in human's cookies."

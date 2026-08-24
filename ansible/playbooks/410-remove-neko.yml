@@ -46,7 +46,7 @@
         name: "{{ item }}"
         kubeconfig: "{{ merged_kubeconf_file }}"
         context: "{{ _target }}"
-      loop: [neko, neko-webrtc]
+      loop: [neko, neko-webrtc, neko-tailnet]
       failed_when: false
 
     - name: "3. Remove the Deployment"
@@ -67,14 +67,15 @@
           propagationPolicy: Background
       failed_when: false
 
-    - name: "4. Remove the chromium config"
+    - name: "4. Remove the config maps"
       kubernetes.core.k8s:
         state: absent
         kind: ConfigMap
         namespace: "{{ browser_namespace }}"
-        name: neko-chromium-conf
+        name: "{{ item }}"
         kubeconfig: "{{ merged_kubeconf_file }}"
         context: "{{ _target }}"
+      loop: [neko-chromium-conf, neko-cdp-proxy]
       failed_when: false
 
     - name: "5. Confirm the pods are actually gone"
@@ -120,7 +121,8 @@
         msg: |
           neko removed.
 
-          Removed:   Deployment, both Services, IngressRoute, chromium ConfigMap.
+          Removed:   Deployment, Services (LAN + any tailnet overlay),
+                     IngressRoute, chromium + CDP-proxy ConfigMaps.
           PRESERVED: the neko-profile PVC{{ ' (present)' if (_pvc.resources | default([]) | length) > 0 else ' — NOT FOUND, so sessions are already gone' }}.
 
           Your logins are still on that volume. `./uis deploy neko` brings the

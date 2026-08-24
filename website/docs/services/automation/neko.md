@@ -21,7 +21,7 @@ can then act as that logged-in user without ever holding the password.
 | **Image** | `ghcr.io/m1k1o/neko/chromium` **pinned to `3.1.5`** |
 | **Default namespace** | `browser` |
 | **Web view** | `http://neko.localhost` — internal only |
-| **CDP** | `neko.browser.svc.cluster.local:9222` — cluster-internal, **unauthenticated** |
+| **CDP** | `:9222` on the LAN and in-cluster — **token-gated** (`X-Neko-Token` header) |
 
 ## neko or browserless?
 
@@ -53,11 +53,18 @@ Escalate only when the level below fails.
 :::danger Read this before you deploy it
 neko is not like the other UIS services, and it is opt-in for these reasons.
 
-**CDP is unauthenticated, full browser control — cookies included.** Anything
-that can reach port 9222 is logged in as whoever the browser is logged in as.
-There is no token and none can be added. It is safe only while the Service stays
-private: cluster-internal here, tailnet-only on the reference installation.
-**Never** route 9222 through an ingress, a tunnel, or a LAN NodePort.
+**CDP is full browser control — cookies included.** Anything that presents the
+token acts as whoever the browser is logged in as.
+
+**The token is the only guard.** neko is deliberately reachable on the LAN so
+that agents, other services and the test harness need no Tailscale operator —
+which means the network is *not* a guard here. On the reference installation it
+was: CDP was tailnet-only. A NetworkPolicy cannot replace that, because it
+cannot distinguish an authorised LAN device from any other LAN device.
+
+So treat `NEKO_CDP_TOKEN` exactly like the logins it protects. `./uis verify
+neko` check F asserts an anonymous request is refused; if that check ever passes
+anonymously, every device on the LAN is logged into everything this browser is.
 
 **The profile volume is a live credential store.** Its blast radius is everything
 you log into. It is deliberately **not backed up** — a backup is a second copy of
@@ -102,48 +109,76 @@ same mechanism `./uis browserless verify-session` exercises, and proven against
 neko's locked-down Chromium on the reference installation.
 
 ```bash
+TOKEN=$(kubectl get secret urbalurba-secrets -n browser \
+  -o jsonpath='{.data.NEKO_CDP_TOKEN}' | base64 -d)
+
 claude mcp add neko -- npx -y @playwright/mcp \
-  --cdp-endpoint "ws://neko.browser.svc.cluster.local:9222"
+  --cdp-endpoint "http://neko.browser.svc.cluster.local:9222" \
+  --cdp-header "X-Neko-Token: $TOKEN"
 ```
 
-From inside the cluster. Raw CDP over the websocket, with flattened sessions,
-remains the low-level fallback.
+From the LAN, swap the endpoint for the Service's external address
+(`kubectl get svc neko -n browser`).
+
+:::note The token is a header, and it has to be
+A CDP client first GETs `/json/version`, then opens the `webSocketDebuggerUrl`
+that response hands back. **Chromium generates that URL, and it carries no query
+string** — so a `?token=` would authenticate the discovery request and then fail
+the websocket upgrade, which looks like the browser being down. A header applies
+to both. `@playwright/mcp` sends it with `--cdp-header`; Playwright itself with
+`connectOverCDP(url, { headers })`.
+:::
+
+Raw CDP over the websocket, with flattened sessions, remains the low-level
+fallback — set the same header on the handshake.
 
 Reading pages: **screenshot plus vision beats DOM selectors** on sites that hide
 content in shadow DOM.
 
-## Exposure — the part that differs per installation
+## Exposure — LAN is the base, tailnet is optional
 
 The web view is HTTP plus a websocket and reaches you through Traefik like every
 other UIS service. **WebRTC media cannot use that path** — it needs raw TCP.
 
-neko advertises exactly one `address:port` to the viewer through ICE
-(`NAT1TO1` : `TCPMUX`), and the browser connects to precisely that. So the
-advertised address must be one the *viewer* can reach, which is a property of
-the network, not of the product.
+neko advertises addresses to the viewer through ICE, and the browser connects to
+exactly those. So an advertised address must be one the *viewer* can reach.
 
-Configure it in `.uis.extend/neko-exposure.yaml`:
-
-| Mode | What it does | When |
+| Who | How | Needs |
 |---|---|---|
-| `local` (default) | NodePort `32816`, advertised as `127.0.0.1:32816` | Rancher Desktop — zero config |
-| `tailscale` | tailscale `LoadBalancer`, advertised at your tailnet IP | viewers on a tailnet |
+| agents, other services | in-cluster `neko.browser.svc.cluster.local` | nothing |
+| agents, the test harness | the LAN address, `:9222` with the token | nothing |
+| a human, locally | `http://neko.localhost` or the LAN address | nothing |
+| a human, remotely | the tailnet overlay | Tailscale operator |
+
+**A plain `LoadBalancer` on the node's own address is the base**, and it works on
+every cluster UIS targets — no Tailscale operator, no CNI-specific feature. The
+node's `InternalIP` is discovered at deploy time and always advertised, which is
+why the default needs no configuration.
+
+**The tailnet is an overlay, never a replacement.** Enabling it adds a *second*
+Service for the web view; the LAN path keeps working. In
+`.uis.extend/neko-exposure.yaml`:
 
 ```yaml
-mode: tailscale
-advertise_address: "100.97.5.40"   # the tailnet IP this Service will own
+tailnet_overlay: true
 hostname: "neko"
+extra_advertise_addresses: ["100.97.5.40"]   # for MEDIA over the tailnet
 ```
 
-Cloud exposure is **explicitly out of scope** — not inferred from these two.
+:::warning A remote viewer needs the overlay address advertised too
+The web view works over the tailnet as soon as the overlay exists. **Media does
+not**, until that tailnet address is in `extra_advertise_addresses` — ICE only
+offers what it is told. A tailnet IP cannot be discovered before its
+LoadBalancer exists, so the deploy prints the address and re-running picks it up.
+
+Until then a remote viewer sees the page load and the screen stay black.
+:::
 
 :::warning The advertised port must equal the reachable port
-In `local` mode the NodePort number and `NEKO_WEBRTC_TCPMUX` are deliberately
-the same. A NodePort that renumbered the port would make neko advertise one the
-viewer cannot open — and the symptom is a **black screen with everything
-reporting healthy**: page loads, pod Ready, `/health` 200.
-
-`./uis verify neko` check E asserts these agree.
+The Service port and `NEKO_WEBRTC_TCPMUX` are deliberately the same number. A
+Service that renumbered it would make neko advertise a port the viewer cannot
+open — and the symptom is a **black screen with everything reporting healthy**:
+page loads, pod Ready, `/health` 200. Check E asserts they agree.
 :::
 
 ## Verifying
@@ -159,6 +194,7 @@ reporting healthy**: page loads, pod Ready, `/health` 200.
 | **C** | **DevTools policy override live, and CDP lists page targets** | **the invisible one** |
 | D | Profile volume bound and writable | logins can persist |
 | E | Advertised WebRTC port equals the reachable port | media path consistent |
+| **F** | **Anonymous and wrong-token CDP requests get 401** | **the guard** |
 
 **C is why the playbook exists.** Upstream neko ships
 `DeveloperToolsAvailability: 2` in its Chromium policy, under which
@@ -181,9 +217,13 @@ check E), and that nothing between you and the cluster blocks that TCP port.
 Confirm with check C; if the ConfigMap was edited, the pod must restart to
 reload the policy.
 
-**CDP refuses to connect at all.** The `cdp` socat sidecar, not the browser.
-Chromium binds its debug port to `127.0.0.1` and refuses non-local binds, so
-that sidecar is what exposes it:
+**CDP returns 401.** The token is missing or wrong, and it must be the
+`X-Neko-Token` **header** — a query parameter authenticates discovery and then
+fails the upgrade.
+
+**CDP refuses to connect at all.** The `cdp` sidecar, not the browser. Chromium
+binds its debug port to `127.0.0.1` and refuses non-local binds, so that sidecar
+both re-exposes it and enforces the token:
 
 ```bash
 kubectl get pod -n browser -l app=neko \

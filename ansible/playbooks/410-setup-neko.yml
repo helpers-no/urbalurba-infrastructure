@@ -43,36 +43,50 @@
 
     - name: "3. Apply defaults for anything unset"
       ansible.builtin.set_fact:
-        neko_mode: "{{ _exp.mode | default('local') }}"
         neko_tcpmux: "{{ _exp.tcpmux_port | default(default_tcpmux_port) }}"
-        neko_advertise: "{{ _exp.advertise_address | default('127.0.0.1') }}"
+        neko_tailnet: "{{ _exp.tailnet_overlay | default(false) | bool }}"
         neko_ts_hostname: "{{ _exp.hostname | default('neko') }}"
+        neko_extra_addresses: "{{ _exp.extra_advertise_addresses | default([]) }}"
 
-    - name: "4. Reject an exposure mode we do not implement"
-      ansible.builtin.assert:
-        that: neko_mode in ['local', 'tailscale']
-        fail_msg: >-
-          .uis.extend/neko-exposure.yaml has mode: '{{ neko_mode }}'.
-          Supported: 'local' (NodePort on 127.0.0.1, the zero-config default) or
-          'tailscale' (LoadBalancer via the Tailscale operator). Cloud exposure
-          is explicitly out of scope — it is not inferred from these two.
-        success_msg: "Exposure mode: {{ neko_mode }}"
+    - name: "4. Discover the node's LAN address"
+      # THE PORTABLE BASE. neko hands the viewer's browser one or more addresses
+      # through ICE and the browser connects to exactly those, so the address has
+      # to be one a viewer can actually reach. The node's InternalIP is that
+      # address on every cluster UIS targets, and it is discoverable — so the
+      # zero-config default is correct rather than merely convenient.
+      #
+      # Not 127.0.0.1: that only works for a viewer sitting on the node itself,
+      # and it would silently exclude every other device on the LAN.
+      kubernetes.core.k8s_info:
+        kind: Node
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _nodes
 
-    - name: "5. tailscale mode requires an address that cannot be discovered"
-      # The tailnet IP is not knowable before the LoadBalancer exists, so it has
-      # to be declared. Failing here beats a black screen later.
+    - name: "5. Resolve the addresses ICE will advertise"
+      ansible.builtin.set_fact:
+        _node_ip: >-
+          {{ (_nodes.resources | default([]) | map(attribute='status.addresses') | flatten
+              | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address')
+              | list | first) | default('', true) }}
+
+    - name: "5b. Fail if no node address could be found"
       ansible.builtin.assert:
-        that:
-          - _exp.advertise_address is defined
-          - _exp.advertise_address | length > 0
-          - _exp.advertise_address != '127.0.0.1'
+        that: _node_ip | length > 0
         fail_msg: >-
-          mode: tailscale needs `advertise_address` set to the tailnet IP this
-          Service will own. neko advertises that address to the viewer's browser
-          through ICE; with 127.0.0.1 the viewer would try to reach itself, the
-          page would load, /health would be 200 and the screen would stay black.
-        success_msg: "Advertising WebRTC media at {{ neko_advertise }}"
-      when: neko_mode == 'tailscale'
+          Could not read an InternalIP from any node, so there is no address to
+          advertise for WebRTC media. Without it the web view would load and the
+          screen would stay black. Set `extra_advertise_addresses` in
+          .uis.extend/neko-exposure.yaml explicitly, or check `kubectl get nodes -o wide`.
+        success_msg: "Advertising WebRTC media at {{ _node_ip }} (node InternalIP)."
+
+    - name: "5c. Build the advertise list"
+      # A LIST, not a single value: neko's webrtc.nat1to1 is a StringSlice, so
+      # LAN and tailnet addresses can be advertised together and ICE picks a
+      # working path. That is what makes the tailnet an OVERLAY rather than a
+      # replacement — adding it does not remove LAN reachability.
+      ansible.builtin.set_fact:
+        neko_advertise_list: "{{ ([_node_ip] + (neko_extra_addresses | default([]))) | unique }}"
 
     - name: "6. Ensure the namespace exists"
       kubernetes.core.k8s:
@@ -92,7 +106,7 @@
       ansible.builtin.shell: >
         kubectl get secret urbalurba-secrets -n {{ browser_namespace }}
         --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
-        -o jsonpath="{.data.NEKO_MEMBER_MULTIUSER_USER_PASSWORD}"
+        -o jsonpath="{.data.NEKO_MEMBER_MULTIUSER_USER_PASSWORD}{\" \"}{.data.NEKO_CDP_TOKEN}"
       register: _pw
       changed_when: false
       failed_when: false
@@ -101,11 +115,15 @@
     - name: "8. Fail with the fix, not the symptom"
       ansible.builtin.fail:
         msg: >-
-          No NEKO_MEMBER_MULTIUSER_USER_PASSWORD in
-          {{ browser_namespace }}/urbalurba-secrets. Run `./uis secrets apply`
-          first — the secrets pipeline creates the namespace's secret from the
-          templates. Without it neko starts and rejects every login.
-      when: _pw.stdout | default('') | length == 0
+          {{ browser_namespace }}/urbalurba-secrets is missing
+          NEKO_MEMBER_MULTIUSER_USER_PASSWORD and/or NEKO_CDP_TOKEN. Run
+          `./uis secrets apply` first — the secrets pipeline creates the
+          namespace's secret from the templates.
+          Without the password neko starts and rejects every login; without the
+          CDP token the `cdp` proxy container cannot start at all, which is
+          deliberate — an unguarded CDP port on the LAN is full browser control
+          for anyone who can reach it.
+      when: (_pw.stdout | default('') | trim | split(' ') | select() | list | length) < 2
 
     - name: "9. Apply the ConfigMap, PVC, Deployment and Services"
       kubernetes.core.k8s:
@@ -136,8 +154,10 @@
                     env:
                       - name: NEKO_WEBRTC_TCPMUX
                         value: "{{ neko_tcpmux }}"
+                      # Comma-separated: webrtc.nat1to1 is a StringSlice, so
+                      # LAN and any overlay address are advertised together.
                       - name: NEKO_WEBRTC_NAT1TO1
-                        value: "{{ neko_advertise }}"
+                        value: "{{ neko_advertise_list | join(',') }}"
                       - name: NEKO_WEBRTC_ICELITE
                         value: "true"
                       - name: NEKO_DESKTOP_SCREEN
@@ -150,68 +170,68 @@
                       - containerPort: "{{ neko_tcpmux | int }}"
                         name: tcpmux
 
-    - name: "11. Replace the media Service for tailscale mode"
-      # A tailnet LoadBalancer instead of a NodePort. Deleted and recreated
-      # rather than patched: type and loadBalancerClass are not freely mutable.
-      when: neko_mode == 'tailscale'
-      block:
-        - name: "11a. Remove the NodePort media Service"
-          kubernetes.core.k8s:
-            state: absent
-            kind: Service
-            name: neko-webrtc
-            namespace: "{{ browser_namespace }}"
-            kubeconfig: "{{ merged_kubeconf_file }}"
-            context: "{{ _target }}"
-            wait: true
-            wait_timeout: 120
-
-        - name: "11b. Create the tailnet media Service"
-          kubernetes.core.k8s:
-            state: present
-            kubeconfig: "{{ merged_kubeconf_file }}"
-            context: "{{ _target }}"
-            definition:
-              apiVersion: v1
-              kind: Service
-              metadata:
-                name: neko-webrtc
-                namespace: "{{ browser_namespace }}"
-                labels: { app: neko, role: webrtc }
-                annotations:
-                  tailscale.com/hostname: "{{ neko_ts_hostname }}"
-              spec:
-                type: LoadBalancer
-                loadBalancerClass: tailscale
-                selector: { app: neko }
-                ports:
-                  - name: http
-                    port: 80
-                    targetPort: 8080
-                    protocol: TCP
-                  - name: tcpmux
-                    port: "{{ neko_tcpmux | int }}"
-                    targetPort: "{{ neko_tcpmux | int }}"
-                    protocol: TCP
-
-    - name: "12. Patch the NodePort to match the advertised port"
-      # Only in local mode, and only because they must be equal — see task 10.
-      when: neko_mode == 'local'
+    - name: "11. Add the tailnet overlay, if this installation has the operator"
+      # AN OVERLAY, NOT A REPLACEMENT. A SECOND Service alongside the LAN one,
+      # so enabling it never removes LAN reachability — the base must keep
+      # working on clusters with no Tailscale operator, which includes the test
+      # cluster.
+      #
+      # The web view is what this is for: the human reaching neko remotely. It is
+      # password-gated by neko itself, so both paths are safe.
+      #
+      # ⚠️ CDP (9222) IS DELIBERATELY NOT ON THIS SERVICE. Adding it would put
+      # token-gated-but-remote full browser control on the tailnet; the token is
+      # the guard, and the fewer places it is reachable the better.
+      when: neko_tailnet | bool
       kubernetes.core.k8s:
-        state: patched
-        kind: Service
-        name: neko-webrtc
-        namespace: "{{ browser_namespace }}"
+        state: present
         kubeconfig: "{{ merged_kubeconf_file }}"
         context: "{{ _target }}"
         definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: neko-tailnet
+            namespace: "{{ browser_namespace }}"
+            labels: { app: neko, role: tailnet-overlay }
+            annotations:
+              tailscale.com/hostname: "{{ neko_ts_hostname }}"
           spec:
+            type: LoadBalancer
+            loadBalancerClass: tailscale
+            selector: { app: neko }
             ports:
+              - name: http
+                port: 80
+                targetPort: 8080
+                protocol: TCP
               - name: tcpmux
                 port: "{{ neko_tcpmux | int }}"
                 targetPort: "{{ neko_tcpmux | int }}"
-                nodePort: "{{ neko_tcpmux | int }}"
                 protocol: TCP
+
+    - name: "12. Remind that the overlay address must be advertised too"
+      # Media follows ICE, not the HTTP route. A viewer arriving over the tailnet
+      # gets the web view from the overlay and then tries to reach media at an
+      # advertised address — so the tailnet IP has to be in that list, and it
+      # cannot be discovered before the LoadBalancer exists.
+      ansible.builtin.debug:
+        msg: |
+          ⚠️ Tailnet overlay created as Service/neko-tailnet.
+
+          The web view will work over the tailnet immediately. WEBRTC MEDIA WILL
+          NOT until the tailnet address is also advertised — ICE currently offers
+          {{ neko_advertise_list | join(', ') }}.
+
+          Find the address, then add it to .uis.extend/neko-exposure.yaml and
+          re-deploy:
+
+            kubectl get svc neko-tailnet -n {{ browser_namespace }}
+            # extra_advertise_addresses: ["100.x.y.z"]
+
+          Until then a remote viewer sees the page load and the screen stay
+          black, which is the failure this warning exists to pre-empt.
+      when: neko_tailnet | bool
 
     - name: "13. Apply the IngressRoute for the web view"
       kubernetes.core.k8s:
@@ -277,45 +297,75 @@
           policy forbids it; neko needs that capability for its desktop stack.
         success_msg: "neko is Ready (browser + CDP sidecar)."
 
-    - name: "18. Deployment summary — read the security model"
+    - name: "20. Read the LoadBalancer address"
+      kubernetes.core.k8s_info:
+        kind: Service
+        namespace: "{{ browser_namespace }}"
+        name: neko
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _svc
+      failed_when: false
+
+    - name: "21. Deployment summary — read the security model"
       ansible.builtin.debug:
         msg: |
           ===============================================
           NEKO READY — the shared human+agent browser
           ===============================================
 
-          Image:      {{ neko_image }} (pinned)
-          Namespace:  {{ browser_namespace }}
-          Web view:   http://neko.localhost      (the HUMAN's door)
-          CDP:        neko.{{ browser_namespace }}.svc.cluster.local:9222
-                                                 (the AGENT's door)
-          Profile:    5Gi PVC, persistent — logins survive restarts
-          Exposure:   {{ neko_mode }} — media advertised at {{ neko_advertise }}:{{ neko_tcpmux }}
+          Image:     {{ neko_image }} (pinned)
+          Namespace: {{ browser_namespace }}
+          LAN address: {{ (_svc.resources[0].status.loadBalancer.ingress[0].ip
+                            | default(_svc.resources[0].status.loadBalancer.ingress[0].hostname, true)
+                            | default('<pending>', true)) }}
+          Media advertised at: {{ neko_advertise_list | join(', ') }}:{{ neko_tcpmux }}
+          Tailnet overlay: {{ 'enabled (Service/neko-tailnet)' if neko_tailnet | bool else 'not enabled' }}
 
-          Log in with the password from urbalurba-secrets:
-            kubectl get secret urbalurba-secrets -n {{ browser_namespace }} \
-              -o jsonpath='{.data.NEKO_MEMBER_MULTIUSER_USER_PASSWORD}' | base64 -d
+          TWO DOORS INTO ONE BROWSER
+
+          1. The HUMAN — the web view, password-gated by neko:
+                 http://neko.localhost          (through Traefik)
+                 http://<LAN address>           (directly)
+             Password:
+               kubectl get secret urbalurba-secrets -n {{ browser_namespace }} \
+                 -o jsonpath='{.data.NEKO_MEMBER_MULTIUSER_USER_PASSWORD}' | base64 -d
+
+          2. The AGENT — CDP on :9222, TOKEN-GATED. In-cluster or over the LAN:
+                 neko.{{ browser_namespace }}.svc.cluster.local:9222
+                 <LAN address>:9222
+
+             The token goes in a HEADER, not a query string:
+                 X-Neko-Token: <token>
+               kubectl get secret urbalurba-secrets -n {{ browser_namespace }} \
+                 -o jsonpath='{.data.NEKO_CDP_TOKEN}' | base64 -d
+
+             With @playwright/mcp:
+                 npx -y @playwright/mcp \
+                   --cdp-endpoint "http://<LAN address>:9222" \
+                   --cdp-header "X-Neko-Token: <token>"
 
           ⚠️ SECURITY — this service is different from the others
 
-          1. CDP IS UNAUTHENTICATED FULL BROWSER CONTROL, cookies included.
-             Anything that can reach port 9222 acts as whoever this browser is
-             logged in as. There is no token to add. It is safe only while the
-             Service stays private — never route 9222 through an ingress, a
-             tunnel or a LAN NodePort.
+          1. CDP IS FULL BROWSER CONTROL, cookies included. Anything that
+             presents the token acts as whoever this browser is logged in as.
+             THE TOKEN IS THE ONLY GUARD — this Service is reachable on the LAN
+             by design, so that agents, other services and the test harness can
+             reach it without a Tailscale operator. Treat the token like the
+             logins themselves. An anonymous request gets 401; confirm with
+             `./uis verify neko`.
 
           2. THE PROFILE VOLUME IS A LIVE CREDENTIAL STORE. Blast radius is
-             everything you log into. It is deliberately NOT backed up: a backup
-             is a second copy of the blast radius, and re-login is cheap.
-             Kill switch — delete the PVC and every session is gone:
+             everything you log into. Deliberately NOT backed up — a backup is a
+             second copy of the blast radius, and re-login is cheap.
+             Kill switch:
                kubectl delete pvc neko-profile -n {{ browser_namespace }}
 
           3. NEVER RUN AN AGENT TASK WHILE TYPING A PASSWORD. The human logs
-             in; THEN the agent acts. An agent driving mid-login can submit,
-             navigate away, or capture the field.
+             in; THEN the agent acts.
 
-          4. SINGLE WRITER. One shared session — two drivers on one login
-             collide. Parallel stateless work belongs on browserless.
+          4. SINGLE WRITER. Two drivers on one login collide. Parallel
+             stateless work belongs on browserless.
 
           Which browser did you want?
             many blank browsers in parallel  -> browserless

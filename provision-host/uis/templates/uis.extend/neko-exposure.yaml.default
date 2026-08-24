@@ -1,50 +1,52 @@
 # .uis.extend/neko-exposure.yaml
 #
-# HOW THIS INSTALLATION EXPOSES NEKO'S WEBRTC MEDIA.
+# HOW THIS INSTALLATION EXPOSES NEKO.
 #
-# Per-installation config, not product config — the same way
-# prometheus-targets.yaml holds this installation's scrape targets. UIS ships
-# neko; where its video can be reached from depends on the network it is in.
+# ⚠️ YOU DO NOT NEED TO EDIT THIS FILE. Every value below is optional and the
+# defaults work on any cluster. It exists for the one thing that cannot be
+# discovered: a remote overlay address.
 #
-# WHY THIS FILE EXISTS AT ALL
+# THE MODEL
 #
-# neko's web view is plain HTTP + websocket and reaches users through Traefik
-# like everything else. Its *media* cannot: WebRTC needs raw TCP, and neko
-# advertises a single address:port pair to the browser through ICE
-# (NEKO_WEBRTC_NAT1TO1 : NEKO_WEBRTC_TCPMUX). The browser then connects to
-# exactly that. So the advertised address must be one the VIEWER can reach —
-# which is a property of the installation, not of the product.
+#   LAN is the base.  A plain LoadBalancer on the node's own address. Works on
+#                     Rancher Desktop, on Proxmox, in the cloud — no Tailscale
+#                     operator, no CNI-specific feature. Agents, other services
+#                     and the test harness all reach neko this way.
+#   Tailnet is an     Added only where the Tailscale operator exists. It never
+#   overlay.          replaces the LAN path, so the service keeps working
+#                     without it.
+#
+# WHY THE ADDRESS MATTERS AT ALL
+#
+# neko's web view is plain HTTP and reaches users through Traefik like anything
+# else. Its *media* cannot: WebRTC needs raw TCP, and neko advertises addresses
+# to the viewer through ICE. The browser then connects to exactly those. So an
+# advertised address must be one the VIEWER can reach.
 #
 # Get it wrong and the failure is quiet: the page loads, the pod is Ready,
-# /health is 200, and the screen stays black forever.
+# /health is 200, and the screen stays black.
 #
-# THE DEFAULT NEEDS NO EDITING on Rancher Desktop.
-#
-# mode: local
-#   A NodePort on 32816, advertised as 127.0.0.1:32816. Rancher Desktop maps a
-#   NodePort straight onto localhost, so this works with zero configuration.
-#   The port number is deliberately identical on both sides — see below.
-#
-# mode: tailscale
-#   For a cluster with the Tailscale operator (the reference installation).
-#   The Service becomes a tailscale LoadBalancer and the media is advertised at
-#   the tailnet address. Use this when viewers are on the tailnet rather than on
-#   the machine running the cluster.
-#
-#   ⚠️ advertise_address must be the tailnet IP the Service ends up owning. It
-#   cannot be discovered before the LoadBalancer exists, so it is stated here.
-#   Set it, deploy, and confirm with `./uis verify neko`.
+# The node's InternalIP is discovered automatically and always advertised, which
+# is why the default needs no editing.
 
-mode: local
-
-# --- only read when mode: tailscale ---
-# advertise_address: "100.97.5.40"
+# --- optional: the tailnet overlay ---
+# Adds a SECOND Service via the Tailscale operator for the web view, so a human
+# can reach neko remotely. The web view is password-gated by neko itself, so
+# both paths are safe.
+# ⚠️ CDP is deliberately NOT put on the overlay — the token is its guard, and
+# the fewer places it is reachable, the better.
+# tailnet_overlay: false
 # hostname: "neko"
 
-# --- advanced, both modes ---
-# The port neko listens on for muxed WebRTC TCP, AND the port it advertises.
-# ⚠️ These are the same number by necessity. A NodePort that renumbered the
-# port would advertise a port the viewer cannot reach, and the symptom would be
-# a black screen with everything reporting healthy. If you change this, keep it
-# inside the cluster's NodePort range (30000-32767 by default).
+# --- optional: extra addresses to advertise for MEDIA ---
+# Only needed for viewers arriving over an overlay. A tailnet IP cannot be
+# discovered before its LoadBalancer exists, so it has to be stated here — the
+# deploy prints the address to use and re-running picks it up.
+# Without this, a remote viewer gets the page and a black screen.
+# extra_advertise_addresses: ["100.97.5.40"]
+
+# --- advanced ---
+# The port neko listens on for muxed WebRTC TCP, and advertises. These are the
+# same number by necessity: ICE offers the port neko listens on, so a Service
+# that renumbered it would advertise a port the viewer cannot open.
 # tcpmux_port: 32816
