@@ -166,6 +166,25 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "neko",
+    "name": "Neko",
+    "description": "Shared browser a human and an agent drive together, with a persistent login",
+    "category": "AUTOMATION",
+    "tags": ["automation", "browser", "chromium", "cdp", "webrtc", "remote-desktop", "agent", "mcp"],
+    "abstract": "One browser that a human and an agent share, keeping its logins between sessions",
+    "logo": "neko-logo.svg",
+    "website": "https://neko.m1k1o.net/"
+    ,"summary": "neko runs a single real Chromium desktop that two kinds of driver share: a human watching it over WebRTC in a browser tab, and an agent driving the same tabs over CDP. Because the profile is persistent, a human can log in by hand once - including through 2FA - and an agent can then act as that logged-in user without ever holding the password. That is the opposite trade to browserless, which gives many blank throwaway browsers in parallel and no identity at all. Reach for neko only when a task needs the humans own session; reach for browserless for everything else, because neko is a single shared session and two drivers on one login collide."
+    ,"docs": "/docs/services/automation/neko"
+    ,"playbook": "410-setup-neko.yml"
+    ,"priority": 95
+    ,"checkCommand": "kubectl get pods -n browser -l app=neko --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "410-remove-neko.yml"
+    ,"namespace": "browser"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "elasticsearch",
     "name": "Elasticsearch",
     "description": "Distributed search and analytics engine",

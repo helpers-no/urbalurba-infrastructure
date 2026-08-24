@@ -206,3 +206,20 @@ When updating these, consider updating both projects for consistency.
   ⚠️ Note for future logos: when a project only publishes a wordmark, take the
   mark out of it rather than shrinking the whole lockup — at the 64px the service
   cards render, a wordmark's text is illegible and reads as a smudge.
+
+- **Official GitHub (mark unmodified, background added)**: neko —
+  `client/src/assets/images/logo.svg` from
+  [m1k1o/neko](https://github.com/m1k1o/neko). Simple Icons does not carry neko.
+  The path data is upstream's, untouched.
+
+  ⚠️ **A background rect was added by us, and the reason matters.** neko ships
+  exactly one mark, a single path filled `#FFFFFF`, and defines **no** brand
+  background colour — their `logo.png` is transparent too, so there was nothing
+  to sample. A white mark is invisible on the service cards, which render on a
+  light surface.
+
+  Given the choice between recolouring the mark (changing the brand asset) and
+  presenting it the way the project itself does (white on dark), the background
+  is the smaller change: the mark stays byte-identical and only the surface
+  under it is ours. `#1c1c1e` is a neutral near-black chosen by us — it is
+  **not** a neko brand colour, and if the project ever publishes one, replace it.

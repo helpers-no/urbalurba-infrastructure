@@ -1,0 +1,137 @@
+---
+# 410-remove-neko.yml
+# Remove neko from the cluster.
+#
+# ⚠️ UNLIKE browserless, NEKO IS NOT STATELESS. Its profile PVC holds live
+# logins. This playbook deletes the workload and KEEPS the volume, so a
+# redeploy comes back logged in.
+#
+# To destroy the sessions too — the kill switch — delete the PVC explicitly:
+#   kubectl delete pvc neko-profile -n browser
+#
+# That asymmetry is deliberate: an accidental `undeploy` should not silently log
+# you out of everything, and a deliberate credential wipe should be an explicit
+# act rather than a side effect.
+#
+# Usage:
+#   ansible-playbook 410-remove-neko.yml -e "target_host=rancher-desktop"
+
+- name: Remove neko from Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    browser_namespace: "browser"
+
+  tasks:
+    - name: "1. Remove the IngressRoute"
+      kubernetes.core.k8s:
+        state: absent
+        api_version: traefik.io/v1alpha1
+        kind: IngressRoute
+        namespace: "{{ browser_namespace }}"
+        name: neko
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      failed_when: false
+
+    - name: "2. Remove both Services"
+      kubernetes.core.k8s:
+        state: absent
+        kind: Service
+        namespace: "{{ browser_namespace }}"
+        name: "{{ item }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      loop: [neko, neko-webrtc, neko-tailnet]
+      failed_when: false
+
+    - name: "3. Remove the Deployment"
+      # Background propagation so the ReplicaSet and pods go with it. Deleting a
+      # workload through the API without a propagation policy can orphan what it
+      # owns — that exact mistake made browserless' undeploy fail on 2026-08-24.
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ browser_namespace }}"
+        name: neko
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+        wait: true
+        wait_timeout: 180
+        delete_options:
+          propagationPolicy: Background
+      failed_when: false
+
+    - name: "4. Remove the config maps"
+      kubernetes.core.k8s:
+        state: absent
+        kind: ConfigMap
+        namespace: "{{ browser_namespace }}"
+        name: "{{ item }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      loop: [neko-chromium-conf, neko-cdp-proxy]
+      failed_when: false
+
+    - name: "5. Confirm the pods are actually gone"
+      # Check the cluster, not the task results. A remove playbook that reports
+      # success while a pod still runs is a defect this repo has shipped before.
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ browser_namespace }}"
+        label_selectors: ["app=neko"]
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: remaining
+      until: remaining.resources | default([]) | length == 0
+      retries: 24
+      delay: 5
+      failed_when: false
+
+    - name: "6. Report anything left behind"
+      ansible.builtin.assert:
+        that: (remaining.resources | default([]) | length) == 0
+        fail_msg: >-
+          neko pods are still present after removal:
+          {{ remaining.resources | default([]) | map(attribute='metadata.name') | list }}.
+          The Deployment was deleted, so check for a stuck finalizer or a pod
+          still holding the profile volume:
+          kubectl describe pod -n {{ browser_namespace }} -l app=neko
+        success_msg: "All neko pods are gone."
+
+    - name: "7. Confirm the profile volume was KEPT"
+      # Asserted, not assumed. If this ever starts deleting the PVC, someone
+      # loses every logged-in session and finds out at the next login prompt.
+      kubernetes.core.k8s_info:
+        kind: PersistentVolumeClaim
+        namespace: "{{ browser_namespace }}"
+        name: neko-profile
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _pvc
+      failed_when: false
+
+    - name: "8. Removal summary"
+      ansible.builtin.debug:
+        msg: |
+          neko removed.
+
+          Removed:   Deployment, Services (LAN + any tailnet overlay),
+                     IngressRoute, chromium + CDP-proxy ConfigMaps.
+          PRESERVED: the neko-profile PVC{{ ' (present)' if (_pvc.resources | default([]) | length) > 0 else ' — NOT FOUND, so sessions are already gone' }}.
+
+          Your logins are still on that volume. `./uis deploy neko` brings the
+          browser back still logged in.
+
+          To destroy the sessions — the kill switch:
+            kubectl delete pvc neko-profile -n {{ browser_namespace }}
+
+          ⚠️ Anything that was DRIVING this browser is now broken, not
+          repointed. An agent with an MCP server pointed at
+          neko.{{ browser_namespace }}.svc.cluster.local:9222 will fail to
+          connect rather than report that its browser is gone.

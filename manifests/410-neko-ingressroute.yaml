@@ -1,0 +1,38 @@
+# 410-neko-ingressroute.yaml
+#
+# The HUMAN's door into neko: the WebRTC web view over HTTP + websocket.
+#
+# ⚠️ THE WEB VIEW ONLY. WebRTC *media* does not ride this route — it needs raw
+# TCP and goes through the separate `neko-webrtc` Service. If the page loads but
+# the screen stays black, the media path is what is broken, not this.
+#
+# ⚠️ CDP (9222) IS DELIBERATELY NOT ROUTED HERE, and must never be added.
+# It is unauthenticated full browser control including cookies. Reaching it
+# means being logged in as whoever the browser is logged in as. Agents reach it
+# in-cluster at neko.browser.svc.cluster.local:9222.
+#
+# Internal only, like every other UIS service: HostRegexp matches
+# neko.localhost and any other host that resolves here, so no per-installation
+# hostname is baked in.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: neko
+  namespace: browser
+  labels:
+    app: neko
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: HostRegexp(`neko\..+`)
+      kind: Rule
+      services:
+        - name: neko
+          port: 80
+          # neko's web view is a long-lived websocket; without sticky routing a
+          # future replica count above 1 would break sessions. Recorded now
+          # because the single-writer profile makes >1 wrong anyway.
+          sticky:
+            cookie:
+              name: neko_session
