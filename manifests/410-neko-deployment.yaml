@@ -156,9 +156,32 @@ data:
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        # chromium validates the Host header on the debug endpoint; passing the
-        # client's would be rejected even with --remote-allow-origins=*.
+
+        # chromium validates the Host header on its debug endpoint (DNS-rebinding
+        # protection) and rejects anything else, so we must send 127.0.0.1:9223.
         proxy_set_header Host 127.0.0.1:9223;
+
+        # ⚠️ ...WHICH MEANS CHROMIUM ADVERTISES ITSELF AS 127.0.0.1:9223.
+        #
+        # A CDP client GETs /json/version, reads "webSocketDebuggerUrl":
+        # "ws://127.0.0.1:9223/devtools/browser/<id>", and then dials that — ON
+        # ITS OWN MACHINE, where nothing is listening. Discovery returns 200 and
+        # the session never opens: green, then silence. Found by the independent
+        # tester (2026-08-24) with a real Playwright client.
+        #
+        # So the advertised host is rewritten back through this proxy. $http_host
+        # is whatever the client used to reach us — in-cluster Service name, LAN
+        # address, or port-forward — so the URL it gets back is always one it can
+        # actually dial.
+        #
+        # Accept-Encoding is cleared because sub_filter cannot rewrite a
+        # compressed body; without it the rewrite silently does nothing.
+        proxy_set_header Accept-Encoding "";
+        sub_filter "ws://127.0.0.1:9223" "ws://$http_host";
+        sub_filter "127.0.0.1:9223" "$http_host";
+        sub_filter_types application/json;
+        sub_filter_once off;
+
         # CDP sessions are long-lived and mostly idle between commands.
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
@@ -367,10 +390,16 @@ spec:
   selector:
     app: neko
   ports:
-    - name: http
-      port: 80
-      targetPort: 8080
-      protocol: TCP
+    # ⚠️ NO http/80 HERE, deliberately. Traefik's own svclb already binds
+    # hostPort 80 on a single-node cluster, so asking for it leaves svclb-neko
+    # Pending ("didn't have free ports") forever — and because all of a
+    # Service's ports share one svclb pod, that collision takes 9222 and tcpmux
+    # down with it. The whole LAN base fails on a port nothing needed.
+    #
+    # The web view does not need it: it already reaches users through the
+    # IngressRoute on Traefik (neko.localhost), which is the same path every
+    # other UIS service uses. Found by the independent tester (2026-08-24) on
+    # Rancher Desktop; it applies to any single-node k3s with Traefik.
     - name: cdp
       port: 9222
       targetPort: 9222

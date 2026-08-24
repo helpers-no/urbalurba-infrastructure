@@ -147,13 +147,22 @@ exactly those. So an advertised address must be one the *viewer* can reach.
 |---|---|---|
 | agents, other services | in-cluster `neko.browser.svc.cluster.local` | nothing |
 | agents, the test harness | the LAN address, `:9222` with the token | nothing |
-| a human, locally | `http://neko.localhost` or the LAN address | nothing |
+| a human, locally | `http://neko.localhost` (through Traefik) | nothing |
 | a human, remotely | the tailnet overlay | Tailscale operator |
 
 **A plain `LoadBalancer` on the node's own address is the base**, and it works on
 every cluster UIS targets — no Tailscale operator, no CNI-specific feature. The
 node's `InternalIP` is discovered at deploy time and always advertised, which is
 why the default needs no configuration.
+
+:::note The LoadBalancer carries CDP and media, not the web view
+It deliberately does **not** ask for port 80. On a single-node cluster Traefik's
+own `svclb` already binds host port 80, so requesting it leaves the
+LoadBalancer `Pending` forever — and because all of a Service's ports share one
+`svclb` pod, that collision would take **CDP and media down with it**. The web
+view does not need it: it reaches users through the IngressRoute, like every
+other UIS service.
+:::
 
 **The tailnet is an overlay, never a replacement.** Enabling it adds a *second*
 Service for the web view; the LAN path keeps working. In

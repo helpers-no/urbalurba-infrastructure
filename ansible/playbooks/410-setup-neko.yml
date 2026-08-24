@@ -164,11 +164,7 @@
                         value: "1280x800@30"
                       - name: NEKO_MEMBER_PROVIDER
                         value: "multiuser"
-                    ports:
-                      - containerPort: 8080
-                        name: http
-                      - containerPort: "{{ neko_tcpmux | int }}"
-                        name: tcpmux
+                    ports: "{{ _neko_container_ports }}"
 
     - name: "11. Add the tailnet overlay, if this installation has the operator"
       # AN OVERLAY, NOT A REPLACEMENT. A SECOND Service alongside the LAN one,
@@ -200,15 +196,7 @@
             type: LoadBalancer
             loadBalancerClass: tailscale
             selector: { app: neko }
-            ports:
-              - name: http
-                port: 80
-                targetPort: 8080
-                protocol: TCP
-              - name: tcpmux
-                port: "{{ neko_tcpmux | int }}"
-                targetPort: "{{ neko_tcpmux | int }}"
-                protocol: TCP
+            ports: "{{ _neko_overlay_ports }}"
 
     - name: "12. Remind that the overlay address must be advertised too"
       # Media follows ICE, not the HTTP route. A viewer arriving over the tailnet
