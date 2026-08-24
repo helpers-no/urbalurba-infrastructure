@@ -60,6 +60,35 @@
         wait_timeout: 120
       failed_when: false
 
+    - name: "3b. Remove the session-verify Job and its script"
+      # `./uis browserless verify-session` creates these. They belong to
+      # browserless, so removing browserless must remove them — otherwise the
+      # Job's pods linger for its ttlSecondsAfterFinished (10 minutes), and
+      # since they carry app=browserless the check below counts them as
+      # unexplained survivors and fails.
+      #
+      # Background propagation so the Job takes its pods with it; deleting a Job
+      # without it orphans them, which is what produced the failure the tester
+      # hit on 2026-08-24.
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        namespace: "{{ browser_namespace }}"
+        name: browserless-session-test
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+        wait: true
+        wait_timeout: 120
+        delete_options:
+          propagationPolicy: Background
+      loop:
+        - { api: "batch/v1", kind: "Job" }
+        - { api: "v1", kind: "ConfigMap" }
+      loop_control:
+        label: "{{ item.kind }}/browserless-session-test"
+      failed_when: false
+
     - name: "4. Confirm the pods are actually gone"
       # Not a formality. A remove playbook that reports success while a pod is
       # still running is a defect this repo has shipped before — check the
@@ -83,8 +112,14 @@
         fail_msg: >-
           browserless pods are still present after removal:
           {{ remaining.resources | default([]) | map(attribute='metadata.name') | list }}.
-          The Deployment was deleted, so these are orphans — check for a second
-          ReplicaSet or a stuck finalizer.
+          The Deployment was deleted, so these are unexplained survivors.
+          Check, in this order:
+          (1) pods labelled role=verify — the session-verify Job's pods also
+              carry app=browserless, and if a Job was deleted without cascading
+              they outlive their owner:
+              kubectl get pods -n {{ browser_namespace }} -l role=verify
+          (2) a second ReplicaSet;
+          (3) a stuck finalizer.
         success_msg: "All browserless pods are gone."
 
     - name: "6. Removal summary"
@@ -92,7 +127,8 @@
         msg: |
           browserless removed.
 
-          Removed: Deployment, Service, IngressRoute.
+          Removed: Deployment, Service, IngressRoute, and the session-verify
+          Job + ConfigMap if a `verify-session` run had left them.
           Nothing preserved — the service is stateless by design.
 
           ⚠️ Anything that was USING it is now broken, not repointed. An Uptime
