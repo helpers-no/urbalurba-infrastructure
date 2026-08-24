@@ -38,7 +38,10 @@
 #                                   commands. No error — agent control simply
 #                                   does nothing.
 #   --remote-debugging-port=9223    chromium refuses to bind CDP to a non-local
-#   + socat sidecar on 9222         address, so the sidecar re-exposes it.
+#   + `cdp` sidecar on 9222         address, so a sidecar re-exposes it. UIS uses
+#                                   an nginx AUTH PROXY where the reference
+#                                   installation used plain socat — see the
+#                                   security note on that container.
 #   /health on 8080                 the v3 health endpoint. /api/health is 404.
 #   strategy: Recreate + fsGroup    one profile volume; never two pods on it.
 ---

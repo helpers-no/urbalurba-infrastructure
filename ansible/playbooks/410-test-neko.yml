@@ -5,9 +5,9 @@
 # WHAT THIS ASSERTS, AND WHY EACH ONE EARNS ITS PLACE
 #
 #   A. The web view serves          — the human's door answers
-#   B. CDP answers through the      — the agent's door answers, via the socat
-#      Service                        sidecar and the Service, not just inside
-#                                     the pod
+#   B. CDP answers through the      — the agent's door answers, via the `cdp`
+#      Service                        auth-proxy sidecar and the Service, not
+#                                     just inside the pod
 #   C. CDP can ATTACH to a target   — THE LOAD-BEARING CHECK. Upstream ships
 #                                     DeveloperToolsAvailability: 2, which
 #                                     SILENTLY refuses attach. /json/version
@@ -60,7 +60,7 @@
           - (_pods.resources[0].status.containerStatuses | default([]) | length) == 2
           - (_pods.resources[0].status.containerStatuses | default([]) | selectattr('ready') | list | length) == 2
         fail_msg: >-
-          neko needs BOTH containers ready — `neko` and the `cdp` socat sidecar.
+          neko needs BOTH containers ready — `neko` and the `cdp` nginx auth proxy.
           Ready:
           {{ _pods.resources[0].status.containerStatuses | default([]) | selectattr('ready') | map(attribute='name') | list }}.
           Without the sidecar the web view works and every agent fails to connect.
@@ -245,14 +245,25 @@
 
     # --- E. the media path's advertised values ---
     - name: "E1. Read what ICE will advertise, and what is reachable"
+      # ⚠️ jsonpath, NOT grep. This used line-oriented greps against
+      # pretty-printed JSON: `grep -o '"NEKO_WEBRTC_TCPMUX"[^}]*'` stops at the
+      # end of the line and never reaches the "value" on the NEXT line. Every
+      # variable came back empty, so E2 failed on emptiness rather than on a real
+      # mismatch — and because E aborted the play, F never ran and the guard went
+      # unexercised by the suite. Found by the independent tester (2026-08-24).
+      #
+      # ⚠️ And the Service is named `neko`. It was queried as `neko-webrtc`,
+      # which was the media Service's name before http/80 was dropped and the
+      # ports were merged onto one Service (D4). NotFound returns empty rather
+      # than failing, so the wrong name looked like a missing value.
       ansible.builtin.shell: |
-        D=$(kubectl get deploy neko -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} -o json)
-        echo "MUX=$(echo "$D" | grep -o '"NEKO_WEBRTC_TCPMUX"[^}]*' | grep -o '"value": *"[0-9]*"' | grep -o '[0-9]*')"
-        echo "NAT=$(echo "$D" | grep -o '"NEKO_WEBRTC_NAT1TO1"[^}]*' | grep -o '"value": *"[^"]*"' | sed 's/.*: *"//;s/"//')"
-        S=$(kubectl get svc neko-webrtc -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} -o json)
-        echo "TYPE=$(echo "$S" | grep -o '"type": *"[^"]*"' | sed 's/.*: *"//;s/"//')"
-        echo "NODEPORT=$(echo "$S" | grep -o '"nodePort": *[0-9]*' | grep -o '[0-9]*')"
-        echo "SVCPORT=$(echo "$S" | grep -o '"port": *[0-9]*' | grep -o '[0-9]*' | head -1)"
+        K="--context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}"
+        echo "MUX=$(kubectl get deploy neko -n {{ ns }} $K -o jsonpath='{.spec.template.spec.containers[?(@.name=="neko")].env[?(@.name=="NEKO_WEBRTC_TCPMUX")].value}')"
+        echo "NAT=$(kubectl get deploy neko -n {{ ns }} $K -o jsonpath='{.spec.template.spec.containers[?(@.name=="neko")].env[?(@.name=="NEKO_WEBRTC_NAT1TO1")].value}')"
+        echo "TYPE=$(kubectl get svc neko -n {{ ns }} $K -o jsonpath='{.spec.type}')"
+        echo "SVCPORT=$(kubectl get svc neko -n {{ ns }} $K -o jsonpath='{.spec.ports[?(@.name=="tcpmux")].port}')"
+        echo "TARGETPORT=$(kubectl get svc neko -n {{ ns }} $K -o jsonpath='{.spec.ports[?(@.name=="tcpmux")].targetPort}')"
+        echo "NODEPORT=$(kubectl get svc neko -n {{ ns }} $K -o jsonpath='{.spec.ports[?(@.name=="tcpmux")].nodePort}')"
       register: _webrtc
       changed_when: false
       failed_when: false
@@ -262,19 +273,29 @@
       # port that is not the one a viewer can open, the page loads, the pod is
       # Ready, /health is 200 — and the screen is black forever. Nothing else in
       # this playbook or in Kubernetes notices.
+      #
+      # Asserts on VALUES, not just on presence: an empty MUX would otherwise
+      # satisfy a "not empty" check the moment the query broke.
       ansible.builtin.assert:
         that:
-          - _webrtc.stdout is search('MUX=[0-9]')
-          - _webrtc.stdout is search('NAT=.+')
-          - (_webrtc.stdout is not search('TYPE=NodePort')) or
-            (_webrtc.stdout | regex_search('MUX=([0-9]+)', '\\1') | first) ==
-            (_webrtc.stdout | regex_search('NODEPORT=([0-9]+)', '\\1') | first)
+          - _webrtc.stdout is search('MUX=[0-9]+')
+          - _webrtc.stdout is search('NAT=[0-9]')
+          - (_webrtc.stdout | regex_search('MUX=([0-9]+)', '\\1') | first) ==
+            (_webrtc.stdout | regex_search('SVCPORT=([0-9]+)', '\\1') | first)
+          - (_webrtc.stdout | regex_search('MUX=([0-9]+)', '\\1') | first) ==
+            (_webrtc.stdout | regex_search('TARGETPORT=([0-9]+)', '\\1') | first)
+          - _webrtc.stdout is not search('NAT=127\\.0\\.0\\.1')
         fail_msg: >-
           The WebRTC media path is inconsistent, which means a black screen with
-          every health check green. neko advertises NAT1TO1:TCPMUX through ICE
-          and the viewer connects to exactly that, so in NodePort mode the
-          nodePort MUST equal TCPMUX. Observed:
-          {{ _webrtc.stdout | default('<empty>') | trim | replace('\n', '  ') }}
+          every health check green. neko advertises NAT1TO1:TCPMUX through ICE and
+          the viewer connects to exactly that, so the Service port and targetPort
+          must equal TCPMUX.
+          {% if _webrtc.stdout is search('NAT=127.0.0.1') %}
+          NAT1TO1 is 127.0.0.1, which only a viewer ON THE NODE ITSELF can reach —
+          the deploy's node-address discovery did not reach the Deployment. Check
+          that task 10's patch applied rather than being dropped.
+          {% endif %}
+          Observed: {{ _webrtc.stdout | default('<empty>') | trim | replace('\n', '  ') }}
         success_msg: >-
           Media path consistent —
           {{ _webrtc.stdout | default('') | trim | replace('\n', '  ') }}

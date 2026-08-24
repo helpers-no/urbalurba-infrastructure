@@ -80,6 +80,33 @@
           .uis.extend/neko-exposure.yaml explicitly, or check `kubectl get nodes -o wide`.
         success_msg: "Advertising WebRTC media at {{ _node_ip }} (node InternalIP)."
 
+    - name: "5d. Build the port structures with REAL integers"
+      # ⚠️ WHY THIS IS A set_fact AND NOT INLINE YAML.
+      #
+      # Inline as `containerPort: "{{ neko_tcpmux | int }}"`, the quotes make it
+      # a STRING and the API rejects the strategic-merge patch with
+      # "unrecognized type: int32". A patch is atomic, so the WHOLE task is
+      # dropped — including the NAT1TO1 env it exists to set — and the Deployment
+      # silently keeps the manifest default of 127.0.0.1. Media is then
+      # advertised at an address no other device can reach while every health
+      # check stays green.
+      #
+      # Inline UNQUOTED it is not valid YAML at all: a value starting with `{{`
+      # parses as a flow mapping.
+      #
+      # A whole-value template returning a list yields a real Python list, so
+      # `| int` inside it stays an int all the way to the API.
+      ansible.builtin.set_fact:
+        _neko_container_ports: "{{ [
+            {'containerPort': 8080, 'name': 'http'},
+            {'containerPort': neko_tcpmux | int, 'name': 'tcpmux'}
+          ] }}"
+        _neko_overlay_ports: "{{ [
+            {'name': 'http', 'port': 80, 'targetPort': 8080, 'protocol': 'TCP'},
+            {'name': 'tcpmux', 'port': neko_tcpmux | int,
+             'targetPort': neko_tcpmux | int, 'protocol': 'TCP'}
+          ] }}"
+
     - name: "5c. Build the advertise list"
       # A LIST, not a single value: neko's webrtc.nat1to1 is a StringSlice, so
       # LAN and tailnet addresses can be advertised together and ICE picks a
@@ -278,7 +305,7 @@
           (_pods.resources[0].status.containerStatuses | default([]) | length)
         fail_msg: >-
           neko did not become Ready. Both containers must be — the browser AND
-          the `cdp` socat sidecar. Check:
+          the `cdp` nginx auth-proxy sidecar. Check:
           kubectl describe pod -n {{ browser_namespace }} -l app=neko
           kubectl logs -n {{ browser_namespace }} -l app=neko -c neko --tail=50
           A pod stuck Pending with SYS_ADMIN denied means the cluster's security
