@@ -198,6 +198,40 @@ rebuilds its image against the new line and confirms, **then** UIS bumps the
 pinned chart. Neither side moves alone.
 :::
 
+## Run start timeout
+
+A run's **entire execution plan is constructed and persisted over gRPC before its
+pod is created**. A job with a very large plan can therefore exhaust the start
+timeout while everything is healthy, and the failure names something that was
+never involved:
+
+```
+RunFailureReason.START_TIMEOUT
+```
+
+That reads like a scheduling problem or an image pull, and it is neither. The
+first real tenant hit it with a job planning **711 events** (645 of them asset
+checks): the code location was healthy, port 4000 open, and smaller jobs on the
+same location ran fine.
+
+The platform allows **900 seconds**, up from the chart default of 300:
+
+```yaml
+dagsterDaemon:
+  runMonitoring:
+    enabled: true
+    startTimeoutSeconds: 900
+```
+
+:::warning This is margin, not a cure
+If you hit `START_TIMEOUT`, the question to ask is **how large is the plan**, not
+whether the timeout can go higher. The durable fix is to split a monolithic job
+so no single plan is that big; raising the ceiling further just hides the next
+instance for longer.
+
+Count the events in the run's plan before concluding the platform is slow.
+:::
+
 ## Concurrency
 
 The platform caps simultaneous run pods at **4**, set in
