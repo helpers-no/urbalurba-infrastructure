@@ -122,6 +122,7 @@ const sidebars: SidebarsConfig = {
           },
           items: [
             'services/automation/browserless',
+            'services/automation/neko',
           ],
         },
         {

@@ -1,0 +1,50 @@
+# .uis.extend/neko-exposure.yaml
+#
+# HOW THIS INSTALLATION EXPOSES NEKO'S WEBRTC MEDIA.
+#
+# Per-installation config, not product config — the same way
+# prometheus-targets.yaml holds this installation's scrape targets. UIS ships
+# neko; where its video can be reached from depends on the network it is in.
+#
+# WHY THIS FILE EXISTS AT ALL
+#
+# neko's web view is plain HTTP + websocket and reaches users through Traefik
+# like everything else. Its *media* cannot: WebRTC needs raw TCP, and neko
+# advertises a single address:port pair to the browser through ICE
+# (NEKO_WEBRTC_NAT1TO1 : NEKO_WEBRTC_TCPMUX). The browser then connects to
+# exactly that. So the advertised address must be one the VIEWER can reach —
+# which is a property of the installation, not of the product.
+#
+# Get it wrong and the failure is quiet: the page loads, the pod is Ready,
+# /health is 200, and the screen stays black forever.
+#
+# THE DEFAULT NEEDS NO EDITING on Rancher Desktop.
+#
+# mode: local
+#   A NodePort on 32816, advertised as 127.0.0.1:32816. Rancher Desktop maps a
+#   NodePort straight onto localhost, so this works with zero configuration.
+#   The port number is deliberately identical on both sides — see below.
+#
+# mode: tailscale
+#   For a cluster with the Tailscale operator (the reference installation).
+#   The Service becomes a tailscale LoadBalancer and the media is advertised at
+#   the tailnet address. Use this when viewers are on the tailnet rather than on
+#   the machine running the cluster.
+#
+#   ⚠️ advertise_address must be the tailnet IP the Service ends up owning. It
+#   cannot be discovered before the LoadBalancer exists, so it is stated here.
+#   Set it, deploy, and confirm with `./uis verify neko`.
+
+mode: local
+
+# --- only read when mode: tailscale ---
+# advertise_address: "100.97.5.40"
+# hostname: "neko"
+
+# --- advanced, both modes ---
+# The port neko listens on for muxed WebRTC TCP, AND the port it advertises.
+# ⚠️ These are the same number by necessity. A NodePort that renumbered the
+# port would advertise a port the viewer cannot reach, and the symptom would be
+# a black screen with everything reporting healthy. If you change this, keep it
+# inside the cluster's NodePort range (30000-32767 by default).
+# tcpmux_port: 32816

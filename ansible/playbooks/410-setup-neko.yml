@@ -1,0 +1,326 @@
+---
+# 410-setup-neko.yml
+# Deploy neko — the shared human+agent browser.
+#
+# ⚠️ OPT-IN ONLY. neko is in no stack; `uis stack install` cannot start it.
+#     Only an explicit `./uis deploy neko` reaches this playbook.
+#
+# ⚠️ WHAT YOU ARE STARTING: a browser that keeps its logins, and that exposes
+#     UNAUTHENTICATED full browser control over CDP to anything in the cluster.
+#     The security model is printed at the end of a successful run — printed,
+#     not linked, because nobody follows the link.
+#
+# Usage:
+#   ansible-playbook 410-setup-neko.yml -e "target_host=rancher-desktop"
+#   ./uis deploy neko
+
+- name: Deploy neko to Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    manifests_dir: "/mnt/urbalurbadisk/manifests"
+    extend_dir: "/mnt/urbalurbadisk/.uis.extend"
+    browser_namespace: "browser"
+    neko_image: "ghcr.io/m1k1o/neko/chromium:3.1.5"
+    default_tcpmux_port: 32816
+
+  tasks:
+    - name: "1. Read this installation's exposure mode"
+      ansible.builtin.slurp:
+        src: "{{ extend_dir }}/neko-exposure.yaml"
+      register: _exp_raw
+      failed_when: false
+
+    - name: "2. Resolve the exposure settings"
+      # Absent file == the default. A missing per-installation file must never
+      # be an error: Rancher Desktop is meant to work with zero configuration.
+      ansible.builtin.set_fact:
+        _exp: "{{ (_exp_raw.content | default('') | b64decode | from_yaml) | default({}, true) or {} }}"
+
+    - name: "3. Apply defaults for anything unset"
+      ansible.builtin.set_fact:
+        neko_mode: "{{ _exp.mode | default('local') }}"
+        neko_tcpmux: "{{ _exp.tcpmux_port | default(default_tcpmux_port) }}"
+        neko_advertise: "{{ _exp.advertise_address | default('127.0.0.1') }}"
+        neko_ts_hostname: "{{ _exp.hostname | default('neko') }}"
+
+    - name: "4. Reject an exposure mode we do not implement"
+      ansible.builtin.assert:
+        that: neko_mode in ['local', 'tailscale']
+        fail_msg: >-
+          .uis.extend/neko-exposure.yaml has mode: '{{ neko_mode }}'.
+          Supported: 'local' (NodePort on 127.0.0.1, the zero-config default) or
+          'tailscale' (LoadBalancer via the Tailscale operator). Cloud exposure
+          is explicitly out of scope — it is not inferred from these two.
+        success_msg: "Exposure mode: {{ neko_mode }}"
+
+    - name: "5. tailscale mode requires an address that cannot be discovered"
+      # The tailnet IP is not knowable before the LoadBalancer exists, so it has
+      # to be declared. Failing here beats a black screen later.
+      ansible.builtin.assert:
+        that:
+          - _exp.advertise_address is defined
+          - _exp.advertise_address | length > 0
+          - _exp.advertise_address != '127.0.0.1'
+        fail_msg: >-
+          mode: tailscale needs `advertise_address` set to the tailnet IP this
+          Service will own. neko advertises that address to the viewer's browser
+          through ICE; with 127.0.0.1 the viewer would try to reach itself, the
+          page would load, /health would be 200 and the screen would stay black.
+        success_msg: "Advertising WebRTC media at {{ neko_advertise }}"
+      when: neko_mode == 'tailscale'
+
+    - name: "6. Ensure the namespace exists"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ browser_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+
+    - name: "7. The service password must exist before the pod starts"
+      # neko's multiuser provider reads these from the environment. Without them
+      # the container starts and refuses every login, which looks like a
+      # password problem rather than a missing secret.
+      ansible.builtin.shell: >
+        kubectl get secret urbalurba-secrets -n {{ browser_namespace }}
+        --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        -o jsonpath="{.data.NEKO_MEMBER_MULTIUSER_USER_PASSWORD}"
+      register: _pw
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: "8. Fail with the fix, not the symptom"
+      ansible.builtin.fail:
+        msg: >-
+          No NEKO_MEMBER_MULTIUSER_USER_PASSWORD in
+          {{ browser_namespace }}/urbalurba-secrets. Run `./uis secrets apply`
+          first — the secrets pipeline creates the namespace's secret from the
+          templates. Without it neko starts and rejects every login.
+      when: _pw.stdout | default('') | length == 0
+
+    - name: "9. Apply the ConfigMap, PVC, Deployment and Services"
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ manifests_dir }}/410-neko-deployment.yaml"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+
+    - name: "10. Patch the WebRTC values for this installation"
+      # ⚠️ THE ADVERTISED PORT AND THE LISTENING PORT MUST MATCH.
+      # ICE hands the viewer exactly one address:port. neko listens on
+      # NEKO_WEBRTC_TCPMUX and advertises NEKO_WEBRTC_NAT1TO1:that-same-port, so
+      # the Service must not renumber it. Patching all three from one variable
+      # is what keeps them from drifting apart.
+      kubernetes.core.k8s:
+        state: patched
+        kind: Deployment
+        name: neko
+        namespace: "{{ browser_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+        definition:
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: neko
+                    env:
+                      - name: NEKO_WEBRTC_TCPMUX
+                        value: "{{ neko_tcpmux }}"
+                      - name: NEKO_WEBRTC_NAT1TO1
+                        value: "{{ neko_advertise }}"
+                      - name: NEKO_WEBRTC_ICELITE
+                        value: "true"
+                      - name: NEKO_DESKTOP_SCREEN
+                        value: "1280x800@30"
+                      - name: NEKO_MEMBER_PROVIDER
+                        value: "multiuser"
+                    ports:
+                      - containerPort: 8080
+                        name: http
+                      - containerPort: "{{ neko_tcpmux | int }}"
+                        name: tcpmux
+
+    - name: "11. Replace the media Service for tailscale mode"
+      # A tailnet LoadBalancer instead of a NodePort. Deleted and recreated
+      # rather than patched: type and loadBalancerClass are not freely mutable.
+      when: neko_mode == 'tailscale'
+      block:
+        - name: "11a. Remove the NodePort media Service"
+          kubernetes.core.k8s:
+            state: absent
+            kind: Service
+            name: neko-webrtc
+            namespace: "{{ browser_namespace }}"
+            kubeconfig: "{{ merged_kubeconf_file }}"
+            context: "{{ _target }}"
+            wait: true
+            wait_timeout: 120
+
+        - name: "11b. Create the tailnet media Service"
+          kubernetes.core.k8s:
+            state: present
+            kubeconfig: "{{ merged_kubeconf_file }}"
+            context: "{{ _target }}"
+            definition:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: neko-webrtc
+                namespace: "{{ browser_namespace }}"
+                labels: { app: neko, role: webrtc }
+                annotations:
+                  tailscale.com/hostname: "{{ neko_ts_hostname }}"
+              spec:
+                type: LoadBalancer
+                loadBalancerClass: tailscale
+                selector: { app: neko }
+                ports:
+                  - name: http
+                    port: 80
+                    targetPort: 8080
+                    protocol: TCP
+                  - name: tcpmux
+                    port: "{{ neko_tcpmux | int }}"
+                    targetPort: "{{ neko_tcpmux | int }}"
+                    protocol: TCP
+
+    - name: "12. Patch the NodePort to match the advertised port"
+      # Only in local mode, and only because they must be equal — see task 10.
+      when: neko_mode == 'local'
+      kubernetes.core.k8s:
+        state: patched
+        kind: Service
+        name: neko-webrtc
+        namespace: "{{ browser_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+        definition:
+          spec:
+            ports:
+              - name: tcpmux
+                port: "{{ neko_tcpmux | int }}"
+                targetPort: "{{ neko_tcpmux | int }}"
+                nodePort: "{{ neko_tcpmux | int }}"
+                protocol: TCP
+
+    - name: "13. Apply the IngressRoute for the web view"
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ manifests_dir }}/410-neko-ingressroute.yaml"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+
+    - name: "14. Wait for the profile volume to bind"
+      # A pod pending on an unbound PVC looks like a slow start. Say which it is.
+      kubernetes.core.k8s_info:
+        kind: PersistentVolumeClaim
+        namespace: "{{ browser_namespace }}"
+        name: neko-profile
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _pvc
+      until: _pvc.resources[0].status.phase | default('') == 'Bound'
+      retries: 24
+      delay: 5
+      failed_when: false
+
+    - name: "15. Report if the volume never bound"
+      ansible.builtin.assert:
+        that: _pvc.resources[0].status.phase | default('') == 'Bound'
+        fail_msg: >-
+          The neko-profile PVC is
+          {{ _pvc.resources[0].status.phase | default('missing') }}, not Bound.
+          neko cannot start without it. Check that a default StorageClass exists:
+          kubectl get storageclass
+        success_msg: "Profile volume bound (5Gi, local-path)."
+
+    - name: "16. Wait for neko to become Ready"
+      # Chromium plus a desktop stack; slower to start than a typical service.
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ browser_namespace }}"
+        label_selectors: ["app=neko"]
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _pods
+      until: >-
+        (_pods.resources | default([]) | length) > 0 and
+        (_pods.resources[0].status.containerStatuses | default([]) | selectattr('ready') | list | length) ==
+        (_pods.resources[0].status.containerStatuses | default([]) | length) and
+        (_pods.resources[0].status.containerStatuses | default([]) | length) > 0
+      retries: 40
+      delay: 10
+      failed_when: false
+
+    - name: "17. Report readiness honestly"
+      ansible.builtin.assert:
+        that: >-
+          (_pods.resources | default([]) | length) > 0 and
+          (_pods.resources[0].status.containerStatuses | default([]) | selectattr('ready') | list | length) ==
+          (_pods.resources[0].status.containerStatuses | default([]) | length)
+        fail_msg: >-
+          neko did not become Ready. Both containers must be — the browser AND
+          the `cdp` socat sidecar. Check:
+          kubectl describe pod -n {{ browser_namespace }} -l app=neko
+          kubectl logs -n {{ browser_namespace }} -l app=neko -c neko --tail=50
+          A pod stuck Pending with SYS_ADMIN denied means the cluster's security
+          policy forbids it; neko needs that capability for its desktop stack.
+        success_msg: "neko is Ready (browser + CDP sidecar)."
+
+    - name: "18. Deployment summary — read the security model"
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          NEKO READY — the shared human+agent browser
+          ===============================================
+
+          Image:      {{ neko_image }} (pinned)
+          Namespace:  {{ browser_namespace }}
+          Web view:   http://neko.localhost      (the HUMAN's door)
+          CDP:        neko.{{ browser_namespace }}.svc.cluster.local:9222
+                                                 (the AGENT's door)
+          Profile:    5Gi PVC, persistent — logins survive restarts
+          Exposure:   {{ neko_mode }} — media advertised at {{ neko_advertise }}:{{ neko_tcpmux }}
+
+          Log in with the password from urbalurba-secrets:
+            kubectl get secret urbalurba-secrets -n {{ browser_namespace }} \
+              -o jsonpath='{.data.NEKO_MEMBER_MULTIUSER_USER_PASSWORD}' | base64 -d
+
+          ⚠️ SECURITY — this service is different from the others
+
+          1. CDP IS UNAUTHENTICATED FULL BROWSER CONTROL, cookies included.
+             Anything that can reach port 9222 acts as whoever this browser is
+             logged in as. There is no token to add. It is safe only while the
+             Service stays private — never route 9222 through an ingress, a
+             tunnel or a LAN NodePort.
+
+          2. THE PROFILE VOLUME IS A LIVE CREDENTIAL STORE. Blast radius is
+             everything you log into. It is deliberately NOT backed up: a backup
+             is a second copy of the blast radius, and re-login is cheap.
+             Kill switch — delete the PVC and every session is gone:
+               kubectl delete pvc neko-profile -n {{ browser_namespace }}
+
+          3. NEVER RUN AN AGENT TASK WHILE TYPING A PASSWORD. The human logs
+             in; THEN the agent acts. An agent driving mid-login can submit,
+             navigate away, or capture the field.
+
+          4. SINGLE WRITER. One shared session — two drivers on one login
+             collide. Parallel stateless work belongs on browserless.
+
+          Which browser did you want?
+            many blank browsers in parallel  -> browserless
+            one logged-in browser, shared    -> neko
+
+          Verify:  ./uis verify neko
+          Docs:    /docs/services/automation/neko
+          ===============================================

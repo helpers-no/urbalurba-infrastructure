@@ -1,0 +1,308 @@
+# 410-neko-deployment.yaml
+#
+# neko — one real Chromium desktop that a HUMAN and an AGENT share.
+#
+# Two doors into the SAME browser, same tabs, same login:
+#   web view (WebRTC, :8080)  the human watches and clicks
+#   CDP      (:9222)          agents drive programmatically
+#
+# That is the whole point, and it is the opposite trade to browserless:
+# browserless gives many blank throwaway browsers and no identity; neko gives
+# ONE browser with a persistent identity. Many blank browsers in parallel ->
+# browserless. One logged-in browser, shared -> neko.
+#
+# ⚠️ SECURITY — read before exposing this anywhere
+#
+# CDP is UNAUTHENTICATED, FULL browser control, cookies included. Anything that
+# can reach port 9222 is logged in as whoever this browser is logged in as.
+# There is no token and no auth to add. It is safe only because the Service is
+# private: cluster-internal by default, tailnet-only on the reference
+# installation. NEVER put 9222 behind a public ingress, a Funnel, or a LAN
+# NodePort you do not control.
+#
+# The profile PVC is a LIVE CREDENTIAL STORE. Blast radius is everything the
+# browser is logged into. It is deliberately NOT backed up — a backup is a
+# second copy of the blast radius, and re-login is cheap. Kill switch: delete
+# the PVC and every session is gone.
+#
+# Usage rule: never run an agent task while a password is being typed. The human
+# logs in; THEN the agent acts. Single-writer — two drivers on one login collide.
+#
+# PROVENANCE: the chromium policy and launch config below are lifted verbatim
+# from the reference installation (platform/browser/neko.yaml, proven
+# 2026-08-21). They are not reconstructed. Each encodes a failure that is
+# INVISIBLE when wrong:
+#
+#   DeveloperToolsAvailability: 1   upstream ships 2, which SILENTLY refuses
+#                                   Target.attachToTarget and swallows page
+#                                   commands. No error — agent control simply
+#                                   does nothing.
+#   --remote-debugging-port=9223    chromium refuses to bind CDP to a non-local
+#   + socat sidecar on 9222         address, so the sidecar re-exposes it.
+#   /health on 8080                 the v3 health endpoint. /api/health is 404.
+#   strategy: Recreate + fsGroup    one profile volume; never two pods on it.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neko-chromium-conf
+  namespace: browser
+  labels:
+    app: neko
+data:
+  # Upstream neko policies with exactly ONE change:
+  # DeveloperToolsAvailability 2 -> 1. Everything else is their hardening and
+  # is kept. Do not "tidy" this file; the one key is why CDP works at all.
+  policies.json: |
+    {
+      "AutofillAddressEnabled": false,
+      "AutofillCreditCardEnabled": false,
+      "BrowserSignin": 0,
+      "DefaultNotificationsSetting": 2,
+      "DeveloperToolsAvailability": 1,
+      "EditBookmarksEnabled": false,
+      "FullscreenAllowed": true,
+      "IncognitoModeAvailability": 1,
+      "SyncDisabled": true,
+      "AutoplayAllowed": true,
+      "BrowserAddPersonEnabled": false,
+      "BrowserGuestModeEnabled": false,
+      "DefaultPopupsSetting": 2,
+      "DownloadRestrictions": 3,
+      "VideoCaptureAllowed": true,
+      "AllowFileSelectionDialogs": false,
+      "PromptForDownloadLocation": false,
+      "BookmarkBarEnabled": false,
+      "PasswordManagerEnabled": false,
+      "BrowserLabsEnabled": false,
+      "CommandLineFlagSecurityWarningsEnabled": false,
+      "URLAllowlist": [
+        "file:///home/neko/Downloads"
+      ],
+      "URLBlocklist": [
+        "file://*",
+        "chrome://policy"
+      ],
+      "ExtensionInstallForcelist": [
+        "ddkjiahejlhfcafbddmgiahcphecmpfh;https://clients2.google.com/service/update2/crx",
+        "mnjggcdmjocbbbhaepdhchncahnbgone;https://clients2.google.com/service/update2/crx"
+      ],
+      "ExtensionInstallAllowlist": [
+        "ddkjiahejlhfcafbddmgiahcphecmpfh",
+        "mnjggcdmjocbbbhaepdhchncahnbgone"
+      ],
+      "ExtensionInstallBlocklist": [
+        "*"
+      ]
+    }
+  chromium.conf: |
+    [program:chromium]
+    environment=HOME="/home/%(ENV_USER)s",USER="%(ENV_USER)s",DISPLAY="%(ENV_DISPLAY)s"
+    command=/usr/bin/chromium
+      --no-sandbox
+      --remote-debugging-port=9223
+      --remote-allow-origins=*
+      --window-position=0,0
+      --display=%(ENV_DISPLAY)s
+      --user-data-dir=/home/neko/.config/chromium
+      --no-first-run
+      --start-maximized
+      --bwsi
+      --force-dark-mode
+      --disable-file-system
+      --disable-gpu
+      --disable-software-rasterizer
+      --disable-dev-shm-usage
+    stopsignal=INT
+    autorestart=true
+    priority=800
+    user=%(ENV_USER)s
+    stdout_logfile=/var/log/neko/chromium.log
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: neko-profile
+  namespace: browser
+  labels:
+    app: neko
+    # Marks this volume as holding live credentials. See the security note in
+    # this file's header and coordinate with the backup investigation before
+    # any backup job starts including the browser namespace.
+    urbalurba.io/backup: "never"
+spec:
+  storageClassName: local-path
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: neko
+  namespace: browser
+  labels:
+    app: neko
+spec:
+  replicas: 1
+  # Single profile volume: never two pods on it. RollingUpdate would try.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: neko
+  template:
+    metadata:
+      labels:
+        app: neko
+    spec:
+      # profile PVC must be writable by the container's `neko` user
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: neko
+          # PINNED. This container holds live logins; a version change is a
+          # deliberate act, not something a `latest` tag does overnight.
+          # v3 (not v2) for the rewritten touch/mobile support.
+          image: ghcr.io/m1k1o/neko/chromium:3.1.5
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 32816
+              name: tcpmux
+          envFrom:
+            - secretRef:
+                name: urbalurba-secrets
+          env:
+            - name: NEKO_DESKTOP_SCREEN
+              value: "1280x800@30"
+            - name: NEKO_MEMBER_PROVIDER
+              value: "multiuser"
+            # --- WebRTC: see 410-setup-neko.yml for why these two values ---
+            # ICE advertises NAT1TO1:TCPMUX to the client, so the port neko
+            # advertises must be a port the client can actually reach. In the
+            # default local mode both are patched by the playbook to the
+            # NodePort, which Rancher Desktop maps 1:1 onto localhost.
+            - name: NEKO_WEBRTC_TCPMUX
+              value: "32816"
+            - name: NEKO_WEBRTC_ICELITE
+              value: "true"
+            - name: NEKO_WEBRTC_NAT1TO1
+              value: "127.0.0.1"
+          volumeMounts:
+            - name: profile
+              mountPath: /home/neko/.config/chromium
+            - name: shm
+              mountPath: /dev/shm
+            - name: chromium-conf
+              mountPath: /etc/neko/supervisord/chromium.conf
+              subPath: chromium.conf
+            - name: chromium-conf
+              mountPath: /etc/chromium/policies/managed/policies.json
+              subPath: policies.json
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            capabilities:
+              add: [SYS_ADMIN]
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 3
+        # Chromium binds CDP to 127.0.0.1 only and refuses non-local binds, so
+        # this re-exposes it on a pod port the Service can select.
+        - name: cdp
+          image: alpine/socat:1.8.0.0
+          args: ["TCP-LISTEN:9222,fork,reuseaddr", "TCP:127.0.0.1:9223"]
+          ports:
+            - containerPort: 9222
+              name: cdp
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: profile
+          persistentVolumeClaim:
+            claimName: neko-profile
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+        - name: chromium-conf
+          configMap:
+            name: neko-chromium-conf
+---
+# Cluster-internal Service. The web view reaches users through the
+# IngressRoute; CDP is reachable only from inside the cluster.
+#
+# ⚠️ CDP (9222) is deliberately NOT in any ingress. See the header.
+apiVersion: v1
+kind: Service
+metadata:
+  name: neko
+  namespace: browser
+  labels:
+    app: neko
+spec:
+  type: ClusterIP
+  selector:
+    app: neko
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+    - name: cdp
+      port: 9222
+      targetPort: 9222
+      protocol: TCP
+---
+# WebRTC media cannot ride an HTTP IngressRoute — it needs raw TCP. This is a
+# SEPARATE Service on purpose, so the exposure mode can change without touching
+# the one above.
+#
+# Default (local): NodePort. Rancher Desktop maps a NodePort onto localhost, and
+# the port number is deliberately the SAME as NEKO_WEBRTC_TCPMUX above, because
+# ICE advertises the port neko listens on. A NodePort that renumbered the port
+# would advertise an unreachable one and the video would never connect while
+# every health check stayed green.
+#
+# On the reference installation this is instead a tailscale LoadBalancer with
+# NAT1TO1 set to the tailnet VIP — see 410-setup-neko.yml and the docs.
+apiVersion: v1
+kind: Service
+metadata:
+  name: neko-webrtc
+  namespace: browser
+  labels:
+    app: neko
+    role: webrtc
+spec:
+  type: NodePort
+  selector:
+    app: neko
+  ports:
+    - name: tcpmux
+      port: 32816
+      targetPort: 32816
+      nodePort: 32816
+      protocol: TCP

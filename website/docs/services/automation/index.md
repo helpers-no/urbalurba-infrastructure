@@ -26,6 +26,17 @@ becomes a thin client that opens a websocket.
 | Service | Description | Deploy |
 |---------|-------------|--------|
 | [browserless](./browserless.md) | Headless Chromium pool, spoken to over Playwright or CDP | `./uis deploy browserless` |
+| [neko](./neko.md) | Shared human+agent browser with a persistent login — **opt-in** | `./uis deploy neko` |
+
+## Which one do you need?
+
+**Many blank browsers in parallel → browserless. One logged-in browser, shared
+→ neko.**
+
+browserless gives throwaway sessions with no identity; neko gives a single
+browser that keeps its logins and that a human and an agent drive together. A
+login-walled task on browserless has no session to use; a parallel scrape on
+neko serialises behind one profile.
 
 ## Quick Start
 
@@ -35,6 +46,10 @@ becomes a thin client that opens a websocket.
 ```
 
 No dependencies — browserless needs no database and no other UIS service.
+
+neko is **opt-in and in no stack** — it holds live logins and exposes
+unauthenticated browser control over CDP. Read
+[its security model](./neko.md) before deploying it.
 
 ## Access control
 

@@ -2040,6 +2040,7 @@ cmd_verify() {
         echo "  argocd          Run E2E health checks on ArgoCD server"
         echo "  backstage       Run E2E health checks on Backstage (RHDH)"
         echo "  browserless     Verify browserless renders a real page"
+        echo "  neko            Verify neko serves both a human and an agent"
         echo "                  (deep: ./uis browserless verify-session — real Playwright + MCP session)"
         echo "  dagster         Verify Dagster orchestrates (webserver, metadata, daemon)"
         echo "  enonic          Run E2E health checks on Enonic XP"
@@ -2074,6 +2075,9 @@ cmd_verify() {
             ;;
         browserless)
             cmd_browserless_verify
+            ;;
+        neko)
+            cmd_neko_verify
             ;;
         dagster)
             cmd_dagster_verify
@@ -2110,6 +2114,7 @@ cmd_verify() {
             echo "  argocd          Run E2E health checks on ArgoCD server"
             echo "  backstage       Run E2E health checks on Backstage (RHDH)"
             echo "  browserless     Verify browserless renders a real page"
+        echo "  neko            Verify neko serves both a human and an agent"
         echo "                  (deep: ./uis browserless verify-session — real Playwright + MCP session)"
         echo "  dagster         Verify Dagster orchestrates (webserver, metadata, daemon)"
         echo "  enonic          Run E2E health checks on Enonic XP"
@@ -2388,6 +2393,11 @@ cmd_enonic_verify() {
 
 # PostgREST is multi-instance: one Deployment per consuming app, so there is no
 # single instance to verify. --app is required, exactly as it is for deploy.
+cmd_neko_verify() {
+    print_section "Verifying neko (both doors into the shared browser)"
+    ansible-playbook "$ANSIBLE_DIR/410-test-neko.yml"
+}
+
 cmd_browserless_verify_session() {
     print_section "Verifying a real browser session (Playwright + MCP)"
     echo "  Deep check — installs npm packages in-cluster, needs npm registry egress."
@@ -2933,6 +2943,14 @@ main() {
                 verify) cmd_browserless_verify ;;
                 verify-session) cmd_browserless_verify_session ;;
                 *) echo "  Use: ./uis browserless verify | verify-session" >&2 ;;
+            esac
+            ;;
+        neko)
+            local subcmd="${1:-}"
+            shift 2>/dev/null || true
+            case "$subcmd" in
+                verify) cmd_neko_verify ;;
+                *) echo "  Use: ./uis neko verify" >&2 ;;
             esac
             ;;
         dagster)

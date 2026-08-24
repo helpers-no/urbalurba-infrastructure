@@ -89,6 +89,7 @@ _build_skip_list() {
 VERIFY_SERVICES="
 alloy:alloy verify
 browserless:browserless verify
+neko:neko verify
 dagster:dagster verify
 postgresql:postgresql verify
 argocd:argocd verify

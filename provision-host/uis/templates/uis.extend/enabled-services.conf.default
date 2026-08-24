@@ -41,3 +41,10 @@ nginx
 
 # === Applications ===
 # nextcloud
+
+# neko — the shared human+agent browser. DELIBERATELY COMMENTED OUT, and in no
+# stack, so it can only ever start from an explicit `./uis deploy neko`.
+# It keeps its logins between sessions and exposes UNAUTHENTICATED full browser
+# control over CDP to anything in the cluster. Read
+# /docs/services/automation/neko before enabling it.
+# neko

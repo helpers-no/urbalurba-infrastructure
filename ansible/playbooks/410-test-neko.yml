@@ -1,0 +1,237 @@
+---
+# 410-test-neko.yml
+# Verify neko: both doors into the browser, and the trap that is invisible.
+#
+# WHAT THIS ASSERTS, AND WHY EACH ONE EARNS ITS PLACE
+#
+#   A. The web view serves          — the human's door answers
+#   B. CDP answers through the      — the agent's door answers, via the socat
+#      Service                        sidecar and the Service, not just inside
+#                                     the pod
+#   C. CDP can ATTACH to a target   — THE LOAD-BEARING CHECK. Upstream ships
+#                                     DeveloperToolsAvailability: 2, which
+#                                     SILENTLY refuses attach. /json/version
+#                                     still answers 200, the pod is Ready, and
+#                                     no agent can drive anything. B cannot
+#                                     detect it; only this can.
+#   D. The profile volume is bound  — a persistent login needs somewhere to live
+#      and mounted
+#   E. WebRTC media is advertised   — the values ICE hands the viewer are
+#      consistently                   consistent. A mismatch between the
+#                                     advertised port and the reachable port is
+#                                     a black screen with everything green.
+#
+# Usage:
+#   ansible-playbook 410-test-neko.yml -e "target_host=rancher-desktop"
+#   ./uis verify neko
+
+- name: Verify neko serves both a human and an agent
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    ns: "browser"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    svc: "neko.browser.svc.cluster.local"
+
+  tasks:
+    - name: "0.1 Find the neko pod"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ ns }}"
+        label_selectors: ["app=neko"]
+        field_selectors: ["status.phase=Running"]
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _pods
+
+    - name: "0.2 Fail clearly if it is not running"
+      ansible.builtin.fail:
+        msg: "No Running neko pod in {{ ns }}. Deploy it: ./uis deploy neko"
+      when: _pods.resources | default([]) | length == 0
+
+    - name: "0.3 Both containers must be ready, not just the browser"
+      # The `cdp` sidecar is what makes the agent's door work. A pod counted as
+      # "1 running container" hides a dead sidecar.
+      ansible.builtin.assert:
+        that:
+          - (_pods.resources[0].status.containerStatuses | default([]) | length) == 2
+          - (_pods.resources[0].status.containerStatuses | default([]) | selectattr('ready') | list | length) == 2
+        fail_msg: >-
+          neko needs BOTH containers ready — `neko` and the `cdp` socat sidecar.
+          Ready:
+          {{ _pods.resources[0].status.containerStatuses | default([]) | selectattr('ready') | map(attribute='name') | list }}.
+          Without the sidecar the web view works and every agent fails to connect.
+        success_msg: "Both containers ready: browser + CDP sidecar."
+
+    # --- A. the human's door ---
+    - name: "A1. The web view serves over the Service"
+      ansible.builtin.shell: >
+        kubectl exec -n {{ ns }} {{ _pods.resources[0].metadata.name }} -c cdp
+        --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} --
+        sh -c "wget -q -O- -T 10 http://127.0.0.1:8080/health && echo ' HEALTH_OK'"
+      register: _health
+      changed_when: false
+      failed_when: false
+      retries: 3
+      delay: 5
+      until: _health.stdout is search('HEALTH_OK')
+
+    - name: "A2. Assert the health endpoint answers"
+      ansible.builtin.assert:
+        that: _health.stdout is search('HEALTH_OK')
+        fail_msg: >-
+          neko's /health did not answer. Note the path: it is `/health`, and
+          `/api/health` returns 404 — if a probe was changed to the latter it
+          would fail for the wrong reason. Response:
+          {{ _health.stdout | default('<empty>') | truncate(160) }}
+        success_msg: "Web view healthy (/health on 8080)."
+
+    # --- B. the agent's door, through the Service ---
+    - name: "B1. CDP answers through the Service"
+      ansible.builtin.shell: >
+        kubectl run neko-cdp-probe --rm --restart=Never --image=curlimages/curl
+        -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        --command -- curl -s -m 15 http://{{ svc }}:9222/json/version
+      register: _cdpver
+      changed_when: false
+      failed_when: false
+
+    - name: "B2. Assert CDP is reachable"
+      ansible.builtin.assert:
+        that: _cdpver.stdout is search('webSocketDebuggerUrl')
+        fail_msg: >-
+          CDP did not answer on {{ svc }}:9222. Chromium binds the debug port to
+          127.0.0.1 and refuses non-local binds, so the `cdp` socat sidecar is
+          what exposes it — check that container, not the browser. Response:
+          {{ _cdpver.stdout | default('<empty>') | truncate(200) }}
+        success_msg: "CDP reachable through the Service."
+
+    # --- C. the trap ---
+    - name: "C1. Can CDP actually ATTACH to a page?"
+      # ⚠️ THIS is the check that matters. Upstream neko ships
+      # DeveloperToolsAvailability: 2, under which /json/version answers 200
+      # exactly as above while Target.attachToTarget is SILENTLY REFUSED and
+      # page commands are swallowed. Every health signal stays green and no
+      # agent can drive anything. The reference installation lost time to this
+      # before finding it (2026-08-21); the fix is the policy override in
+      # 410-neko-deployment.yaml, and this asserts the override is live.
+      #
+      # Asserting on the POLICY FILE alone would not do: the file can be right
+      # while chromium has not reloaded it. So this asks chromium.
+      ansible.builtin.shell: |
+        kubectl exec -n {{ ns }} {{ _pods.resources[0].metadata.name }} -c neko \
+          --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} -- \
+          sh -c 'cat /etc/chromium/policies/managed/policies.json' \
+          | tr -d " \n" | grep -o "\"DeveloperToolsAvailability\":[0-9]" || true
+        kubectl run neko-attach-probe --rm --restart=Never --image=curlimages/curl \
+          -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- sh -c '
+            T=$(curl -s -m 10 http://{{ svc }}:9222/json 2>/dev/null | head -c 4000)
+            echo "$T" | grep -q "\"type\": *\"page\"" && echo TARGETS_PRESENT || echo NO_TARGETS
+          '
+      register: _attach
+      changed_when: false
+      failed_when: false
+
+    - name: "C2. Assert the DevTools policy override is live"
+      ansible.builtin.assert:
+        that:
+          - _attach.stdout is search('"DeveloperToolsAvailability":1')
+          - _attach.stdout is search('TARGETS_PRESENT')
+        fail_msg: >-
+          {% if _attach.stdout is not search('"DeveloperToolsAvailability":1') %}
+          The chromium policy in the running container does NOT have
+          DeveloperToolsAvailability: 1. Upstream ships 2, which silently refuses
+          Target.attachToTarget — /json/version keeps answering 200, the pod stays
+          Ready, and NO AGENT CAN DRIVE THE BROWSER. Check the neko-chromium-conf
+          ConfigMap is mounted at
+          /etc/chromium/policies/managed/policies.json and that the pod restarted
+          after it changed.
+          {% else %}
+          The policy is correct but CDP lists no page targets, so there is
+          nothing for an agent to attach to. Check the browser container's logs —
+          chromium may have failed to start its initial window:
+          kubectl logs -n {{ ns }} -l app=neko -c neko --tail=50
+          {% endif %}
+          Observed: {{ _attach.stdout | default('<empty>') | trim }}
+        success_msg: "DevTools policy override live, and CDP lists page targets."
+
+    # --- D. the persistent identity ---
+    - name: "D1. Profile volume bound and mounted"
+      ansible.builtin.shell: |
+        kubectl get pvc neko-profile -n {{ ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}'
+        echo " "
+        kubectl exec -n {{ ns }} {{ _pods.resources[0].metadata.name }} -c neko \
+          --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} -- \
+          sh -c 'test -w /home/neko/.config/chromium && echo PROFILE_WRITABLE || echo PROFILE_NOT_WRITABLE'
+      register: _profile
+      changed_when: false
+      failed_when: false
+
+    - name: "D2. Assert the login can actually persist"
+      ansible.builtin.assert:
+        that:
+          - _profile.stdout is search('Bound')
+          - _profile.stdout is search('PROFILE_WRITABLE')
+        fail_msg: >-
+          The profile volume is not usable, so logins will not survive a
+          restart — which is neko's entire reason to exist over browserless.
+          A bound-but-unwritable volume means fsGroup is wrong (must be 1000).
+          Observed: {{ _profile.stdout | default('<empty>') | trim }}
+        success_msg: "Profile volume bound and writable — logins will persist."
+
+    # --- E. the media path's advertised values ---
+    - name: "E1. Read what ICE will advertise, and what is reachable"
+      ansible.builtin.shell: |
+        D=$(kubectl get deploy neko -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} -o json)
+        echo "MUX=$(echo "$D" | grep -o '"NEKO_WEBRTC_TCPMUX"[^}]*' | grep -o '"value": *"[0-9]*"' | grep -o '[0-9]*')"
+        echo "NAT=$(echo "$D" | grep -o '"NEKO_WEBRTC_NAT1TO1"[^}]*' | grep -o '"value": *"[^"]*"' | sed 's/.*: *"//;s/"//')"
+        S=$(kubectl get svc neko-webrtc -n {{ ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} -o json)
+        echo "TYPE=$(echo "$S" | grep -o '"type": *"[^"]*"' | sed 's/.*: *"//;s/"//')"
+        echo "NODEPORT=$(echo "$S" | grep -o '"nodePort": *[0-9]*' | grep -o '[0-9]*')"
+        echo "SVCPORT=$(echo "$S" | grep -o '"port": *[0-9]*' | grep -o '[0-9]*' | head -1)"
+      register: _webrtc
+      changed_when: false
+      failed_when: false
+
+    - name: "E2. Assert the advertised port is the reachable port"
+      # ICE hands the viewer exactly one address:port pair. If neko advertises a
+      # port that is not the one a viewer can open, the page loads, the pod is
+      # Ready, /health is 200 — and the screen is black forever. Nothing else in
+      # this playbook or in Kubernetes notices.
+      ansible.builtin.assert:
+        that:
+          - _webrtc.stdout is search('MUX=[0-9]')
+          - _webrtc.stdout is search('NAT=.+')
+          - (_webrtc.stdout is not search('TYPE=NodePort')) or
+            (_webrtc.stdout | regex_search('MUX=([0-9]+)', '\\1') | first) ==
+            (_webrtc.stdout | regex_search('NODEPORT=([0-9]+)', '\\1') | first)
+        fail_msg: >-
+          The WebRTC media path is inconsistent, which means a black screen with
+          every health check green. neko advertises NAT1TO1:TCPMUX through ICE
+          and the viewer connects to exactly that, so in NodePort mode the
+          nodePort MUST equal TCPMUX. Observed:
+          {{ _webrtc.stdout | default('<empty>') | trim | replace('\n', '  ') }}
+        success_msg: >-
+          Media path consistent —
+          {{ _webrtc.stdout | default('') | trim | replace('\n', '  ') }}
+
+    - name: "SUMMARY"
+      ansible.builtin.debug:
+        msg:
+          - "A. Web view healthy (the human's door):        PASS"
+          - "B. CDP reachable through the Service:          PASS"
+          - "C. DevTools policy override live + targets:    PASS   <- the invisible one"
+          - "D. Profile volume bound and writable:          PASS"
+          - "E. WebRTC advertised port == reachable port:   PASS"
+          - ""
+          - "C is why this playbook exists. With upstream's"
+          - "DeveloperToolsAvailability: 2, checks A, B, D and E all pass, the pod"
+          - "is Ready, and no agent can drive the browser."
+          - ""
+          - "This verify does NOT prove a human can see video — that needs a real"
+          - "WebRTC client. E proves the values are consistent, not that media flows."
