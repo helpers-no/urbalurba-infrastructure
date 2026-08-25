@@ -10,6 +10,15 @@ on:
     paths:
       - 'website/**'
       - '.github/workflows/docs.yml'
+      # ⚠️ The navbar badge reads version.txt at build time, so the site has a
+      # dependency OUTSIDE website/. Without this line a version bump never
+      # rebuilt the docs and the badge stayed a release behind - it showed
+      # v1.6.0 while main was v1.6.1. Found by the independent tester.
+      #
+      # Second time a path filter has been narrower than what the job actually
+      # depends on; the other was test-uis.yml, which ran no tests at all on
+      # ansible/** changes.
+      - 'version.txt'
   workflow_dispatch: # Allow manual trigger
 
 permissions:

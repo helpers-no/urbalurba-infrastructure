@@ -572,7 +572,16 @@ update_launcher() {
 }
 
 pull_container() {
-    report_version_status
+    # ⚠️ `|| true` IS LOAD-BEARING. This script runs under `set -e`, and
+    # report_version_status deliberately returns 1 when an update is available
+    # and 2 when the remote cannot be reached. Called bare, either return
+    # ABORTED THE SCRIPT HERE - so `./uis pull` did nothing whenever there was
+    # something to do, and worked only when there was not. Found by the
+    # independent tester (2026-08-26).
+    #
+    # A non-zero return that MEANS something must never be left bare under
+    # set -e. See the other three call sites below.
+    report_version_status || true
     log_info "Pulling latest UIS container image..."
     if docker pull "$IMAGE"; then
         log_info "Image updated successfully"
@@ -587,7 +596,10 @@ pull_container() {
         # After the restart, so the container is already on the new image and
         # the old one is genuinely unreferenced.
         cleanup_old_images
-        update_launcher
+        # Same hazard: update_launcher returns 1 when it REFUSES a download
+        # (truncated, wrong file, bad syntax). That is a correct refusal, not a
+        # reason to abort the rest of the command.
+        update_launcher || true
         log_info "Now running version: $(installed_version)"
     else
         log_error "Failed to pull image"
@@ -690,8 +702,9 @@ case "${1:-help}" in
         # --check: report drift without installing anything. DCT has this and it
         # is the difference between "tell me" and "change my machine".
         if [ "${2:-}" = "--check" ]; then
-            report_version_status
-            exit $?
+            vstatus=0
+            report_version_status || vstatus=$?
+            exit "$vstatus"
         fi
         pull_container
         ;;
@@ -700,8 +713,8 @@ case "${1:-help}" in
         # own `uis-cli.sh version`, so a machine running a three-week-old
         # launcher printed the image's version and looked current. That is
         # exactly how the launcher drift stayed invisible.
-        report_version_status
-        vstatus=$?
+        vstatus=0
+        report_version_status || vstatus=$?
         if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
             docker exec "$CONTAINER_NAME" /mnt/urbalurbadisk/provision-host/uis/manage/uis-cli.sh version 2>/dev/null || true
         fi
