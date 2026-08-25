@@ -1015,7 +1015,69 @@ cmd_platform() {
 # Also no-ops when there's no kubectl or no kubeconf-all file at all — that's
 # the host-side test harness running uis-cli.sh on ubuntu-latest CI, not a
 # real cluster-touching context. In the container these always exist.
+# Refuse a cluster-touching command that was told to target one cluster while
+# it would act on another.
+#
+# ⚠️ `deploy` and `verify` resolve their target by DIFFERENT means, and only
+# verify honours the override:
+#
+#   verify → uis_target_host()   — reads cluster-config.sh, honours UIS_TARGET_HOST
+#   deploy → pf_active_platform() — the active kubectl context
+#
+# So `TARGET_HOST=somewhere ./uis deploy x` used to name the ACTIVE cluster and
+# mutate it — applying secrets across ~10 namespaces — without ever mentioning
+# the target it had been given. Harmless on a laptop. The machines where someone
+# reaches for the override are exactly the ones where the active context might
+# be production. Found by the independent tester (2026-08-25).
+#
+# This does not make deploy honour the override — switching clusters mid-command
+# is a bigger change to a path that is running in production. It makes the
+# mismatch impossible to walk into silently, which is the part that could hurt.
+_uis_assert_target_override_matches() {
+    [[ -n "${UIS_TARGET_HOST:-}" ]] || return 0
+    type pf_active_platform >/dev/null 2>&1 || return 0
+
+    local active
+    active="$(pf_active_platform)"
+
+    if [[ -z "$active" ]]; then
+        # Cannot determine what this would act on. With an override set, that is
+        # not a reason to proceed — it is a reason not to. "I could not check"
+        # and "it matches" must not resolve the same way.
+        log_error "Refusing to run: told to target '$UIS_TARGET_HOST', but no active kubectl context is set."
+        log_info  "This command acts on the active context, and there is not one, so it"
+        log_info  "cannot be shown to match what you asked for."
+        log_info  "    ./uis platform use $UIS_TARGET_HOST"
+        return 1
+    fi
+
+    [[ "$UIS_TARGET_HOST" == "$active" ]] && return 0
+
+    log_error "Refusing to run: told to target '$UIS_TARGET_HOST', but this command acts on '$active'."
+    log_info  ""
+    log_info  "TARGET_HOST / UIS_TARGET_HOST is honoured by \`./uis verify\` only."
+    log_info  "Cluster-touching commands such as deploy and undeploy act on the"
+    log_info  "ACTIVE kubectl context, which is currently '$active'."
+    log_info  ""
+    log_info  "To act on '$UIS_TARGET_HOST', switch to it first:"
+    log_info  "    ./uis platform use $UIS_TARGET_HOST"
+    log_info  ""
+    log_info  "Refusing rather than proceeding, because proceeding would write to"
+    log_info  "'$active' while you asked for '$UIS_TARGET_HOST'."
+    return 1
+}
+
 _uis_cluster_banner() {
+    # ⚠️ FIRST, BEFORE THE EARLY RETURNS BELOW. Placed after them, this guard
+    # never ran on any installation where PF_KUBECONFIG is absent — which is the
+    # harness case AND at least one real box. Verified by running a deploy with a
+    # mismatched override and watching it proceed to apply secrets.
+    #
+    # Third time this week I have put a guard behind a return that skips it
+    # (pf_ensure_legacy_kubeconf, the _neko_container_ports fact, this). A guard
+    # that is not reached is not a guard.
+    _uis_assert_target_override_matches || exit "$EXIT_GENERAL_ERROR"
+
     type pf_banner >/dev/null 2>&1 || return 0
     command -v kubectl >/dev/null 2>&1 || return 0
     # F15 — seed kubeconf-all from /home/ansible/.kube/config on first run so

@@ -133,7 +133,12 @@ uis_verify_preflight() {
         kubectl config get-contexts -o name --kubeconfig "$UIS_VERIFY_KUBECONFIG" 2>/dev/null \
             | sed 's/^/  /' || true
         log_info ""
-        log_info "TARGET_HOST comes from .uis.extend/cluster-config.sh."
+        if [[ -n "${UIS_TARGET_HOST:-}" ]]; then
+            log_info "That value came from the ENVIRONMENT (TARGET_HOST / UIS_TARGET_HOST),"
+            log_info "not from .uis.extend/cluster-config.sh — which says '${TARGET_HOST:-rancher-desktop}'."
+        else
+            log_info "TARGET_HOST comes from .uis.extend/cluster-config.sh."
+        fi
         log_info "This is a configuration problem. The service was never asked."
         return 1
     fi
