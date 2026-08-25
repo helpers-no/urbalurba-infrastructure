@@ -361,6 +361,104 @@ remote_version() {
     curl -fsSL --max-time 10 "$UIS_RAW_BASE/version.txt" 2>/dev/null | tr -d "[:space:]" || echo ""
 }
 
+# ─── Ambient update notice ───────────────────────────────────────────────────
+#
+# Adopted from DCT, where the check is ambient rather than something the user
+# remembers to run: dev-welcome shows it on every shell start, so drift is
+# noticed without anyone going looking.
+#
+# Two adaptations, both because UIS is shaped differently:
+#
+#   1. DCT checks once per container start - a shell session. Every `./uis` is
+#      a fresh process, so the equivalent is per-invocation. Without a cache
+#      that is a network call for every `./uis list`, so the answer is cached
+#      briefly on disk.
+#
+#   2. DCT uses --connect-timeout 2 so the check can never block the user. That
+#      part is copied exactly, and it matters more here: `./uis deploy` on a
+#      disconnected laptop must not wait on GitHub.
+#
+# Silent when up to date. The notice IS the signal - a line printed every time
+# would be ignored within a day, which is how the drift went unnoticed in the
+# first place.
+UIS_VERSION_CACHE="${UIS_VERSION_CACHE:-$SCRIPT_DIR/.uis.version-check}"
+UIS_VERSION_CACHE_TTL="${UIS_VERSION_CACHE_TTL:-3600}"
+
+# Echo the latest version, using a cached answer when it is fresh enough.
+# Never blocks for more than a couple of seconds, and never fails the command.
+cached_remote_version() {
+    local now cached_at
+    now="$(date +%s)"
+
+    if [ -f "$UIS_VERSION_CACHE" ]; then
+        cached_at="$(head -1 "$UIS_VERSION_CACHE" 2>/dev/null || echo 0)"
+        case "$cached_at" in ''|*[!0-9]*) cached_at=0 ;; esac
+        if [ $(( now - cached_at )) -lt "$UIS_VERSION_CACHE_TTL" ]; then
+            tail -1 "$UIS_VERSION_CACHE" 2>/dev/null
+            return 0
+        fi
+    fi
+
+    local remote
+    remote="$(curl -fsSL --connect-timeout 2 --max-time 4 "$UIS_RAW_BASE/version.txt" 2>/dev/null | tr -d "[:space:]" || echo "")"
+
+    # Only cache a real answer. Caching an empty result would suppress the
+    # notice for an hour every time the user happened to be offline once.
+    if [ -n "$remote" ]; then
+        printf '%s\n%s\n' "$now" "$remote" > "$UIS_VERSION_CACHE" 2>/dev/null || true
+    fi
+    echo "$remote"
+}
+
+# One line, only when there is something to say.
+maybe_notify_update() {
+    [ -n "${UIS_NO_VERSION_CHECK:-}" ] && return 0
+    # Not on a terminal - a script parsing our output should not get this.
+    [ -t 2 ] || return 0
+
+    local installed remote
+    installed="$(installed_version)"
+    [ -n "$installed" ] || return 0
+
+    remote="$(cached_remote_version)"
+    [ -n "$remote" ] || return 0
+    [ "$installed" = "$remote" ] && return 0
+
+    log_info "Update available: $installed -> $remote   (run: ./uis pull)"
+}
+
+# Show the version, always; the update line only when there is one.
+#
+# DCT's shape: one function, two formats, called from the places a user looks -
+# the welcome line and `dev-help`. One function so the formats cannot drift
+# apart, and the version shown unconditionally while the update notice is the
+# exception. A banner that always says something is one people stop reading.
+#
+#   short : one line, for headers
+#   full  : the version, then an indented update line if behind
+show_version_info() {
+    local format="${1:-full}"
+    local installed remote update=""
+    installed="$(installed_version)"
+    [ -n "$installed" ] || installed="unknown"
+    remote="$(cached_remote_version)"
+
+    if [ -n "$remote" ] && [ "$installed" != "unknown" ] && [ "$installed" != "$remote" ]; then
+        update="$remote"
+    fi
+
+    if [ "$format" = "short" ]; then
+        if [ -n "$update" ]; then
+            echo "UIS v$installed - Update available: v$update (run: ./uis pull)"
+        else
+            echo "UIS v$installed"
+        fi
+    else
+        echo "UIS (Urbalurba Infrastructure Stack) v$installed"
+        [ -n "$update" ] && echo "  Update available: v$update   (run: ./uis pull)"
+    fi
+}
+
 # Report where this machine stands. Used by `./uis version` and `./uis pull`.
 # Returns 0 if up to date, 1 if an update is available, 2 if it could not tell.
 report_version_status() {
@@ -504,6 +602,19 @@ show_usage() {
 }
 
 # Main command handler
+# ⚠️ Before the dispatch, so EVERY command carries it - which is the point. The
+# user should not have to remember to check; that is how three-week-old
+# launchers went unnoticed on three machines at once. Silent unless there is an
+# update, capped at a few seconds, cached for an hour, and skipped for `version`
+# and `pull` because those report the versions themselves.
+case "${1:-help}" in
+    # `help` is NOT excluded: the container's own help prints the version
+    # header, so all it needs from us is the update line. Adding
+    # show_version_info here printed the version twice.
+    version|--version|-v|pull|container) : ;;
+    *) maybe_notify_update ;;
+esac
+
 case "${1:-help}" in
     start)
         start_container
@@ -518,6 +629,7 @@ case "${1:-help}" in
         log_info "UIS container restarted"
         ;;
     container)
+        show_version_info short
         if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
             log_info "Container is running"
             docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
