@@ -29,6 +29,32 @@
 # Usage:
 #   ansible-playbook 088-test-postgrest.yml -e "target_host=rancher-desktop _app_name=myapp"
 #   ./uis verify postgrest --app myapp
+#
+# ── HOW TO PROVE CHECK C ACTUALLY WORKS ───────────────────────────────────────
+#
+# C is the security property, so it is worth being able to prove it can fail.
+# Recorded here because the obvious way to try it DOES NOT WORK, and quietly
+# produces a PASS that looks like the check is broken:
+#
+#   ✗ GRANT INSERT ON ALL TABLES IN SCHEMA <schema> TO web_anon;
+#
+#     Two reasons it fails to falsify anything:
+#       1. The role is PER-APP. `configure` creates <app>_web_anon and
+#          <app>_authenticator — there is no bare `web_anon`.
+#       2. ON ALL TABLES applies only to tables that exist AT GRANT TIME. The
+#          probe table is created by A1 *during* the run, so it is not covered —
+#          and C POSTs to exactly that table.
+#
+#   ✓ ALTER DEFAULT PRIVILEGES IN SCHEMA <schema>
+#       GRANT INSERT ON TABLES TO <app>_web_anon;
+#
+#     Then C fails loudly, as it should. Revert with the matching REVOKE.
+#
+# The independent tester followed the wrong version, saw C pass on a
+# deliberately-loosened database, and nearly filed "C cannot detect the
+# misconfiguration it exists for" (2026-08-25). A falsification recipe that
+# silently does nothing is worse than none: it manufactures false confidence in
+# both directions.
 
 - name: Verify a PostgREST instance serves its schema and refuses writes
   hosts: localhost
@@ -211,6 +237,16 @@
         changed_when: true
         failed_when: false
         no_log: true
+        # ⚠️ REQUIRED. The SUMMARY below branches on _drop.rc. Without this the
+        # fact is undefined, `default(1)` applies, and the success branch is
+        # UNREACHABLE — every green run ends by claiming the probe table could
+        # not be dropped. Found by the independent tester (2026-08-25).
+        #
+        # Same class as the neko round-2 defect: a consumer added without its
+        # producer. The previous version of this summary lied one way (always
+        # "clean"); the fix lied the other (always "dirty"). A line nobody can
+        # trust gets ignored on the day it is right.
+        register: _drop
 
     - name: "SUMMARY"
       ansible.builtin.debug:

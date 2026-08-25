@@ -136,6 +136,31 @@ curl -sS -X OPTIONS \
 # expect: Access-Control-Allow-Origin: ...
 ```
 
+### Proving the write-refusal check can actually fail
+
+`./uis verify postgrest --app <name>` asserts that a write through the API is
+**refused**. That is a security property, so it is worth knowing it can fail —
+and the obvious way to try it silently does nothing:
+
+```sql
+-- ✗ does NOT falsify anything
+GRANT INSERT ON ALL TABLES IN SCHEMA api_v1 TO web_anon;
+```
+
+Two reasons: the role is per-app (`<app>_web_anon`, never a bare `web_anon` —
+see [Roles](#roles) above), and `ON ALL TABLES` covers only tables that exist
+**at grant time**, while the verify creates its probe table during the run.
+
+```sql
+-- ✓ actually loosens the instance
+ALTER DEFAULT PRIVILEGES IN SCHEMA api_v1
+  GRANT INSERT ON TABLES TO atlas_web_anon;
+```
+
+The verify then fails, reporting that an unauthenticated write endpoint is live.
+Revert with the matching `REVOKE`, or re-run `uis configure postgrest --app
+<name>`, which rebuilds the grants from scratch.
+
 Check 1 confirms PostgREST is alive and the pinned image is what's actually running. Check 2 confirms the default schema (the first one in `--schemas`) is reachable and populated. Check 3 is the **multi-schema verification**: it walks the full `--schemas` list, fetching the OpenAPI spec under each `Accept-Profile` and asserting each schema has a non-zero path count. **Don't skip this check on a multi-schema instance** — without `Accept-Profile`, root-path probes only verify the *default* schema, which masks broken GRANTs on the other schemas. Check 4 confirms `private_*` schemas (or anything else not in `--schemas`) return 404 even when explicitly requested. Check 5 confirms CORS is open enough for browser apps.
 
 ### Schema reload
