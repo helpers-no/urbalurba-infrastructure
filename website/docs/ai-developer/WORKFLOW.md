@@ -166,6 +166,63 @@ Claude will:
 
 ---
 
+## Version Management (MANDATORY)
+
+**Before creating a pull request, ask:**
+
+> "Should we bump the version for this change?
+>  Current version: `<contents of version.txt>`
+>  If yes, what should the new version be?"
+
+If yes, edit `version.txt` — **the single version file** — and include it in the
+same PR.
+
+| Bump | When |
+|---|---|
+| PATCH `1.5.x` | bug fixes, small improvements |
+| MINOR `1.x.0` | new features, documentation improvements |
+| MAJOR `x.0.0` | breaking changes |
+
+### Why this is mandatory rather than nice-to-have
+
+**`./uis pull` only tells a user there is an update when the number changes.**
+Ship a fix without bumping and it reaches nobody who is not already watching
+commits — the update notice on every command says "up to date" about an
+installation that is weeks behind.
+
+That is not hypothetical. `version.txt` sat at `0.1.1` while the image was
+rebuilt dozens of times, during which three defects shipped to the launcher and
+reached no machine at all: the kubeconfig written as a symlink, images never
+cleaned up, and a dropped override. **A version that never moves makes the
+version check theatre**, and the check wears the fix as a disguise.
+
+### What one edit propagates to
+
+One file, every consumer:
+
+- the container image (`Dockerfile` copies it in)
+- `uis version` and the launcher's installed/latest comparison
+- the update notice carried by every command
+- the version badge on the documentation site
+- the CI image tags
+
+### Release process
+
+```bash
+echo "1.5.3" > version.txt
+git add version.txt
+git commit -m "chore: bump version to 1.5.3"
+```
+
+Merging to `main` builds and publishes the image tagged with both the version
+and `:latest`. Users see it on their next `./uis` command, and get it with
+`./uis pull`.
+
+Adopted from `devcontainer-toolbox`, which states the reason plainly: *without a
+version bump, changes will never reach users.*
+
+---
+
 ## Handing work to the tester
 
 Build and verify are separated — see **[Writing a testable dispatch](./VERIFICATION.md)**.
