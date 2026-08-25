@@ -183,6 +183,25 @@ include it in the same PR.
 | **MINOR** `1.x.0` | new capability, or a command behaves newly | the ambient update notice; `./uis browserless verify-session`; a new service |
 | **MAJOR** `x.0.0` | someone's working setup breaks | a renamed command; a changed config file format; a removed flag |
 
+### ⚠️ Current series: stay on `1.6.x` (Terje, 2026-08-25)
+
+**Until every service runs on asgard, the minor number does not move.** Bump the
+patch — `1.6.1`, `1.6.2`, … — for everything, including work that would
+otherwise classify as MINOR.
+
+**Why**: the minor number is being used to mark a milestone rather than to
+describe individual changes. "Everything runs on production" is the thing worth
+signalling, and spending the minor on intermediate features would spend it on
+nothing anyone outside the project can see.
+
+**This overrides the "unsure → choose MINOR" default below.** During this series
+the answer is always PATCH.
+
+**Exit condition**: when all services are running on asgard, the next release is
+`1.7.0`. That is a MAJOR-shaped decision in significance if not in semver, so
+confirm it rather than taking it — it is the one bump that means something to
+someone outside this repository.
+
 **Ask only for MAJOR.** A breaking change is a product decision with a blast
 radius beyond the repository, and it is the one case where the person who owns
 the platform should weigh it. PATCH and MINOR are the assistant's call.
