@@ -346,6 +346,17 @@ installed_version() {
 }
 
 # The version published upstream.
+#
+# ⚠️ raw.githubusercontent.com is CDN-CACHED. Measured on 2026-08-25: it served
+# the previous version for about four minutes after the merge landed, while the
+# GitHub API already returned the new one. So immediately after a release this
+# will report "up to date" against a version that has just been superseded.
+#
+# That is not worth engineering around - a few minutes' lag on a version check
+# costs nothing - but it IS worth knowing, because the alternative is someone
+# debugging a correct check for an hour. If you need the authoritative answer
+# right now:
+#     gh api repos/helpers-no/urbalurba-infrastructure/contents/version.txt?ref=main -q .content | base64 -d
 remote_version() {
     curl -fsSL --max-time 10 "$UIS_RAW_BASE/version.txt" 2>/dev/null | tr -d "[:space:]" || echo ""
 }
