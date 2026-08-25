@@ -93,113 +93,124 @@
     # that idiom can return rc=0 with empty stdout when the container outlives the
     # attach, which reads a healthy service as failing. See
     # INVESTIGATE-system-verification-playbooks-usage.
-    - name: "A1. Create the probe table as the app would, in {{ _schema }}"
-      ansible.builtin.command: >
-        kubectl exec -n {{ _pg_ns }} postgresql-0 --context {{ _target }} --
-        env PGPASSWORD={{ _pgpw.stdout }}
-        psql -U postgres -d {{ _db }} -v ON_ERROR_STOP=1 -c
-        "CREATE TABLE IF NOT EXISTS {{ _schema }}.{{ _tbl }}(id int primary key, msg text);
-         INSERT INTO {{ _schema }}.{{ _tbl }} VALUES (1,'uis-verify')
-         ON CONFLICT (id) DO UPDATE SET msg=EXCLUDED.msg;"
-      register: _seed
-      changed_when: true
-      no_log: true
+    # ⚠️ block/always, NOT a plain task list. The probe table is created in the
+    # APP'S OWN SCHEMA, so if an assertion below fails the play would abort
+    # before Z1 and leave `uis_verify_probe` sitting in a real application
+    # schema — the one Atlas exposes publicly. The SUMMARY also claims "the
+    # database is as it was found", which would then be false.
+    #
+    # A verify that dirties the thing it verifies, precisely when it fails, is
+    # worse than no verify: it turns a failed test into a data-cleanup task.
+    - name: "Probe the instance, always cleaning up afterwards"
+      block:
+      - name: "A1. Create the probe table as the app would, in {{ _schema }}"
+        ansible.builtin.command: >
+          kubectl exec -n {{ _pg_ns }} postgresql-0 --context {{ _target }} --
+          env PGPASSWORD={{ _pgpw.stdout }}
+          psql -U postgres -d {{ _db }} -v ON_ERROR_STOP=1 -c
+          "CREATE TABLE IF NOT EXISTS {{ _schema }}.{{ _tbl }}(id int primary key, msg text);
+           INSERT INTO {{ _schema }}.{{ _tbl }} VALUES (1,'uis-verify')
+           ON CONFLICT (id) DO UPDATE SET msg=EXCLUDED.msg;"
+        register: _seed
+        changed_when: true
+        no_log: true
 
-    - name: "A1b. Tell PostgREST to reload its schema cache"
-      # PostgREST caches the schema at startup, so a table created after the pod
-      # started is invisible to it (PGRST205 "not found in the schema cache").
-      # NOTIFY on the pgrst channel is the supported reload signal and avoids
-      # restarting the pod. Harmless if db-channel-enabled is off - the retry on
-      # B1 then covers the window instead.
-      ansible.builtin.command: >
-        kubectl exec -n {{ _pg_ns }} postgresql-0 --context {{ _target }} --
-        env PGPASSWORD={{ _pgpw.stdout }}
-        psql -U postgres -d {{ _db }} -c "NOTIFY pgrst, 'reload schema';"
-      changed_when: false
-      failed_when: false
-      no_log: true
+      - name: "A1b. Tell PostgREST to reload its schema cache"
+        # PostgREST caches the schema at startup, so a table created after the pod
+        # started is invisible to it (PGRST205 "not found in the schema cache").
+        # NOTIFY on the pgrst channel is the supported reload signal and avoids
+        # restarting the pod. Harmless if db-channel-enabled is off - the retry on
+        # B1 then covers the window instead.
+        ansible.builtin.command: >
+          kubectl exec -n {{ _pg_ns }} postgresql-0 --context {{ _target }} --
+          env PGPASSWORD={{ _pgpw.stdout }}
+          psql -U postgres -d {{ _db }} -c "NOTIFY pgrst, 'reload schema';"
+        changed_when: false
+        failed_when: false
+        no_log: true
 
-    - name: "A2. Assert the seed landed"
-      ansible.builtin.assert:
-        that: _seed.rc == 0
-        fail_msg: >-
-          Could not write the probe row into {{ _db }}.{{ _schema }}. The
-          database or schema this instance is configured for is not usable.
-        success_msg: "Probe row written by the app side."
+      - name: "A2. Assert the seed landed"
+        ansible.builtin.assert:
+          that: _seed.rc == 0
+          fail_msg: >-
+            Could not write the probe row into {{ _db }}.{{ _schema }}. The
+            database or schema this instance is configured for is not usable.
+          success_msg: "Probe row written by the app side."
 
-    # --- Test B: read it back through the HTTP API ---
-    - name: "B1. GET the row through {{ _app_name }}-postgrest"
-      ansible.builtin.shell: |
-        set -e
-        kubectl run {{ _probe }} --image=curlimages/curl --restart=Never \
-          -n {{ _ns }} --context {{ _target }} --command -- \
-          curl -s -m 15 "http://{{ _app_name }}-postgrest:3000/{{ _tbl }}?id=eq.1" >/dev/null
-        kubectl wait --for=condition=Ready=false --timeout=60s \
-          -n {{ _ns }} --context {{ _target }} pod/{{ _probe }} >/dev/null 2>&1 || true
-        for i in $(seq 1 30); do
-          phase=$(kubectl get pod {{ _probe }} -n {{ _ns }} --context {{ _target }} -o jsonpath='{.status.phase}' 2>/dev/null)
-          [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ] && break
-          sleep 2
-        done
-        kubectl logs {{ _probe }} -n {{ _ns }} --context {{ _target }}
-        kubectl delete pod {{ _probe }} -n {{ _ns }} --context {{ _target }} --wait=false >/dev/null 2>&1
-      register: _read
-      changed_when: false
-      failed_when: false
-      retries: 6
-      delay: 5
-      until: _read.stdout is search('uis-verify')
+      # --- Test B: read it back through the HTTP API ---
+      - name: "B1. GET the row through {{ _app_name }}-postgrest"
+        ansible.builtin.shell: |
+          set -e
+          kubectl run {{ _probe }} --image=curlimages/curl --restart=Never \
+            -n {{ _ns }} --context {{ _target }} --command -- \
+            curl -s -m 15 "http://{{ _app_name }}-postgrest:3000/{{ _tbl }}?id=eq.1" >/dev/null
+          kubectl wait --for=condition=Ready=false --timeout=60s \
+            -n {{ _ns }} --context {{ _target }} pod/{{ _probe }} >/dev/null 2>&1 || true
+          for i in $(seq 1 30); do
+            phase=$(kubectl get pod {{ _probe }} -n {{ _ns }} --context {{ _target }} -o jsonpath='{.status.phase}' 2>/dev/null)
+            [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ] && break
+            sleep 2
+          done
+          kubectl logs {{ _probe }} -n {{ _ns }} --context {{ _target }}
+          kubectl delete pod {{ _probe }} -n {{ _ns }} --context {{ _target }} --wait=false >/dev/null 2>&1
+        register: _read
+        changed_when: false
+        failed_when: false
+        retries: 6
+        delay: 5
+        until: _read.stdout is search('uis-verify')
 
-    - name: "B2. Assert the API returned the row the app wrote"
-      ansible.builtin.assert:
-        that:
-          - _read.stdout is search('uis-verify')
-        fail_msg: >-
-          {{ _app_name }}-postgrest did not return the probe row. The pod may be
-          running while unable to reach {{ _db }}, or the schema
-          '{{ _schema }}' is not the one it serves. Response was:
-          {{ _read.stdout | default('<empty>') | truncate(200) }}
-        success_msg: "The API served data written by the app."
+      - name: "B2. Assert the API returned the row the app wrote"
+        ansible.builtin.assert:
+          that:
+            - _read.stdout is search('uis-verify')
+          fail_msg: >-
+            {{ _app_name }}-postgrest did not return the probe row. The pod may be
+            running while unable to reach {{ _db }}, or the schema
+            '{{ _schema }}' is not the one it serves. Response was:
+            {{ _read.stdout | default('<empty>') | truncate(200) }}
+          success_msg: "The API served data written by the app."
 
-    # --- Test C: writes through the API must be refused (read-only by design) ---
-    - name: "C1. POST through the API"
-      ansible.builtin.shell: |
-        kubectl run {{ _probe }}-w --image=curlimages/curl --restart=Never \
-          -n {{ _ns }} --context {{ _target }} --command -- \
-          curl -s -m 15 -o /dev/null -w "%{http_code}" \
-          -X POST "http://{{ _app_name }}-postgrest:3000/{{ _tbl }}" \
-          -H "Content-Type: application/json" -d '{"id":999,"msg":"should-not-persist"}' >/dev/null
-        for i in $(seq 1 30); do
-          phase=$(kubectl get pod {{ _probe }}-w -n {{ _ns }} --context {{ _target }} -o jsonpath='{.status.phase}' 2>/dev/null)
-          [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ] && break
-          sleep 2
-        done
-        kubectl logs {{ _probe }}-w -n {{ _ns }} --context {{ _target }}
-        kubectl delete pod {{ _probe }}-w -n {{ _ns }} --context {{ _target }} --wait=false >/dev/null 2>&1
-      register: _write
-      changed_when: false
-      failed_when: false
+      # --- Test C: writes through the API must be refused (read-only by design) ---
+      - name: "C1. POST through the API"
+        ansible.builtin.shell: |
+          kubectl run {{ _probe }}-w --image=curlimages/curl --restart=Never \
+            -n {{ _ns }} --context {{ _target }} --command -- \
+            curl -s -m 15 -o /dev/null -w "%{http_code}" \
+            -X POST "http://{{ _app_name }}-postgrest:3000/{{ _tbl }}" \
+            -H "Content-Type: application/json" -d '{"id":999,"msg":"should-not-persist"}' >/dev/null
+          for i in $(seq 1 30); do
+            phase=$(kubectl get pod {{ _probe }}-w -n {{ _ns }} --context {{ _target }} -o jsonpath='{.status.phase}' 2>/dev/null)
+            [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ] && break
+            sleep 2
+          done
+          kubectl logs {{ _probe }}-w -n {{ _ns }} --context {{ _target }}
+          kubectl delete pod {{ _probe }}-w -n {{ _ns }} --context {{ _target }} --wait=false >/dev/null 2>&1
+        register: _write
+        changed_when: false
+        failed_when: false
 
-    - name: "C2. Assert the write was refused"
-      ansible.builtin.assert:
-        that:
-          - _write.stdout is not search('^20[0-9]$')
-        fail_msg: >-
-          A write through the PostgREST API was ACCEPTED (HTTP
-          {{ _write.stdout | default('?') }}). UIS grants SELECT only - see the
-          GRANT block in configure-postgrest.sh. An accepted write means this
-          instance exposes an unauthenticated write endpoint.
-        success_msg: "Writes are refused (HTTP {{ _write.stdout | default('?') }})."
+      - name: "C2. Assert the write was refused"
+        ansible.builtin.assert:
+          that:
+            - _write.stdout is not search('^20[0-9]$')
+          fail_msg: >-
+            A write through the PostgREST API was ACCEPTED (HTTP
+            {{ _write.stdout | default('?') }}). UIS grants SELECT only - see the
+            GRANT block in configure-postgrest.sh. An accepted write means this
+            instance exposes an unauthenticated write endpoint.
+          success_msg: "Writes are refused (HTTP {{ _write.stdout | default('?') }})."
 
-    # --- Cleanup: leave the database as it was found ---
-    - name: "Z1. Drop the probe table"
-      ansible.builtin.command: >
-        kubectl exec -n {{ _pg_ns }} postgresql-0 --context {{ _target }} --
-        env PGPASSWORD={{ _pgpw.stdout }}
-        psql -U postgres -d {{ _db }} -c "DROP TABLE IF EXISTS {{ _schema }}.{{ _tbl }};"
-      changed_when: true
-      failed_when: false
-      no_log: true
+      # --- Cleanup: leave the database as it was found ---
+      always:
+      - name: "Z1. Drop the probe table"
+        ansible.builtin.command: >
+          kubectl exec -n {{ _pg_ns }} postgresql-0 --context {{ _target }} --
+          env PGPASSWORD={{ _pgpw.stdout }}
+          psql -U postgres -d {{ _db }} -c "DROP TABLE IF EXISTS {{ _schema }}.{{ _tbl }};"
+        changed_when: true
+        failed_when: false
+        no_log: true
 
     - name: "SUMMARY"
       ansible.builtin.debug:
@@ -211,4 +222,7 @@
           - "B. API serves that data over HTTP:   PASS"
           - "C. API refuses writes (SELECT only): PASS"
           - ""
-          - "The probe table has been dropped; the database is as it was found."
+          - "{{ ((_drop.rc | default(1)) == 0)
+                 | ternary('The probe table has been dropped; the database is as it was found.',
+                           '⚠️ THE PROBE TABLE COULD NOT BE DROPPED. ' ~ _schema ~ '.' ~ _tbl ~
+                           ' may still exist in ' ~ _db ~ ' — remove it by hand.') }}"
