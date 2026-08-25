@@ -30,6 +30,35 @@
 #   ansible-playbook 088-test-postgrest.yml -e "target_host=rancher-desktop _app_name=myapp"
 #   ./uis verify postgrest --app myapp
 #
+# ── KNOWN LIMITATION: the cleanup-failure branch is UNRENDERED ────────────────
+#
+# The SUMMARY's last line branches on whether Z1's DROP succeeded. The SUCCESS
+# branch is exercised on every green run. The FAILURE branch has never been
+# rendered against a real run, so its wording and its variables are unproven.
+#
+# That is not an oversight — it is hard to reach on purpose:
+#   - `postgres` is a superuser here, so REVOKE cannot stop it dropping
+#     (verified by the independent tester, 2026-08-25);
+#   - the branch only fires on a genuine drop failure.
+#
+# A mechanism that WOULD render it, proven in a throwaway schema by the tester
+# rather than guessed: Z1 runs `DROP TABLE IF EXISTS` WITHOUT CASCADE, and a
+# dependent view defeats that even for a superuser —
+#
+#     create view <schema>.dependent_v as select * from <schema>.uis_verify_probe;
+#     -- Z1 then fails: "cannot drop table ... because other objects depend on it"
+#
+# ⚠️ NOT DONE, AND NOT TO BE DONE CASUALLY. Rendering it requires pre-creating
+# `uis_verify_probe` plus a dependent view inside a REAL application schema, and
+# leaving that litter in place through an otherwise-green run. On atlas that
+# schema is `api_v1`, which is publicly exposed. Deliberately dirtying a
+# soon-public schema to exercise a log line is an owner's decision, not a
+# tester's or a builder's — it is with Terje as of 2026-08-25.
+#
+# Recorded here so the finding survives the handoff file it came from. A branch
+# that has never been rendered is not verified, and this one should not be
+# assumed correct because the round it belongs to passed.
+
 # ── HOW TO PROVE CHECK C ACTUALLY WORKS ───────────────────────────────────────
 #
 # C is the security property, so it is worth being able to prove it can fail.
