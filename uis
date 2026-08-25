@@ -276,9 +276,32 @@ cleanup_old_images() {
     running_id="$(docker inspect "$CONTAINER_NAME" --format '{{.Image}}' 2>/dev/null || true)"
     keep_ids="$latest_id $running_id"
 
-    # Every image for this repo, tagged or dangling, newest first.
+    # ⚠️ TWO ENUMERATIONS, UNIONED. Neither alone is sufficient.
+    #
+    # `docker images <repo>` lists images that still carry that REPOSITORY
+    # NAME. That is the one this used to use, and its comment claimed "tagged or
+    # dangling" - which the command does not deliver. When `:latest` moves, the
+    # superseded image can lose its repository association entirely and become
+    # <none>:<none>, at which point this filter never sees it again.
+    #
+    # That is the ordinary path - pulling :latest repeatedly as the version
+    # advances - so the cleanup was blind to exactly the images it accumulates.
+    # The tester measured 11 of them, 1.73 GB each, while every pull reported
+    # "No superseded UIS images to remove" (2026-08-26).
+    #
+    # It passed its own round because that falsification pulled a DIGEST, which
+    # leaves the image as repo:<none> - still inside the old filter. The
+    # reachable state was tested; the state that actually accumulates was not.
+    #
+    # So: by repository name, AND by our source label which survives the loss of
+    # the name. The union also covers images built before the label existed,
+    # which the label filter alone would miss.
     local all_ids
-    all_ids="$(docker images "$repo" --format '{{.ID}}' --no-trunc 2>/dev/null | sort -u || true)"
+    all_ids="$( {
+        docker images "$repo" --format '{{.ID}}' --no-trunc 2>/dev/null || true
+        docker images -a --no-trunc --filter "label=org.opencontainers.image.source=$UIS_IMAGE_SOURCE" \
+            --format '{{.ID}}' 2>/dev/null || true
+    } | sort -u )"
     [ -n "$all_ids" ] || return 0
 
     local id size blocked=0 blockers=""
@@ -335,7 +358,14 @@ cleanup_old_images() {
 # reason it works: the product has one version, and updating refreshes the
 # host-side file too, so "are they in step?" is answered by "did you update?"
 # rather than by comparing two numbers that can drift apart.
-UIS_RAW_BASE="https://raw.githubusercontent.com/helpers-no/urbalurba-infrastructure/main"
+# Overridable so the falsification recipes in the dispatches can actually point
+# this somewhere else. It was hard-assigned for three rounds, which made my own
+# "point it at a wrong URL" test inert and forced the tester to patch the
+# launcher by hand each time to run it.
+UIS_RAW_BASE="${UIS_RAW_BASE:-https://raw.githubusercontent.com/helpers-no/urbalurba-infrastructure/main}"
+
+# Used to recognise our images even after they lose their repository name.
+UIS_IMAGE_SOURCE="${UIS_IMAGE_SOURCE:-https://github.com/helpers-no/urbalurba-infrastructure}"
 
 # The version this machine is running: read from the image, which is the
 # artefact that carries it.
