@@ -247,6 +247,80 @@ start_container() {
 }
 
 # Pull latest container image and restart
+# Remove UIS images this machine no longer needs.
+#
+# ⚠️ `./uis pull` used to leave every superseded image on disk. Each is ~1.2 GB,
+# and the machine that pulls most often is the one building UIS — so the
+# maintainer's own box fills first. On a 29 GB Pi that is about a fortnight.
+#
+# It filled assist's disk on 2026-08-25: 18 images, 12.9 GB, 9 GB reclaimable.
+# k3s taints a node at ~10% free, so the node tainted itself, and the pods that
+# went Pending included Uptime Kuma — the fleet's watchdog, down six hours
+# before anyone noticed. The thing that would have reported it was the thing
+# that was down.
+#
+# Rules, in order of importance:
+#   1. NEVER remove an image a container is using. `docker rmi` already refuses,
+#      so this deliberately does NOT pass -f. If an image is in use, leaving it
+#      is the correct outcome and the loop moves on.
+#   2. Keep the image the current container runs, plus whatever :latest now
+#      resolves to. Those can differ for a moment during a restart.
+#   3. Say what was freed. Silent cleanup is how people stop trusting cleanup.
+cleanup_old_images() {
+    local repo="${IMAGE%%:*}"
+    local keep_ids="" freed=0 removed=0
+
+    # What must survive: what :latest points at, and what the container runs.
+    local latest_id running_id
+    latest_id="$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+    running_id="$(docker inspect "$CONTAINER_NAME" --format '{{.Image}}' 2>/dev/null || true)"
+    keep_ids="$latest_id $running_id"
+
+    # Every image for this repo, tagged or dangling, newest first.
+    local all_ids
+    all_ids="$(docker images "$repo" --format '{{.ID}}' --no-trunc 2>/dev/null | sort -u || true)"
+    [ -n "$all_ids" ] || return 0
+
+    local id size blocked=0 blockers=""
+    for id in $all_ids; do
+        case " $keep_ids " in *" $id "*) continue ;; esac
+
+        size="$(docker image inspect "$id" --format '{{.Size}}' 2>/dev/null || echo 0)"
+        # No -f: an image still referenced by ANY container stays, by design.
+        if docker rmi "$id" >/dev/null 2>&1; then
+            freed=$(( freed + size ))
+            removed=$(( removed + 1 ))
+        else
+            # ⚠️ "could not remove" and "nothing to remove" are DIFFERENT, and
+            # the first version of this reported them identically — it said
+            # "No superseded UIS images to remove" while 1.18 GB sat there,
+            # held by a stopped container. Same defect this codebase has been
+            # chasing all week, written into the fix for it.
+            blocked=$(( blocked + 1 ))
+            local holder
+            holder="$(docker ps -a --filter "ancestor=$id" --format '{{.Names}} ({{.Status}})' 2>/dev/null | head -3 | tr '\n' ' ')"
+            blockers="$blockers  ${id#sha256:} <- ${holder:-unknown container}\n"
+        fi
+    done
+
+    if [ "$removed" -gt 0 ]; then
+        log_info "Removed $removed superseded UIS image(s), freeing $(( freed / 1024 / 1024 )) MB"
+    fi
+
+    if [ "$blocked" -gt 0 ]; then
+        log_info "$blocked superseded UIS image(s) could NOT be removed - a container still references them:"
+        printf "%b" "$blockers" >&2
+        log_info "These are usually leftover stopped containers. To reclaim the space:"
+        log_info "    docker ps -a --filter ancestor=<image-id>     # see what holds it"
+        log_info "    docker rm <container>  &&  ./uis pull         # then this will clear it"
+        log_info "Not forced on purpose: -f would delete an image another container is using."
+    fi
+
+    if [ "$removed" -eq 0 ] && [ "$blocked" -eq 0 ]; then
+        log_info "No superseded UIS images to remove"
+    fi
+}
+
 pull_container() {
     log_info "Pulling latest UIS container image..."
     if docker pull "$IMAGE"; then
@@ -259,6 +333,9 @@ pull_container() {
         else
             log_info "Container is not running. Start it with: ./uis start"
         fi
+        # After the restart, so the container is already on the new image and
+        # the old one is genuinely unreferenced.
+        cleanup_old_images
     else
         log_error "Failed to pull image"
         exit 1
