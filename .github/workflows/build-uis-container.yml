@@ -126,21 +126,6 @@ jobs:
           fi
           echo "OK: :latest and :${SHA_TAG} are the same image."
 
-      - name: Sync website/static/version.txt
-        run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          echo "$VERSION" > website/static/version.txt
-          if git diff --quiet website/static/version.txt; then
-            echo "website/static/version.txt already up to date"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add website/static/version.txt
-            git commit -m "chore: sync website/static/version.txt to ${VERSION} [skip ci]"
-            git pull --rebase
-            git push
-          fi
-
       - name: Generate build summary
         run: |
           echo "## UIS Container Build Summary" >> $GITHUB_STEP_SUMMARY
