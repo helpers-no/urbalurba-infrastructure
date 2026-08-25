@@ -10,7 +10,7 @@
 # service would be a nasty surprise. Dropping it is a separate, explicit act:
 #
 #   kubectl exec -n default postgresql-0 -- \
-#     env PGPASSWORD=<pw> psql -U postgres -c "DROP DATABASE dagster"
+#     env PGPASSWORD=<pw> kubectl exec -n default $(kubectl get pod -n default -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}') -- psql -h 127.0.0.1 -U postgres -c "DROP DATABASE dagster"
 #
 # Usage:
 #   ansible-playbook 360-remove-dagster.yml -e "target_host=rancher-desktop"
@@ -130,4 +130,4 @@
             - the namespace itself
 
           To discard the history as well:
-            psql -U postgres -c "DROP DATABASE dagster"
+            kubectl exec -n default $(kubectl get pod -n default -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}') -- psql -h 127.0.0.1 -U postgres -c "DROP DATABASE dagster"

@@ -3,11 +3,19 @@ name: Test UIS Scripts
 on:
   pull_request:
     paths:
+      # ⚠️ ansible/** is here on purpose. The static suite scans the playbooks
+      # (see tests/static/test-postgres-connection-shape.sh), and with only
+      # provision-host/uis/** a playbook change ran NO tests at all — which is
+      # how a hardcoded postgres pod name shipped and stayed green.
       - 'provision-host/uis/**'
+      - 'ansible/**'
+      - 'uis'
   push:
     branches: [main]
     paths:
       - 'provision-host/uis/**'
+      - 'ansible/**'
+      - 'uis'
   workflow_dispatch:
 
 jobs:

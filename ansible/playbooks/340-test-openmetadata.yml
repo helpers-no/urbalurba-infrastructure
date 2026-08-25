@@ -222,7 +222,7 @@
           - Check PostgreSQL: kubectl get pods -n default -l app.kubernetes.io/name=postgresql
           - Check Elasticsearch: kubectl get pods -n default -l app=elasticsearch-master
           - Check pod logs: kubectl logs -n {{ openmetadata_namespace }} -l app.kubernetes.io/name=openmetadata --tail=100
-          - Check DB connection: kubectl exec -n default postgresql-0 -- psql -U postgres -c "\\l" | grep openmetadata
+          - Check DB connection: kubectl exec -n default $(kubectl get pod -n default -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}') -- psql -h 127.0.0.1 -U postgres -c "\\l" | grep openmetadata
         success_msg: "✅ Test D PASSED: Database and search backends are healthy"
       when: jwt_token is defined and jwt_token | length > 0
 

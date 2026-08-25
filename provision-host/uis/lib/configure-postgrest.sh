@@ -12,6 +12,12 @@
 #   - PLAN-002-postgrest-deployment.md Phase 2
 
 # PostgreSQL connection details (where we create the roles)
+
+# See pg-connection.sh — ALWAYS pass -h. The local socket does not exist on the
+# proxied topology. Defined defensively here so this lib works even when sourced
+# outside uis-cli.sh.
+PG_PSQL_HOST="${PG_PSQL_HOST:-127.0.0.1}"
+
 PG_ADMIN_USER="postgres"
 PG_K8S_SVC="postgresql"
 PG_NAMESPACE="default"
@@ -130,7 +136,7 @@ _pgrst_exec() {
     kubectl exec "$pod" \
         -n "$PG_NAMESPACE" \
         --kubeconfig="$kubeconf" \
-        -- env PGPASSWORD="$admin_pass" psql -U "$PG_ADMIN_USER" -t -A -c "$sql" 2>/dev/null
+        -- env PGPASSWORD="$admin_pass" psql -h "$PG_PSQL_HOST" -U "$PG_ADMIN_USER" -t -A -c "$sql"
 }
 
 # Run a SQL block against a specific database. Mirrors `_pg_exec_db` in
@@ -152,7 +158,7 @@ _pgrst_exec_db() {
     printf '%s\n' "$sql" | kubectl exec -i "$pod" \
         -n "$PG_NAMESPACE" \
         --kubeconfig="$kubeconf" \
-        -- env PGPASSWORD="$admin_pass" psql -U "$PG_ADMIN_USER" -d "$database" \
+        -- env PGPASSWORD="$admin_pass" psql -h "$PG_PSQL_HOST" -U "$PG_ADMIN_USER" -d "$database" \
            --set ON_ERROR_STOP=on -f - 2>&1
 }
 

@@ -136,6 +136,14 @@
       no_log: true
 
     - name: "0.4b Find the PostgreSQL pod, whatever provides it"
+      # ⚠️ TWO separate topology assumptions live here. This one is the pod NAME;
+      # the other is the psql HOST. Finding the right pod is not enough — without
+      # `-h` psql uses the local unix socket, which does not exist in the proxy
+      # (its first container is client tooling with no server). I fixed the pod
+      # name on 2026-08-25 and left the socket assumption in place, so this
+      # playbook still could not run on a proxied installation. Both halves are
+      # needed; neither is sufficient.
+      #
       # ⚠️ NOT `postgresql-0` — see 360-test-dagster.yml B0 for the full note.
       # In short: that name is a StatefulSet artefact of the in-cluster
       # database. An installation that declares postgresql in
@@ -194,7 +202,7 @@
         ansible.builtin.command: >
           kubectl exec -n {{ _pg_ns }} {{ _pgpods.resources[0].metadata.name }} --context {{ _target }} --
           env PGPASSWORD={{ _pgpw.stdout }}
-          psql -U postgres -d {{ _db }} -v ON_ERROR_STOP=1 -c
+          psql -h 127.0.0.1 -U postgres -d {{ _db }} -v ON_ERROR_STOP=1 -c
           "CREATE TABLE IF NOT EXISTS {{ _schema }}.{{ _tbl }}(id int primary key, msg text);
            INSERT INTO {{ _schema }}.{{ _tbl }} VALUES (1,'uis-verify')
            ON CONFLICT (id) DO UPDATE SET msg=EXCLUDED.msg;"
@@ -211,7 +219,7 @@
         ansible.builtin.command: >
           kubectl exec -n {{ _pg_ns }} {{ _pgpods.resources[0].metadata.name }} --context {{ _target }} --
           env PGPASSWORD={{ _pgpw.stdout }}
-          psql -U postgres -d {{ _db }} -c "NOTIFY pgrst, 'reload schema';"
+          psql -h 127.0.0.1 -U postgres -d {{ _db }} -c "NOTIFY pgrst, 'reload schema';"
         changed_when: false
         failed_when: false
         no_log: true
@@ -294,7 +302,7 @@
         ansible.builtin.command: >
           kubectl exec -n {{ _pg_ns }} {{ _pgpods.resources[0].metadata.name }} --context {{ _target }} --
           env PGPASSWORD={{ _pgpw.stdout }}
-          psql -U postgres -d {{ _db }} -c "DROP TABLE IF EXISTS {{ _schema }}.{{ _tbl }};"
+          psql -h 127.0.0.1 -U postgres -d {{ _db }} -c "DROP TABLE IF EXISTS {{ _schema }}.{{ _tbl }};"
         changed_when: true
         failed_when: false
         no_log: true
