@@ -19,6 +19,13 @@
 # Leaving the PVC behind makes install bugs unfalsifiable - every reinstall after
 # the first lands on an existing database, so a broken first-install path stays
 # hidden. That is exactly how the empty-username seeding bug survived a redeploy.
+#
+# It also means the SURVIVING ADMIN ACCOUNT carries whatever password
+# urbalurba-secrets held when it was first seeded. If the secret has moved on,
+# the account and the secret disagree. 230-setup-uptime-kuma.yml task 11.2
+# reconciles that on redeploy - before it did, `deploy` failed at its own
+# credential gate on any machine that had ever run this service, and `no_log`
+# hid the reason. If you change the reconcile there, re-read this note.
 
 - name: Remove Uptime Kuma
   hosts: localhost

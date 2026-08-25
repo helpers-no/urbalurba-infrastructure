@@ -417,12 +417,113 @@
         KUMA_USER: "{{ kuma_secret.resources[0].data['uptime-kuma-admin-user'] | b64decode }}"
       register: kuma_auth
       changed_when: false
-      failed_when: "'AUTH_OK' not in kuma_auth.stdout"
+      # ⚠️ Does NOT fail here. A mismatch is reconcilable (11.2), and failing
+      # inside a no_log task produced the worst possible operator experience:
+      # "censored due to no_log" with no reason at all. The tester had to
+      # rebuild this check by hand to learn it said HASH_MISMATCH.
+      #
+      # no_log stays — the password is in this task's environment. The outcome
+      # is a single token, so 11.4 can report it safely without the value.
+      failed_when: false
       no_log: true
 
-    - name: "11.2 Report the credential check"
-      ansible.builtin.debug:
-        msg: "Admin credential verified - the seeded password authenticates"
+    # ⚠️ THE REDEPLOY CASE. Task 9 seeds the admin ONLY when the user table is
+    # empty, and `undeploy` deliberately keeps the data volume. So on any
+    # machine that has ever run uptime-kuma, a redeploy finds an account seeded
+    # earlier — with whatever password urbalurba-secrets held THEN — and the
+    # credential gate fails against today's secret.
+    #
+    # Observed by the independent tester (2026-08-25): PVC 3d19h old, pod 2m,
+    # deploy failing at its own gate. `deploy` could not succeed twice on the
+    # same machine.
+    #
+    # The secret is the declared source of truth, so bring the account into line
+    # with it rather than failing. Same contract as
+    # 360-setup-dagster.yml task 13, "Keep the role password in step with the
+    # secret" — a UIS-managed credential follows the secret, not the other way
+    # round.
+    - name: "11.2 Bring the admin password back in step with the secret"
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf '%s\n%s\n' "$KUMA_USER" "$KUMA_PW" \
+        | kubectl exec -i -n {{ namespace }} {{ component_name }}-0 \
+            --kubeconfig {{ merged_kubeconf_file }} -- sh -c '
+              read -r U
+              read -r P
+              H=$(cd /app && P="$P" node -e "console.log(require(\"bcryptjs\").hashSync(process.env.P, 10))")
+              sqlite3 /app/data/kuma.db <<SQL
+        update user set password = "$H" where username = "$U";
+        SQL
+              echo RECONCILED
+            '
+      args:
+        executable: /bin/bash
+      environment:
+        KUMA_PW: "{{ kuma_secret.resources[0].data['uptime-kuma-admin-password'] | b64decode }}"
+        KUMA_USER: "{{ kuma_secret.resources[0].data['uptime-kuma-admin-user'] | b64decode }}"
+      register: kuma_reconcile
+      when: "'HASH_MISMATCH' in (kuma_auth.stdout | default(''))"
+      changed_when: true
+      failed_when: false
+      no_log: true
+
+    - name: "11.3 Re-check the credential after reconciling"
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf '%s\n%s\n' "$KUMA_USER" "$KUMA_PW" \
+        | kubectl exec -i -n {{ namespace }} {{ component_name }}-0 \
+            --kubeconfig {{ merged_kubeconf_file }} -- sh -c '
+              read -r U
+              read -r P
+              H=$(sqlite3 /app/data/kuma.db "select password from user where username = \"$U\";")
+              [ -n "$H" ] || { echo "NO_SUCH_USER"; exit 0; }
+              cd /app && P="$P" H="$H" node -e "
+                const b = require(\"bcryptjs\");
+                console.log(b.compareSync(process.env.P, process.env.H) ? \"AUTH_OK\" : \"HASH_MISMATCH\");
+              "
+            '
+      args:
+        executable: /bin/bash
+      environment:
+        KUMA_PW: "{{ kuma_secret.resources[0].data['uptime-kuma-admin-password'] | b64decode }}"
+        KUMA_USER: "{{ kuma_secret.resources[0].data['uptime-kuma-admin-user'] | b64decode }}"
+      register: kuma_auth_final
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: "'HASH_MISMATCH' in (kuma_auth.stdout | default(''))"
+
+    - name: "11.4 Report the credential check, with the reason if it failed"
+      # NOT no_log. The registered stdout is a single token - AUTH_OK,
+      # HASH_MISMATCH or NO_SUCH_USER - and never the password, so the operator
+      # can be told WHY. A verification step that hides why it failed is the
+      # same defect as the `2>/dev/null` that turned a connection error into a
+      # wrong statement about a database.
+      ansible.builtin.assert:
+        that: "'AUTH_OK' in _kuma_result"
+        fail_msg: >-
+          {% if 'NO_SUCH_USER' in _kuma_result %}
+          The admin account named in urbalurba-secrets does not exist in Kuma's
+          database, and seeding did not create it. Check
+          uptime-kuma-admin-user in the `{{ namespace }}` secret.
+          {% elif 'HASH_MISMATCH' in _kuma_result %}
+          The admin password still does not match urbalurba-secrets after an
+          attempted reconcile. The account exists; its stored hash disagrees.
+          Reconcile reported: {{ (kuma_reconcile.stdout | default('did not run')) }}.
+          {% else %}
+          The credential check produced no recognised result: '{{ _kuma_result }}'.
+          That usually means the check itself could not run - a pod that is not
+          ready, or sqlite3/node missing from the image - rather than a bad
+          password.
+          {% endif %}
+          Data volume note: `undeploy` keeps the PVC by design, so an account
+          seeded by an earlier install survives. To start clean:
+          kubectl delete pvc -n {{ namespace }} -l app={{ component_name }}
+        success_msg: >-
+          Admin credential verified{{ ' (password reconciled to match the secret on this run)'
+          if (kuma_reconcile is defined and kuma_reconcile.changed | default(false)) else '' }}.
+      vars:
+        _kuma_result: "{{ (kuma_auth_final.stdout | default('', true)) or (kuma_auth.stdout | default('', true)) }}"
 
     - name: "12. Deployment complete"
       ansible.builtin.debug:
