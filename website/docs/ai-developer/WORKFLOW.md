@@ -166,6 +166,17 @@ Claude will:
 
 ---
 
+## Handing work to the tester
+
+Build and verify are separated — see **[Writing a testable dispatch](./VERIFICATION.md)**.
+The rule that page exists for, because three dispatches have shipped without it:
+
+> After injecting a fault, read the value back from where the code will actually
+> read it. Only then run the test.
+
+A falsification that does not break anything produces a passing run that reads as
+proof the check works.
+
 ## Quick Reference
 
 ### Commands to give Claude:
