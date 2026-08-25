@@ -547,6 +547,34 @@ is a failure you have to look for.
 
 See **[Documentation Standards](../rules/documentation.md)** for page conventions.
 
+### Step 10a: Register the verify with `run_verify_playbook`
+
+```bash
+cmd_myservice_verify() {
+    print_section "Verifying MyService"
+    run_verify_playbook "NNN-test-myservice.yml"
+}
+```
+
+**Not `ansible-playbook` directly.** Every test playbook declares
+`_target: "{{ target_host | default('rancher-desktop') }}"` and then pins
+`kubectl --context {{ _target }}`. Invoked without `-e target_host=…`, a verify
+silently targets a context named `rancher-desktop` whatever this installation
+calls its cluster.
+
+:::danger This failure blames the service
+On Rancher Desktop the wrong default is accidentally right, so nothing ever
+fails there. On any other cluster every `kubectl` call fails and the playbook
+reports **the service** as broken. A perfectly healthy Dagster was reported as
+*"the webserver did not answer a GraphQL query"* on the production installation
+when the truth was `context "rancher-desktop" does not exist`.
+
+13 of 15 verify commands had this. The two that did not had each learned it
+individually and left a comment saying so — which is why it is now a helper
+rather than a rule to remember. `run_verify_playbook` resolves the target, prints
+which cluster it is asking, and passes any extra args through.
+:::
+
 ### Step 11a: Regenerate `services.json` before you preview
 
 ```bash

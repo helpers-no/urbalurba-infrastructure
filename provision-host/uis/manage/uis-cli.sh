@@ -30,6 +30,7 @@ source "$LIB_DIR/uis-hosts.sh" 2>/dev/null || true
 source "$LIB_DIR/integration-testing.sh" 2>/dev/null || true
 source "$LIB_DIR/expose.sh" 2>/dev/null || true
 source "$LIB_DIR/configure.sh" 2>/dev/null || true
+source "$LIB_DIR/verify-target.sh"
 source "$LIB_DIR/platform-switching.sh" 2>/dev/null || true
 source "$LIB_DIR/template.sh" 2>/dev/null || true
 source "$LIB_DIR/connect.sh" 2>/dev/null || true
@@ -2379,7 +2380,7 @@ cmd_argocd_list() {
 
 cmd_argocd_verify() {
     print_section "Verifying ArgoCD Deployment"
-    ansible-playbook "$ANSIBLE_DIR/220-test-argocd.yml"
+    run_verify_playbook "220-test-argocd.yml"
 }
 
 # ============================================================
@@ -2388,31 +2389,31 @@ cmd_argocd_verify() {
 
 cmd_enonic_verify() {
     print_section "Verifying Enonic XP Deployment"
-    ansible-playbook "$ANSIBLE_DIR/085-test-enonic.yml"
+    run_verify_playbook "085-test-enonic.yml"
 }
 
 # PostgREST is multi-instance: one Deployment per consuming app, so there is no
 # single instance to verify. --app is required, exactly as it is for deploy.
 cmd_neko_verify() {
     print_section "Verifying neko (both doors into the shared browser)"
-    ansible-playbook "$ANSIBLE_DIR/410-test-neko.yml"
+    run_verify_playbook "410-test-neko.yml"
 }
 
 cmd_browserless_verify_session() {
     print_section "Verifying a real browser session (Playwright + MCP)"
     echo "  Deep check — installs npm packages in-cluster, needs npm registry egress."
     echo "  Deliberately NOT part of test-all; see 401-test-browserless-session.yml."
-    ansible-playbook "$ANSIBLE_DIR/401-test-browserless-session.yml"
+    run_verify_playbook "401-test-browserless-session.yml"
 }
 
 cmd_browserless_verify() {
     print_section "Verifying browserless (renders a real page)"
-    ansible-playbook "$ANSIBLE_DIR/400-test-browserless.yml"
+    run_verify_playbook "400-test-browserless.yml"
 }
 
 cmd_dagster_verify() {
     print_section "Verifying Dagster Data Orchestrator"
-    ansible-playbook "$ANSIBLE_DIR/360-test-dagster.yml"
+    run_verify_playbook "360-test-dagster.yml"
 }
 
 cmd_postgrest_verify() {
@@ -2432,7 +2433,7 @@ cmd_postgrest_verify() {
     fi
 
     print_section "Verifying PostgREST instance '$app_name'"
-    ansible-playbook "$ANSIBLE_DIR/088-test-postgrest.yml" -e "_app_name=$app_name"
+    run_verify_playbook "088-test-postgrest.yml" -e "_app_name=$app_name"
 }
 
 # ============================================================
@@ -2441,7 +2442,7 @@ cmd_postgrest_verify() {
 
 cmd_nextcloud_verify() {
     print_section "Verifying Nextcloud + OnlyOffice Deployment"
-    ansible-playbook "$ANSIBLE_DIR/620-test-nextcloud.yml"
+    run_verify_playbook "620-test-nextcloud.yml"
 }
 
 # ============================================================
@@ -2450,7 +2451,7 @@ cmd_nextcloud_verify() {
 
 cmd_backstage_verify() {
     print_section "Verifying Backstage (RHDH) Deployment"
-    ansible-playbook "$ANSIBLE_DIR/650-test-backstage.yml"
+    run_verify_playbook "650-test-backstage.yml"
 }
 
 # ============================================================
@@ -2459,7 +2460,7 @@ cmd_backstage_verify() {
 
 cmd_openmetadata_verify() {
     print_section "Verifying OpenMetadata Deployment"
-    ansible-playbook "$ANSIBLE_DIR/340-test-openmetadata.yml"
+    run_verify_playbook "340-test-openmetadata.yml"
 }
 
 # ============================================================
@@ -2468,7 +2469,7 @@ cmd_openmetadata_verify() {
 
 cmd_minio_verify() {
     print_section "Verifying MinIO Deployment"
-    ansible-playbook "$ANSIBLE_DIR/045-test-minio.yml"
+    run_verify_playbook "045-test-minio.yml"
 }
 
 # ============================================================
@@ -2477,7 +2478,7 @@ cmd_minio_verify() {
 
 cmd_temporal_verify() {
     print_section "Verifying Temporal Deployment"
-    ansible-playbook "$ANSIBLE_DIR/086-test-temporal.yml"
+    run_verify_playbook "086-test-temporal.yml"
 }
 
 # ============================================================
@@ -2486,40 +2487,17 @@ cmd_temporal_verify() {
 
 cmd_postgresql_verify() {
     print_section "Verifying PostgreSQL"
-
-    # Same target resolution deploy uses; the alloy verify learned this the hard way.
-    local cluster_config="$CONFIG_DIR/cluster-config.sh"
-    local target_host="rancher-desktop"
-    if [[ -f "$cluster_config" ]]; then
-        # shellcheck source=/dev/null
-        source "$cluster_config"
-        target_host="${TARGET_HOST:-rancher-desktop}"
-    fi
-
-    ansible-playbook "$ANSIBLE_DIR/040-test-postgresql.yml" -e "target_host=$target_host"
+    run_verify_playbook "040-test-postgresql.yml"
 }
 
 cmd_alloy_verify() {
     print_section "Verifying Alloy Deployment"
-
-    # The alloy playbooks pin `context: {{ _target }}`, so verify must resolve the
-    # target the same way service-deployment.sh does for deploy. Without it the
-    # playbook falls back to 'rancher-desktop' and fails on every other cluster -
-    # which is the whole dev/prod parity the platform is supposed to have.
-    local cluster_config="$CONFIG_DIR/cluster-config.sh"
-    local target_host="rancher-desktop"
-    if [[ -f "$cluster_config" ]]; then
-        # shellcheck source=/dev/null
-        source "$cluster_config"
-        target_host="${TARGET_HOST:-rancher-desktop}"
-    fi
-
-    ansible-playbook "$ANSIBLE_DIR/031-test-alloy.yml" -e "target_host=$target_host"
+    run_verify_playbook "031-test-alloy.yml"
 }
 
 cmd_uptime_kuma_verify() {
     print_section "Verifying Uptime Kuma Deployment"
-    ansible-playbook "$ANSIBLE_DIR/230-test-uptime-kuma.yml"
+    run_verify_playbook "230-test-uptime-kuma.yml"
 }
 
 # ============================================================

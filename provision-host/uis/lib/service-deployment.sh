@@ -149,6 +149,13 @@ deploy_single_service() {
         fi
 
         # Load cluster config for target_host
+        #
+        # NOTE: verify-target.sh::uis_target_host() does the identical thing for
+        # the verify path. The duplication is deliberate for now: this path runs
+        # in production, and consolidating it would be an untested change to a
+        # working deploy. If you touch either, change both — the verify path
+        # drifted out of step with this one and shipped a defect that reported
+        # healthy services as broken on every non-Rancher-Desktop cluster.
         local cluster_config="$CONFIG_DIR/cluster-config.sh"
         local target_host="rancher-desktop"  # Default
         if [[ -f "$cluster_config" ]]; then
