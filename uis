@@ -153,13 +153,42 @@ start_container() {
     # Wait for container to be ready
     sleep 2
 
-    # Create kubeconfig symlink to host kubeconfig
+    # Put the host kubeconfig where the ~100 ansible playbooks read it.
+    #
+    # ⚠️ A REAL FILE, NOT A SYMLINK — and this line is why.
+    #
+    # This used to be `ln -sf /home/ansible/.kube/config <path>`. That symlink
+    # points into the container's own home, which cannot be read back through
+    # the bind mount: kubectl reports "operation not permitted". Every ansible
+    # playbook reads that path, so EVERY verify failed — and failed by blaming
+    # the service it was verifying, not the config.
+    #
+    # It ran on every `./uis start`, so restarting the container did not repair
+    # the state, it RE-CREATED it. Container-side code that fixed the path was
+    # undone by the next start. Found by the independent tester (2026-08-25),
+    # who was following remediation advice that told them to restart.
+    #
+    # Errors are reported rather than swallowed: a silent failure here breaks
+    # everything downstream and points nowhere.
     docker exec "$CONTAINER_NAME" bash -c '
-        if [ -d /mnt/urbalurbadisk/.uis.secrets ]; then
-            mkdir -p /mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig
-            ln -sf /home/ansible/.kube/config /mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all
+        set -e
+        KC_DIR=/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig
+        KC="$KC_DIR/kubeconf-all"
+        [ -d /mnt/urbalurbadisk/.uis.secrets ] || exit 0
+        mkdir -p "$KC_DIR"
+        if [ -f /home/ansible/.kube/config ]; then
+            # --remove-destination replaces a symlink left by an older launcher
+            # instead of following it into the unwritable target.
+            cp --remove-destination /home/ansible/.kube/config "$KC" || exit 1
+            chmod 600 "$KC" || true
         fi
-    ' 2>/dev/null || true
+        # Assert the outcome, not the command.
+        if [ -L "$KC" ] || [ ! -r "$KC" ]; then
+            echo "WARNING: $KC is not a readable regular file." >&2
+            echo "         Ansible playbooks read it; kubectl will fail for all of them." >&2
+            exit 1
+        fi
+    ' || log_info "WARNING: could not write the merged kubeconfig; verifies may fail"
 
     log_info "Container started"
 
