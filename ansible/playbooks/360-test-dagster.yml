@@ -71,6 +71,41 @@
         success_msg: "Webserver answered GraphQL."
 
     # --- Test B: the metadata store is real ---
+    - name: "B0. Find the PostgreSQL pod, whatever provides it"
+      # ⚠️ NOT `postgresql-0`. That name is a StatefulSet artefact of the
+      # IN-CLUSTER database. When an installation declares postgresql in
+      # .uis.extend/external-services.yaml, `uis deploy postgresql` renders a
+      # transparent PROXY instead — a Deployment, so its pod is
+      # postgresql-<hash>-<hash> and `postgresql-0` does not exist.
+      #
+      # The proxy is deliberately indistinguishable in every other way: same
+      # Service name, same labels, and a first container carrying bash+psql
+      # precisely so playbooks that exec into "the postgres pod" keep working.
+      # Hardcoding the pod NAME was the one thing that defeated that.
+      #
+      # The setup playbook already discovers it by label; this did not, so the
+      # verify would fail on exactly the installations that proxy — which is the
+      # production one. Found while preparing dagster for asgard (2026-08-25).
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ postgres_ns }}"
+        label_selectors:
+          - "app.kubernetes.io/name=postgresql"
+        field_selectors:
+          - status.phase=Running
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        context: "{{ _target }}"
+      register: _pgpods
+
+    - name: "B0b. Fail clearly if PostgreSQL is not there at all"
+      ansible.builtin.fail:
+        msg: >-
+          No Running PostgreSQL pod in {{ postgres_ns }} (label
+          app.kubernetes.io/name=postgresql). Dagster stores its metadata there.
+          If this installation proxies to an external database, the proxy itself
+          is not running — check `uis deploy postgresql`.
+      when: _pgpods.resources | default([]) | length == 0
+
     - name: "B1. Read the admin password"
       ansible.builtin.shell: >
         kubectl get secret urbalurba-secrets -n {{ postgres_ns }} --context {{ _target }}
@@ -81,7 +116,7 @@
 
     - name: "B2. Count the tables Dagster migrated into its own database"
       ansible.builtin.shell: >-
-        kubectl exec -n {{ postgres_ns }} postgresql-0 --
+        kubectl exec -n {{ postgres_ns }} {{ _pgpods.resources[0].metadata.name }} --
         bash -c "PGPASSWORD='{{ _pgpw.stdout }}'
         psql -h postgresql.{{ postgres_ns }} -U postgres -d dagster -tAc
         \"SELECT count(*) FROM pg_tables WHERE schemaname='public';\""
