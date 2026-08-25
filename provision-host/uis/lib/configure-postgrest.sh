@@ -18,6 +18,21 @@
 # outside uis-cli.sh.
 PG_PSQL_HOST="${PG_PSQL_HOST:-127.0.0.1}"
 
+# Where the most recent _pgrst_exec leaves psql's stderr.
+#
+# ⚠️ A FILE, NOT A VARIABLE, and that is not a style choice. Callers run
+# `out=$(_pgrst_exec ...)`, which executes the function in a SUBSHELL — any
+# variable it sets is discarded when that subshell exits. A first version of
+# this fix used a variable and would have reported "no error text was captured"
+# on every failure, which is barely better than the silence it replaced.
+# A file outlives the subshell.
+_PGRST_ERR_FILE="${_PGRST_ERR_FILE:-${TMPDIR:-/tmp}/uis-pgrst-last-err}"
+
+# Read whatever psql last wrote to stderr. Empty string if there was nothing.
+_pgrst_last_err() {
+    [[ -r "$_PGRST_ERR_FILE" ]] && cat "$_PGRST_ERR_FILE" 2>/dev/null || true
+}
+
 PG_ADMIN_USER="postgres"
 PG_K8S_SVC="postgresql"
 PG_NAMESPACE="default"
@@ -133,10 +148,24 @@ _pgrst_exec() {
         return 1
     fi
 
-    kubectl exec "$pod" \
+    # ⚠️ stderr is CAPTURED, not left to find its own way out.
+    #
+    # Removing `2>/dev/null` was necessary and not sufficient: the caller runs
+    # this inside $(...), which captures stdout only, so psql's error reached
+    # neither the caller nor reliably the terminal. The tester measured zero
+    # occurrences of any connection text while the host was unroutable.
+    #
+    # _PGRST_LAST_ERR lets the caller print the real reason on the failure path,
+    # which is the difference between "could not ask" and "the answer was no".
+    : > "$_PGRST_ERR_FILE" 2>/dev/null || true
+    local out rc
+    out="$(kubectl exec "$pod" \
         -n "$PG_NAMESPACE" \
         --kubeconfig="$kubeconf" \
-        -- env PGPASSWORD="$admin_pass" psql -h "$PG_PSQL_HOST" -U "$PG_ADMIN_USER" -t -A -c "$sql"
+        -- env PGPASSWORD="$admin_pass" psql -h "$PG_PSQL_HOST" -U "$PG_ADMIN_USER" -t -A -c "$sql" 2>"$_PGRST_ERR_FILE")"
+    rc=$?
+    printf '%s' "$out"
+    return $rc
 }
 
 # Run a SQL block against a specific database. Mirrors `_pg_exec_db` in
@@ -557,7 +586,28 @@ EOF
     local db_check_rc=0
     local db_check
     db_check=$(_pgrst_exec "SELECT 1 FROM pg_database WHERE datname='$database_name'" "$admin_pass") || db_check_rc=$?
-    if [[ $db_check_rc -ne 0 || "$db_check" != "1" ]]; then
+
+    # ⚠️ TWO OUTCOMES, TWO MESSAGES. These used to share one branch, and it
+    # asserted the second: a query that could not run at all was reported as
+    # "the database does not exist", telling the operator to create something
+    # that may already be there. With an unroutable PG_PSQL_HOST the tool
+    # confidently described a database it had never managed to ask about.
+    #
+    # rc != 0        -> the query FAILED. We do not know what exists.
+    # rc == 0, != 1  -> the query SUCCEEDED and the database is not there.
+    if [[ $db_check_rc -ne 0 ]]; then
+        local why
+        why="$(_pgrst_last_err)"
+        [[ -z "$why" ]] && why="psql produced no error text"
+        local msg="Could not query PostgreSQL to check whether database '$database_name' exists (psql exit $db_check_rc). This is a CONNECTION problem, not a statement about the database - it may well exist. psql said: ${why}"
+        if [[ "$json_output" == true ]]; then
+            _configure_error "create_resources" "$service_id" "$msg"
+        fi
+        log_error "$msg"
+        log_info "Check that PostgreSQL is reachable at $PG_PSQL_HOST from inside the postgres pod."
+        return 1
+    fi
+    if [[ "$db_check" != "1" ]]; then
         local msg="Database '$database_name' does not exist in the cluster's PostgreSQL. Create it first (typically via the consuming app's migration / bootstrap script), then retry: ./uis configure postgrest --app $app_name --database $database_name --schemas $schemas"
         if [[ "$json_output" == true ]]; then
             _configure_error "create_resources" "$service_id" "$msg"
