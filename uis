@@ -321,7 +321,116 @@ cleanup_old_images() {
     fi
 }
 
+# ─── Version detection, adopted from devcontainer-toolbox ────────────────────
+#
+# UIS is delivered as TWO artefacts — this launcher on the host, and the
+# container image — and until now only the image carried a version. So a box
+# running a three-week-old launcher against today's image reported v0.1.1 and
+# looked current, which is how three defects stayed invisible in two days: the
+# kubeconfig written as a symlink, images never cleaned up, and an override the
+# launcher dropped.
+#
+# ⚠️ ONE VERSION FILE, deliberately: version.txt at the repository root. The
+# launcher does NOT carry a version of its own. That is the DCT model, and the
+# reason it works: the product has one version, and updating refreshes the
+# host-side file too, so "are they in step?" is answered by "did you update?"
+# rather than by comparing two numbers that can drift apart.
+UIS_RAW_BASE="https://raw.githubusercontent.com/helpers-no/urbalurba-infrastructure/main"
+
+# The version this machine is running: read from the image, which is the
+# artefact that carries it.
+installed_version() {
+    docker exec "$CONTAINER_NAME" cat /mnt/urbalurbadisk/version.txt 2>/dev/null | tr -d "[:space:]" \
+        || docker run --rm --entrypoint cat "$IMAGE" /mnt/urbalurbadisk/version.txt 2>/dev/null | tr -d "[:space:]" \
+        || echo ""
+}
+
+# The version published upstream.
+remote_version() {
+    curl -fsSL --max-time 10 "$UIS_RAW_BASE/version.txt" 2>/dev/null | tr -d "[:space:]" || echo ""
+}
+
+# Report where this machine stands. Used by `./uis version` and `./uis pull`.
+# Returns 0 if up to date, 1 if an update is available, 2 if it could not tell.
+report_version_status() {
+    local installed remote
+    installed="$(installed_version)"
+    remote="$(remote_version)"
+
+    if [ -z "$installed" ]; then
+        log_info "Installed version: unknown (no image on this machine yet)"
+    else
+        log_info "Installed version: $installed"
+    fi
+
+    if [ -z "$remote" ]; then
+        # ⚠️ Could-not-check is NOT up-to-date. Reporting them the same way is
+        # the defect this project has spent a week removing from its own
+        # playbooks; it is not going into the launcher.
+        log_info "Latest version:    could not be determined (offline, or GitHub unreachable)"
+        return 2
+    fi
+
+    log_info "Latest version:    $remote"
+
+    if [ -z "$installed" ]; then
+        return 1
+    elif [ "$installed" = "$remote" ]; then
+        log_info "Up to date."
+        return 0
+    else
+        log_info "Update available: $installed -> $remote   (run: ./uis pull)"
+        return 1
+    fi
+}
+
+# Refresh the launcher itself. This is the step UIS was missing entirely: the
+# image can be updated by `docker pull`, but nothing ever updated this file, so
+# fixes shipped to it never reached the machines running it.
+update_launcher() {
+    # Which file to replace. ${BASH_SOURCE[0]} is the file this function is
+    # DEFINED in - correct today, because that is this launcher, but it would
+    # silently overwrite a library if the function ever moved. Naming it
+    # explicitly makes the target unambiguous and lets it be tested against a
+    # throwaway file instead of the real launcher.
+    local target="${UIS_LAUNCHER_PATH:-${BASH_SOURCE[0]}}"
+    [ -w "$target" ] || { log_info "Launcher not writable, skipping self-update: $target"; return 0; }
+
+    local tmp
+    tmp="$(mktemp)" || return 0
+    if ! curl -fsSL --max-time 20 "$UIS_RAW_BASE/uis" -o "$tmp" 2>/dev/null; then
+        log_info "Could not fetch the latest launcher - keeping the current one"
+        rm -f "$tmp"; return 0
+    fi
+
+    # Never install something that will not parse. A launcher that fails to
+    # source leaves the machine with no way to run the command that fixes it.
+    if ! bash -n "$tmp" 2>/dev/null; then
+        log_error "Downloaded launcher failed a syntax check - NOT installing it"
+        rm -f "$tmp"; return 1
+    fi
+
+    if cmp -s "$tmp" "$target"; then
+        rm -f "$tmp"; return 0
+    fi
+
+    local backup="${target}.bak-$(date +%Y%m%d-%H%M%S)"
+    cp "$target" "$backup" || { rm -f "$tmp"; return 1; }
+
+    # ⚠️ mv, not an in-place edit. This script is EXECUTING. mv writes a new
+    # inode, so the running shell keeps its descriptor on the old file and
+    # finishes cleanly; editing in place would corrupt it mid-read.
+    if mv "$tmp" "$target" && chmod +x "$target"; then
+        log_info "Launcher updated (backup: $(basename "$backup"))"
+        log_info "The new launcher applies to your NEXT ./uis command."
+    else
+        log_error "Could not replace the launcher; it is unchanged (backup: $backup)"
+        rm -f "$tmp"; return 1
+    fi
+}
+
 pull_container() {
+    report_version_status
     log_info "Pulling latest UIS container image..."
     if docker pull "$IMAGE"; then
         log_info "Image updated successfully"
@@ -336,6 +445,8 @@ pull_container() {
         # After the restart, so the container is already on the new image and
         # the old one is genuinely unreferenced.
         cleanup_old_images
+        update_launcher
+        log_info "Now running version: $(installed_version)"
     else
         log_error "Failed to pull image"
         exit 1
@@ -420,7 +531,25 @@ case "${1:-help}" in
         docker logs "$CONTAINER_NAME" ${2:---tail 50}
         ;;
     pull)
+        # --check: report drift without installing anything. DCT has this and it
+        # is the difference between "tell me" and "change my machine".
+        if [ "${2:-}" = "--check" ]; then
+            report_version_status
+            exit $?
+        fi
         pull_container
+        ;;
+    version|--version|-v)
+        # ⚠️ Reports BOTH halves. This used to fall through to the container's
+        # own `uis-cli.sh version`, so a machine running a three-week-old
+        # launcher printed the image's version and looked current. That is
+        # exactly how the launcher drift stayed invisible.
+        report_version_status
+        vstatus=$?
+        if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+            docker exec "$CONTAINER_NAME" /mnt/urbalurbadisk/provision-host/uis/manage/uis-cli.sh version 2>/dev/null || true
+        fi
+        exit "$vstatus"
         ;;
     build)
         log_info "Building UIS container image..."
