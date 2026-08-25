@@ -33,7 +33,9 @@ KUBECONFIG_DIR="${UIS_KUBECONFIG_DIR:-$HOME/.kube}"
 UIS_FORWARDED_ENV=(
     PG_PSQL_HOST            # lib/pg-connection.sh — how UIS reaches postgres
     UIS_VERIFY_KUBECONFIG   # lib/verify-target.sh — which kubeconfig verifies read
-    UIS_TARGET_HOST         # overrides .uis.extend/cluster-config.sh for one command
+    UIS_TARGET_HOST         # which cluster `./uis verify` asks. VERIFY ONLY —
+                            # deploy/undeploy act on the ACTIVE kubectl context
+                            # and refuse if this disagrees with it.
 )
 
 # TARGET_HOST is the name an operator naturally reaches for, but the container's
