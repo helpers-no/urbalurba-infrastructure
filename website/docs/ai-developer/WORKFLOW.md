@@ -168,20 +168,35 @@ Claude will:
 
 ## Version Management (MANDATORY)
 
-**Before creating a pull request, ask:**
+**Before creating a pull request, set the version yourself.** Do not ask.
 
-> "Should we bump the version for this change?
->  Current version: `<contents of version.txt>`
->  If yes, what should the new version be?"
+Asking on every PR does not scale — it moves a judgement the assistant is
+equipped to make onto the person least able to batch it, and it fails the same
+way "remember to update the launcher" failed: at the moment everyone is busy.
 
-If yes, edit `version.txt` — **the single version file** — and include it in the
-same PR.
+Classify the change, edit `version.txt` — **the single version file** — and
+include it in the same PR.
 
-| Bump | When |
-|---|---|
-| PATCH `1.5.x` | bug fixes, small improvements |
-| MINOR `1.x.0` | new features, documentation improvements |
-| MAJOR `x.0.0` | breaking changes |
+| Bump | When | Examples from this repo |
+|---|---|---|
+| **PATCH** `1.5.x` | a fix to existing behaviour; nothing new to learn | the kubeconfig symlink; `psql` missing `-h`; a wrong failure message |
+| **MINOR** `1.x.0` | new capability, or a command behaves newly | the ambient update notice; `./uis browserless verify-session`; a new service |
+| **MAJOR** `x.0.0` | someone's working setup breaks | a renamed command; a changed config file format; a removed flag |
+
+**Ask only for MAJOR.** A breaking change is a product decision with a blast
+radius beyond the repository, and it is the one case where the person who owns
+the platform should weigh it. PATCH and MINOR are the assistant's call.
+
+### Deciding when it is not obvious
+
+- **Docs-only, no shipped code?** No bump. Nothing reaches a user's machine, and
+  a version that moves without the product moving is noise in the update notice.
+- **A fix plus a small new flag?** MINOR. The larger classification wins.
+- **Several changes batched into one PR?** Classify the whole PR, not each file.
+- **Genuinely unsure between PATCH and MINOR?** Choose MINOR. The cost of an
+  over-bump is a redundant pull; the cost of an under-bump is a fix nobody
+  receives, which is the failure this rule exists to prevent.
+- **Reverting something?** Bump — a revert is a change users need.
 
 ### Why this is mandatory rather than nice-to-have
 
