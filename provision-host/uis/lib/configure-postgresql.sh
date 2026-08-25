@@ -8,6 +8,12 @@
 # See: PLAN-001-uis-configure-expose.md Phase 3
 
 # PostgreSQL connection details (inside the cluster)
+
+# See pg-connection.sh — ALWAYS pass -h. The local socket does not exist on the
+# proxied topology. Defined defensively here so this lib works even when sourced
+# outside uis-cli.sh.
+PG_PSQL_HOST="${PG_PSQL_HOST:-127.0.0.1}"
+
 PG_ADMIN_USER="postgres"
 PG_K8S_SVC="postgresql"
 PG_NAMESPACE="default"
@@ -47,7 +53,7 @@ _pg_exec() {
     kubectl exec "$pod" \
         -n "$PG_NAMESPACE" \
         --kubeconfig="$kubeconf" \
-        -- env PGPASSWORD="$admin_pass" psql -U "$PG_ADMIN_USER" -t -A -c "$sql" 2>/dev/null
+        -- env PGPASSWORD="$admin_pass" psql -h "$PG_PSQL_HOST" -U "$PG_ADMIN_USER" -t -A -c "$sql"
 }
 
 # Run psql with a specific database
@@ -63,7 +69,7 @@ _pg_exec_db() {
     kubectl exec "$pod" \
         -n "$PG_NAMESPACE" \
         --kubeconfig="$kubeconf" \
-        -- env PGPASSWORD="$pass" psql -U "$user" -d "$database" -t -A -c "$sql" 2>/dev/null
+        -- env PGPASSWORD="$pass" psql -h "$PG_PSQL_HOST" -U "$user" -d "$database" -t -A -c "$sql"
 }
 
 # Apply init file via stdin to a database
@@ -79,7 +85,7 @@ _pg_apply_init_file() {
     kubectl exec -i "$pod" \
         -n "$PG_NAMESPACE" \
         --kubeconfig="$kubeconf" \
-        -- env PGPASSWORD="$pass" psql -U "$user" -d "$database" \
+        -- env PGPASSWORD="$pass" psql -h "$PG_PSQL_HOST" -U "$user" -d "$database" \
            --set ON_ERROR_STOP=on -f - 2>&1
 }
 

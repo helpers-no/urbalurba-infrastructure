@@ -61,6 +61,6 @@
 
           Note: The PostgreSQL database 'unity_catalog' was NOT deleted.
           To remove the database manually:
-            kubectl exec -n default postgresql-0 -- psql -U postgres -c "DROP DATABASE unity_catalog;"
+            kubectl exec -n default $(kubectl get pod -n default -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}') -- psql -h 127.0.0.1 -U postgres -c "DROP DATABASE unity_catalog;"
 
           ===============================================

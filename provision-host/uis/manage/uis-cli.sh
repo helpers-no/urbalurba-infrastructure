@@ -30,6 +30,7 @@ source "$LIB_DIR/uis-hosts.sh" 2>/dev/null || true
 source "$LIB_DIR/integration-testing.sh" 2>/dev/null || true
 source "$LIB_DIR/expose.sh" 2>/dev/null || true
 source "$LIB_DIR/configure.sh" 2>/dev/null || true
+source "$LIB_DIR/pg-connection.sh"
 source "$LIB_DIR/verify-target.sh"
 source "$LIB_DIR/platform-switching.sh" 2>/dev/null || true
 source "$LIB_DIR/template.sh" 2>/dev/null || true

@@ -8,6 +8,12 @@
 # See: INVESTIGATE-uis-shell-commands.md for the broader design
 # See: PLAN-002-uis-template-command.md
 
+
+# See pg-connection.sh — ALWAYS pass -h. The local socket does not exist on the
+# proxied topology. Defined defensively here so this lib works even when sourced
+# outside uis-cli.sh.
+PG_PSQL_HOST="${PG_PSQL_HOST:-127.0.0.1}"
+
 UIS_BASE="${UIS_BASE:-/mnt/urbalurbadisk}"
 SERVICES_JSON="${UIS_BASE}/website/src/data/services.json"
 KUBECONF="${KUBECONF:-/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all}"
@@ -16,7 +22,7 @@ KUBECONF="${KUBECONF:-/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubec
 # Format: "label_selector|namespace|client_cmd|secret_key_for_password"
 declare -A SHELL_CONFIG
 SHELL_CONFIG=(
-    ["postgresql"]="app.kubernetes.io/name=postgresql|default|psql -U postgres|PGPASSWORD"
+    ["postgresql"]="app.kubernetes.io/name=postgresql|default|psql -h 127.0.0.1 -U postgres|PGPASSWORD"
     ["mysql"]="app.kubernetes.io/name=mysql|default|mysql -u root -p\$MYSQL_ROOT_PASSWORD|MYSQL_ROOT_PASSWORD"
     ["redis"]="app.kubernetes.io/name=redis|default|redis-cli -a \$REDIS_PASSWORD|REDIS_PASSWORD"
     ["mongodb"]="app=mongodb|default|mongosh -u root -p \$MONGODB_ROOT_PASSWORD|MONGODB_ROOT_PASSWORD"
@@ -108,13 +114,13 @@ cmd_connect() {
                     local db="$1"
                     shift
                     exec kubectl exec "$kflags" "$pod" -n "$namespace" --kubeconfig="$KUBECONF" \
-                        -- env "PGPASSWORD=$admin_pass" psql -U postgres -d "$db" "$@"
+                        -- env "PGPASSWORD=$admin_pass" psql -h "$PG_PSQL_HOST" -U postgres -d "$db" "$@"
                 fi
                 exec kubectl exec "$kflags" "$pod" -n "$namespace" --kubeconfig="$KUBECONF" \
-                    -- env "PGPASSWORD=$admin_pass" psql -U postgres "$@"
+                    -- env "PGPASSWORD=$admin_pass" psql -h "$PG_PSQL_HOST" -U postgres "$@"
             fi
             exec kubectl exec "$kflags" "$pod" -n "$namespace" --kubeconfig="$KUBECONF" \
-                -- env "PGPASSWORD=$admin_pass" psql -U postgres
+                -- env "PGPASSWORD=$admin_pass" psql -h "$PG_PSQL_HOST" -U postgres
             ;;
         mysql)
             exec kubectl exec "$kflags" "$pod" -n "$namespace" --kubeconfig="$KUBECONF" \
