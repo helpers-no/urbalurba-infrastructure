@@ -505,11 +505,42 @@ update_launcher() {
     local target="${UIS_LAUNCHER_PATH:-${BASH_SOURCE[0]}}"
     [ -w "$target" ] || { log_info "Launcher not writable, skipping self-update: $target"; return 0; }
 
+    # ⚠️ The temp file MUST live beside the target, not in /tmp.
+    #
+    # `mv` is atomic only within one filesystem. On a Raspberry Pi /tmp is
+    # tmpfs while ~/uis is the SD card - different filesystems - so mv silently
+    # degrades to copy-then-unlink. A crash, a full disk or a killed process
+    # mid-copy would leave a TRUNCATED launcher on the machine that manages the
+    # platform, with no way to run the command that fixes it.
+    #
+    # Created in the target's directory, the replace is a rename within one
+    # filesystem: it either happened or it did not.
     local tmp
-    tmp="$(mktemp)" || return 0
+    tmp="$(mktemp "${target}.new.XXXXXX")" || {
+        log_info "Could not create a temp file beside the launcher - skipping self-update"
+        return 0
+    }
+
     if ! curl -fsSL --max-time 20 "$UIS_RAW_BASE/uis" -o "$tmp" 2>/dev/null; then
         log_info "Could not fetch the latest launcher - keeping the current one"
         rm -f "$tmp"; return 0
+    fi
+
+    # ⚠️ A TRUNCATED DOWNLOAD CAN STILL BE VALID BASH.
+    #
+    # `bash -n` alone is not enough: a file cut off at a statement boundary
+    # parses cleanly and would be installed, leaving a launcher missing half its
+    # commands. So check it looks like OUR launcher and is a plausible size
+    # before trusting the syntax check.
+    local size
+    size="$(wc -c < "$tmp" 2>/dev/null || echo 0)"
+    if [ "$size" -lt 8000 ]; then
+        log_error "Downloaded launcher is only ${size} bytes - refusing to install a truncated file"
+        rm -f "$tmp"; return 1
+    fi
+    if ! grep -q "^start_container()" "$tmp" || ! grep -q "^case \"\${1:-help}\" in" "$tmp"; then
+        log_error "Downloaded file does not look like the UIS launcher - NOT installing it"
+        rm -f "$tmp"; return 1
     fi
 
     # Never install something that will not parse. A launcher that fails to
@@ -530,7 +561,9 @@ update_launcher() {
     # inode, so the running shell keeps its descriptor on the old file and
     # finishes cleanly; editing in place would corrupt it mid-read.
     if mv "$tmp" "$target" && chmod +x "$target"; then
-        log_info "Launcher updated (backup: $(basename "$backup"))"
+        log_info "Launcher updated. Previous version saved at:"
+        log_info "    $backup"
+        log_info "    Restore with: cp \"$backup\" \"$target\""
         log_info "The new launcher applies to your NEXT ./uis command."
     else
         log_error "Could not replace the launcher; it is unchanged (backup: $backup)"
