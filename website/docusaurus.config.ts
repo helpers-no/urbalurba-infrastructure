@@ -1,6 +1,30 @@
 import { themes as prismThemes } from 'prism-react-renderer';
 import type { Config } from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// THE version. One number for the whole product - the launcher, the container
+// image and this site all report it, so "what am I running?" has one answer.
+//
+// Read from version.txt at the repository root, which is the same file the
+// image build copies in and the same file `./uis pull` compares against. If it
+// is ever read from somewhere else, the two can disagree, which is the entire
+// problem this is meant to close.
+//
+// Deliberately NOT hardcoded here: a version duplicated in a config file is a
+// version that will be stale within a week.
+function readVersion(): string {
+  try {
+    return fs.readFileSync(path.join(__dirname, '..', 'version.txt'), 'utf8').trim();
+  } catch {
+    // Never fail the build over a badge. An empty string means the navbar item
+    // is dropped rather than showing a wrong or placeholder number - a version
+    // nobody can trust is worse than none.
+    return '';
+  }
+}
+const UIS_VERSION = readVersion();
 
 // GitHub organization and repository from environment or defaults
 const GITHUB_ORG = process.env.GITHUB_ORG || 'helpers-no';
@@ -93,6 +117,16 @@ const config: Config = {
           label: 'GitHub',
           position: 'right',
         },
+        // The version, shown the way devcontainer-toolbox shows its own: a
+        // badge in the navbar, present on every page. Omitted entirely if
+        // version.txt could not be read.
+        ...(UIS_VERSION
+          ? [{
+              type: 'html' as const,
+              position: 'right' as const,
+              value: `<span class="badge badge--secondary">v${UIS_VERSION}</span>`,
+            }]
+          : []),
       ],
     },
     footer: {

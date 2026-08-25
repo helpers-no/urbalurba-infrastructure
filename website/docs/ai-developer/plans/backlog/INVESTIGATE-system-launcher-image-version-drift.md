@@ -89,6 +89,49 @@ after backing it up**, refuses politely when pinned, and cleans up old images.
 
 The host-side step is the one UIS is missing entirely.
 
+## DECIDED (Terje, 2026-08-25): one version, and it is displayed
+
+This supersedes the "strict match or a range?" question below, and simplifies the
+rest.
+
+**There is ONE version for the product** — `version.txt` — carried by the
+launcher, the container image and the documentation site alike. Not a launcher
+version paired with an image minimum, which is what this document originally
+proposed. One number, so "do these agree?" is a string comparison and "what am I
+running?" has a single answer.
+
+**It is displayed on the website**, as `devcontainer-toolbox` displays its own: a
+badge in the navbar, on every page. Shipped — the site reads `version.txt` at
+build time rather than hardcoding it, and omits the badge entirely if the file
+cannot be read, because a version nobody can trust is worse than none.
+
+### What that decision leaves to build
+
+1. **The launcher must carry the version**, since today it declares nothing.
+   With one shared number, the launcher and the image are compatible when their
+   versions are equal — which is only checkable once the launcher has one.
+2. **`./uis pull` compares and reports** local against
+   `raw.githubusercontent.com/.../main/version.txt`, exactly as DCT does.
+3. **`./uis version` reports both halves**, not just the container's. Today it
+   prints the container's version, so a box with a three-week-old launcher shows
+   `v0.1.1` and looks current. That is how all three of this week's incidents
+   stayed invisible.
+4. **`./uis pull` updates the launcher**, backup first — the step DCT has and
+   UIS lacks. Download to a temp file, `bash -n` it, back up, `mv` into place:
+   `mv` writes a new inode, so the running shell keeps its descriptor on the old
+   one and finishes cleanly. The new launcher applies to the next invocation.
+
+### One consequence worth stating plainly
+
+A single version means **`version.txt` must actually be bumped on release**. It
+has sat at `0.1.1` while the image was rebuilt many times, and the only thing
+distinguishing today's images is the git SHA in
+`org.opencontainers.image.revision`. A shared version that never changes reports
+"in step" for two artefacts that are weeks apart — the failure this work exists
+to prevent, wearing the fix as a disguise.
+
+So the bump has to be part of releasing, or the comparison is theatre.
+
 ## Answers to the open questions, as starting positions
 
 **Should the launcher self-update, or only detect and instruct?**
