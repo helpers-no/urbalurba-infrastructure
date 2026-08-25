@@ -12,6 +12,43 @@ CONTAINER_NAME="uis-provision-host"
 IMAGE="${UIS_IMAGE:-ghcr.io/helpers-no/uis-provision-host:latest}"
 KUBECONFIG_DIR="${UIS_KUBECONFIG_DIR:-$HOME/.kube}"
 
+# ---------------------------------------------------------------------------
+# Environment forwarded into the container
+#
+# ⚠️ `docker exec` does NOT inherit the caller's environment. A variable set on
+# the host simply does not exist inside, silently — so any documented override
+# that is not listed here is a NO-OP that looks like it worked.
+#
+# That happened: the dispatch for a test told the tester to run
+#   PG_PSQL_HOST=10.255.255.1 ./uis configure postgrest ...
+# and every psql call went to the default anyway. The run SUCCEEDED, which
+# reads as "the tool handled a dead host fine" rather than "the override never
+# arrived". A test whose failure mode is indistinguishable from success is not
+# a test.
+#
+# Add a variable here when the code inside the container reads it and an
+# operator is meant to be able to set it. Keep it an allow-list rather than
+# forwarding the whole environment: the container should not inherit whatever
+# happens to be exported on someone's laptop.
+UIS_FORWARDED_ENV=(
+    PG_PSQL_HOST            # lib/pg-connection.sh — how UIS reaches postgres
+    UIS_VERIFY_KUBECONFIG   # lib/verify-target.sh — which kubeconfig verifies read
+    TARGET_HOST             # overrides .uis.extend/cluster-config.sh for one command
+)
+
+# Build the `-e NAME=value` arguments for those that are actually set, so an
+# unset variable stays unset inside rather than becoming an empty string.
+build_env_args() {
+    ENV_ARGS=()
+    local name
+    for name in "${UIS_FORWARDED_ENV[@]}"; do
+        if [ -n "${!name+x}" ]; then
+            ENV_ARGS+=(-e "$name=${!name}")
+        fi
+    done
+}
+build_env_args
+
 # Detect TTY for docker exec flags
 # -it for interactive terminal, -i only for piped stdin (still forwards input)
 if [ -t 0 ] && [ -t 1 ]; then
@@ -281,7 +318,7 @@ case "${1:-help}" in
         ;;
     shell)
         start_container
-        docker exec $DOCKER_IT "$CONTAINER_NAME" bash
+        docker exec $DOCKER_IT "${ENV_ARGS[@]}" "$CONTAINER_NAME" bash
         ;;
     exec)
         shift
@@ -290,7 +327,7 @@ case "${1:-help}" in
             exit 1
         fi
         start_container
-        docker exec $DOCKER_IT "$CONTAINER_NAME" "$@"
+        docker exec $DOCKER_IT "${ENV_ARGS[@]}" "$CONTAINER_NAME" "$@"
         ;;
     logs)
         docker logs "$CONTAINER_NAME" ${2:---tail 50}
@@ -377,6 +414,6 @@ case "${1:-help}" in
     *)
         # Pass all other commands to uis-cli.sh inside the container
         start_container
-        docker exec $DOCKER_IT "$CONTAINER_NAME" /mnt/urbalurbadisk/provision-host/uis/manage/uis-cli.sh "$@"
+        docker exec $DOCKER_IT "${ENV_ARGS[@]}" "$CONTAINER_NAME" /mnt/urbalurbadisk/provision-host/uis/manage/uis-cli.sh "$@"
         ;;
 esac
