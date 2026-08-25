@@ -33,8 +33,16 @@ KUBECONFIG_DIR="${UIS_KUBECONFIG_DIR:-$HOME/.kube}"
 UIS_FORWARDED_ENV=(
     PG_PSQL_HOST            # lib/pg-connection.sh — how UIS reaches postgres
     UIS_VERIFY_KUBECONFIG   # lib/verify-target.sh — which kubeconfig verifies read
-    TARGET_HOST             # overrides .uis.extend/cluster-config.sh for one command
+    UIS_TARGET_HOST         # overrides .uis.extend/cluster-config.sh for one command
 )
+
+# TARGET_HOST is the name an operator naturally reaches for, but the container's
+# cluster-config.sh assigns TARGET_HOST unconditionally and would overwrite it.
+# Accept the friendly name here and forward it under the one the container
+# honours. Setting UIS_TARGET_HOST directly also works.
+if [ -n "${TARGET_HOST+x}" ] && [ -z "${UIS_TARGET_HOST+x}" ]; then
+    UIS_TARGET_HOST="$TARGET_HOST"
+fi
 
 # Build the `-e NAME=value` arguments for those that are actually set, so an
 # unset variable stays unset inside rather than becoming an empty string.
