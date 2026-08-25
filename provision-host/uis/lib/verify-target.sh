@@ -41,6 +41,13 @@ uis_target_host() {
         source "$cluster_config"
         target_host="${TARGET_HOST:-rancher-desktop}"
     fi
+    # An explicit override wins over the file. See load_cluster_config in
+    # first-run.sh for why this is UIS_TARGET_HOST and not TARGET_HOST: the
+    # config file assigns TARGET_HOST unconditionally, so sourcing it discards
+    # anything the caller set.
+    if [[ -n "${UIS_TARGET_HOST:-}" ]]; then
+        target_host="$UIS_TARGET_HOST"
+    fi
     echo "$target_host"
 }
 

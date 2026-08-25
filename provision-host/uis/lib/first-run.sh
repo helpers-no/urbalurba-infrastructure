@@ -164,6 +164,25 @@ load_cluster_config() {
         # shellcheck source=/dev/null
         source "$config_file"
         log_info "Loaded cluster config: $CLUSTER_TYPE"
+
+        # ⚠️ An explicit override must survive the source above.
+        #
+        # cluster-config.sh contains a bare `TARGET_HOST="rancher-desktop"`, so
+        # sourcing it OVERWRITES anything the caller set. The launcher forwarded
+        # TARGET_HOST into the container, the value arrived, and this line threw
+        # it away — a documented override with no effect, which read as working
+        # to anyone who checked with `exec` and stopped there. Found by the
+        # independent tester (2026-08-25): `TARGET_HOST=does-not-exist ./uis
+        # verify postgresql` verified a service successfully.
+        #
+        # UIS_TARGET_HOST rather than reusing TARGET_HOST: TARGET_HOST is
+        # `export`ed below, so on a second call the previously-exported value
+        # would look like a fresh override and pin itself. Nothing else ever
+        # sets UIS_TARGET_HOST, so it cannot be confused with a leftover.
+        if [[ -n "${UIS_TARGET_HOST:-}" ]]; then
+            TARGET_HOST="$UIS_TARGET_HOST"
+            log_info "Target host overridden from the environment: $TARGET_HOST"
+        fi
     else
         # Use defaults
         CLUSTER_TYPE="${CLUSTER_TYPE:-rancher-desktop}"
