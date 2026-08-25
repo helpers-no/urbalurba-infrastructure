@@ -65,8 +65,17 @@
       ansible.builtin.assert:
         that: _gql.stdout is search('version')
         fail_msg: >-
-          The Dagster webserver did not answer a GraphQL query. The pod may be
-          Running while unable to reach its metadata database. Response:
+          The Dagster webserver did not answer a GraphQL query.
+          ⚠️ Read the probe's stderr below BEFORE assuming the service is at
+          fault: an empty response means "the question could not be asked" and
+          "the answer was wrong" identically. A kubectl failure — wrong context,
+          unreadable kubeconfig, missing namespace — produces exactly this.
+          `./uis verify` pre-flights the context and kubeconfig, so those two are
+          already excluded if you got here through it.
+          If the probe genuinely reached the pod, then the webserver is up but
+          not serving: check it can reach its metadata database.
+          stderr: {{ _gql.stderr | default('<none>') | truncate(300) }}
+          Response:
           {{ _gql.stdout | default('<empty>') | truncate(200) }}
         success_msg: "Webserver answered GraphQL."
 

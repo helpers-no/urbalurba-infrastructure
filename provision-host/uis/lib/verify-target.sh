@@ -50,6 +50,79 @@ uis_target_host() {
 #   run_verify_playbook 088-test-postgrest.yml -e "_app_name=atlas"
 #
 # Extra args are passed through, so per-service extra-vars still work.
+# The kubeconfig every ansible playbook reads. Not PF_KUBECONFIG — the ~100
+# playbooks under ansible/playbooks/ use this legacy bind-mounted path.
+UIS_VERIFY_KUBECONFIG="${UIS_VERIFY_KUBECONFIG:-/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all}"
+
+# Refuse to run a verify that cannot possibly succeed, and say why.
+#
+# ⚠️ THIS EXISTS BECAUSE A CONFIGURATION ERROR USED TO BE REPORTED AS A BROKEN
+# SERVICE. With a context that does not exist, every kubectl in the playbook
+# fails, every probe returns empty, and the assertions — which are written as
+# "did the expected string appear?" — report the SERVICE as unhealthy. One of
+# them even speculated a cause ("the pod may be unable to reach its metadata
+# database") that was entirely wrong, sending the reader to debug a database
+# while the real fault was a kubectl context.
+#
+# An empty probe result means "I could not ask" and "the answer was wrong"
+# identically, and an assertion on stdout can only ever report the second. The
+# fix for that class is to not start: if we cannot ask, say so here, in
+# configuration terms, before the playbook runs.
+#
+# Both failures below were observed in one session (2026-08-25): a
+# non-existent context, and a kubeconfig left as an unreadable symlink after a
+# container restart — which silently broke EVERY verify on that installation.
+uis_verify_preflight() {
+    local target_host="$1"
+
+    # Test the LINK before the target. A dangling symlink fails `-e` and a
+    # resolvable-but-unreadable one fails `-r`; both were seen, and both want
+    # the same diagnosis, so ask about the symlink first rather than letting
+    # the sub-case decide which message appears.
+    if [[ -L "$UIS_VERIFY_KUBECONFIG" ]]; then
+        log_error "Kubeconfig is a SYMLINK: $UIS_VERIFY_KUBECONFIG"
+        log_info  "  -> $(readlink "$UIS_VERIFY_KUBECONFIG" 2>/dev/null)"
+        log_info  "This path must be a real file. A symlink into the container's own"
+        log_info  "home cannot be read back through the bind mount, and every ansible"
+        log_info  "playbook reads it — so every verify fails and blames its service."
+        log_info  "Fix: ./uis stop && ./uis start rewrites it as a real file."
+        return 1
+    fi
+
+    if [[ ! -e "$UIS_VERIFY_KUBECONFIG" ]]; then
+        log_error "Kubeconfig not found: $UIS_VERIFY_KUBECONFIG"
+        log_info  "Every verify playbook reads that path. This is a configuration"
+        log_info  "problem, not a problem with the service you are verifying."
+        return 1
+    fi
+
+    if [[ ! -r "$UIS_VERIFY_KUBECONFIG" ]]; then
+        log_error "Kubeconfig is not readable: $UIS_VERIFY_KUBECONFIG"
+        log_info  "This is a configuration problem, not an unhealthy service."
+        return 1
+    fi
+
+    # Does the context actually exist? kubectl already answers this precisely;
+    # the old failure mode was that nobody asked, and its answer never appeared
+    # anywhere in the output.
+    local ctx_err
+    if ! ctx_err="$(kubectl config get-contexts "$target_host" \
+                      --kubeconfig "$UIS_VERIFY_KUBECONFIG" 2>&1 >/dev/null)"; then
+        log_error "Cluster context '$target_host' does not exist in $UIS_VERIFY_KUBECONFIG"
+        [[ -n "$ctx_err" ]] && log_info "kubectl: $ctx_err"
+        log_info ""
+        log_info "Available contexts:"
+        kubectl config get-contexts -o name --kubeconfig "$UIS_VERIFY_KUBECONFIG" 2>/dev/null \
+            | sed 's/^/  /' || true
+        log_info ""
+        log_info "TARGET_HOST comes from .uis.extend/cluster-config.sh."
+        log_info "This is a configuration problem. The service was never asked."
+        return 1
+    fi
+
+    return 0
+}
+
 run_verify_playbook() {
     local playbook="$1"; shift
     local target_host
@@ -59,6 +132,9 @@ run_verify_playbook() {
     # this defect survived: the output looked like a service failure, and
     # nothing on screen said which cluster had been asked.
     log_info "Target cluster: $target_host"
+
+    # Fail as configuration BEFORE the playbook can fail as a service.
+    uis_verify_preflight "$target_host" || return 2
 
     ansible-playbook "$ANSIBLE_DIR/$playbook" -e "target_host=$target_host" "$@"
 }

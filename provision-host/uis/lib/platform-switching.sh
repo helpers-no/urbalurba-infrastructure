@@ -94,19 +94,75 @@ pf_ensure_kubeconf_seeded() {
     if [[ ! -f "$PF_KUBECONFIG" ]]; then
         cp --remove-destination "$seed_file" "$PF_KUBECONFIG" 2>/dev/null || true
         chmod 600 "$PF_KUBECONFIG" 2>/dev/null || true
-
-        # Mirror to legacy bind-mounted kubeconfig — the ~100 ansible playbooks
-        # under ansible/playbooks/ read from there, not from PF_KUBECONFIG.
-        # --remove-destination handles the symlink (kubeconf-all -> /home/ansible/
-        # .kube/config) that lives at the legacy path on first-run; without it
-        # cp follows the symlink into the read-only host kubeconfig (EROFS).
-        local legacy_dir
-        legacy_dir="$(dirname "$PF_LEGACY_KUBECONFIG")"
-        if [[ -d "$legacy_dir" ]]; then
-            cp --remove-destination "$seed_file" "$PF_LEGACY_KUBECONFIG" 2>/dev/null || true
-            chmod 600 "$PF_LEGACY_KUBECONFIG" 2>/dev/null || true
-        fi
     fi
+
+    # Mirror to the legacy bind-mounted kubeconfig — the ~100 ansible playbooks
+    # under ansible/playbooks/ read from THERE, not from PF_KUBECONFIG.
+    #
+    # ⚠️ DELIBERATELY NOT NESTED INSIDE THE CHECK ABOVE. It used to be, and that
+    # was the defect: once PF_KUBECONFIG existed as a real file, this block never
+    # ran again — so the legacy path kept whatever it had, which on first-run is
+    # a SYMLINK to /home/ansible/.kube/config. That symlink cannot be read back
+    # through the bind mount ("operation not permitted"), so every kubectl in
+    # every playbook failed, and every verify reported healthy services as
+    # unhealthy. A container restart was enough to land in that state.
+    #
+    # The two files have independent lifetimes; they must be checked
+    # independently. Found by the independent tester (2026-08-25), who nearly
+    # attributed it to an unrelated release.
+    pf_ensure_legacy_kubeconf "$seed_file"
+}
+
+
+# ----- pf_ensure_legacy_kubeconf ---------------------------------------------
+# Guarantee the legacy bind-mounted kubeconfig is a REAL, READABLE file.
+#
+# Every ansible playbook reads this path. If it is a symlink into the
+# container's own home, it is unreadable through the bind mount and everything
+# fails in a way that looks like broken services rather than broken config.
+pf_ensure_legacy_kubeconf() {
+    local seed_file="${1:-}"
+    local legacy_dir
+    legacy_dir="$(dirname "$PF_LEGACY_KUBECONFIG")"
+    [[ -d "$legacy_dir" ]] || return 0
+
+    # A symlink here is ALWAYS wrong, even when it resolves: `-f` follows
+    # symlinks, so a plain existence test says "fine" about the exact state that
+    # breaks everything. Test the link itself.
+    local needs_replacing=false
+    if [[ -L "$PF_LEGACY_KUBECONFIG" ]]; then
+        needs_replacing=true
+    elif [[ ! -f "$PF_LEGACY_KUBECONFIG" ]]; then
+        needs_replacing=true
+    elif [[ ! -r "$PF_LEGACY_KUBECONFIG" ]]; then
+        needs_replacing=true
+    fi
+
+    if [[ "$needs_replacing" == "true" ]]; then
+        local source_file="$PF_KUBECONFIG"
+        [[ -f "$source_file" ]] || source_file="$seed_file"
+        [[ -n "$source_file" && -f "$source_file" ]] || return 0
+
+        # Errors are NOT swallowed here. The previous version ended every line
+        # with `2>/dev/null || true`, so a failure to fix this left no trace and
+        # the next symptom appeared somewhere unrelated.
+        if ! cp --remove-destination "$source_file" "$PF_LEGACY_KUBECONFIG" 2>/dev/null; then
+            echo "WARNING: could not write $PF_LEGACY_KUBECONFIG from $source_file." >&2
+            echo "         Ansible playbooks read that path; kubectl will fail for all of them." >&2
+            return 1
+        fi
+        chmod 600 "$PF_LEGACY_KUBECONFIG" 2>/dev/null || true
+    fi
+
+    # Assert the outcome, not the command. A readable real file is the thing
+    # that matters, and it is cheap to check.
+    if [[ ! -r "$PF_LEGACY_KUBECONFIG" ]] || [[ -L "$PF_LEGACY_KUBECONFIG" ]]; then
+        echo "WARNING: $PF_LEGACY_KUBECONFIG is still not a readable regular file." >&2
+        echo "         Every ansible playbook reads it; expect kubectl failures that" >&2
+        echo "         look like unhealthy services." >&2
+        return 1
+    fi
+    return 0
 }
 
 
