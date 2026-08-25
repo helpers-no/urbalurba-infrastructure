@@ -62,6 +62,16 @@ pf_ensure_kubeconf_seeded() {
     kc_dir="$(dirname "$PF_KUBECONFIG")"
     local seed_file="$kc_dir/rancher-desktop-kubeconf"
 
+    # ⚠️ FIRST, BEFORE ANY EARLY RETURN. The legacy kubeconfig guard has nothing
+    # to do with rancher-desktop seeding, and every return below skips it:
+    # "already seeded", "no host kubeconfig", and — the one that matters — "the
+    # host has no rancher-desktop context", which is true of exactly the
+    # non-development installations that most need the guard.
+    #
+    # Placing it at the end of this function, as the first version did, meant it
+    # never ran on a production installation.
+    pf_ensure_legacy_kubeconf "" || true
+
     # Idempotent based on the seed file — the actual artifact we're
     # responsible for producing. (Pre-F18 fix this was `[[ -f "$PF_KUBECONFIG" ]]`
     # which had the talk50 hole.)
@@ -110,7 +120,9 @@ pf_ensure_kubeconf_seeded() {
     # The two files have independent lifetimes; they must be checked
     # independently. Found by the independent tester (2026-08-25), who nearly
     # attributed it to an unrelated release.
-    pf_ensure_legacy_kubeconf "$seed_file"
+    # Re-assert after seeding: the seed may have produced the file this guard
+    # wants to mirror. Cheap, idempotent, and returns 0 when already correct.
+    pf_ensure_legacy_kubeconf "$seed_file" || true
 }
 
 
@@ -438,6 +450,6 @@ pf_banner() {
 
 # Make the functions available to child shells if needed (sub-shell invocations
 # from ansible's `shell` module, etc.). Most callers source this file directly.
-export -f pf_ensure_kubeconf_seeded pf_active_platform pf_probe_reachable
+export -f pf_ensure_kubeconf_seeded pf_ensure_legacy_kubeconf pf_active_platform pf_probe_reachable
 export -f pf_lockstep_flip pf_remove_context pf_list_platforms
 export -f pf_platform_summary pf_banner

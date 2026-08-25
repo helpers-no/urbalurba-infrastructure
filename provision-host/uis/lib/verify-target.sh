@@ -85,7 +85,18 @@ uis_verify_preflight() {
         log_info  "This path must be a real file. A symlink into the container's own"
         log_info  "home cannot be read back through the bind mount, and every ansible"
         log_info  "playbook reads it — so every verify fails and blames its service."
-        log_info  "Fix: ./uis stop && ./uis start rewrites it as a real file."
+        log_info  ""
+        log_info  "Fix (from the HOST, not inside the container):"
+        log_info  "  ./uis stop && ./uis start"
+        log_info  ""
+        log_info  "⚠️ That only works on a launcher from 2026-08-25 or later. Older"
+        log_info  "   launchers CREATE this symlink on every start, so restarting"
+        log_info  "   reproduces the fault instead of fixing it. If a restart does"
+        log_info  "   not clear this, update ~/uis/uis from the repo, or repair it"
+        log_info  "   by hand:"
+        log_info  "     docker exec uis-provision-host cp --remove-destination \\"
+        log_info  "       /home/ansible/.kube/config \\"
+        log_info  "       $UIS_VERIFY_KUBECONFIG"
         return 1
     fi
 
