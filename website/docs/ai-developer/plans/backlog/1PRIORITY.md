@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-23 (fifth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-26 (sixth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -56,6 +56,24 @@ shipped, so the triage view had drifted badly from the repo:
   `image-size` with no published patch — a floor, not a backlog item.
 - The first local build surfaced **pre-existing broken links and one broken
   anchor** in the docs. Warnings, not failures. Currently owned by nobody.
+---
+
+## What changed 2026-08-26 (sixth entry) — topology coverage gets a file
+
+- **[system-topology-coverage](INVESTIGATE-system-topology-coverage.md) filed.** A
+  requirement from ops (25/8, at Terje's direction) that had been accepted and
+  "queued" for a day while existing only as a message in `terchris/home`. It had a
+  queue position and no artefact — the same shape as the defects it is about, where
+  an absent record reads as a live one. Outcomes 1 and 4 (target_host plumbing,
+  loud configuration errors) already shipped via `lib/verify-target.sh`; **outcome 2
+  is open — nothing yet exercises the external-postgres proxy topology.**
+- **Version system shipped** (1.5.2 → 1.6.3): one `version.txt`, remote-version
+  detection on every command, display in `help`/`status` and on the website navbar,
+  launcher self-update, and untagged-image cleanup. Verified by ops on asgard.
+  UIS stays on **1.6.x until every service runs on asgard** — Terje, 25/8.
+- **TALK protocol v2 adopted.** Messages now live in `ai-developer/talk/` in
+  `terchris/home` and **rounds append under `## Round N` rather than overwriting**.
+
 ---
 
 ## What changed 2026-08-23 (fifth entry) — browserless shipped, Dagster shipped
@@ -250,6 +268,7 @@ INVESTIGATEs that still live in `backlog/` because their work isn't fully shippe
 
 | # | Investigation | Effort | Why this tier |
 |---|---|---|---|
+| **NEW** | [system-topology-coverage](INVESTIGATE-system-topology-coverage.md) | M | **Filed 2026-08-26 from an ops requirement.** Three defects in one morning, all the same class: an assumption true only of the development topology. The tester and production differ on exactly two axes — context name and postgres shape — and all three defects lived there. Ranked Tier 1 because it is the systemic version of a failure that has already cost four hand-found production defects, and because part of the answer is cheap: a **lint**, not a second cluster. Outcomes 1 and 4 shipped; **outcome 2 (exercise the proxy topology) is open**. ⚠️ Do not "fix" this by switching the tester to production's shape — in-cluster postgres is a supported configuration and swapping moves the blind spot. |
 | 1 | [secrets-template-defaults-clarity](INVESTIGATE-secrets-template-defaults-clarity.md) | S | Foundational fix to the secrets workflow every service depends on. The current silent-overwrite confusion between `00-common-values.env.template` and `default-secrets.env` produces bug reports from contributors and slows every onboarding. Investigation already half-shipped via the existing template scaffolding; closing it out is a small read-and-decide. |
 | 2 | [verification-playbooks-usage](INVESTIGATE-system-verification-playbooks-usage.md) | M | **Promoted from Tier 2 on evidence, and the evidence keeps arriving.** Written 2026-03-12, it states the risk as "verification playbooks present but not wired into active setup or test flows → deployments report success when no real validation happened." Three separate confirmations since: (1) `031-test-alloy.yml` was reachable by no command at all while its docs page told users to run it; (2) uptime-kuma's verify was invisible to `test-all`; (3) **`kubectl run --rm -i` silently returns rc=0 with empty stdout** when the container outlives the attach — every `until:` asserting on stdout then reads a successful call as a failure. (3) is the serious one: the same idiom appears across other services' verify playbooks, so an unknown number of them can fail or pass for reasons unrelated to the service. All three are fixed ad-hoc; this investigation is the systematic version. **Stays Tier 1, not Tier 0, on purpose** — its child plans are point fixes to the services that happened to break, not the investigation's output. |
 | 3 | [external-or-in-cluster-services](INVESTIGATE-system-external-or-in-cluster-services.md) | M | **New 2026-08-13.** OpenBao, the registry cache and the backup chain run on Odin, built by hand, with no service definition — the exact state Alloy was in before it was made a real service. Rebuild Odin and they are rebuilt from memory; OpenBao holds the vault recovery keys. The requirement is that they also run on Rancher Desktop, which needs one convention: how a service is *provided externally* in one installation and *deployed in-cluster* in another, behind one interface. `.uis.extend/` is the half-built precedent (shipped twice, for watching external things, never for substituting them), and six database services already live this shape undeclared. A full `pct list` of Odin found **six** components, not three: `pg` and `minio` already have both a service definition *and* a hand-built proxy (unproductised, not missing), `bao` and the `registry` mirrors have nothing, and **`nas` (Samba/NFS) is parked pending a scope decision** — the laptop answer is probably Rancher Desktop's existing storage class rather than shipping Samba, but that should be decided deliberately. `ops` is not a service: it is the host running `uis-provision-host` itself. **First child plan SHIPPED 2026-08-14** — PostgreSQL and MinIO both run from the convention, and the reference installation has zero hand-written proxies left. Remaining children: `bao`, the `registry` mirrors, cluster backup. **Decide alongside the observability artifact convention** — same question in a different costume, and two answers would never converge. |
