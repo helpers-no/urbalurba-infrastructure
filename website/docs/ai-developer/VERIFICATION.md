@@ -72,6 +72,69 @@ is present, so a silently-inert injection cannot be mistaken for a working check
 If the first command prints `UNSET`, the second proves nothing whatever it says.
 ```
 
+## Three more ways a dispatch proves nothing (2026-08-26/27)
+
+The rule above is about falsifications that cannot fail. The version-system rounds
+produced three siblings, all found by the tester, all costing a round.
+
+### 1. A gate that cannot pass
+
+A dispatch pre-flight said *refuse to start unless the image reports 1.6.4*:
+
+```bash
+docker run --rm --entrypoint cat "$IMAGE" /uis/version.txt   # WRONG PATH
+```
+
+There is no `/uis` in the image — the file is at `/mnt/urbalurbadisk/version.txt`. So the
+gate failed on a missing file **whatever the build state**, and could not discriminate the
+thing it existed to discriminate.
+
+> **A gate that cannot pass is the mirror image of a falsification that cannot fail.**
+> Both report the same verdict regardless of the state they are meant to tell apart.
+
+It is the more dangerous direction, because refusing *looks* like working. Two consequences:
+
+- **Copy the command the product already uses.** The correct pre-flight was sitting in
+  `uis` at `installed_version()`. It was written from memory instead, while that file was
+  open.
+- **An error is not a negative result.** `No such file or directory` means *the gate is
+  broken*, not *the wrong version*. A dispatch must say which of the two a non-zero exit is,
+  or the tester will grade a build on a broken instrument.
+
+### 2. The code under test must be the code doing the work
+
+Testing a fix to the launcher's self-update, the tester installed the **pre-fix** launcher and
+ran it, saw the old behaviour, and was one step from filing "the fix does not work".
+
+The launcher that *performs* the update is the one that prints the message. Installing 1.6.3 to
+trigger a self-update meant 1.6.4 was what got **installed**, never what **ran**.
+
+> **Confirming the fault is present is not enough. The code under test has to be the code
+> doing the work.**
+
+Same family as the rule at the top — the injected state was not the state the claim is about —
+but it survives the original rule, because the fault really was present and really was read
+back correctly.
+
+### 3. A pre-flight must not consume the state the acceptance measures
+
+The same dispatch asked for both:
+
+- pre-flight: `docker pull …:latest`, then check the version
+- acceptance: the **image digest must change** across `./uis pull`
+
+Running the pre-flight satisfies the pull, so the digest cannot change afterwards and the
+acceptance criterion **can never pass on its own terms**. The tester resolved it by reading the
+registry digest without touching the local store, and committed in advance to reporting
+BLOCKED rather than grading the round if the version turned out wrong.
+
+> **Read the pre-flight and the acceptance together and ask whether performing the first
+> destroys the evidence for the second.**
+
+Prefer a pre-flight that *observes* (query the registry, inspect a manifest) over one that
+*acts* (pull, restart, deploy). Anything the pre-flight does is state the acceptance no longer
+gets to measure.
+
 ## The general form
 
 This is the same distinction that keeps appearing in the services themselves:
