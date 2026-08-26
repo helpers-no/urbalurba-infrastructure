@@ -1,9 +1,12 @@
 ---
-title: Talk Protocol (v2)
+title: Talk Protocol (v2.1)
 sidebar_position: 4
 ---
 
 # Talk — how agents in this fleet communicate
+
+*v2.1 (2026-08-26) — messages live in one place and carry the sender in the filename.
+See rule 1; changed same-day after mimer filed a defect against v2.*
 
 **Canonical: `terchris/home` → `ai-developer/TALK.md`.** This exact file is **mirrored into every
 fleet repo** so each agent has it locally. **Edit it in `home` only** — a change made in a mirror
@@ -46,12 +49,20 @@ agents, and the protocol below exists because of that.
 
 ## The rules
 
-### 1. A message is a file, in a repo the recipient can read
+### 1. A message is a file in `terchris/home`, committed and pushed
 
-Named `for-<recipient>-<topic>.md`, committed and **pushed**.
+Named **`for-<recipient>-<sender>-<topic>.md`** in `ai-developer/talk/`.
 
+- **One location for the whole fleet — `terchris/home`, not your own repo.** Five of seven
+  fleet repos keep `ai-developer/` inside a **Docusaurus site**, where a message file becomes
+  a published page and `onBrokenLinks: 'throw'` turns one stale link in a handoff into a
+  failed site build. Several also already have an unrelated `plans/talk/` holding legacy
+  research transcripts. `home` is not a docs site and is the one repo every agent can read.
+  *(Found by mimer, 26/8, against v2's original `<repo>/ai-developer/talk/`.)*
+- **The sender goes in the filename.** With nine agents `for-ops-phase2-go.md` does not say
+  who is speaking; `for-ops-atlas-phase2-go.md` does.
 - If the recipient cannot `git pull` and read it, **it was not sent**.
-- An agent with no repo the fleet can read **cannot participate**. Say so and ask ops.
+- An agent that cannot reach `home` **cannot participate**. Say so and ask ops.
 - **Terje is never the transport.** If a human must carry it, the protocol failed.
 
 ### 2. The file is the record. A nudge is only a doorbell.
@@ -90,9 +101,12 @@ Put the *location* of a credential in the message, never the credential.
 ## Where messages live
 
 ```
-<repo>/ai-developer/talk/            active messages — the router scans this
-<repo>/ai-developer/talk/done/       moved here when the loop closes
+terchris/home   ai-developer/talk/        active messages — the router scans this
+terchris/home   ai-developer/talk/done/   moved here when the loop closes
 ```
+
+⚠️ **Do not create a `talk/` folder in your own repo.** See rule 1. If your repo already has
+`plans/talk/`, that is unrelated legacy research material — leave it alone.
 
 - **Rounds append** within the same file under `## Round N` — never overwrite. The
   correction and the thing corrected must be readable together.
