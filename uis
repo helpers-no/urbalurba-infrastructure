@@ -533,6 +533,24 @@ update_launcher() {
     # explicitly makes the target unambiguous and lets it be tested against a
     # throwaway file instead of the real launcher.
     local target="${UIS_LAUNCHER_PATH:-${BASH_SOURCE[0]}}"
+
+    # ⚠️ Absolute, because $backup is derived from $target and the restore
+    # instruction we print is only useful if it works from anywhere.
+    # Invoked as `./uis`, BASH_SOURCE is RELATIVE, so we printed
+    #     Restore with: cp "./uis.bak-20260826-002933" "./uis"
+    # which silently refers to a different file after a single `cd` - and the
+    # moment you need it is the moment the launcher is broken. Found by the
+    # independent tester (2026-08-26).
+    #
+    # `readlink -f`/`realpath` are NOT portable - the tester runs macOS, where
+    # BSD readlink has no -f. `cd $(dirname) && pwd -P` is POSIX and works on
+    # both. The basename is deliberately NOT resolved: if the launcher itself
+    # is a symlink we replace the symlink, which is the existing behaviour.
+    local _ldir
+    if _ldir="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" && [ -n "$_ldir" ]; then
+        target="$_ldir/$(basename "$target")"
+    fi
+
     [ -w "$target" ] || { log_info "Launcher not writable, skipping self-update: $target"; return 0; }
 
     # ⚠️ The temp file MUST live beside the target, not in /tmp.
