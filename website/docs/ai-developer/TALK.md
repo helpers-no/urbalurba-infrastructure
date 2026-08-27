@@ -131,6 +131,36 @@ leave it alone and do not confuse it with this.
 - **Never delete.** Move to `done/` when closed.
 - Git history is the archive; the folder tells you what is live.
 
+### 🔑 Who moves it — **ops**, and this was missing until 2026-08-27
+
+The rule above said *when*, never *who*, so nobody did it. `talk/` reached **47 active files** of
+which only ~12 were live: an agent reading the folder to find outstanding work got an answer that
+overstated it roughly threefold. That is the same failure as a ledger row saying "open" for
+something already fixed — it sends agents to do work that does not exist.
+
+**ops moves a file to `done/`.** It writes most of them and maintains `assignments.md`, so it is
+the only role that sees both ends of a loop. The **ops-router cannot** do it and must not be asked
+to: its own rules forbid git commits and any file edit outside its own state directory.
+
+**A loop is closed when one of these is true, and ops records which:**
+
+| Closed when | Evidence to cite |
+|---|---|
+| a verdict exists for a `*-testable.md` | the tester's file, and the merge if there is one |
+| the message itself is the verdict (`# PASS:`, `# VERDICT:`) | the file's own first line |
+| a later message supersedes or corrects it | the superseding file |
+| the request was acted on | the commit, PR or ledger row that shows it |
+| an audit proved it was never open | the audit |
+
+**If ops is unsure, it asks — it does not leave the file live as a hedge.** A folder that
+overstates live work is not a safe default; it is the failure this rule exists to prevent.
+
+⚠️ Moving a file to `done/` is safe for routing: the router globs `talk/for-*.md`, which does not
+match `talk/done/for-*.md`, so a moved file simply stops being scanned. Stale `routed.list` entries
+for the old path are harmless — they never match again. **Moving files *into* `talk/` is the
+dangerous direction**, and needs `routed.list` remapped first, or the fleet gets re-nudged with
+history — the cold-start spam the router flagged on 23/8.
+
 ---
 
 ## Message format
@@ -162,9 +192,16 @@ One ask, or none. Say who owns the next move.
 
 ## Build → test round
 
-1. **Builder** ships and declares `for-ops-<thing>-testable.md`: what changed, what to
+1. **Builder** ships and declares `for-ops-<builder>-<thing>-testable.md`: what changed, what to
    run, PASS criteria, and the **falsifications** that would disprove it.
-2. **Tester** runs it, reports `for-ops-test-<thing>.md`: per-criterion verdicts with output.
+2. **Tester** runs it, reports `for-ops-<tester>-<thing>.md`: per-criterion verdicts with output.
+
+   ⚠️ **Both names carry the sender, per rule 1.** Fixed 2026-08-27 — mimer reported that this
+   section still used v2's senderless `for-ops-<thing>-testable.md` and `for-ops-test-<thing>.md`
+   after rule 1 replaced them, and it was right. The inconsistency was live the same week: on 27/8
+   tor-agent filed `for-ops-docs-build-strictness-testable.md` (no sender) while imac filed
+   `for-ops-imac-docs-pr-gate.md` (sender), because the document told them different things.
+   imac had already flagged the same thing about its own filing and asked which to use.
 3. **FAIL** routes back to the builder. **PASS** closes the loop *with the builder* —
    otherwise builders answer status questions from stale context.
 4. ⚠️ **State which topology produced the result.** A green round on one topology says
