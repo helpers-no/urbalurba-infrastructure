@@ -420,6 +420,3 @@ The configure precheck found no database named `<name>` in the cluster's Postgre
 ## Learn More
 
 - [Official PostgREST documentation](https://postgrest.org)
-
-<!-- THROWAWAY TEST LINE - imac, docs-pr-gate round, criterion 2. Reverted in the next commit. -->
-[nope](/docs/no/such/page)
