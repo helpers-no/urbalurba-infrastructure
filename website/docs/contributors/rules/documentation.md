@@ -63,15 +63,30 @@ Documentation is built with [Docusaurus](https://docusaurus.io/) and deployed to
    npm run build
    ```
    The build must exit 0. It is the same build GitHub Actions runs
-   (`.github/workflows/docs.yml`), so a failure here is a failure there — running
-   it locally costs ~30 s and saves a push/fail/fix round trip.
+   (`.github/workflows/docs.yml`) — that workflow and this pre-flight both read the
+   node version from `website/.nvmrc`, so `nvm use` before building if you manage
+   node versions.
+
+   Expect **2–4 minutes cold** and **under a minute** on a rebuild, plus ~40 s for
+   `npm ci` the first time. (Measured on two machines: 31 s cold on a 2-core x86 LXC
+   with a warm npm cache, 3m49s cold on a 4-core Sandy Bridge.) A slow first build is
+   normal — it has not hung.
 
    :::warning Needs more than 2 GB of RAM
-   `npm run build` aborts with a V8 heap error (exit 134) on a machine or container
-   limited to 2 GB. Measured on a 2-core x86 LXC against `main`: **2 GB fails** after
-   123 s, **3 GB passes** in 182 s, **4 GB passes** in 163 s. The abort message does
-   not mention memory, so if the build dies without naming a file, check how much RAM
-   the machine actually has before looking for a broken page.
+   On a machine or container limited to 2 GB, `npm run build` dies with:
+
+   ```
+   FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+   Aborted (core dumped)          # exit 134
+   ```
+
+   **That is RAM, not a broken page.** If you see `exit 134` or
+   `JavaScript heap out of memory`, stop looking for a bad link and check how much
+   memory the machine actually has.
+
+   Measured on two machines: **2 GB fails**, **3 GB and 4 GB pass**. ⚠️ The 2 GB
+   failure needs a **cold** cache — with `.docusaurus` and the webpack cache warm, a
+   2 GB cap can pass, so a build that worked yesterday can fail after a `git clean`.
    :::
 
 6. **Commit and push** when ready - GitHub Pages updates automatically

@@ -19,17 +19,38 @@ on:
       # depends on; the other was test-uis.yml, which ran no tests at all on
       # ansible/** changes.
       - 'version.txt'
+  # ⚠️ Build on PRs too, or the build is not a gate - it is a notification.
+  #
+  # The three onBroken* settings became 'throw' on 2026-08-27, so a broken link
+  # now FAILS this build instead of warning. Without a pull_request trigger that
+  # failure lands after the merge, on main, where the only thing standing between
+  # a contributor and a red main is remembering the local pre-flight. The
+  # independent tester caught this in the same round that passed the 'throw'
+  # change: "the new gate does not run on pull requests, so it reds main instead
+  # of the PR."
+  #
+  # Same paths as the push trigger deliberately. This is the THIRD time a filter
+  # here has been narrower than what the job depends on (see the version.txt note
+  # above, and test-uis.yml's ansible/**); two lists that must agree are how that
+  # keeps happening, so if you add a path, add it to both.
+  pull_request:
+    paths:
+      - 'website/**'
+      - '.github/workflows/docs.yml'
+      - 'version.txt'
   workflow_dispatch: # Allow manual trigger
 
+# Least privilege at the top; the deploy job widens it for itself. A PR build
+# needs to read the repo and nothing else - it must never hold pages: write.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# Allow only one concurrent deployment
+# Real deploys keep the single "pages" group and are never cancelled. PR builds
+# group per branch and DO cancel superseded runs: a force-push should not leave
+# two builds racing, and a queued PR build must not sit behind a Pages deploy.
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'push' && 'pages' || format('docs-pr-{0}', github.head_ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -43,7 +64,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Single source of truth, so "run the same build locally" is literally
+          # true. Was a bare '20' here while package.json said >=18.0 and nothing
+          # pinned a local version - a node-major gap between local and CI is
+          # exactly how a local-passes/CI-fails round trip comes back.
+          node-version-file: website/.nvmrc
           cache: 'npm'
           cache-dependency-path: website/package-lock.json
 
@@ -64,6 +89,12 @@ jobs:
           path: website/build
 
   deploy:
+    # PRs build but never deploy. A fork PR must not be able to publish the site.
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
