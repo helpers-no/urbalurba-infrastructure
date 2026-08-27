@@ -57,10 +57,22 @@ Documentation is built with [Docusaurus](https://docusaurus.io/) and deployed to
 
 4. **Edit markdown files** in `website/docs/` - changes appear instantly with hot reload
 
-5. **Build and test**:
+5. **Run the build before you push — this is a required pre-flight, not a habit**:
    ```bash
+   cd website
    npm run build
    ```
+   The build must exit 0. It is the same build GitHub Actions runs
+   (`.github/workflows/docs.yml`), so a failure here is a failure there — running
+   it locally costs ~30 s and saves a push/fail/fix round trip.
+
+   :::warning Needs more than 2 GB of RAM
+   `npm run build` aborts with a V8 heap error (exit 134) on a machine or container
+   limited to 2 GB. Measured on a 2-core x86 LXC against `main`: **2 GB fails** after
+   123 s, **3 GB passes** in 182 s, **4 GB passes** in 163 s. The abort message does
+   not mention memory, so if the build dies without naming a file, check how much RAM
+   the machine actually has before looking for a broken page.
+   :::
 
 6. **Commit and push** when ready - GitHub Pages updates automatically
 
@@ -306,6 +318,12 @@ npm run build
 # - Verify frontmatter syntax
 # - Check for unclosed code blocks
 ```
+
+A broken internal link, a broken anchor or a broken markdown link **fails the build**
+(`onBrokenLinks`, `onBrokenAnchors`, `onBrokenMarkdownLinks` are all `throw` in
+`docusaurus.config.ts`). They were warnings until 2026-08-27, which meant neither the
+local build nor Actions caught them and they accumulated silently. If you need to land
+a link a checker cannot follow, fix the link rather than lowering the setting.
 
 ### GitHub Pages Not Updating
 

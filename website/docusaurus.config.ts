@@ -44,8 +44,8 @@ const config: Config = {
   projectName: GITHUB_REPO,
   trailingSlash: false,
 
-  onBrokenLinks: 'warn',
-  onBrokenAnchors: 'warn',
+  onBrokenLinks: 'throw',
+  onBrokenAnchors: 'throw',
 
   i18n: {
     defaultLocale: 'en',
@@ -56,7 +56,7 @@ const config: Config = {
     mermaid: true,
     format: 'detect',
     hooks: {
-      onBrokenMarkdownLinks: 'warn',
+      onBrokenMarkdownLinks: 'throw',
     },
   },
 

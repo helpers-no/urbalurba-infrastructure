@@ -148,7 +148,7 @@ GRANT INSERT ON ALL TABLES IN SCHEMA api_v1 TO web_anon;
 ```
 
 Two reasons: the role is per-app (`<app>_web_anon`, never a bare `web_anon` —
-see [Roles](#roles) above), and `ON ALL TABLES` covers only tables that exist
+see [Connection model and role naming](#connection-model-and-role-naming) above), and `ON ALL TABLES` covers only tables that exist
 **at grant time**, while the verify creates its probe table during the run.
 
 ```sql
