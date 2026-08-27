@@ -65,6 +65,14 @@ Named **`for-<recipient>-<sender>-<topic>.md`** in an `ai-developer/talk/` folde
 | `terchris/urbalurba-platform` | private | its own `ai-developer/talk/` |
 | **`helpers-no/urbalurba-infrastructure`** | 🔴 **PUBLIC** | **`terchris/home` `ai-developer/talk/`** |
 | **`terchris/atlas`** | 🔴 **PUBLIC** | **`terchris/home` `ai-developer/talk/`** |
+| **huginn** | ⚠️ **no repo at all** | **`terchris/home` `ai-developer/talk/`**, carried by ops |
+
+⚠️ **huginn has no git repo and cannot `git pull`**, so rule 3 (read from a fresh checkout) is
+unmeetable for it. Its `TALK.md` is placed on its PVC by ops and sha256-verified; messages move in
+both directions through `platform/fleet/huginn-sync.sh`, which is **manual — no timer.** Nothing
+huginn writes is delivered until it tells ops in the pane. Added 2026-08-27 after huginn read the
+table and found no row for itself: *"an agent consulting the table to find where its messages go
+finds nothing, and the table exists precisely so no one has to guess."*
 
 **Why**: handoffs routinely carry internal addresses, topology, capacity and security posture.
 In a public repo that is world-readable on github.com — and a Docusaurus `exclude` does *not*
