@@ -47,7 +47,14 @@ This means every completed feature has a written record of what was built, why, 
 
 This is the part that catches the most bugs. The contributor writes test instructions in a shared `talk.md` file. The tester executes every step and reports back — including wrong URLs in documentation, rendering errors in UIs, and missing annotations on generated entities. These are UX issues that only surface when someone actually uses the system, and automated tests would never find them.
 
-Over 24 talk sessions have been completed. See the [Talk Protocol](/docs/ai-developer/TALK) documentation for the full format, rules, and a real session example.
+Over 24 talk sessions have been completed.
+
+:::note Where this lives now
+The talk protocol described here was the fleet's coordination bus. It has moved out of this
+repository — fleet coordination is no longer part of the UIS product documentation. What
+remains here is the part that is about the product: the builder/tester separation and what
+makes a verification trustworthy, in [Verification](/docs/ai-developer/VERIFICATION).
+:::
 
 ## What Makes This Work
 
@@ -87,7 +94,7 @@ The entire AI development workflow is documented and visible on this site:
 - [AI Developer Guide](/docs/ai-developer/) — how the workflow works
 - [Workflow](/docs/ai-developer/WORKFLOW) — step-by-step from idea to implementation
 - [Creating Plans](/docs/ai-developer/PLANS) — plan templates and structure
-- [Talk Protocol](/docs/ai-developer/TALK) — how the two-session testing works
+- [Verification](/docs/ai-developer/VERIFICATION) — what makes a test round trustworthy
 - [Plans Overview](/docs/ai-developer/plans-overview) — browse all plans and investigations
 
 The plans, investigations, and talk protocol aren't specific to UIS. Any project can use this pattern: plan before you code, test with a fresh perspective, and keep written records of what was built and why.

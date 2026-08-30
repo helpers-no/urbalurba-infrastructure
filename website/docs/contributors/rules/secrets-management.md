@@ -40,7 +40,8 @@ Two conditions, and **both** hold today:
 **If either stops being true, that is a new decision, not this one.** A publicly routable address, a
 hostname that resolves outside the network, or anything credential-shaped is out of scope here and
 needs Terje. Under this project's own rules the platform owner is the only person who can approve
-public exposure — see the roles section of `TALK.md`.
+public exposure, production writes, spending, credentials and deletion — no automated process and no
+agent decides those.
 
 ⚠️ **Today this boundary is enforced by review, not by a check.** Nothing in CI fails a commit that
 adds a public address or a credential-shaped string to this repo. That is worth fixing, and it is a
