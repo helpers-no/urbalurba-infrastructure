@@ -2,11 +2,47 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-26 (sixth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-30 (seventh refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
 **UIS lifecycle convention**: an INVESTIGATE moves from `backlog/` to `completed/` once every child PLAN has shipped (or the investigation is otherwise closed). Once moved, it disappears from this doc — see [`completed/`](../completed/index.md) for the historical list.
+
+---
+
+## Current status — tor-agent, 2026-08-30
+
+**`state: blocked`. `active/` is empty, and both are accurate rather than gaps.**
+
+I build; the independent tester proves. One round has been **declared and ungraded since
+27 August**: branch `topology-shim-contract` @ `d8d2aab`, nine criteria of which five are
+red cases. WIP=1, so nothing else starts until it closes.
+
+That wait is the reason ops's status poll exists. Both ends of the handoff sat idle for
+three days — I was waiting for a verdict, and the tester's queue showed nothing to do.
+
+| Blocked on | Who | Since |
+|---|---|---|
+| Verdict on `topology-shim-contract` @ `d8d2aab` | tester | 2026-08-27 |
+| Accept or refuse exercising the **proxy topology** — outcomes 2 and 3 of the topology requirement cannot close without a real run | tester | 2026-08-27 |
+| Disclosure call on internal addresses in this **public** repo — sanitise, keep private, or accept and record | Terje | 2026-08-27 |
+
+**Shipped since taking over UIS code on 2026-08-27** — two rounds, both graded PASS and
+both merged fast-forward, so the graded commit is byte-for-byte the commit on `main`:
+
+| | Change | Verdict |
+|---|---|---|
+| `9e79334` | Broken links, anchors and markdown links **fail** the docs build; the one broken anchor fixed; the local build documented as a required pre-flight | PASS 6/6, plus a third setting the tester graded unasked |
+| `4ebee23` | The gate runs on **pull requests**, so a broken link reds the PR rather than `main`; a PR build holds `Contents: read` only and cannot publish the site | PASS 7/7 |
+
+**Next three, in order**: get the shim-contract round graded and merged; write up the
+launcher/image version-drift INVESTIGATE (mechanism already traced — the host launcher is
+fetched from `raw.githubusercontent` off `main` and matches nothing in the container build's
+paths filter, so the two artefacts version independently); bump `actions/*@v4` to `@v5`
+across all four workflows before the deprecation turns fatal.
+
+If the verdict does not arrive I will start the launcher-drift write-up — it needs no
+tester — and say so here rather than quietly changing what I am doing.
 
 ---
 
@@ -72,10 +108,12 @@ shipped, so the triage view had drifted badly from the repo:
   31 s warm. The container recipe still works and is still right for machines without
   Node; it is no longer the only route, and the pre-flight is documented in
   [documentation.md](../../../contributors/rules/documentation.md).
-- **A note on this file's name.** It is the INVESTIGATE *triage* view — what to
-  investigate next. The poll-answering status file, saying what is being worked on right
-  now, is [`../1priority.md`](../1priority.md). Two different jobs, similar names; do not
-  merge them.
+- **A stray `1priority.md` existed for two hours and has been deleted.** ops's first
+  status poll asked every agent to create `plans/backlog/1priority.md`; that was ops's
+  error, and on a case-insensitive filesystem the lowercase twin would have silently
+  overwritten *this* file. I wrote to `plans/1priority.md` instead so nothing was lost,
+  and the revised poll confirmed there is no new file. Its content is folded into the
+  status section at the top of this document, and the stray is removed.
 ---
 
 ## What changed 2026-08-26 (sixth entry) — topology coverage gets a file
