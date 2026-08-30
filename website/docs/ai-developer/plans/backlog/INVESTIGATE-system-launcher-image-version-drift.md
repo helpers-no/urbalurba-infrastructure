@@ -165,6 +165,60 @@ this document exists because two copies drifted.
 Stand alone, cross-linked. That one is complete and correct within its frame;
 reopening it would blur what was decided from what was missed.
 
+## A live instance, 2026-08-30 — the image moved and the version did not
+
+Everything above was written from drift found by hand. This is the mechanism producing a fresh
+instance in ordinary use, recorded while it was still on screen.
+
+Moving every GitHub Action off the deprecated Node 20 runtime touched only `.github/workflows/*`.
+That path is in `build-uis-container.yml`'s filter, so the container **rebuilt and republished**:
+
+```
+:latest digest   sha256:bbfb4c255b49bf65...      (moved)
+revision label   cc62c186b8fa...                 (the merge commit)
+version.txt      1.6.4                           (unchanged)
+```
+
+`remote_version()` reads `version.txt` from the raw CDN. It said `1.6.4`. Every container already
+running said `1.6.4`. So **`./uis pull` had nothing to detect**, and the republished image was
+unreachable through the product's own update mechanism.
+
+**This is the sharpest form of the problem in this document**, and it is not the one the document
+was written about. The earlier cases were *two artifacts disagreeing*. This is **one artifact
+changing without its version changing** — the update mechanism is not wrong about the comparison, it
+is being fed a number that no longer describes the thing it names.
+
+⚠️ **It was nearly filed as a caveat rather than a defect.** The gap was spotted and written into
+the tester's handover as *"verify by digest, not by version"*. That works around it for one round
+and leaves every other consumer unable to see the image at all. Terje's correction (2026-08-30):
+*"a republished image the update mechanism cannot detect is a broken release, not a documentation
+problem."* Fixed by bumping `version.txt` to 1.6.5, which republished the image reachably.
+
+### What this adds to the open questions
+
+**The bump was manual, and that is the same class of problem as the drift.** A rule that depends on
+a human remembering to edit `version.txt` whenever a build-affecting path changes will be forgotten,
+and the failure is silent: the release publishes, the workflows go green, and only a digest
+comparison reveals that nobody can install it.
+
+Three candidate answers, none chosen here:
+
+1. **The build bumps the patch version itself** when it publishes from a path that changes the
+   image. Removes the human, but makes the version a build artifact rather than a deliberate
+   statement — and two builds racing would need an answer.
+2. **CI refuses a merge** that touches a build-affecting path without touching `version.txt`. Keeps
+   the version deliberate and makes forgetting loud. Cheap; a variation of the guards this repo
+   already runs. Costs a friction on every such change, including ones that genuinely need no
+   release.
+3. **The check moves off the version entirely** — compare the published digest against the running
+   container's digest, and treat `version.txt` as a human label rather than the update mechanism's
+   source of truth. Strongest signal, and the one this incident was actually caught by; it needs the
+   registry to be reachable, which `version.txt` over a CDN does not.
+
+⚠️ **Option 3 changes what "up to date" means** and should not be adopted casually — the whole
+reason there is one version number is the decision recorded above. Raised because the incident was
+detected by digest and missed by version, which is evidence about which instrument is stronger.
+
 ## What this does not answer
 
 Whether the drift check belongs on `start` (every invocation, needs to be fast
