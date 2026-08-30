@@ -233,17 +233,49 @@ deploy_single_service() {
                     log_warn "  if it was proxied by an older UIS, check: kubectl get svc $service_id -o jsonpath='{.spec.selector}'"
                 fi
 
-                # Symmetric inverse of the stand-down in 900-external-service-proxy.yml.
-                # Scaling back is safe because the PVC was never touched.
-                if kubectl get statefulset "$service_id" \
-                     -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
-                     >/dev/null 2>&1; then
-                    log_info "  restoring the in-cluster StatefulSet to 1 replica"
-                    kubectl scale statefulset "$service_id" --replicas=1 \
-                        -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
-                        >/dev/null 2>&1 || \
-                        log_warn "  could not scale it back; the setup playbook may still do so"
-                fi
+            fi
+
+            # ⚠️ UNCONDITIONAL, AND IT USED TO BE INSIDE THE BLOCK ABOVE.
+            #
+            # The scale-back was gated on having recognised a proxy by its marker.
+            # So reverting a declaration whose proxy predates the marker left the
+            # StatefulSet at ZERO REPLICAS, the orphaned proxy still relaying, and
+            # the cluster silently still served by the external database - with no
+            # output at all. The tester measured exactly that on a pre-marker
+            # fixture built to reproduce production.
+            #
+            # Bringing the in-cluster workload back up is not conditional on
+            # recognising anything. If we are deploying in-cluster and the
+            # workload is scaled to zero, it must come back. Safe because the
+            # stand-down never touched the PVC.
+            local _sts_replicas
+            _sts_replicas="$(kubectl get statefulset "$service_id" \
+                -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                -o jsonpath='{.spec.replicas}' 2>/dev/null || true)"
+            if [[ "$_sts_replicas" == "0" ]]; then
+                log_info "  in-cluster $service_id is scaled to 0; restoring it to 1 replica"
+                kubectl scale statefulset "$service_id" --replicas=1 \
+                    -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                    >/dev/null 2>&1 || \
+                    log_warn "  could not scale it back; the setup playbook may still do so"
+            fi
+
+            # An unmarked proxy cannot be removed automatically - deleting a
+            # workload on a name match alone is not something a deploy should do -
+            # but it must not be removed SILENTLY either. A Deployment and a
+            # StatefulSet sharing the service's name is the pre-marker proxy shape.
+            if [[ -z "$_proxy_found" ]] \
+               && kubectl get deployment "$service_id" -n "${SCRIPT_NAMESPACE:-default}" \
+                    --context "$target_host" >/dev/null 2>&1 \
+               && [[ -n "$_sts_replicas" ]]; then
+                log_warn "$service_id has BOTH a Deployment and a StatefulSet, and the"
+                log_warn "  Deployment carries no uis.io/external-proxy marker."
+                log_warn "  That is the shape of a proxy created before markers existed."
+                log_warn "  It has NOT been removed - a deploy must not delete a workload on a"
+                log_warn "  name match alone - so it may still be relaying, and the Service may"
+                log_warn "  still select it. Check, then remove it by hand:"
+                log_warn "    kubectl get endpoints $service_id -n ${SCRIPT_NAMESPACE:-default}"
+                log_warn "    kubectl delete deployment $service_id -n ${SCRIPT_NAMESPACE:-default}"
             fi
         fi
 

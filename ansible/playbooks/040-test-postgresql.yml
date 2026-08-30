@@ -295,16 +295,96 @@
         success_msg: "Same system_identifier through the Service and directly: this IS the declared database."
       when: _exthost.stdout | default('') | length > 0
 
-    - name: "B6. An in-cluster installation must NOT be served by a proxy"
-      ansible.builtin.assert:
-        that: _backing_pods | intersect(_proxy_pod_names) | length == 0
-        fail_msg: >-
-          This installation declares no external PostgreSQL, but service/postgresql is
-          backed by {{ _backing_pods | intersect(_proxy_pod_names) | join(', ') }}, which
-          is an external proxy. A declaration was probably removed without the proxy being
-          torn down, so queries are still leaving the cluster.
-        success_msg: "The in-cluster database is serving, as declared."
+    # ⚠️ B6 DECIDES BY IDENTITY TOO. It used to decide by marker, and the tester
+    # proved that wrong on the fixture built for B4.
+    #
+    # The old test was `backing pods must not intersect the MARKED pods`. An
+    # unmarked proxy is not in that list, so the intersection was empty and B6
+    # passed - while the cluster was served by an external database, the
+    # StatefulSet sat at zero replicas, and the declaration had been removed.
+    # It reported "the in-cluster database is serving, as declared." It was not.
+    #
+    # That is this defect class inverted once more and one layer down: B4 called
+    # a working install broken; B6 called a broken install working. The second is
+    # the worse direction, by the same argument about operators who are not
+    # looking for trouble - so the principle this round established for B4 is
+    # applied here rather than left one task short.
+    #
+    # No declaration exists in this branch, so there is no declared host to
+    # compare against. The reference is the in-cluster workload itself.
+    - name: "B6a. Is the in-cluster workload even running?"
+      ansible.builtin.shell: >
+        set -o pipefail;
+        kubectl get statefulset postgresql -n {{ _ns }} --context {{ _target }}
+        -o jsonpath='{.spec.replicas}'
+      args: { executable: /bin/bash }
+      register: _sts_replicas
+      changed_when: false
+      failed_when: false
       when: _exthost.stdout | default('') | length == 0
+
+    - name: "B6b. A scaled-down workload cannot be what answered"
+      ansible.builtin.assert:
+        that: (_sts_replicas.stdout | default('') | trim) != '0'
+        fail_msg: >-
+          This installation declares no external PostgreSQL, but the in-cluster
+          StatefulSet is scaled to 0 replicas - so it cannot be what answered, and
+          something else is serving on {{ _pg_sysid }}. This is the state a revert
+          leaves behind when the proxy it removed carried no external-proxy marker:
+          the proxy is orphaned and still relaying, and the in-cluster database was
+          never brought back. Check:
+          kubectl get deployment,statefulset,endpoints postgresql -n {{ _ns }}
+        success_msg: "The in-cluster workload is running."
+      when:
+        - _exthost.stdout | default('') | length == 0
+        - (_sts_replicas.stdout | default('') | trim) | length > 0
+
+    - name: "B6c. Read the in-cluster workload directly, bypassing the Service"
+      ansible.builtin.shell: >
+        set -o pipefail;
+        kubectl get pods -n {{ _ns }} --context {{ _target }}
+        -l app.kubernetes.io/name=postgresql
+        -o jsonpath='{range .items[*]}{.metadata.ownerReferences[0].kind}{"="}{.status.podIP}{"\n"}{end}'
+        | awk -F= '$1=="StatefulSet"{print $2; exit}'
+      args: { executable: /bin/bash }
+      register: _incluster_ip
+      changed_when: false
+      failed_when: false
+      when: _exthost.stdout | default('') | length == 0
+
+    - name: "B6d. Compare it with what the Service answered"
+      ansible.builtin.command: >
+        kubectl run pg-incluster-{{ 9999 | random }} --image=postgres:18 --rm -i
+        --restart=Never -n {{ _ns }} --context {{ _target }} --timeout=60s
+        --env PGPASSWORD={{ _pgpw.stdout }} --env PGCONNECT_TIMEOUT=10 --
+        /bin/sh -c 'timeout 30 psql -h {{ _incluster_ip.stdout | trim }} -U postgres -tAc "select chr(85)||chr(73)||chr(83)||chr(124)||(select system_identifier from pg_control_system())"'
+      register: _incluster_q
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when:
+        - _exthost.stdout | default('') | length == 0
+        - (_incluster_ip.stdout | default('') | trim) | length > 0
+
+    - name: "B6. An in-cluster installation must be served by the in-cluster database"
+      ansible.builtin.assert:
+        that: >-
+          (_incluster_q.stdout | default('') | regex_search('UIS[|][^\n]*') | default('', true)).split('|')
+          | last | trim == _pg_sysid
+        fail_msg: >-
+          This installation declares no external PostgreSQL, but the database answering
+          through service/postgresql is NOT the in-cluster one. Through the Service:
+          system_identifier {{ _pg_sysid }}. The in-cluster workload at
+          {{ _incluster_ip.stdout | default('?') | trim }} reports
+          {{ (_incluster_q.stdout | default('') | regex_search('UIS[|][^\n]*') | default('', true)).split('|') | last | trim }}.
+          Something outside the cluster is serving queries that should be served
+          in-cluster - most likely a proxy Deployment left behind by a revert. Check:
+          kubectl get deployment,endpoints postgresql -n {{ _ns }}
+        success_msg: "The in-cluster database is serving, and it is the one answering."
+      when:
+        - _exthost.stdout | default('') | length == 0
+        - (_incluster_ip.stdout | default('') | trim) | length > 0
+        - (_incluster_q.stdout | default('') | length) > 0
 
     - name: "SUMMARY"
       ansible.builtin.debug:
