@@ -236,3 +236,5 @@ if [[ $fails -eq 0 ]]; then
     echo "PASS: every proxy-eligible service is addressed only by guaranteed identity"
 fi
 exit $fails
+
+# imac actions-v5 round: touch to trigger test-uis.yml paths. Comment only.
