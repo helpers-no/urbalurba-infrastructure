@@ -96,6 +96,35 @@ PostgreSQL configuration is in `manifests/042-database-postgresql-config.yaml`. 
 
 This removes the Helm release and pods. Services that depend on PostgreSQL (authentik, openwebui, litellm, unity-catalog, pgadmin) should be undeployed first.
 
+## After moving between topologies
+
+Declaring PostgreSQL in `.uis.extend/external-services.yaml` (or removing the declaration)
+swaps the database underneath everything that is already connected. `uis deploy` restores the
+Service, the selector and the workload, and `uis verify postgresql` proves which database is
+answering — but it cannot fix consumers that are holding a connection to the old one.
+
+:::warning Restart consumers that hold long-lived connections
+A client using `LISTEN`/`NOTIFY` or a long-lived pool may not recover on its own. Measured on
+2026-08-30: after a round trip back to the in-cluster database, PostgREST sat at `0/1` for about
+eight minutes looping
+
+```
+Failed listening for database notifications ... Retrying in 32 seconds
+```
+
+against a database that was demonstrably healthy — an independent pod read 195 rows through the
+same Service at the time. A `kubectl rollout restart` fixed it immediately. Dagster, which does
+not hold a `LISTEN`, rode the same swap out without trouble.
+
+```bash
+kubectl rollout restart deployment/<consumer> -n <namespace>
+```
+
+This is expected behaviour rather than a fault: nothing can swap a database under a live client
+and leave every connection valid. It is written down because a consumer stuck in a retry loop
+against a healthy database looks exactly like a broken deployment.
+:::
+
 ## Troubleshooting
 
 **Pod won't start:**
