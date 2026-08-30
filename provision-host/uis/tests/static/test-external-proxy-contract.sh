@@ -54,6 +54,37 @@ _code_only() {
     sed -E 's/^([^:]+:[0-9]+:)//' | sed -E 's/#.*$//'
 }
 
+# Is the match CODE, or a quoted string being displayed to a human?
+#
+# Operator help text lives in `debug: msg:` lists as quoted display strings:
+#
+#     - "* Restart OpenWebUI: kubectl rollout restart statefulset/open-webui"
+#
+# That is not an invocation. But it is NOT harmless either, which is why this
+# does not simply skip it: on the day that service is declared external there is
+# no StatefulSet to restart, so the help text becomes wrong advice. It still has
+# to change - it just needs a different remedy than the code case.
+#
+# Deciding structurally, the same way test-postgres-connection-shape.sh does:
+# strip quoted string literals, then ask whether the pattern still stands. Code
+# survives that; a display string does not.
+_match_is_code() {  # $1 = raw "file:line:code" hit, $2 = extended regex
+    local code stripped
+    code="$(printf '%s' "$1" | sed -E 's/^[^:]+:[0-9]+://')"
+    stripped="$(printf '%s' "$code" | awk '{
+        out=""; inq=0; q=""
+        for (i=1; i<=length($0); i++) {
+            c = substr($0,i,1)
+            if (inq) { if (c==q) inq=0; continue }
+            if (c=="\"" || c=="'"'"'") { inq=1; q=c; continue }
+            if (c=="#") break
+            out = out c
+        }
+        print out
+    }')"
+    printf '%s' "$stripped" | grep -qE "$2"
+}
+
 _pod_artefact_hits() {   # $1 = service id
     grep -rn -- "$1-0" "${CODE_DIRS[@]}" --include='*.sh' --include='*.yml' 2>/dev/null \
         | awk -v id="$1" '{ line=$0; sub(/^[^:]+:[0-9]+:/,"",line); sub(/#.*$/,"",line);
@@ -90,6 +121,17 @@ _self_check() {
     [[ -z "$(_pod_artefact_hits widget)" ]] || { echo "SELF-CHECK FAIL: pod-artefact matcher flagged a comment"; ok=1; }
 
     CODE_DIRS=("${saved[@]}")
+
+    # The classifier decides FAIL-as-code vs FAIL-as-stale-guidance. If it always
+    # answered "code" the remedy would be wrong; if it always answered "prose"
+    # every real defect would be filed as a documentation nit. Both directions
+    # must be shown to work, or the split is decoration.
+    local rx='(statefulset|sts)/open-webui'
+    local real='x.yml:98:        kubectl rollout status statefulset/open-webui -n ai'
+    local help='x.yml:346:        - "* Restart: kubectl rollout restart statefulset/open-webui -n ai"'
+    _match_is_code "$real" "$rx" || { echo "SELF-CHECK FAIL: classifier called a real invocation prose"; ok=1; }
+    _match_is_code "$help" "$rx" && { echo "SELF-CHECK FAIL: classifier called quoted help text code"; ok=1; }
+
     return $ok
 }
 
@@ -97,6 +139,48 @@ if ! _self_check; then
     note "The matchers are broken; this test's verdict cannot be trusted."
     fails=$((fails+1))
 fi
+
+# Report one check, splitting code from operator help text.
+#
+# BOTH fail. A display string that names a StatefulSet is wrong advice the moment
+# the service goes external, so silencing it would hide a real defect. What differs
+# is the REMEDY: "wait on the Service instead" is sound for code and meaningless
+# for a help string, and a contributor handed the wrong remedy learns to reword
+# prose until the gate goes quiet - the worst habit to teach around a correctness
+# check. So the message says which kind it is and what to actually do.
+_report() {  # $1 id, $2 hits, $3 regex, $4 fail_msg, $5 code_remedy, $6 pass_msg
+    local id="$1" hits="$2" rx="$3" fail_msg="$4" code_remedy="$5" pass_msg="$6"
+    local code_hits="" text_hits="" line
+
+    [[ -z "$hits" ]] && { echo "      PASS: $pass_msg"; return; }
+
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        if _match_is_code "$line" "$rx"; then code_hits+="$line"$'\n'
+        else                                  text_hits+="$line"$'\n'; fi
+    done <<< "$hits"
+
+    if [[ -n "$code_hits" ]]; then
+        echo "      FAIL: $fail_msg"
+        printf '%s' "$code_hits" | sed 's/^/          /'
+        note "$code_remedy"
+        fails=$((fails+1))
+    fi
+
+    if [[ -n "$text_hits" ]]; then
+        echo "      FAIL: stale operator guidance for '$id' - quoted help text, not code"
+        printf '%s' "$text_hits" | sed 's/^/          /'
+        note "These are display strings telling a human what to type. They are not"
+        note "invocations, so the code remedy does not apply - but once '$id' is"
+        note "declared external the thing they tell the operator to do does not"
+        note "exist. Update the guidance to match the proxy, or drop the line."
+        note "Do NOT reword it just to quiet this test."
+        fails=$((fails+1))
+    fi
+
+    [[ -z "$code_hits$text_hits" ]] && echo "      PASS: $pass_msg"
+    return 0
+}
 
 shopt -s nullglob
 templates=("$TEMPLATE_DIR"/*-external-proxy.yml.j2)
@@ -128,26 +212,16 @@ for tpl in "${templates[@]}"; do
     fi
 
     # 2. nothing may address it by StatefulSet pod name
-    hits="$(_pod_artefact_hits "$id")"
-    if [[ -n "$hits" ]]; then
-        echo "      FAIL: '$id-0' is a StatefulSet pod name; the proxy is a Deployment"
-        echo "$hits" | sed 's/^/          /'
-        note "Discover it instead: -l app.kubernetes.io/name=$id"
-        fails=$((fails+1))
-    else
-        echo "      PASS: no '$id-0' pod name in code"
-    fi
+    _report "$id" "$(_pod_artefact_hits "$id")" "$id-0" \
+        "'$id-0' is a StatefulSet pod name; the proxy is a Deployment" \
+        "Discover it instead: -l app.kubernetes.io/name=$id" \
+        "no '$id-0' pod name"
 
     # 3. nothing may assume the workload kind
-    hits="$(_workload_kind_hits "$id")"
-    if [[ -n "$hits" ]]; then
-        echo "      FAIL: workload kind assumed for '$id'; the proxy is a Deployment"
-        echo "$hits" | sed 's/^/          /'
-        note "Wait on the Service or on pods by label, not on statefulset/$id."
-        fails=$((fails+1))
-    else
-        echo "      PASS: no workload-kind assumption for '$id'"
-    fi
+    _report "$id" "$(_workload_kind_hits "$id")" "(statefulset|sts)/$id" \
+        "workload kind assumed for '$id'; the proxy is a Deployment" \
+        "Wait on the Service or on pods by label, not on statefulset/$id." \
+        "no workload-kind assumption"
 done
 
 if [[ $fails -eq 0 ]]; then
