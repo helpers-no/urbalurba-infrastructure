@@ -35,14 +35,14 @@ kind: Deployment
 metadata:
   name: minio
   namespace: {{ namespace | default('default') }}
-  labels: { app: minio, app.kubernetes.io/name: minio }
+  labels: { app: minio, app.kubernetes.io/name: minio, uis.io/external-proxy: "true" }
 spec:
   replicas: 1
   selector:
     matchLabels: { app: minio }
   template:
     metadata:
-      labels: { app: minio, app.kubernetes.io/name: minio }
+      labels: { app: minio, app.kubernetes.io/name: minio, uis.io/external-proxy: "true" }
     spec:
       containers:
         # FIRST container = target of `kubectl exec`; provides the mc client.
@@ -56,18 +56,18 @@ spec:
         # see docs: odin-backplane-network.md
         - name: socat-api
           image: alpine/socat:1.8.0.0
-          args: ["TCP-LISTEN:{{ _external_port | default(9000) }},fork,reuseaddr","TCP:{{ _external_host }}:{{ _external_port | default(9000) }}"]
-          ports: [{ containerPort: {{ _external_port | default(9000) }}, name: s3 }]
+          args: ["TCP-LISTEN:9000,fork,reuseaddr","TCP:{{ _external_host }}:{{ _external_port | default(9000) }}"]
+          ports: [{ containerPort: 9000, name: s3 }]
           readinessProbe:
-            tcpSocket: { port: {{ _external_port | default(9000) }} }
+            tcpSocket: { port: 9000 }
             initialDelaySeconds: 3
           resources:
             requests: { cpu: 10m, memory: 16Mi }
             limits: { cpu: 300m, memory: 64Mi }
         - name: socat-console
           image: alpine/socat:1.8.0.0
-          args: ["TCP-LISTEN:{{ _console_port | default(9001) }},fork,reuseaddr","TCP:{{ _external_host }}:{{ _console_port | default(9001) }}"]
-          ports: [{ containerPort: {{ _console_port | default(9001) }}, name: console }]
+          args: ["TCP-LISTEN:9001,fork,reuseaddr","TCP:{{ _external_host }}:{{ _console_port | default(9001) }}"]
+          ports: [{ containerPort: 9001, name: console }]
           resources:
             requests: { cpu: 10m, memory: 16Mi }
             limits: { cpu: 200m, memory: 64Mi }
@@ -78,7 +78,7 @@ metadata: { name: minio, namespace: {{ namespace | default('default') }}, labels
 spec:
   type: ClusterIP
   selector: { app: minio }
-  ports: [{ name: s3, port: {{ _external_port | default(9000) }}, targetPort: {{ _external_port | default(9000) }} }]
+  ports: [{ name: s3, port: 9000, targetPort: 9000 }]
 ---
 apiVersion: v1
 kind: Service
@@ -86,4 +86,4 @@ metadata: { name: minio-console, namespace: {{ namespace | default('default') }}
 spec:
   type: ClusterIP
   selector: { app: minio }
-  ports: [{ name: console, port: {{ _console_port | default(9001) }}, targetPort: {{ _console_port | default(9001) }} }]
+  ports: [{ name: console, port: 9001, targetPort: 9001 }]

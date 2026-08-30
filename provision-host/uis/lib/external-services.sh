@@ -54,11 +54,22 @@ external_service_get() {
         return 1
     fi
 
+    # ⚠️ AN OMITTED PORT MEANS "the service's normal port", AND ONLY THE PROXY
+    # TEMPLATE KNOWS WHAT THAT IS.
+    #
+    # This used to fall back to the caller's SCRIPT_EXPOSE_PORT, which is the
+    # HOST-side forwarded port by convention - 35432 for postgres, 37017 for
+    # mongo, 36379 for redis. Declaring a database external without an explicit
+    # `port:` therefore pointed socat at :35432 on the far host, where nothing
+    # listens, while the shipped external-services.yaml comment promised the
+    # port "defaults to the service's normal port". The documentation was right
+    # about the intent and the code did something else.
+    #
+    # So an absent port is now reported as the sentinel `-`, and the caller omits
+    # the extra-var entirely; the template applies its own default, which is the
+    # only place that legitimately knows a postgres proxy speaks 5432.
     [[ -z "$port" || "$port" == "null" ]] && port="$default_port"
-    if [[ -z "$port" ]]; then
-        log_error "external-services.yaml: '$service_id' has no port and no default"
-        return 1
-    fi
+    [[ -z "$port" ]] && port="-"
 
     echo "$host" "$port" "$why"
 }

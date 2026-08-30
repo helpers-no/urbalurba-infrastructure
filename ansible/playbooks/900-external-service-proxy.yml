@@ -56,6 +56,50 @@
           from .uis.extend/external-services.yaml.
       when: not _tpl.stat.exists
 
+    # ⚠️ THE IN-CLUSTER WORKLOAD MUST STAND DOWN, OR THE PROXY IS DECORATION.
+    #
+    # Before 2026-08-30 the proxy was applied ALONGSIDE an existing StatefulSet.
+    # Both carry app.kubernetes.io/name=<id>, so the Service could still select
+    # the real database - and did. `uis verify` then reported EXTERNAL while the
+    # in-cluster StatefulSet served every query.
+    #
+    # SCALED TO ZERO, NEVER DELETED. The tester established that `uis deploy`
+    # does not touch the PVC, and that is the property worth keeping: the data
+    # survives, and removing the declaration scales it straight back up. Deleting
+    # the StatefulSet would orphan or reclaim the volume depending on the storage
+    # class, which is not a decision a deploy should make silently.
+    #
+    # Absent on a clean installation - asgard has never had a postgres
+    # StatefulSet - so this is a no-op there and cannot disturb it.
+    - name: "3b. Find an in-cluster StatefulSet standing in the proxy's way"
+      kubernetes.core.k8s_info:
+        kind: StatefulSet
+        name: "{{ _service_id }}"
+        namespace: "{{ namespace }}"
+        context: "{{ _target }}"
+      register: _sts
+      failed_when: false
+
+    - name: "3c. Scale it to zero - the data and the PVC are left alone"
+      kubernetes.core.k8s_scale:
+        api_version: apps/v1
+        kind: StatefulSet
+        name: "{{ _service_id }}"
+        namespace: "{{ namespace }}"
+        replicas: 0
+        wait: true
+        wait_timeout: 120
+        context: "{{ _target }}"
+      when: _sts.resources | default([]) | length > 0
+
+    - name: "3d. Say so, because standing a database down deserves a line in the log"
+      ansible.builtin.debug:
+        msg: >-
+          In-cluster {{ _service_id }} StatefulSet scaled to 0. Its PersistentVolumeClaim
+          is untouched; removing {{ _service_id }} from external-services.yaml and
+          redeploying brings it back with its data.
+      when: _sts.resources | default([]) | length > 0
+
     - name: "4. Ensure {{ namespace }} exists"
       kubernetes.core.k8s:
         name: "{{ namespace }}"
@@ -70,11 +114,59 @@
         context: "{{ _target }}"
         definition: "{{ lookup('template', templates_dir + '/' + _proxy_template) | from_yaml_all | list }}"
 
+    # ⚠️ `kubectl apply` STRATEGIC-MERGES A SELECTOR MAP - IT DOES NOT REPLACE IT.
+    #
+    # Where the Service already exists and is owned by Helm, its selector carries
+    # three labels (component, instance, name). The proxy declares one. Applying
+    # merges the one INTO the three, and the merged selector still matches only
+    # the StatefulSet pod. The proxy runs, goes Ready, and receives nothing.
+    #
+    # A JSON-patch `replace` on /spec/selector sets the whole map, so ownership is
+    # unambiguous whoever created the Service. On a cluster where the proxy made
+    # the Service itself - asgard - this rewrites it to the value it already has.
+    # ⚠️ REMEMBER THE SELECTOR WE ARE ABOUT TO REPLACE, or the return trip strands
+    # the database. On revert the proxy Deployment is removed, but a Service still
+    # selecting uis.io/external-proxy matches NOTHING once that pod goes: the
+    # database comes back up and is unreachable in-cluster, and every consumer
+    # fails. The tester hit exactly that and had to patch the selector by hand.
+    #
+    # Stored as an annotation on the Service itself, so the value travels with the
+    # object rather than living in a file some other machine would have to read.
+    - name: "5a1. Read the Service as it stands, before taking it over"
+      kubernetes.core.k8s_info:
+        kind: Service
+        name: "{{ _service_id }}"
+        namespace: "{{ namespace }}"
+        context: "{{ _target }}"
+      register: _svc_before
+      failed_when: false
+
+    - name: "5a2. Remember its original selector, once and only once"
+      ansible.builtin.command: >
+        kubectl annotate service {{ _service_id }} -n {{ namespace }} --context {{ _target }}
+        uis.io/original-selector={{ _svc_before.resources[0].spec.selector | to_json | quote }}
+      when:
+        - _svc_before.resources | default([]) | length > 0
+        - "'uis.io/original-selector' not in (_svc_before.resources[0].metadata.annotations | default({}))"
+        - "'uis.io/external-proxy' not in (_svc_before.resources[0].spec.selector | default({}))"
+      changed_when: true
+
+    - name: "5b. Take ownership of the Service selector, replacing it rather than merging"
+      ansible.builtin.command: >
+        kubectl patch service {{ _service_id }} -n {{ namespace }} --context {{ _target }}
+        --type=json
+        -p '[{"op":"replace","path":"/spec/selector","value":{"app.kubernetes.io/name":"{{ _service_id }}","uis.io/external-proxy":"true"}}]'
+      register: _selpatch
+      changed_when: "'patched' in _selpatch.stdout"
+
     - name: "6. Wait for the proxy to be ready"
       kubernetes.core.k8s_info:
         kind: Pod
         namespace: "{{ namespace }}"
         label_selectors:
+          # The in-cluster workload carries app.kubernetes.io/name too, so waiting
+          # on that alone can be satisfied by the very pod the proxy replaces.
+          - "uis.io/external-proxy=true"
           - "app.kubernetes.io/name={{ _service_id }}"
         context: "{{ _target }}"
       register: _pods
@@ -87,11 +179,36 @@
     # Reachability is the only claim worth making here. A Running proxy pod whose
     # socat cannot reach the far side looks exactly like a healthy one - the same
     # defect class as reporting a service Deployed when nothing verified it.
+    # ⚠️ ASK THE CLUSTER WHICH PORT THE SERVICE IS ON, do not assume it is the
+    # external one. Those are two different numbers - see the note in the
+    # template - and this check probed the external one, so a declaration with a
+    # non-default port probed a port the Service did not have.
+    - name: "6b. The port consumers will actually use"
+      ansible.builtin.command: >
+        kubectl get service {{ _service_id }} -n {{ namespace }} --context {{ _target }}
+        -o jsonpath={.spec.ports[0].port}
+      register: _svcport
+      changed_when: false
+
+    # ⚠️ `_external_port` IS OPTIONAL and the report must not dereference it bare.
+    # Omitting `port:` is a supported, documented configuration; before this the
+    # report task raised "'_external_port' is undefined" and `uis deploy` exited 3
+    # AFTER the StatefulSet had been scaled down and the proxy applied - telling
+    # the operator the deploy failed while the cluster was fully swapped. An
+    # operator who reverts on that signal is acting on a false picture.
+    #
+    # When no port was declared the template used its own default, which is the
+    # service's normal in-cluster port - the same number task 6b just read off
+    # the Service. So that is the honest fallback.
+    - name: "6c. The port socat actually targets out there"
+      ansible.builtin.set_fact:
+        _upstream_port: "{{ _external_port | default(_svcport.stdout) }}"
+
     - name: "7. Prove the external service actually answers"
       ansible.builtin.command: >
         kubectl run extproxy-check-{{ 9999 | random }} --image=busybox:1.36 --rm -i
         --restart=Never -n {{ namespace }} --context {{ _target }} --timeout=30s --
-        /bin/sh -c 'sleep 2; nc -z -w 5 {{ _service_id }}.{{ namespace }}.svc.cluster.local {{ _external_port }} && echo REACHABLE || echo UNREACHABLE'
+        /bin/sh -c 'sleep 2; nc -z -w 5 {{ _service_id }}.{{ namespace }}.svc.cluster.local {{ _svcport.stdout }} && echo REACHABLE || echo UNREACHABLE'
       register: _reach
       changed_when: false
       failed_when: false
@@ -102,5 +219,10 @@
     - name: "8. Report"
       ansible.builtin.debug:
         msg:
-          - "{{ _service_id }}: proxied to {{ _external_host }}:{{ _external_port }}"
-          - "{{ (_reach.stdout is search('REACHABLE')) | ternary('Reachable through the in-cluster Service - consumers need no change.', 'WARNING - the proxy is Running but ' ~ _external_host ~ ':' ~ _external_port ~ ' did not answer. Consumers will fail. Check the address, the route, and that the service is up.') }}"
+          - "{{ _service_id }}: proxied to {{ _external_host }}:{{ _upstream_port }}"
+          - "{{ _service_id }}.{{ namespace }} listens on {{ _svcport.stdout }}; the real service is on {{ _upstream_port }}"
+          - "{{ (_reach.stdout is search('REACHABLE')) | ternary('Something answered through the in-cluster Service - consumers need no change.', 'WARNING - the proxy is Running but ' ~ _external_host ~ ':' ~ _upstream_port ~ ' did not answer. Consumers will fail. Check the address, the route, and that the service is up.') }}"
+          - "⚠️ A TCP connect proves something answered on that port, NOT that it was"
+          - "   the external service. Run `uis verify {{ _service_id }}` for that: it asks"
+          - "   the server which address it is on and fails if the answer came from"
+          - "   inside the cluster."

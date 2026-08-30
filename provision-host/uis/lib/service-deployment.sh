@@ -136,7 +136,12 @@ deploy_single_service() {
         local _ext_playbook="" _ext_host="" _ext_port="" _ext_why="" _ext_tpl=""
         if is_external_service "$service_id"; then
             local _ext_fields
-            if ! _ext_fields="$(external_service_get "$service_id" "${SCRIPT_EXPOSE_PORT:-}")"; then
+            # ⚠️ NO DEFAULT PORT FROM HERE. SCRIPT_EXPOSE_PORT is the host-side
+            # forwarded port (35432 for postgres), not the in-cluster one, and
+            # passing it made an omitted `port:` point socat at a dead port.
+            # An omitted port comes back as `-` and the extra-var is omitted, so
+            # the proxy template supplies the service's real default.
+            if ! _ext_fields="$(external_service_get "$service_id")"; then
                 die_config "external-services.yaml is invalid for '$service_id'"
             fi
             read -r _ext_host _ext_port _ext_why <<< "$_ext_fields"
@@ -164,14 +169,93 @@ deploy_single_service() {
             target_host="${TARGET_HOST:-rancher-desktop}"
         fi
 
+        # ⚠️ COMING BACK FROM EXTERNAL: the proxy must go, or both serve at once.
+        #
+        # Removing a service from external-services.yaml used to leave the socat
+        # Deployment running. On a cluster where the Service selected it, the
+        # restored workload and a relay to a host that may no longer be listening
+        # both matched - traffic split between the real database and a dead
+        # route. `uis deploy` owns what it created, including on the way back.
+        #
+        # Keyed on the marker label the proxy templates set, so this can only ever
+        # remove a Deployment UIS created as a proxy. A proxy predating the marker
+        # (deployed before 2026-08-30) is not matched and must be removed by hand.
+        if [[ -z "$_ext_host" ]] && command -v kubectl >/dev/null 2>&1; then
+            local _proxy_found
+            # Selector only - kubectl refuses a name and a selector together.
+            # Both labels, so this cannot match another service's proxy.
+            _proxy_found="$(kubectl get deployment \
+                -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                -l "uis.io/external-proxy=true,app.kubernetes.io/name=$service_id" \
+                -o name 2>/dev/null || true)"
+            if [[ -n "$_proxy_found" ]]; then
+                log_info "$service_id was provided externally and no longer is"
+                log_info "  removing the proxy Deployment before deploying in-cluster"
+                kubectl delete deployment \
+                    -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                    -l "uis.io/external-proxy=true,app.kubernetes.io/name=$service_id" \
+                    --wait=true >/dev/null 2>&1 || \
+                    log_warn "  could not remove the proxy Deployment; remove it by hand"
+
+                # ⚠️ RESTORE THE SELECTOR, or the database comes back unreachable.
+                #
+                # Removing the proxy Deployment is only half the return trip. The
+                # Service still selects uis.io/external-proxy=true, which nothing
+                # carries once the proxy pod is gone - so the StatefulSet comes
+                # back up, the Service matches NOTHING, and every consumer fails
+                # while the database is perfectly healthy. The tester hit this and
+                # had to patch it by hand.
+                #
+                # 900-external-service-proxy.yml stored the original selector on
+                # the Service before replacing it. The annotation value is already
+                # JSON, so it drops straight into a JSON patch.
+                local _orig_sel
+                _orig_sel="$(kubectl get service "$service_id" \
+                    -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                    -o jsonpath="{.metadata.annotations['uis\.io/original-selector']}" 2>/dev/null || true)"
+                if [[ -n "$_orig_sel" ]]; then
+                    log_info "  restoring the Service selector the proxy replaced"
+                    kubectl patch service "$service_id" \
+                        -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                        --type=json \
+                        -p "[{\"op\":\"replace\",\"path\":\"/spec/selector\",\"value\":$_orig_sel}]" \
+                        >/dev/null 2>&1 \
+                      && kubectl annotate service "$service_id" \
+                           -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                           uis.io/original-selector- >/dev/null 2>&1 \
+                      || log_warn "  could not restore the Service selector; restore it by hand or the service is unreachable"
+                else
+                    # No annotation: either the Service was created by the proxy
+                    # itself (nothing to go back to - asgard's shape), or the proxy
+                    # predates this change. Dropping the marker leaves the service
+                    # name label, which the in-cluster workload also carries.
+                    log_warn "  no remembered selector for $service_id"
+                    log_warn "  if it was proxied by an older UIS, check: kubectl get svc $service_id -o jsonpath='{.spec.selector}'"
+                fi
+
+                # Symmetric inverse of the stand-down in 900-external-service-proxy.yml.
+                # Scaling back is safe because the PVC was never touched.
+                if kubectl get statefulset "$service_id" \
+                     -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                     >/dev/null 2>&1; then
+                    log_info "  restoring the in-cluster StatefulSet to 1 replica"
+                    kubectl scale statefulset "$service_id" --replicas=1 \
+                        -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                        >/dev/null 2>&1 || \
+                        log_warn "  could not scale it back; the setup playbook may still do so"
+                fi
+            fi
+        fi
+
         # Build extra-vars. Multi-instance services receive per-app context.
         local -a ansible_args=("-e" "target_host=$target_host")
         if [[ -n "$_ext_host" ]]; then
             ansible_args+=("-e" "_service_id=$service_id"
                            "-e" "_proxy_template=$_ext_tpl"
                            "-e" "_external_host=$_ext_host"
-                           "-e" "_external_port=$_ext_port"
                            "-e" "_namespace=${SCRIPT_NAMESPACE:-default}")
+            # `-` means the declaration named no port: let the template default it.
+            [[ "$_ext_port" != "-" ]] && ansible_args+=("-e" "_external_port=$_ext_port")
         fi
         if [[ -n "$app_name" ]]; then
             ansible_args+=("-e" "_app_name=$app_name")
