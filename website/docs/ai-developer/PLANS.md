@@ -11,6 +11,20 @@ How we plan, track, and implement features and fixes.
 
 ---
 
+## Before you write a real address into a plan
+
+This repository is **public**, and plans are where working notes accumulate most easily.
+
+Existing plans contain private-range addresses from the reference installation. Those were reviewed
+and **deliberately accepted** on 2026-08-30 — see
+[Secrets Management](../contributors/rules/secrets-management.md#decision-internal-addresses-already-in-this-repo-are-accepted)
+for the decision and the reasoning.
+
+**That acceptance covers what is already there. It is not a reason to add more.** Prefer a
+placeholder such as `<postgres-host>`; keep real values in the private `home` repository and
+reference them from here. A publicly routable address or anything credential-shaped is outside the
+accepted boundary entirely and is the platform owner's call, not a plan author's.
+
 ## Folder Structure
 
 ```
