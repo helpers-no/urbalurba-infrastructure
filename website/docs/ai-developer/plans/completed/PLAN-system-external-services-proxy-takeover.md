@@ -10,7 +10,7 @@
 outside the cluster, the verify can prove which topology answered, and removing the declaration
 returns cleanly to in-cluster.
 
-**Last Updated**: 2026-08-30
+**Last Updated**: 2026-08-30 (reopened and re-closed, see Phase 4)
 
 **Priority**: High — production and the test environment ran disjoint topologies until this closed.
 
@@ -117,6 +117,40 @@ prevent.
 **Deliberately not done**: nothing here was exercised against the production installation, which is
 the only one running the proxy shape. Everything was found and proved on a single laptop fixture,
 rebuilt three times by one tester. Closing this plan closes the *code* gap, not that one.
+
+## Phase 4: What production found that no fixture could
+
+⚠️ **This phase was added after the plan first closed.** The work above was proved against a laptop
+fixture and merged. Then the platform manager ran the new verify against the **production**
+installation — read-only — and it failed while the installation was working perfectly.
+
+- [x] 4.1 A proxy created before the marker existed makes the verify report a **true green as a false
+      green** — the original defect inverted, and the worse direction: it misleads an operator who is
+      not looking for trouble
+- [x] 4.2 The teardown left the in-cluster workload **at zero replicas** on an unmarked revert, and
+      the verify called that healthy. The scale-back sat inside the block gated on recognising a
+      proxy — a recovery action behind a recognition test
+- [x] 4.3 `B6` still decided by marker after `B4` and `B5` had been moved to identity — the principle
+      was applied and left one task short
+- [x] 4.4 With the scale-back fixed, restoring the workload beside a still-running orphan produces a
+      **split Service**, and a check that samples a load-balanced resource has a failure rate rather
+      than a verdict: five runs of one broken state gave four failures and one **pass**
+
+### Validation
+
+Three further tester rounds: 7/7, 6/6, 6/6, the last measured **across repetition** — five failures
+out of five where the same state previously gave four-and-one.
+
+### What this phase is really about
+
+**Every defect above was reachable only from an installation that predates the feature.** The fixture
+builds each proxy with current code, so the marker is always present; production is the only place a
+pre-marker proxy exists. Once the shape was known it was reproducible in four `kubectl` commands —
+but nobody knew to write them.
+
+The general lesson, and it outlives this plan: **a check that samples a load-balanced resource has a
+failure rate, not a verdict.** Refusing to characterise is a better answer than sampling harder,
+because a refusal cannot itself be sampled wrong.
 
 ## Files Modified
 

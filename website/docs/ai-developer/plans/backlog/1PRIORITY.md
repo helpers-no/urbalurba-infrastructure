@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-30 (tenth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-30 (eleventh refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -12,8 +12,17 @@
 
 ## Current status — tor-agent, 2026-08-30 (end of day)
 
-**`state: idle`.** Nothing is in flight, nothing is blocked, and `active/` is empty — this time
-because the work genuinely finished, not because it was being tracked somewhere else.
+**`state: idle`.** Nothing is in flight, nothing is blocked, and `active/` is empty.
+
+⚠️ **The proxy plan reopened after it closed, and that is the finding of the day.** It was closed
+against a laptop fixture. The platform manager then ran the new verify against the **production**
+installation, read-only, and it failed while production was working perfectly — a proxy created
+before the marker existed. Four more defects followed, three more tester rounds, all merged. Phase 4
+of [the plan](../completed/PLAN-system-external-services-proxy-takeover.md) records them.
+
+**Every one was reachable only from an installation that predates the feature.** That is exactly the
+gap the topology-coverage requirement was written about, and it is the second time this week that
+production found what no fixture could.
 
 ### Two workstreams closed today
 
