@@ -4,12 +4,12 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active
+## Status: Completed
 
 **Goal**: Every `actions/*` step in this repository runs on a supported runtime, so the Node 20
 deprecation cannot take all four workflows down at once.
 
-**Last Updated**: 2026-08-30
+**Last Updated**: 2026-08-30 (closed)
 
 **Priority**: High — and it is the only item in the current queue with a clock somebody else
 controls. The version-drift investigation and image vulnerability scanning both wait on nobody.
@@ -79,24 +79,36 @@ Every remaining pin is either on a supported runtime or recorded as deliberately
 
 ### Tasks
 
-- [ ] 3.1 Declare testable; the independent tester runs the workflows
-- [ ] 3.2 Confirm the deprecation warning is gone from a real run
-- [ ] 3.3 Confirm the docs deploy still publishes and the container build still pushes
+- [x] 3.1 Declare testable; the independent tester runs the workflows
+- [x] 3.2 Confirm the deprecation warning is gone from a real run
+- [x] 3.3 Confirm the docs deploy still publishes and the container build still pushes
 
 ### Validation
 
-Tester's verdict. **This cannot be validated on the maintainer machine** — there is no way to run
-GitHub Actions here, so every claim in Phase 3 is the tester's to make.
+**Tester's verdict: 8/8, closed.** Every claim in Phase 3 was the tester's to make and it made them,
+reading the pin out of each run's own `head_sha` rather than trusting a timestamp — because a green
+run on the wrong commit is indistinguishable from a green run on the right one.
+
+| workflow | run | commit | pin |
+|---|---|---|---|
+| `test-uis.yml` | `33321843843` | `fcc275f` | v5 |
+| `docs.yml` | `33320095741` | `dedf78f` | v5 |
+| `build-uis-container.yml` | `33320095746` | `dedf78f` | v5 |
+| `generate-uis-docs.yml` | `33321843871` | `fcc275f` | v5 |
+
+All four: **0 deprecation annotations, 0 zero-step successes**, against **1** annotation on the
+pre-bump commit. `generate-uis-docs` did not merely survive — its output commit `3b90cc9` produced
+`services.json`, `categories.json` and `tools.json` **md5-identical** to pre-bump.
 
 ## Acceptance Criteria
 
-- [ ] No `actions/*` pin in the repository sits on the Node 20 runtime
-- [ ] All four workflows parse and run
-- [ ] The docs site still deploys from `main`
-- [ ] The container build still publishes to GHCR
-- [ ] `test-uis.yml` still runs the static and unit suites on a pull request
-- [ ] The deprecation warning is absent from a real run
-- [ ] Any third-party action left unchanged is recorded with the reason
+- [x] No `actions/*` pin in the repository sits on the Node 20 runtime
+- [x] All four workflows parse and run
+- [x] The docs site still deploys from `main`
+- [x] The container build still publishes to GHCR
+- [x] `test-uis.yml` still runs the static and unit suites on a pull request
+- [x] The deprecation warning is absent from a real run
+- [x] Any third-party action left unchanged is recorded with the reason
 
 ## What the investigation changed — the brief was wrong in three ways
 
@@ -151,3 +163,23 @@ and is unrelated to the action runtime — do not "fix" it while here.
 - `.github/workflows/build-uis-container.yml`
 - `.github/workflows/generate-uis-docs.yml`
 - `.github/workflows/test-uis.yml`
+
+## What closing this actually took, beyond the bump
+
+**The pins were the easy part.** Three things made it a real piece of work:
+
+1. **The brief was wrong in three ways**, and only reading each `action.yml` at its pinned tag found
+   it: 19 pins not 14, `upload-pages-artifact` looked exempt but is not, and "v5" is neither correct
+   for everything nor the latest for anything.
+2. **`version.txt` had to move.** The bump republished the image with a moved digest and an unchanged
+   version, so `./uis pull` could not see the release at all. That was a defect in the change, and it
+   was nearly filed as a caveat for the tester instead — see
+   [the version-drift investigation](../backlog/INVESTIGATE-system-launcher-image-version-drift.md).
+3. **Two workflows could not notice their own change.** `generate-uis-docs.yml` and `test-uis.yml`
+   were missing from their own `paths:` filters, so their bumped pins merged and never ran. Fixing
+   the first self-triggered the workflow, which is the fix demonstrating itself. Filed as a class in
+   [the paths-filter investigation](../backlog/INVESTIGATE-system-workflow-paths-filter-drift.md)
+   after the audit found the fourth instance.
+
+**Every one of those was found by measurement, and three of the four instances of (3) were found by
+the tester rather than by an author.** That is the pattern the class investigation exists to break.

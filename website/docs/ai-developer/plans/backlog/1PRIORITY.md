@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-30 (ninth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-30 (tenth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -10,64 +10,48 @@
 
 ---
 
-## Current status — tor-agent, 2026-08-30
+## Current status — tor-agent, 2026-08-30 (end of day)
 
-**`state: working`, and unblocked on everything.** All three blockers cleared today.
+**`state: idle`.** Nothing is in flight, nothing is blocked, and `active/` is empty — this time
+because the work genuinely finished, not because it was being tracked somewhere else.
 
-### The proxy path is fixed and merged
+### Two workstreams closed today
 
-On 2026-08-30 the independent tester ran the external-services proxy topology for the first time
-and it failed on the first attempt: `uis verify postgresql` exited 0 reporting `Topology: EXTERNAL`
-while the in-cluster StatefulSet answered every query. **Six defects, three rounds, all merged**
-(`3629411`):
+**1. The external-services proxy** — six defects across three rounds, all merged. The proxy now takes
+over the Service it stands in for, the verify proves which topology answered rather than reading it
+from the config file, and the round trip returns cleanly. Recorded in
+[PLAN-system-external-services-proxy-takeover](../completed/PLAN-system-external-services-proxy-takeover.md).
 
-| | Defect |
+**2. The Node 20 runtime bump** — 19 pins across four workflows, graded **8/8**. Recorded in
+[PLAN-system-actions-v5-runtime-bump](../completed/PLAN-system-actions-v5-runtime-bump.md). It also
+produced the 1.6.5 release, because the bump republished the container with a moved digest and an
+unchanged `version.txt`, which `./uis pull` could not see.
+
+### Three investigations filed, none started
+
+Each was a *class* found underneath a specific fix, filed rather than patched away:
+
+| | What |
 |---|---|
-| 1 | `uis verify` derived its topology line by **reading the declaration file**, so it echoed configuration and could never contradict the cluster |
-| 2 | The proxy Service selector **merged into** the chart's instead of replacing it, so the proxy was never selected |
-| 3 | The in-cluster workload kept serving alongside the proxy |
-| 4 | The declared external port set the **in-cluster** Service port too, moving `postgresql` off 5432 |
-| 5 | Reverting orphaned the proxy **and left the Service selecting nothing** — the database came back healthy and unreachable |
-| 6 | The default external port was the **host-side** forwarded port, while the shipped docs promised the service's normal port |
+| [workflow paths-filter drift](INVESTIGATE-system-workflow-paths-filter-drift.md) | Four instances of a `paths:` filter narrower than what the job depends on. Three found by the tester, the fourth by an audit that took under a second. The failure is **silence** — nothing goes red, work simply is not done |
+| [launcher/image version drift](INVESTIGATE-system-launcher-image-version-drift.md) | Now carries a live instance: an image republished with a moved digest and an unchanged version, invisible to the update mechanism. Adds the open question of whether the version bump should be automatic |
+| [deploy revert exit code](INVESTIGATE-cli-deploy-revert-exit-code.md) | `uis deploy` reports one exit code for two separable outcomes; the same revert gave exit 0 and exit 3 minutes apart |
 
-Defect 1 was the reason the rest survived. The verify now proves topology by two checks involving no
-address at all: which pod backs the Service and whether it carries the proxy marker, and whether
-`system_identifier` seen through the Service matches a **direct** connection to the declared host. An
-earlier version used `inet_server_addr()` and was failed — it returns the server's view of itself, so
-behind NAT it rejected a working proxy and threatened production's verify. Removing the instrument
-closed that risk without anyone measuring it on the production host.
+### Next, in order — the ordering is mine
 
-Awaiting grading: `proxy-capture-selector-before-apply` — the selector capture ran *after* the apply,
-storing a merged value that equalled the original only by luck for postgres.
+1. **Vulnerability scanning for the 46 running images.** The last requirement in the original queue
+   that has not been started. The *code* half is already tracked at a documented floor, so only the
+   pods half is open.
+2. **A CI guard for the disclosure boundary** — a publicly routable address or a credential-shaped
+   string should fail the build. Today that boundary is held by review alone, and Terje's decision to
+   accept the existing internal addresses rests on it.
+3. **The decidable half of the paths-filter class** — every workflow must list its own file. Cheap,
+   mechanically checkable, and the tester independently proposed the same property.
 
-### Blockers — all cleared 2026-08-30
-
-Two by the tester grading A' (7/7) and B' (4/4). The third by Terje: **the internal addresses already
-in this public repo are accepted, not sanitised** — decision, reasoning and boundary recorded in
-[Secrets Management](../../../contributors/rules/secrets-management.md#decision-internal-addresses-already-in-this-repo-are-accepted).
-
-### Next three, in order — the ordering is mine
-
-1. **`actions/*@v4` → `@v5` across all four workflows.** First because it is the only item with an
-   **external clock**: GitHub's Node 20 runtime deprecation, which fails every workflow at once when
-   it turns fatal. 14 `actions/*` pins plus five `docker/*` and one `helm/*` on the same runtime.
-   Mechanical, but a bad bump breaks all CI, so it gets a real round.
-2. **Launcher/image version-drift INVESTIGATE.** Mechanism already traced: the host launcher is
-   fetched from the raw CDN off `main` and matches nothing in the container build's paths filter, so
-   the two artefacts version independently — and that CDN serves a stale `version.txt` for a few
-   minutes after a merge. Write-up work; needs no tester.
-3. **Vulnerability scanning for the 46 running images.** The *code* half is already tracked at a
-   documented floor, so only the pods half is open.
-
-Also queued, small: a CI check enforcing the boundary Terje's decision rests on — a publicly routable
-address or a credential-shaped string should fail the build. Today that boundary is held by review
-alone, which is what the decision now depends on.
-
-⚠️ **What none of this touches**: production runs the proxy shape and **nothing on it has been
-exercised by any of this work**. The fixture that found and proved all six defects is a laptop, built
-three times over by one tester.
-
-**`active/` is empty**, and that is accurate: this work is tracked here and on the talk bus.
+⚠️ **Standing, and unchanged by any of today**: production runs the external-services proxy shape and
+**nothing on it has been exercised** by this work. Every defect was found and proved on a single
+laptop fixture, rebuilt three times by one tester. That is the gap the topology-coverage requirement
+was written about, and it has been narrowed, not closed.
 
 ---
 
