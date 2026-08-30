@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-30 (eighth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-30 (ninth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -12,60 +12,62 @@
 
 ## Current status — tor-agent, 2026-08-30
 
-**`state: working`.** The topology requirement's runtime half is open and it is worse than the
-paperwork suggested.
+**`state: working`, and unblocked on everything.** All three blockers cleared today.
 
-🔴 **The external-services proxy path does not work on any cluster that previously ran the service
-in-cluster — and `uis verify` reports a false green.** Found by the independent tester on the first
-real run of the proxy topology (2026-08-30). `uis verify postgresql` exits 0 and prints
-`Topology: EXTERNAL`, while the server answering is the in-cluster StatefulSet; proven by version
-fingerprint. Five defects: the proxy Service selector merges into Helm's instead of replacing it so
-the proxy is never selected; the declared external port is used for the in-cluster Service port too,
-moving `postgresql` off 5432; a wrong target makes verify **hang** rather than fail; reverting leaves
-the socat Deployment orphaned; and `040-test-postgresql.yml` derives its topology line by **reading
-the declaration file**, so it echoes configuration and can never contradict the cluster.
+### The proxy path is fixed and merged
 
-That last one is mine and is the reason the others survived undetected. Fixing in two rounds —
-**A**: make the verify prove topology (`inet_server_addr()`) and give it a connect timeout, so the
-failure becomes loud. **B**: selector ownership, standing the in-cluster workload down without
-touching the PVC, the port conflation, and teardown on revert. A first, because grading B with an
-instrument that cannot fail proves nothing.
+On 2026-08-30 the independent tester ran the external-services proxy topology for the first time
+and it failed on the first attempt: `uis verify postgresql` exited 0 reporting `Topology: EXTERNAL`
+while the in-cluster StatefulSet answered every query. **Six defects, three rounds, all merged**
+(`3629411`):
 
-asgard cannot produce this bug — it never ran postgres in-cluster — which is precisely the "both
-topologies" case outcome 3 exists for.
+| | Defect |
+|---|---|
+| 1 | `uis verify` derived its topology line by **reading the declaration file**, so it echoed configuration and could never contradict the cluster |
+| 2 | The proxy Service selector **merged into** the chart's instead of replacing it, so the proxy was never selected |
+| 3 | The in-cluster workload kept serving alongside the proxy |
+| 4 | The declared external port set the **in-cluster** Service port too, moving `postgresql` off 5432 |
+| 5 | Reverting orphaned the proxy **and left the Service selecting nothing** — the database came back healthy and unreachable |
+| 6 | The default external port was the **host-side** forwarded port, while the shipped docs promised the service's normal port |
 
-**`active/` is empty**, and that is accurate: this work is tracked here and in the talk bus, and the
-plan file for it lands with Round A.
+Defect 1 was the reason the rest survived. The verify now proves topology by two checks involving no
+address at all: which pod backs the Service and whether it carries the proxy marker, and whether
+`system_identifier` seen through the Service matches a **direct** connection to the declared host. An
+earlier version used `inet_server_addr()` and was failed — it returns the server's view of itself, so
+behind NAT it rejected a working proxy and threatened production's verify. Removing the instrument
+closed that risk without anyone measuring it on the production host.
 
-I build; the independent tester proves. One round has been **declared and ungraded since
-27 August**: branch `topology-shim-contract` @ `d8d2aab`, nine criteria of which five are
-red cases. WIP=1, so nothing else starts until it closes.
+Awaiting grading: `proxy-capture-selector-before-apply` — the selector capture ran *after* the apply,
+storing a merged value that equalled the original only by luck for postgres.
 
-That wait is the reason ops's status poll exists. Both ends of the handoff sat idle for
-three days — I was waiting for a verdict, and the tester's queue showed nothing to do.
+### Blockers — all cleared 2026-08-30
 
-| Blocked on | Who | Since |
-|---|---|---|
-| Verdict on `topology-shim-contract` @ `d8d2aab` | tester | 2026-08-27 |
-| Accept or refuse exercising the **proxy topology** — outcomes 2 and 3 of the topology requirement cannot close without a real run | tester | 2026-08-27 |
-| Disclosure call on internal addresses in this **public** repo — sanitise, keep private, or accept and record | Terje | 2026-08-27 |
+Two by the tester grading A' (7/7) and B' (4/4). The third by Terje: **the internal addresses already
+in this public repo are accepted, not sanitised** — decision, reasoning and boundary recorded in
+[Secrets Management](../../../contributors/rules/secrets-management.md#decision-internal-addresses-already-in-this-repo-are-accepted).
 
-**Shipped since taking over UIS code on 2026-08-27** — two rounds, both graded PASS and
-both merged fast-forward, so the graded commit is byte-for-byte the commit on `main`:
+### Next three, in order — the ordering is mine
 
-| | Change | Verdict |
-|---|---|---|
-| `9e79334` | Broken links, anchors and markdown links **fail** the docs build; the one broken anchor fixed; the local build documented as a required pre-flight | PASS 6/6, plus a third setting the tester graded unasked |
-| `4ebee23` | The gate runs on **pull requests**, so a broken link reds the PR rather than `main`; a PR build holds `Contents: read` only and cannot publish the site | PASS 7/7 |
+1. **`actions/*@v4` → `@v5` across all four workflows.** First because it is the only item with an
+   **external clock**: GitHub's Node 20 runtime deprecation, which fails every workflow at once when
+   it turns fatal. 14 `actions/*` pins plus five `docker/*` and one `helm/*` on the same runtime.
+   Mechanical, but a bad bump breaks all CI, so it gets a real round.
+2. **Launcher/image version-drift INVESTIGATE.** Mechanism already traced: the host launcher is
+   fetched from the raw CDN off `main` and matches nothing in the container build's paths filter, so
+   the two artefacts version independently — and that CDN serves a stale `version.txt` for a few
+   minutes after a merge. Write-up work; needs no tester.
+3. **Vulnerability scanning for the 46 running images.** The *code* half is already tracked at a
+   documented floor, so only the pods half is open.
 
-**Next three, in order**: get the shim-contract round graded and merged; write up the
-launcher/image version-drift INVESTIGATE (mechanism already traced — the host launcher is
-fetched from `raw.githubusercontent` off `main` and matches nothing in the container build's
-paths filter, so the two artefacts version independently); bump `actions/*@v4` to `@v5`
-across all four workflows before the deprecation turns fatal.
+Also queued, small: a CI check enforcing the boundary Terje's decision rests on — a publicly routable
+address or a credential-shaped string should fail the build. Today that boundary is held by review
+alone, which is what the decision now depends on.
 
-If the verdict does not arrive I will start the launcher-drift write-up — it needs no
-tester — and say so here rather than quietly changing what I am doing.
+⚠️ **What none of this touches**: production runs the proxy shape and **nothing on it has been
+exercised by any of this work**. The fixture that found and proved all six defects is a laptop, built
+three times over by one tester.
+
+**`active/` is empty**, and that is accurate: this work is tracked here and on the talk bus.
 
 ---
 
