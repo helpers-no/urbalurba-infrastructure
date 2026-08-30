@@ -18,22 +18,32 @@
 
   Extra-vars (underscore-prefixed, per ansible/playbooks/templates/README.md):
     _external_host   address of the real database (see the note on addresses)
-    _external_port   its port (default 5432)
+    _external_port   the port the REAL database listens on, out there (default 5432)
     namespace        target namespace (default "default")
+
+  ⚠️ TWO PORTS, AND CONFLATING THEM BREAKS EVERY CONSUMER.
+  PostgreSQL's in-cluster port is 5432 and is hardcoded below, because a postgres
+  proxy is always a postgres proxy - consumers connect to postgresql:5432 in both
+  topologies and that is the whole promise. `_external_port` describes only the
+  far side of socat. Until 2026-08-30 one value did both jobs, so declaring
+  `port: 5433` moved service/postgresql to 5433 and every consumer using the
+  normal port found no such port.
 -#}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgresql
   namespace: {{ namespace | default('default') }}
-  labels: { app.kubernetes.io/name: postgresql }
+  # The marker is how `uis deploy` recognises its own proxy on the way back:
+  # reverting a declaration must remove THIS Deployment and nothing else.
+  labels: { app.kubernetes.io/name: postgresql, uis.io/external-proxy: "true" }
 spec:
   replicas: 1
   selector:
     matchLabels: { app.kubernetes.io/name: postgresql }
   template:
     metadata:
-      labels: { app.kubernetes.io/name: postgresql }
+      labels: { app.kubernetes.io/name: postgresql, uis.io/external-proxy: "true" }
     spec:
       containers:
         # FIRST container = what `kubectl exec` targets. Provides bash + psql
@@ -44,7 +54,8 @@ spec:
           resources:
             requests: { cpu: 10m, memory: 32Mi }
             limits: { cpu: 500m, memory: 256Mi }
-        # Forwards the pod's :{{ _external_port | default(5432) }} to the real external database.
+        # Listens on 5432 - the in-cluster port consumers use - and forwards to
+        # the real database on whatever port IT uses out there.
         #
         # ⚠️ PREFER A BACKPLANE ADDRESS OVER A TAILNET ONE where the database and
         # the cluster sit on the same host. On the reference installation this is
@@ -54,10 +65,10 @@ spec:
         # docs: odin-backplane-network.md
         - name: socat
           image: alpine/socat:1.8.0.0
-          args: ["TCP-LISTEN:{{ _external_port | default(5432) }},fork,reuseaddr","TCP:{{ _external_host }}:{{ _external_port | default(5432) }}"]
-          ports: [{ containerPort: {{ _external_port | default(5432) }}, name: tcp-postgresql }]
+          args: ["TCP-LISTEN:5432,fork,reuseaddr","TCP:{{ _external_host }}:{{ _external_port | default(5432) }}"]
+          ports: [{ containerPort: 5432, name: tcp-postgresql }]
           readinessProbe:
-            tcpSocket: { port: {{ _external_port | default(5432) }} }
+            tcpSocket: { port: 5432 }
             initialDelaySeconds: 3
           resources:
             requests: { cpu: 10m, memory: 16Mi }
@@ -74,5 +85,5 @@ spec:
   selector: { app.kubernetes.io/name: postgresql }
   ports:
     - name: tcp-postgresql
-      port: {{ _external_port | default(5432) }}
-      targetPort: {{ _external_port | default(5432) }}
+      port: 5432
+      targetPort: 5432
