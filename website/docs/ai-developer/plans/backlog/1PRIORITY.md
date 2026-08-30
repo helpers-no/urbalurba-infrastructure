@@ -56,6 +56,26 @@ shipped, so the triage view had drifted badly from the repo:
   `image-size` with no published patch — a floor, not a backlog item.
 - The first local build surfaced **pre-existing broken links and one broken
   anchor** in the docs. Warnings, not failures. Currently owned by nobody.
+
+---
+
+## What changed 2026-08-30 (tor-agent, incoming UIS maintainer)
+
+- **The broken-link item above is CLOSED.** It was the last bullet of the 2026-08-13
+  refresh and had been nobody's for a fortnight. `onBrokenLinks`, `onBrokenAnchors` and
+  `onBrokenMarkdownLinks` are now `'throw'`, the one broken anchor is fixed, and the
+  build runs on pull requests — so a broken link fails the PR rather than reding `main`.
+  Graded PASS by the independent tester in two rounds (`9e79334`, `4ebee23`).
+- **The container-build recipe above is no longer the only option.** That bullet says
+  there is no Node on the workstation or in the provision-host container. There is Node
+  on the maintainer machine now, and `cd website && npm run build` runs natively in about
+  31 s warm. The container recipe still works and is still right for machines without
+  Node; it is no longer the only route, and the pre-flight is documented in
+  [documentation.md](../../../contributors/rules/documentation.md).
+- **A note on this file's name.** It is the INVESTIGATE *triage* view — what to
+  investigate next. The poll-answering status file, saying what is being worked on right
+  now, is [`../1priority.md`](../1priority.md). Two different jobs, similar names; do not
+  merge them.
 ---
 
 ## What changed 2026-08-26 (sixth entry) — topology coverage gets a file

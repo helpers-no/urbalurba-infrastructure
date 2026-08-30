@@ -17,7 +17,7 @@ installation-specific input being a list of targets UIS did not deploy.
 **Prerequisites**: [PLAN-service-uptime-kuma-004-uis-service](../completed/PLAN-service-uptime-kuma-004-uis-service.md) *(done)*
 
 **Related**:
-- [PLAN-service-uptime-kuma-002-monitors](../active/PLAN-service-uptime-kuma-002-monitors.md) — what to watch, proven on the reference installation
+- [PLAN-service-uptime-kuma-002-monitors](PLAN-service-uptime-kuma-002-monitors.md) — what to watch, proven on the reference installation
 - [PLAN-service-uptime-kuma-003-alerting](./PLAN-service-uptime-kuma-003-alerting.md) — the alerting design this ships
 - [PLAN-system-observability-006-service-probes](./PLAN-system-observability-006-service-probes.md) — **depends on this.** 006 auto-generates probes per service; it needs the pipeline this plan ships to deliver them
 

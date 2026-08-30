@@ -16,7 +16,7 @@ sync as UIS gains services — before `002` hand-creates twenty of them.
   *that* an external watchdog is needed (Option C). This does not reopen that.
 - [INVESTIGATE-system-observability](./INVESTIGATE-system-observability.md) — Part 2
   and PLAN-003 establish the principle this extends.
-- [PLAN-service-uptime-kuma-002-monitors](../active/PLAN-service-uptime-kuma-002-monitors.md) — the
+- [PLAN-service-uptime-kuma-002-monitors](PLAN-service-uptime-kuma-002-monitors.md) — the
   plan this would change.
 
 ---

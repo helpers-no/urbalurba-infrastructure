@@ -9,6 +9,8 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Deploy Uptime Kuma as an external watchdog](PLAN-service-uptime-kuma-001-deploy.md) | External watchdog; **parked** — task 3.2 (retention) open | 2026-08-09 |
+| [Define what the watchdog watches](PLAN-service-uptime-kuma-002-monitors.md) | What the watchdog monitors; **parked** — task 4.6 open: no job calls its push URL | 2026-08-10 |
 | [Ship an availability probe with every service](PLAN-system-observability-006-service-probes.md) | `uis deploy <service>` results in that service being monitored by the | 2026-08-26 |
 | [Monitor the components that are not in the cluster](PLAN-system-observability-004-external-targets.md) | The parts of a production install that live outside Kubernetes — the | 2026-08-26 |
 | [Ship a dashboard with the service](PLAN-system-observability-003-service-dashboards.md) | `uis deploy <service>` on a cluster with Grafana yields a dashboard for | 2026-08-26 |

@@ -129,8 +129,8 @@ where browserless's amd64-first images are a problem in themselves.
 
 ### UIS ships a service with a dependency it cannot satisfy
 
-UIS ships Uptime Kuma (see [PLAN-service-uptime-kuma-001-deploy](../active/PLAN-service-uptime-kuma-001-deploy.md),
-[002-monitors](../active/PLAN-service-uptime-kuma-002-monitors.md)). Uptime Kuma
+UIS ships Uptime Kuma (see [PLAN-service-uptime-kuma-001-deploy](../backlog/PLAN-service-uptime-kuma-001-deploy.md),
+[002-monitors](../backlog/PLAN-service-uptime-kuma-002-monitors.md)). Uptime Kuma
 has a `real-browser` monitor type. Verified in upstream source
 (`server/monitor-types/real-browser-monitor-type.js`):
 
