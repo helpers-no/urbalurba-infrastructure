@@ -197,6 +197,42 @@ deploy_single_service() {
                     --wait=true >/dev/null 2>&1 || \
                     log_warn "  could not remove the proxy Deployment; remove it by hand"
 
+                # ⚠️ RESTORE THE SELECTOR, or the database comes back unreachable.
+                #
+                # Removing the proxy Deployment is only half the return trip. The
+                # Service still selects uis.io/external-proxy=true, which nothing
+                # carries once the proxy pod is gone - so the StatefulSet comes
+                # back up, the Service matches NOTHING, and every consumer fails
+                # while the database is perfectly healthy. The tester hit this and
+                # had to patch it by hand.
+                #
+                # 900-external-service-proxy.yml stored the original selector on
+                # the Service before replacing it. The annotation value is already
+                # JSON, so it drops straight into a JSON patch.
+                local _orig_sel
+                _orig_sel="$(kubectl get service "$service_id" \
+                    -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                    -o jsonpath="{.metadata.annotations['uis\.io/original-selector']}" 2>/dev/null || true)"
+                if [[ -n "$_orig_sel" ]]; then
+                    log_info "  restoring the Service selector the proxy replaced"
+                    kubectl patch service "$service_id" \
+                        -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                        --type=json \
+                        -p "[{\"op\":\"replace\",\"path\":\"/spec/selector\",\"value\":$_orig_sel}]" \
+                        >/dev/null 2>&1 \
+                      && kubectl annotate service "$service_id" \
+                           -n "${SCRIPT_NAMESPACE:-default}" --context "$target_host" \
+                           uis.io/original-selector- >/dev/null 2>&1 \
+                      || log_warn "  could not restore the Service selector; restore it by hand or the service is unreachable"
+                else
+                    # No annotation: either the Service was created by the proxy
+                    # itself (nothing to go back to - asgard's shape), or the proxy
+                    # predates this change. Dropping the marker leaves the service
+                    # name label, which the in-cluster workload also carries.
+                    log_warn "  no remembered selector for $service_id"
+                    log_warn "  if it was proxied by an older UIS, check: kubectl get svc $service_id -o jsonpath='{.spec.selector}'"
+                fi
+
                 # Symmetric inverse of the stand-down in 900-external-service-proxy.yml.
                 # Scaling back is safe because the PVC was never touched.
                 if kubectl get statefulset "$service_id" \

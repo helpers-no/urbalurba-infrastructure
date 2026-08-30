@@ -124,6 +124,33 @@
     # A JSON-patch `replace` on /spec/selector sets the whole map, so ownership is
     # unambiguous whoever created the Service. On a cluster where the proxy made
     # the Service itself - asgard - this rewrites it to the value it already has.
+    # ⚠️ REMEMBER THE SELECTOR WE ARE ABOUT TO REPLACE, or the return trip strands
+    # the database. On revert the proxy Deployment is removed, but a Service still
+    # selecting uis.io/external-proxy matches NOTHING once that pod goes: the
+    # database comes back up and is unreachable in-cluster, and every consumer
+    # fails. The tester hit exactly that and had to patch the selector by hand.
+    #
+    # Stored as an annotation on the Service itself, so the value travels with the
+    # object rather than living in a file some other machine would have to read.
+    - name: "5a1. Read the Service as it stands, before taking it over"
+      kubernetes.core.k8s_info:
+        kind: Service
+        name: "{{ _service_id }}"
+        namespace: "{{ namespace }}"
+        context: "{{ _target }}"
+      register: _svc_before
+      failed_when: false
+
+    - name: "5a2. Remember its original selector, once and only once"
+      ansible.builtin.command: >
+        kubectl annotate service {{ _service_id }} -n {{ namespace }} --context {{ _target }}
+        uis.io/original-selector={{ _svc_before.resources[0].spec.selector | to_json | quote }}
+      when:
+        - _svc_before.resources | default([]) | length > 0
+        - "'uis.io/original-selector' not in (_svc_before.resources[0].metadata.annotations | default({}))"
+        - "'uis.io/external-proxy' not in (_svc_before.resources[0].spec.selector | default({}))"
+      changed_when: true
+
     - name: "5b. Take ownership of the Service selector, replacing it rather than merging"
       ansible.builtin.command: >
         kubectl patch service {{ _service_id }} -n {{ namespace }} --context {{ _target }}
@@ -163,6 +190,20 @@
       register: _svcport
       changed_when: false
 
+    # ⚠️ `_external_port` IS OPTIONAL and the report must not dereference it bare.
+    # Omitting `port:` is a supported, documented configuration; before this the
+    # report task raised "'_external_port' is undefined" and `uis deploy` exited 3
+    # AFTER the StatefulSet had been scaled down and the proxy applied - telling
+    # the operator the deploy failed while the cluster was fully swapped. An
+    # operator who reverts on that signal is acting on a false picture.
+    #
+    # When no port was declared the template used its own default, which is the
+    # service's normal in-cluster port - the same number task 6b just read off
+    # the Service. So that is the honest fallback.
+    - name: "6c. The port socat actually targets out there"
+      ansible.builtin.set_fact:
+        _upstream_port: "{{ _external_port | default(_svcport.stdout) }}"
+
     - name: "7. Prove the external service actually answers"
       ansible.builtin.command: >
         kubectl run extproxy-check-{{ 9999 | random }} --image=busybox:1.36 --rm -i
@@ -178,9 +219,9 @@
     - name: "8. Report"
       ansible.builtin.debug:
         msg:
-          - "{{ _service_id }}: proxied to {{ _external_host }}:{{ _external_port }}"
-          - "{{ _service_id }}.{{ namespace }} listens on {{ _svcport.stdout }}; the real service is on {{ _external_port }}"
-          - "{{ (_reach.stdout is search('REACHABLE')) | ternary('Something answered through the in-cluster Service - consumers need no change.', 'WARNING - the proxy is Running but ' ~ _external_host ~ ':' ~ _external_port ~ ' did not answer. Consumers will fail. Check the address, the route, and that the service is up.') }}"
+          - "{{ _service_id }}: proxied to {{ _external_host }}:{{ _upstream_port }}"
+          - "{{ _service_id }}.{{ namespace }} listens on {{ _svcport.stdout }}; the real service is on {{ _upstream_port }}"
+          - "{{ (_reach.stdout is search('REACHABLE')) | ternary('Something answered through the in-cluster Service - consumers need no change.', 'WARNING - the proxy is Running but ' ~ _external_host ~ ':' ~ _upstream_port ~ ' did not answer. Consumers will fail. Check the address, the route, and that the service is up.') }}"
           - "⚠️ A TCP connect proves something answered on that port, NOT that it was"
           - "   the external service. Run `uis verify {{ _service_id }}` for that: it asks"
           - "   the server which address it is on and fails if the answer came from"
