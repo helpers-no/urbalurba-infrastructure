@@ -204,21 +204,25 @@
         _backing_pods: "{{ (_eppods.stdout | default('')).split() }}"
         _proxy_pod_names: "{{ (_proxypods.stdout | default('')).split() }}"
 
-    - name: "B4. A declared-external database must be served by the proxy, not the in-cluster workload"
-      ansible.builtin.assert:
-        that:
-          - _backing_pods | length > 0
-          - _backing_pods | difference(_proxy_pod_names) | length == 0
-        fail_msg: >-
-          FALSE GREEN. PostgreSQL is declared external ({{ _exthost.stdout | trim }}), but
-          service/postgresql is backed by {{ _backing_pods | join(', ') | default('nothing') }},
-          which is not the external proxy. The proxy may be Running and Ready and still
-          be selected by nothing - `kubectl apply` MERGES a Service selector rather than
-          replacing it, so a proxy applied over a Helm-owned Service never takes over.
-          Compare: kubectl get svc postgresql -o jsonpath='{.spec.selector}'
-        success_msg: "service/postgresql is backed by the external proxy."
-      when: _exthost.stdout | default('') | length > 0
-
+    # ⚠️ ORDER MATTERS: identity is the authority, the marker only corroborates.
+    #
+    # B4 originally asserted that the pod behind the Service carries the proxy
+    # marker, and FAILED if it did not. On 2026-08-30 that redded asgard - the
+    # only production installation running this topology - while it was working
+    # perfectly: its proxy was created 16 days earlier, before markers existed,
+    # so it carries no marker and never will until it is redeployed.
+    #
+    # That is the false green inverted, and it is the worse error of the two: an
+    # operator who trusts a verify that calls a healthy production database
+    # misconfigured will act on it. A check that cannot pass a correct
+    # installation is as useless as one that cannot fail a broken one.
+    #
+    # So the identity comparison runs FIRST and decides. If the database that
+    # answered IS the declared external one, the topology is external - whatever
+    # labels happen to be on the pod. The marker then reports on something real
+    # but different: whether `uis deploy` will RECOGNISE this proxy on the way
+    # back out. An unmarked proxy works and cannot be torn down automatically,
+    # and those are two separate facts that deserve two separate messages.
     - name: "B5. Read the declared database directly, bypassing the Service entirely"
       ansible.builtin.command: >
         kubectl run pg-direct-{{ 9999 | random }} --image=postgres:18 --rm -i
@@ -231,16 +235,59 @@
       no_log: true
       when: _exthost.stdout | default('') | length > 0
 
-    - name: "B5b. Extract its identifier"
+    - name: "B5b. Extract its identifier and decide whether the topology is proven"
       ansible.builtin.set_fact:
         _direct_sysid: "{{ (_direct.stdout | default('') | regex_search('UIS[|][^\n]*') | default('', true)).split('|') | last | trim }}"
       when: _exthost.stdout | default('') | length > 0
 
-    - name: "B5c. The database that answered must BE the database that was declared"
+    - name: "B5c. Is the answering database the declared one?"
+      ansible.builtin.set_fact:
+        _identity_proven: "{{ (_direct_sysid | default('') is match('^[0-9]+$')) and (_direct_sysid | default('') == _pg_sysid) }}"
+        _backing_is_marked: "{{ (_backing_pods | length > 0) and (_backing_pods | difference(_proxy_pod_names) | length == 0) }}"
+      when: _exthost.stdout | default('') | length > 0
+
+    - name: "B4. A declared-external database must not be served from inside the cluster"
       ansible.builtin.assert:
         that:
-          - _direct_sysid is match('^[0-9]+$')
-          - _direct_sysid == _pg_sysid
+          - _backing_pods | length > 0
+          - _backing_is_marked or _identity_proven
+        fail_msg: >-
+          FALSE GREEN. PostgreSQL is declared external ({{ _exthost.stdout | trim }}), but
+          service/postgresql is backed by {{ _backing_pods | join(', ') | default('nothing') }},
+          which carries no external-proxy marker AND is not serving the declared database -
+          through the Service the identifier is {{ _pg_sysid }}, and {{ _exthost.stdout | trim }}
+          {{ (_direct_sysid | default('') is match('^[0-9]+$')) | ternary('reports ' ~ (_direct_sysid | default('')), 'could not be read at all') }}.
+          The query is not reaching the external database. `kubectl apply` MERGES a Service
+          selector rather than replacing it, so a proxy applied over a chart-owned Service
+          never takes over. Compare: kubectl get svc postgresql -o jsonpath='{.spec.selector}'
+        success_msg: "service/postgresql is serving the external database."
+      when: _exthost.stdout | default('') | length > 0
+
+    - name: "B4b. WORKING BUT UNMANAGED - an unmarked proxy is serving correctly"
+      ansible.builtin.debug:
+        msg:
+          - "⚠️ The topology is correct: {{ _exthost.stdout | trim }} answered, identifier {{ _pg_sysid }}."
+          - "   But {{ _backing_pods | join(', ') }} carries no uis.io/external-proxy marker, so it"
+          - "   predates the marker (any proxy deployed before 2026-08-30) or was created by hand."
+          - ""
+          - "   This is NOT a fault in the topology and nothing is broken today. It matters on the"
+          - "   way OUT: `uis deploy` finds the proxy to remove by that marker, so removing the"
+          - "   declaration would deploy the in-cluster service while this proxy keeps running -"
+          - "   and both could then match the Service."
+          - ""
+          - "   Adopt it by redeploying, or label it in place:"
+          - "     kubectl label deployment postgresql -n {{ _ns }} uis.io/external-proxy=true"
+          - "     kubectl patch deployment postgresql -n {{ _ns }} --type=merge \\"
+          - "       -p '{\"spec\":{\"template\":{\"metadata\":{\"labels\":{\"uis.io/external-proxy\":\"true\"}}}}}'"
+          - "   The second rolls the pod - brief connection reset for anything holding a session."
+      when:
+        - _exthost.stdout | default('') | length > 0
+        - _identity_proven | default(false)
+        - not (_backing_is_marked | default(false))
+
+    - name: "B5d. The database that answered must BE the database that was declared"
+      ansible.builtin.assert:
+        that: _identity_proven
         fail_msg: >-
           {{ (_direct_sysid is match('^[0-9]+$'))
              | ternary('PostgreSQL is declared external at ' ~ (_exthost.stdout | trim) ~ ', and that host answers - but with a DIFFERENT database. Through the Service: system_identifier ' ~ _pg_sysid ~ '. Directly: ' ~ _direct_sysid ~ '. Consumers are not talking to the database this installation declared.',
