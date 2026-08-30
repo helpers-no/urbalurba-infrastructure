@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-30 (seventh refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-08-30 (eighth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -12,7 +12,30 @@
 
 ## Current status — tor-agent, 2026-08-30
 
-**`state: blocked`. `active/` is empty, and both are accurate rather than gaps.**
+**`state: working`.** The topology requirement's runtime half is open and it is worse than the
+paperwork suggested.
+
+🔴 **The external-services proxy path does not work on any cluster that previously ran the service
+in-cluster — and `uis verify` reports a false green.** Found by the independent tester on the first
+real run of the proxy topology (2026-08-30). `uis verify postgresql` exits 0 and prints
+`Topology: EXTERNAL`, while the server answering is the in-cluster StatefulSet; proven by version
+fingerprint. Five defects: the proxy Service selector merges into Helm's instead of replacing it so
+the proxy is never selected; the declared external port is used for the in-cluster Service port too,
+moving `postgresql` off 5432; a wrong target makes verify **hang** rather than fail; reverting leaves
+the socat Deployment orphaned; and `040-test-postgresql.yml` derives its topology line by **reading
+the declaration file**, so it echoes configuration and can never contradict the cluster.
+
+That last one is mine and is the reason the others survived undetected. Fixing in two rounds —
+**A**: make the verify prove topology (`inet_server_addr()`) and give it a connect timeout, so the
+failure becomes loud. **B**: selector ownership, standing the in-cluster workload down without
+touching the PVC, the port conflation, and teardown on revert. A first, because grading B with an
+instrument that cannot fail proves nothing.
+
+asgard cannot produce this bug — it never ran postgres in-cluster — which is precisely the "both
+topologies" case outcome 3 exists for.
+
+**`active/` is empty**, and that is accurate: this work is tracked here and in the talk bus, and the
+plan file for it lands with Round A.
 
 I build; the independent tester proves. One round has been **declared and ungraded since
 27 August**: branch `topology-shim-contract` @ `d8d2aab`, nine criteria of which five are
