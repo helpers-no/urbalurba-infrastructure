@@ -2,6 +2,50 @@
 
 Mandatory rules for managing secrets in UIS. These rules ensure security, prevent accidental exposure, and maintain consistency across services.
 
+## Decision: internal addresses already in this repo are accepted
+
+**Decided by Terje, 2026-08-30.** Raised 2026-08-26 after a scan of this repository.
+
+This repository is **public**. Around two dozen private-range (RFC1918) addresses from the
+reference installation's own network appear in about ten markdown files, mostly under
+`ai-developer/plans/`, where they were written as ordinary working notes. They are **staying**.
+The repository is not being sanitised and is not being made private.
+
+**The reasoning, so nobody has to reconstruct it.** RFC1918 addresses are not routable from the
+internet and grant no access on their own. **No credential is exposed** — that was checked, and it
+is the fact the decision rests on. What the addresses do give away is internal topology to someone
+who *already* has a foothold, and they pair badly with the detail elsewhere in this repo about what
+runs where. So the severity is **low, but not nothing**, and the decision is a deliberate
+acceptance of that residual rather than a judgement that it does not exist.
+
+### This is not a licence to add more
+
+The decision covers **what was already committed**. It says nothing about new material.
+
+- Do not put an address in a new plan because older plans have them.
+- Prefer a placeholder — `<postgres-host>`, `<node-ip>` — wherever the actual value is not
+  load-bearing for the reader.
+- Where a real value genuinely helps, keep it in the private `home` repository and reference it
+  from here.
+
+### The boundary that made it acceptable
+
+Two conditions, and **both** hold today:
+
+| | Condition |
+|---|---|
+| 1 | **Private-range addresses only** — RFC1918, not routable from the internet |
+| 2 | **No credentials of any kind** — no passwords, tokens, keys, or connection strings carrying one |
+
+**If either stops being true, that is a new decision, not this one.** A publicly routable address, a
+hostname that resolves outside the network, or anything credential-shaped is out of scope here and
+needs Terje. Under this project's own rules the platform owner is the only person who can approve
+public exposure — see the roles section of `TALK.md`.
+
+⚠️ **Today this boundary is enforced by review, not by a check.** Nothing in CI fails a commit that
+adds a public address or a credential-shaped string to this repo. That is worth fixing, and it is a
+separate piece of work from the decision recorded here.
+
 ## Core Pattern: Template + Gitignore
 
 All secrets follow a three-stage pipeline:
