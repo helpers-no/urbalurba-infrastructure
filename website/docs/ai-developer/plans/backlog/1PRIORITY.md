@@ -59,7 +59,7 @@ shipped, so the triage view had drifted badly from the repo:
 
 ---
 
-## What changed 2026-08-30 (tor-agent, incoming UIS maintainer)
+## What changed 2026-08-30 (tor-agent, UIS maintainer)
 
 - **The broken-link item above is CLOSED.** It was the last bullet of the 2026-08-13
   refresh and had been nobody's for a fortnight. `onBrokenLinks`, `onBrokenAnchors` and
