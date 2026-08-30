@@ -15,3 +15,4 @@ Plans currently being implemented. Maximum 1-2 at a time.
 
 | Plan | Goal | Updated |
 |------|------|---------|
+| [Bump the GitHub Actions to v5 before the Node 20 runtime deprecation turns fatal](PLAN-system-actions-v5-runtime-bump.md) | Every `actions/*` step in this repository runs on a supported runtime, so the Node 20 | 2026-08-30 |
