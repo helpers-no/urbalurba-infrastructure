@@ -108,6 +108,47 @@
         state: present
         context: "{{ _target }}"
 
+    # ⚠️ REMEMBER THE SELECTOR WE ARE ABOUT TO REPLACE, or the return trip strands
+    # the database. On revert the proxy Deployment is removed, but a Service still
+    # selecting uis.io/external-proxy matches NOTHING once that pod goes: the
+    # database comes back up and is unreachable in-cluster, and every consumer
+    # fails. The tester hit exactly that and had to patch the selector by hand.
+    #
+    # Stored as an annotation on the Service itself, so the value travels with the
+    # object rather than living in a file some other machine would have to read.
+    #
+    # ⚠️ THIS MUST RUN BEFORE THE PROXY IS APPLIED. It first ran after, and so
+    # captured the selector as `apply` had already left it - merged, not original.
+    # For postgres that was harmless by luck: the proxy's one label is a subset of
+    # the chart's three, so merging added nothing and the captured value happened
+    # to equal the original. A proxy whose selector carries a key the chart does
+    # NOT have would have stored original+extra, and the revert would have
+    # restored a selector matching nothing - the exact stranding this annotation
+    # exists to prevent, reintroduced in a different configuration. The tester
+    # noticed the divergence between the comment and the behaviour; the comment
+    # was describing the right design and the code was doing something else.
+    #
+    # Reading before the apply also makes the "no annotation" case mean what it
+    # says: the Service did not exist, so there is genuinely nothing to go back to.
+    - name: "4b. Read the Service as it stands, BEFORE the proxy is applied"
+      kubernetes.core.k8s_info:
+        kind: Service
+        name: "{{ _service_id }}"
+        namespace: "{{ namespace }}"
+        context: "{{ _target }}"
+      register: _svc_before
+      failed_when: false
+
+    - name: "4c. Remember its original selector, once and only once"
+      ansible.builtin.command: >
+        kubectl annotate service {{ _service_id }} -n {{ namespace }} --context {{ _target }}
+        uis.io/original-selector={{ _svc_before.resources[0].spec.selector | to_json | quote }}
+      when:
+        - _svc_before.resources | default([]) | length > 0
+        - "'uis.io/original-selector' not in (_svc_before.resources[0].metadata.annotations | default({}))"
+        - "'uis.io/external-proxy' not in (_svc_before.resources[0].spec.selector | default({}))"
+      changed_when: true
+
     - name: "5. Apply the proxy for {{ _service_id }}"
       kubernetes.core.k8s:
         state: present
@@ -124,33 +165,6 @@
     # A JSON-patch `replace` on /spec/selector sets the whole map, so ownership is
     # unambiguous whoever created the Service. On a cluster where the proxy made
     # the Service itself - asgard - this rewrites it to the value it already has.
-    # ⚠️ REMEMBER THE SELECTOR WE ARE ABOUT TO REPLACE, or the return trip strands
-    # the database. On revert the proxy Deployment is removed, but a Service still
-    # selecting uis.io/external-proxy matches NOTHING once that pod goes: the
-    # database comes back up and is unreachable in-cluster, and every consumer
-    # fails. The tester hit exactly that and had to patch the selector by hand.
-    #
-    # Stored as an annotation on the Service itself, so the value travels with the
-    # object rather than living in a file some other machine would have to read.
-    - name: "5a1. Read the Service as it stands, before taking it over"
-      kubernetes.core.k8s_info:
-        kind: Service
-        name: "{{ _service_id }}"
-        namespace: "{{ namespace }}"
-        context: "{{ _target }}"
-      register: _svc_before
-      failed_when: false
-
-    - name: "5a2. Remember its original selector, once and only once"
-      ansible.builtin.command: >
-        kubectl annotate service {{ _service_id }} -n {{ namespace }} --context {{ _target }}
-        uis.io/original-selector={{ _svc_before.resources[0].spec.selector | to_json | quote }}
-      when:
-        - _svc_before.resources | default([]) | length > 0
-        - "'uis.io/original-selector' not in (_svc_before.resources[0].metadata.annotations | default({}))"
-        - "'uis.io/external-proxy' not in (_svc_before.resources[0].spec.selector | default({}))"
-      changed_when: true
-
     - name: "5b. Take ownership of the Service selector, replacing it rather than merging"
       ansible.builtin.command: >
         kubectl patch service {{ _service_id }} -n {{ namespace }} --context {{ _target }}
