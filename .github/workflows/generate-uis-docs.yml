@@ -12,6 +12,19 @@ on:
       - 'provision-host/uis/manage/uis-docs-markdown.sh'
       - 'provision-host/uis/manage/uis-docs-plan-indexes.sh'
       - 'website/docs/ai-developer/plans/**'
+      # ⚠️ A workflow must list ITS OWN FILE, or it cannot notice its own change.
+      # Without this line, the 2026-08-30 runtime bump edited this workflow and
+      # this workflow did not run - so its bumped action pins were merged and
+      # never executed, and the only way to exercise them was for a human to
+      # dispatch it by hand. CI that needs a human who does not know they are
+      # needed is not automatic.
+      #
+      # THIRD time a filter here has been narrower than what the job depends on:
+      # test-uis.yml missed `ansible/**` and ran no tests on playbook changes,
+      # docs.yml missed `version.txt` and left the navbar badge a release behind.
+      # All three were found by the independent tester, never by an author. The
+      # class is filed as INVESTIGATE-system-workflow-paths-filter-drift.
+      - '.github/workflows/generate-uis-docs.yml'
   workflow_dispatch:
 
 permissions:

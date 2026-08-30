@@ -10,12 +10,20 @@ on:
       - 'provision-host/uis/**'
       - 'ansible/**'
       - 'uis'
+      # ⚠️ Its own file, or this workflow cannot notice its own change - the same
+      # defect as the ansible/** one above, one level up. Found by audit on
+      # 2026-08-30 while fixing the identical miss in generate-uis-docs.yml: the
+      # Node 20 runtime bump edited this workflow and this workflow did not run,
+      # so its bumped pins merged unexercised. See
+      # INVESTIGATE-system-workflow-paths-filter-drift.
+      - '.github/workflows/test-uis.yml'
   push:
     branches: [main]
     paths:
       - 'provision-host/uis/**'
       - 'ansible/**'
       - 'uis'
+      - '.github/workflows/test-uis.yml'
   workflow_dispatch:
 
 jobs:
