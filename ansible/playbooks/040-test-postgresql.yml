@@ -223,6 +223,60 @@
     # but different: whether `uis deploy` will RECOGNISE this proxy on the way
     # back out. An unmarked proxy works and cannot be torn down automatically,
     # and those are two separate facts that deserve two separate messages.
+    # ⚠️ A SINGLE QUERY CANNOT CHARACTERISE A SERVICE WITH MIXED ENDPOINTS.
+    #
+    # Everything below asks the Service one question and reasons about the answer.
+    # That is sound while the Service has one backing workload. It is not sound
+    # when it has two, and the tester measured exactly how unsound: five runs
+    # against one broken state - an orphaned proxy and the restored in-cluster
+    # database both matching a name-only selector - gave four failures and one
+    # PASS. An operator running verify once after such a revert has roughly a
+    # one-in-five chance of being told everything is fine.
+    #
+    # That is a green on a broken state, which is the thing this playbook exists
+    # to prevent, arriving through sampling rather than through logic. The
+    # identity checks are not wrong - they report correctly on whatever answered.
+    # The flaw is asking once and generalising.
+    #
+    # So: refuse to characterise a mixed Service at all. If the endpoints resolve
+    # to more than one owning workload, no single connection can say which
+    # topology is live, and saying so is the only honest verdict. The data is
+    # already in hand - B3 fetched the backing pods.
+    - name: "B3d. What owns each pod behind the Service?"
+      ansible.builtin.shell: >
+        set -o pipefail;
+        kubectl get pods -n {{ _ns }} --context {{ _target }}
+        -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.metadata.ownerReferences[0].kind}{"/"}{.metadata.ownerReferences[0].name}{"\n"}{end}'
+      args: { executable: /bin/bash }
+      register: _pod_owners
+      changed_when: false
+      failed_when: false
+
+    - name: "B3e. Reduce the backing pods to their owners"
+      ansible.builtin.set_fact:
+        _backing_owners: >-
+          {{ (_pod_owners.stdout | default('')).splitlines()
+             | select('match', '^(' ~ (_backing_pods | join('|')) ~ ')=')
+             | map('regex_replace', '^[^=]+=', '')
+             | unique | list }}
+      when: _backing_pods | length > 0
+
+    - name: "B3f. A Service backed by two different workloads cannot be characterised"
+      ansible.builtin.assert:
+        that: (_backing_owners | default([])) | length <= 1
+        fail_msg: >-
+          service/postgresql is backed by {{ _backing_pods | length }} pods owned by
+          {{ _backing_owners | length }} different workloads: {{ _backing_owners | join(', ') }}.
+          Queries are being load-balanced between them, so a single connection cannot say which
+          topology is live - and running this verify repeatedly would give different verdicts.
+          This is refused rather than sampled. It is the state a revert leaves when the proxy it
+          removed carried no external-proxy marker: the in-cluster workload is restored and the
+          orphaned proxy is still running, and both match the Service selector. Remove the one
+          that should not be there:
+          kubectl get endpoints postgresql -n {{ _ns }} -o wide
+        success_msg: "service/postgresql is backed by a single workload; one query characterises it."
+      when: _backing_pods | length > 0
+
     - name: "B5. Read the declared database directly, bypassing the Service entirely"
       ansible.builtin.command: >
         kubectl run pg-direct-{{ 9999 | random }} --image=postgres:18 --rm -i
