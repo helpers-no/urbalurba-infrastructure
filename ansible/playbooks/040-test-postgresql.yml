@@ -44,12 +44,31 @@
       when: _pgpw.stdout | default('') | length == 0
 
     # --- Test A: the database answers a real query, through the Service ---
-    - name: "A1. SELECT through postgresql.{{ _ns }}"
+    # ⚠️ TWO things are asked, and the second one is the point.
+    #
+    # `select version()` proves a database answered. It does NOT prove WHICH
+    # database answered, and on 2026-08-30 the independent tester showed that
+    # mattered: with PostgreSQL declared external, this verify exited 0 and
+    # reported "Topology: EXTERNAL" while the in-cluster StatefulSet was serving
+    # every query. The proxy was running, Ready, and selected by nothing.
+    #
+    # `inet_server_addr()` returns the address of the server end of the
+    # connection as the SERVER sees it: the real database's own address when
+    # traffic is relayed through socat, and the StatefulSet pod's IP when it is
+    # not. That is an observation of the cluster rather than a restatement of
+    # the config, and it is what B now asserts on.
+    #
+    # ⚠️ PGCONNECT_TIMEOUT and `timeout` are not tidiness. Traffic to a ClusterIP
+    # with no ready backend is DROPPED, not refused, so psql waits forever: the
+    # tester measured over ten minutes with the pod still Running and no verdict.
+    # With `retries: 6` that is an hour of hanging. In CI a job with no verdict
+    # is worse than a wrong one.
+    - name: "A1. SELECT through postgresql.{{ _ns }}, and record which server answered"
       ansible.builtin.command: >
         kubectl run pg-verify-{{ 9999 | random }} --image=postgres:18 --rm -i
         --restart=Never -n {{ _ns }} --context {{ _target }} --timeout=60s
-        --env PGPASSWORD={{ _pgpw.stdout }} --
-        /bin/sh -c 'sleep 2; psql -h postgresql.{{ _ns }}.svc.cluster.local -U postgres -tAc "select version()"'
+        --env PGPASSWORD={{ _pgpw.stdout }} --env PGCONNECT_TIMEOUT=10 --
+        /bin/sh -c 'sleep 2; timeout 30 psql -h postgresql.{{ _ns }}.svc.cluster.local -U postgres -tAc "select version() || chr(124) || coalesce(host(inet_server_addr()), chr(48))"'
       register: _q
       changed_when: false
       failed_when: false
@@ -69,8 +88,13 @@
         success_msg: "The database answered."
 
     - name: "A3. Which server answered"
+      ansible.builtin.set_fact:
+        _pg_version: "{{ _q.stdout | default('') | regex_search('PostgreSQL [0-9.]+') }}"
+        _pg_server_addr: "{{ (_q.stdout | default('')).split('|') | last | trim }}"
+
+    - name: "A3. Report it"
       ansible.builtin.debug:
-        msg: "{{ _q.stdout | default('') | regex_search('PostgreSQL [0-9.]+') }}"
+        msg: "{{ _pg_version }} at {{ _pg_server_addr }}"
 
     # --- Test B: say which topology served that answer ---
     - name: "B1. Is this installation proxying to an external database?"
@@ -86,11 +110,90 @@
       failed_when: false
       when: _extfile.stat.exists
 
+    # ⚠️ B USED TO READ THE DECLARATION AND PRINT IT BACK.
+    #
+    # It said "Topology: EXTERNAL - proxied to <host>" whenever the declaration
+    # file named a host, without ever checking which server answered. So B could
+    # not contradict the config no matter what the cluster did - a falsification
+    # that cannot fail, sitting in the verify for the one topology it exists to
+    # test. That is how a broken proxy path passed as green on 2026-08-30.
+    #
+    # B now compares the DECLARED topology against the OBSERVED one and fails on
+    # disagreement. Two independent checks, because either alone has a blind spot:
+    #
+    #   B4  the answering address is a pod IP in this namespace -> the answer came
+    #       from inside the cluster. Works even when the declared host is a DNS
+    #       name, and catches the exact defect the tester found.
+    #   B5  the declared host is a literal address and does not match the answering
+    #       address. Catches "external, but not the external you declared".
+    #
+    # When the declared host is a NAME, B4 still applies but B5 cannot: that is
+    # reported as not-proven rather than passed. An assertion that could not be
+    # made must never read as one that succeeded.
+    - name: "B3. Pod addresses in this namespace, to tell inside from outside"
+      ansible.builtin.shell: >
+        kubectl get pods -n {{ _ns }} --context {{ _target }}
+        -o jsonpath='{.items[*].status.podIP}'
+      register: _podips
+      changed_when: false
+      failed_when: false
+
+    - name: "B4. A declared-external database must not answer from inside the cluster"
+      ansible.builtin.assert:
+        that: _pg_server_addr not in (_podips.stdout | default('') | split(' '))
+        fail_msg: >-
+          FALSE GREEN. PostgreSQL is declared external ({{ _exthost.stdout }}), but the
+          server that answered is at {{ _pg_server_addr }}, which is a pod in
+          {{ _ns }} - the query never left the cluster. The proxy is deployed but
+          is not behind service/postgresql; check that the Service selector
+          actually selects the proxy pod and not the in-cluster workload.
+        success_msg: "The answering server is outside the cluster."
+      when:
+        - _exthost.stdout | default('') | length > 0
+        - _podips.stdout | default('') | length > 0
+
+    - name: "B5. And it must be the database that was declared"
+      ansible.builtin.assert:
+        that: _pg_server_addr == _exthost.stdout | trim
+        fail_msg: >-
+          PostgreSQL is declared external at {{ _exthost.stdout }}, but the server
+          that answered is at {{ _pg_server_addr }}. Something outside the cluster
+          answered, but not the database this installation declared.
+        success_msg: "The answering server is the declared external database."
+      when:
+        - _exthost.stdout | default('') | length > 0
+        - _exthost.stdout | trim is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$')
+
+    - name: "B5. NOT PROVEN - the declared host is a name, not an address"
+      ansible.builtin.debug:
+        msg: >-
+          ⚠️ NOT PROVEN: '{{ _exthost.stdout | trim }}' is a name, so the answering
+          address {{ _pg_server_addr }} could not be matched against it. B4 has
+          confirmed the answer came from outside the cluster; that it came from
+          THIS host is unverified.
+      when:
+        - _exthost.stdout | default('') | length > 0
+        - not (_exthost.stdout | trim is match('^[0-9]{1,3}(\.[0-9]{1,3}){3}$'))
+
+    - name: "B6. An in-cluster installation must answer from inside the cluster"
+      ansible.builtin.assert:
+        that: _pg_server_addr in (_podips.stdout | default('') | split(' '))
+        fail_msg: >-
+          This installation declares no external PostgreSQL, but the server that
+          answered is at {{ _pg_server_addr }}, which is not a pod in {{ _ns }}.
+          Something outside the cluster is serving queries that should be served
+          in-cluster - check for a leftover proxy Deployment from a reverted
+          declaration.
+        success_msg: "The answering server is the in-cluster database."
+      when:
+        - _exthost.stdout | default('') | length == 0
+        - _podips.stdout | default('') | length > 0
+
     - name: "SUMMARY"
       ansible.builtin.debug:
         msg:
           - "A. Database answers a real query:  PASS"
-          - "B. Topology: {{ (_exthost.stdout | default('') | length > 0) | ternary('EXTERNAL - proxied to ' ~ (_exthost.stdout | default('')), 'in-cluster') }}"
+          - "B. Topology: {{ (_exthost.stdout | default('') | length > 0) | ternary('EXTERNAL - proxied to ' ~ (_exthost.stdout | default('')), 'in-cluster') }} - VERIFIED, answered from {{ _pg_server_addr }}"
           - ""
           - "The same test passes in both topologies. That is the point: consumers"
           - "connect to postgresql.{{ _ns }} and cannot tell the difference."
