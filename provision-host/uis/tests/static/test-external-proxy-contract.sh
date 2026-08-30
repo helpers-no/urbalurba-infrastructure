@@ -86,14 +86,22 @@ _match_is_code() {  # $1 = raw "file:line:code" hit, $2 = extended regex
 }
 
 _pod_artefact_hits() {   # $1 = service id
-    grep -rn -- "$1-0" "${CODE_DIRS[@]}" --include='*.sh' --include='*.yml' 2>/dev/null \
+    # No `--` here. It terminates option parsing, which turns both --include
+    # arguments into file operands: the filters stop filtering, grep recurses over
+    # every file, and the "No such file" errors for the two literal --include paths
+    # are swallowed by 2>/dev/null. The tester found it when its own .imacbak
+    # scratch file appeared in this test's output. test-postgres-connection-shape.sh
+    # does the same search without `--`, which is why its filters have always worked.
+    grep -rn "$1-0" "${CODE_DIRS[@]}" \
+        --include='*.sh' --include='*.yml' --include='*.yaml' 2>/dev/null \
         | awk -v id="$1" '{ line=$0; sub(/^[^:]+:[0-9]+:/,"",line); sub(/#.*$/,"",line);
                             if (line ~ id "-0") print $0 }' || true
 }
 
 _workload_kind_hits() {  # $1 = service id
-    grep -rnE -- "(statefulset|sts)/$1([^A-Za-z0-9_-]|$)" "${CODE_DIRS[@]}" \
-        --include='*.sh' --include='*.yml' 2>/dev/null \
+    # See the note in _pod_artefact_hits: no `--`, or the filters are inert.
+    grep -rnE "(statefulset|sts)/$1([^A-Za-z0-9_-]|$)" "${CODE_DIRS[@]}" \
+        --include='*.sh' --include='*.yml' --include='*.yaml' 2>/dev/null \
         | awk -v id="$1" '{ line=$0; sub(/^[^:]+:[0-9]+:/,"",line); sub(/#.*$/,"",line);
                             if (line ~ "(statefulset|sts)/" id) print $0 }' || true
 }
