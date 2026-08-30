@@ -420,5 +420,3 @@ The configure precheck found no database named `<name>` in the cluster's Postgre
 ## Learn More
 
 - [Official PostgREST documentation](https://postgrest.org)
-
-[nope](/docs/no/such/page)
