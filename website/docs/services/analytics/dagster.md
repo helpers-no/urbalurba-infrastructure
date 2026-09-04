@@ -248,8 +248,40 @@ This is **platform policy, not application configuration** — deliberately, and
 is the one Dagster setting that *does* live in the product manifest rather than
 the extend file. Run pods all talk to the same shared PostgreSQL that other
 services use, so the ceiling protects every tenant and must be changeable without
-any of them rebuilding an image. Do not throttle in application code to
-compensate; raise this instead, on evidence from real materialisations.
+any of them rebuilding an image. Do not duplicate this cap in application code;
+raise it here instead, on evidence from real materialisations.
+
+### It bounds runs, not steps — and the difference matters
+
+`maxConcurrentRuns` is nested under `runs:` for a reason. **It bounds how many runs
+execute at once. It does not bound how many steps run inside one of them.**
+
+A fan-out job — one job materialising dozens of assets — is **a single run**. Inside
+that run pod, Dagster's multiprocess executor takes `max_concurrent` from the pod's
+CPU count by default, and this manifest sets no executor bound at all. So on a
+fan-out job the platform cap **never engages**: one run cannot exceed a ceiling of
+four runs.
+
+Measured on the reference installation: a weekly job fired **37 assets** in **one**
+run, with a peak of **4 concurrent steps**. That 4 came from the application's own
+bound, not from this manifest. The platform cap was never reached by that job and
+could not have been.
+
+:::warning A step-level bound is not a duplicate of this cap — keep it
+If your job fans out, bound your own step concurrency. It is the only thing standing
+between a wide job and as many concurrent database writers as the run pod has CPUs,
+against a PostgreSQL that other services share — and, if the job fetches from
+external APIs, as many simultaneous callers to those.
+
+The advice above is *"do not re-implement the run cap in application code"*. It is
+**not** "do not bound concurrency in application code". Deleting a step-level bound
+because this section caps runs at 4 removes a control the platform does not provide,
+and the failure is quiet: unbounded writers, not an error.
+
+Read your bound from an environment variable with a default — `os.getenv` with a
+fallback, never a required variable — so the platform can retune it without you
+rebuilding an image. That honours the same principle this cap is built on.
+:::
 
 ## The metadata database
 
