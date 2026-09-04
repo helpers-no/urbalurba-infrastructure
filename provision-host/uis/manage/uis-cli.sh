@@ -2479,6 +2479,34 @@ cmd_dagster_verify() {
     run_verify_playbook "360-test-dagster.yml"
 }
 
+# ⚠️ `verify` passes whether automation is RUNNING or STOPPED, and that is correct
+# for what it asks: it proves the daemon can fire schedules. It does not prove any
+# schedule is switched on, and on 2026-09-04 an instance was reported functional on
+# four green checks while everything was STOPPED and nothing had run for eleven
+# days. This is the other half of the question, and it is a separate verb because
+# STOPPED is a legitimate state - a deliberate test fixture is exactly that.
+cmd_dagster_automation() {
+    local expect=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --expect) expect="${2:-}"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    if [[ -n "$expect" && "$expect" != "running" && "$expect" != "stopped" ]]; then
+        log_error "--expect takes 'running' or 'stopped' (got '$expect')"
+        log_info  "Omit it to report without asserting."
+        return "$EXIT_GENERAL_ERROR"
+    fi
+
+    print_section "Dagster automation state"
+    if [[ -n "$expect" ]]; then
+        run_verify_playbook "361-dagster-automation.yml" -e "expect=$expect"
+    else
+        run_verify_playbook "361-dagster-automation.yml"
+    fi
+}
+
 cmd_postgrest_verify() {
     local app_name=""
     while [[ $# -gt 0 ]]; do
@@ -3001,8 +3029,11 @@ main() {
                 verify)
                     cmd_dagster_verify
                     ;;
+                automation)
+                    cmd_dagster_automation "$@"
+                    ;;
                 *)
-                    echo "  Use: ./uis dagster verify" >&2
+                    echo "  Use: ./uis dagster verify | automation [--expect running|stopped]" >&2
                     ;;
             esac
             ;;

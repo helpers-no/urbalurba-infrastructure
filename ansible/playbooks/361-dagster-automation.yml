@@ -1,0 +1,173 @@
+---
+# 361-dagster-automation.yml
+# Report whether Dagster's schedules and sensors are RUNNING or STOPPED.
+#
+# ⚠️ A HEALTHY DAGSTER WITH EVERY SCHEDULE STOPPED LOOKS EXACTLY LIKE A WORKING ONE.
+#
+# 360-test-dagster.yml proves the daemon is alive — that schedules *can* fire. It
+# never asks whether any schedule is switched on. Both states pass it, because in
+# both the daemon heartbeat is fresh and the webserver answers.
+#
+# That gap cost a real round on 2026-09-04: an instance was reported functional on
+# four green checks while every schedule and sensor was STOPPED and nothing had run
+# for eleven days. Nobody was wrong — the checks answered the question they were
+# asked. This playbook asks the other one.
+#
+# It reports; it does not change anything. Turning automation on or off is a
+# separate action and deliberately not in here (see the note at the foot).
+#
+# Usage:
+#   ansible-playbook 361-dagster-automation.yml -e "target_host=rancher-desktop"
+#   ansible-playbook 361-dagster-automation.yml -e "target_host=... expect=running"
+#   ./uis dagster automation
+#   ./uis dagster automation --expect running
+#
+# `expect` turns a report into an assertion:
+#   running  every schedule and sensor must be RUNNING; any STOPPED one fails
+#   stopped  every one must be STOPPED — for restoring a deliberate fixture
+#   (unset)  report only, exit 0 whatever the state
+
+- name: Report Dagster automation state
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    dagster_ns: "dagster"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    probe: "dagster-automation-{{ 9999 | random }}"
+    _expect: "{{ expect | default('') }}"
+
+  tasks:
+    - name: "0. Refuse an expect value that is not one of the two"
+      ansible.builtin.assert:
+        that: _expect in ['', 'running', 'stopped']
+        fail_msg: >-
+          expect={{ _expect }} is not valid. Use `running`, `stopped`, or omit it to
+          report without asserting. A typo must not silently become "report only" —
+          that would turn an assertion you asked for into one that cannot fail.
+
+    # Same probe shape as 360-test-dagster.yml A1, and for the same reason: NOT
+    # `kubectl run --rm -i`, which can return rc=0 with empty stdout when the
+    # container outlives the attach, reading a healthy service as failing.
+    - name: "1. Ask Dagster for every schedule and sensor, with its state"
+      ansible.builtin.shell: |
+        set -e
+        kubectl run {{ probe }} --image=curlimages/curl --restart=Never \
+          -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- curl -s -m 20 -X POST \
+          -H 'Content-Type: application/json' \
+          -d '{"query":"{ repositoriesOrError { ... on RepositoryConnection { nodes { name location { name } schedules { name scheduleState { status } } sensors { name sensorState { status } } } } } }"}' \
+          http://dagster-dagster-webserver:80/graphql >/dev/null
+        for i in $(seq 1 30); do
+          phase=$(kubectl get pod {{ probe }} -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ] && break
+          sleep 2
+        done
+        kubectl logs {{ probe }} -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod {{ probe }} -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
+      register: _gql
+      changed_when: false
+      failed_when: false
+      retries: 5
+      delay: 6
+      until: _gql.stdout is search('repositoriesOrError') or _gql.stdout is search('nodes')
+
+    - name: "2. The question must have been asked before any answer is believed"
+      ansible.builtin.assert:
+        that:
+          - _gql.stdout | default('') | length > 0
+          - _gql.stdout is search('nodes')
+        fail_msg: >-
+          Could not read the schedule and sensor list from Dagster's GraphQL API.
+          ⚠️ This is "the question could not be asked", NOT "nothing is running".
+          An empty response, a wrong context or an unreadable kubeconfig produce
+          exactly this, and reporting it as "automation is stopped" would be a
+          false negative about the thing this playbook exists to report.
+          stderr: {{ _gql.stderr | default('<none>') | truncate(300) }}
+          response: {{ _gql.stdout | default('<empty>') | truncate(300) }}
+        success_msg: "Dagster answered with its repository list."
+
+    - name: "3. Reduce it to names and states"
+      ansible.builtin.set_fact:
+        _nodes: "{{ (_gql.stdout | from_json).data.repositoriesOrError.nodes | default([]) }}"
+
+    - name: "4. Flatten schedules and sensors into one list"
+      ansible.builtin.set_fact:
+        _instigators: >-
+          {{ _nodes | map(attribute='schedules') | flatten
+             | map('combine', {'kind': 'schedule'}) | list
+           + _nodes | map(attribute='sensors') | flatten
+             | map('combine', {'kind': 'sensor'}) | list }}
+
+    - name: "5. Split them by state"
+      ansible.builtin.set_fact:
+        _running: >-
+          {{ _instigators | selectattr('scheduleState', 'defined')
+               | selectattr('scheduleState.status', 'equalto', 'RUNNING') | list
+           + _instigators | selectattr('sensorState', 'defined')
+               | selectattr('sensorState.status', 'equalto', 'RUNNING') | list }}
+        _stopped: >-
+          {{ _instigators | selectattr('scheduleState', 'defined')
+               | rejectattr('scheduleState.status', 'equalto', 'RUNNING') | list
+           + _instigators | selectattr('sensorState', 'defined')
+               | rejectattr('sensorState.status', 'equalto', 'RUNNING') | list }}
+
+    - name: "6. There must be something to report"
+      ansible.builtin.assert:
+        that: _instigators | length > 0
+        fail_msg: >-
+          Dagster answered, but declares NO schedules and NO sensors at all. That is
+          not "everything is stopped" — it means no code location defines any, so
+          there is nothing here to switch on. Check that a code location is loaded:
+          `./uis verify dagster` test D reports its load status.
+        success_msg: "{{ _instigators | length }} schedules and sensors declared."
+
+    - name: "REPORT"
+      ansible.builtin.debug:
+        msg: >-
+          {{ ["Dagster automation: " ~ (_running | length) ~ " RUNNING, "
+              ~ (_stopped | length) ~ " STOPPED, of "
+              ~ (_instigators | length) ~ " declared.", ""]
+           + (_running | map(attribute='name') | map('regex_replace', '^', '  RUNNING  ') | list)
+           + (_stopped | map(attribute='name') | map('regex_replace', '^', '  STOPPED  ') | list)
+           + ["",
+              "⚠️ `./uis verify dagster` passes in BOTH states. It proves the daemon can",
+              "   fire schedules, not that any schedule is switched on. This is the",
+              "   other half of that question."] }}
+
+    - name: "7. Assert the expected state, when one was asked for"
+      ansible.builtin.assert:
+        that: >-
+          {{ (_expect == 'running' and (_stopped | length) == 0)
+             or (_expect == 'stopped' and (_running | length) == 0) }}
+        fail_msg: >-
+          Expected every schedule and sensor to be {{ _expect | upper }}, but
+          {{ (_expect == 'running') | ternary(_stopped | length, _running | length) }}
+          of {{ _instigators | length }} {{ (_expect == 'running') | ternary('are STOPPED', 'are RUNNING') }}:
+          {{ (_expect == 'running')
+             | ternary(_stopped | map(attribute='name') | join(', '),
+                       _running | map(attribute='name') | join(', ')) }}
+        success_msg: "Every schedule and sensor is {{ _expect | upper }}, as expected."
+      when: _expect != ''
+
+# ⚠️ WHY THIS ONLY REPORTS, AND DOES NOT START OR STOP
+#
+# Switching automation on and off belongs here too — it is the obvious next verb,
+# and `--expect stopped` exists precisely so a deliberate STOPPED fixture can be
+# restored and proven restored.
+#
+# It is not implemented because the mutation signatures are version-sensitive
+# (`startSchedule` takes a selector, `stopRunningSchedule` has historically wanted
+# an origin id) and this repository's maintainer has no cluster to check them
+# against the deployed chart, 1.13.19. Guessing them into a playbook would produce
+# a command that silently does nothing on the wrong signature — which is the exact
+# defect class this file was written to close.
+#
+# The check needed is a GraphQL introspection on a live instance, which takes
+# seconds for whoever holds the cluster and is impossible here. When that answer
+# exists, the verbs belong in this file, and each must RE-READ the state after
+# acting and fail if it did not change.
