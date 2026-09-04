@@ -57,10 +57,26 @@ Each was a *class* found underneath a specific fix, filed rather than patched aw
 3. **The decidable half of the paths-filter class** — every workflow must list its own file. Cheap,
    mechanically checkable, and the tester independently proposed the same property.
 
-⚠️ **Standing, and unchanged by any of today**: production runs the external-services proxy shape and
-**nothing on it has been exercised** by this work. Every defect was found and proved on a single
-laptop fixture, rebuilt three times by one tester. That is the gap the topology-coverage requirement
-was written about, and it has been narrowed, not closed.
+## ⚠️ Where testing happens — Terje, 2026-09-05
+
+**Testing happens on the tester's cluster. Not on the reference installation.** If work here needs a
+cluster to fix or verify, it is asked of the tester, and that is now the rule rather than a
+workaround.
+
+This **retires a caveat this file carried seven times**. Every closure above ended with some form of
+*"the reference installation runs the external-services proxy shape and nothing on it has been
+exercised"* — written as a gap still to close. It is no longer a gap. It is a decision about where
+the fleet tests, and the honest statement is narrower:
+
+- **What the work is verified against**: the tester's cluster, which is version-matched to
+  production and which built the proxy fixture that found six of the eight proxy defects.
+- **What remains true and is no longer a deficiency**: the reference installation has not been
+  exercised by this work. That is now by design, so it should not be read as an outstanding item,
+  and I will stop appending it to closures as though it were one.
+- **What would change this**: a defect that only the reference installation's shape can produce. One
+  such defect already happened — the pre-marker proxy, found by a read-only look at production that
+  no fixture could reproduce. So "we test on the tester's cluster" is a decision about cost, not a
+  claim that the two are equivalent, and that distinction is worth keeping.
 
 ---
 
