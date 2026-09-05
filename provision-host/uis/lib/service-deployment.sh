@@ -342,12 +342,34 @@ deploy_single_service() {
     # Verify deployment
     if [[ -n "$SCRIPT_CHECK_COMMAND" ]]; then
         log_info "Verifying deployment..."
-        # Give it a moment to start
-        sleep 2
-        if check_service_deployed "$service_id"; then
+        # ⚠️ RETRY, DO NOT SLEEP ONCE AND GUESS.
+        #
+        # This used to sleep 2 seconds, check once, and on failure warn
+        # "deployed but health check failed (may need time to start)". Two
+        # problems, and the second is the reason this changed:
+        #
+        #  - The playbook has ALREADY waited on rollout status. A single probe
+        #    two seconds later can still catch a pod mid-replacement, so the
+        #    warning fired on deploys that were completely healthy - measured on
+        #    a PostgREST redeploy whose endpoints answered immediately.
+        #  - The message admitted it might be wrong ("may need time to start")
+        #    and changed no outcome. A warning that fires on success and means
+        #    nothing teaches people to ignore warnings, which costs far more
+        #    than it ever saved.
+        #
+        # Retrying removes the race. If it still fails after this, the deploy is
+        # genuinely not ready and the message says something a reader can act on.
+        local _check_ok=0 _attempt
+        for _attempt in 1 2 3 4 5 6; do
+            sleep 2
+            if check_service_deployed "$service_id"; then _check_ok=1; break; fi
+        done
+        if [[ "$_check_ok" -eq 1 ]]; then
             log_success "$SCRIPT_NAME deployed successfully"
         else
-            log_warn "$SCRIPT_NAME deployed but health check failed (may need time to start)"
+            log_warn "$SCRIPT_NAME deployed, but it is still not reporting ready after 12s."
+            log_warn "  The rollout completed, so this is not a scheduling failure."
+            log_warn "  Check what it is waiting on:  ./uis verify $service_id"
         fi
     else
         log_success "$SCRIPT_NAME deployment completed"
