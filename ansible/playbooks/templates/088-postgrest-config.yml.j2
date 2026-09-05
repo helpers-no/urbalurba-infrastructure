@@ -30,6 +30,21 @@ spec:
       labels:
         app.kubernetes.io/name: postgrest
         app.kubernetes.io/instance: "{{ _app_name }}"
+      # ⚠️ THE ADMIN SERVER IS ENABLED BELOW AND WAS REACHABLE BY NOTHING.
+      # PostgREST exports Prometheus text on the admin port - schema-cache loads
+      # with a SUCCESS|FAIL label, and pool metrics including
+      # pgrst_db_pool_timeouts_total and pgrst_db_pool_waiting, which are exactly
+      # what you want when a tenant's API goes slow. This platform ships
+      # Prometheus. The two never met, because nothing told Prometheus to look.
+      #
+      # Scraped from the POD, not the Service: annotation discovery targets the
+      # pod IP directly, so this works whatever ports the Service publishes. The
+      # Service port added below is for addressing the admin endpoints BY NAME -
+      # /config or /live from another pod - a different need with the same cause.
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3001"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: postgrest
@@ -94,6 +109,18 @@ spec:
     - name: api
       port: 3000
       targetPort: 3000
+    # The admin server has been enabled on the container since this template was
+    # written, and this port was never published - so /live, /ready, /config and
+    # /metrics answered nothing through the Service. Publishing it does NOT expose
+    # them: the IngressRoute names `port: 3000` explicitly, so it routes the API
+    # port and only the API port.
+    #
+    # The probes were never affected. kubelet probes the pod directly rather than
+    # through the Service, so livenessProbe and readinessProbe have always reached
+    # 3001 - this gap cost observability, not health checking.
+    - name: admin
+      port: 3001
+      targetPort: 3001
   selector:
     app.kubernetes.io/name: postgrest
     app.kubernetes.io/instance: "{{ _app_name }}"
