@@ -88,6 +88,25 @@ curl http://api-atlas.localhost/             # Swagger 2.0 metadata
 curl http://api-atlas.localhost/kommune      # Sample view
 ```
 
+:::warning The schema list is the tenant's decision, not an illustration
+`api_v1,marts,raw` above is **Atlas's decided posture**, not a stylistic example. The multi-schema
+flag exists *because* Atlas asked for it — `PLAN-postgrest-multi-schema-reconciliation`, PR #140,
+merged 2026-05-06 — and Atlas's published API documentation and customer frontend are built on all
+three being anonymously readable.
+
+Narrowing it to `api_v1` on least-privilege reasoning reverses a decision that was made, coordinated
+across two repositories, shipped, and built on. That has been attempted once — by the maintainer of
+this repository, who had shipped the feature at Atlas's request and did not check before recommending
+against it.
+
+Equally, **do not copy this list into a different tenant.** Three schemas is Atlas's answer, not a
+default. For a new instance the rule is: *name exactly what that application intends to serve
+publicly, and nothing else.* The anon role receives `SELECT` on every schema listed.
+
+If a tenant's list looks wrong, that is a conversation with the tenant — and, where it changes what a
+public API serves, with whoever owns the exposure decision. It is not a flag to tighten in passing.
+:::
+
 Step 0 is required before step 1. `./uis configure postgrest` runs a precheck that the named database exists in the cluster's PostgreSQL — if it doesn't, configure aborts with a clear error and creates no side effects (no roles, no Secret). Running step 0 first is what guarantees the precheck passes; it also gives the application a role + credentials to write `marts.*` and `api_v1.*` into. Step 0 is per-app and idempotent.
 
 What changes at each step:
