@@ -213,6 +213,21 @@ kubectl delete pvc -n <namespace> -l app=<service>
 
 The file `.uis.extend/enabled-services.conf` controls which services deploy when running `./uis deploy` without arguments.
 
+:::warning Despite the name, this is not a boot mechanism
+Nothing in UIS runs at boot. This file is the default argument list for
+`./uis deploy`, and that command only runs when a person or a script runs it.
+
+After a host restart, **already-deployed services return without any UIS
+command** — they are cluster state, and the kubelet restarts their pods once the
+cluster is up. What UIS does not do is start the cluster: Rancher Desktop is
+installed at OS level (`platform-switching.sh`, `pf_list_platforms`), so bringing
+it up with the machine is a host setting.
+
+The failure this warning exists to prevent: services look "gone" after a reboot,
+someone redeploys everything, and the actual cause was a cluster that never
+started.
+:::
+
 ```bash
 # Enable a service (adds to enabled-services.conf)
 ./uis enable postgresql
