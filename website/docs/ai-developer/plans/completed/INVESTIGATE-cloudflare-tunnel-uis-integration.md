@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Make Cloudflare tunnel work through the UIS CLI with a similar operator experience as Tailscale, while respecting the architectural differences between the two.
 

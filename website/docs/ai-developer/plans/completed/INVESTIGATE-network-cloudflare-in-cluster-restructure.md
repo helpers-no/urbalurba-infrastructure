@@ -5,7 +5,7 @@ sidebar_label: INVESTIGATE — Networking restructure
 
 # INVESTIGATE — Networking restructure + cloudflared on rancher-desktop
 
-## Status: Completed (2026-05-16)
+**Status:** Completed (2026-05-16)
 
 **All 10 decisions and 4 threads shipped.** Implementation landed across PRs #169–#172; produced plan `PLAN-network-cloudflare-port-and-docs-lift-up.md` was closed in PR #190 (see `completed/`). The Tailscale follow-up referenced below (`INVESTIGATE-tailscale-architecture-cleanup.md`) is also completed — see PLAN-002 + PLAN-003 in `completed/`.
 

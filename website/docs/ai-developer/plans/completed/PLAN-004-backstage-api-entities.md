@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Add API entities to the Backstage catalog so that services show "Provided APIs" and "Consumed APIs" tabs with dependency relationships
 

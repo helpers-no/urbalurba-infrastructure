@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Group all Tailscale operations under `./uis tailscale` — expose/unexpose services and verify configuration — so users don't need to enter the shell or know internal script paths.
 

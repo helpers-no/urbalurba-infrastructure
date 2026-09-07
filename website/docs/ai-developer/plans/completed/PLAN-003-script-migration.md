@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Update all scripts in the repo that reference `topsecret/` or `secrets/` to use the new `.uis.secrets/` paths, while maintaining backwards compatibility.
 

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: Complete ArgoCD migration to the UIS system — fix metadata, verify deployment with E2E tests, and document the devcontainer-toolbox integration path.
 

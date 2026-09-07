@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (2026-04-29)
+**Status:** Completed (2026-04-29)
 
 **Goal**: Implement PostgREST as a deployable, multi-instance UIS service following every decision recorded in [INVESTIGATE-postgrest.md](./INVESTIGATE-postgrest.md). After this plan, `./uis configure postgrest --app <name>` followed by `./uis deploy postgrest --app <name>` produces a working REST API serving an `api_v1` schema, and the platform supports the multi-instance pattern as a reusable convention.
 

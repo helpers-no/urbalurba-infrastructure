@@ -1,6 +1,6 @@
 # INVESTIGATE: uis.ps1 Fails on Windows Due to $ErrorActionPreference = "Stop"
 
-**Status:** Investigation Complete — Ready for PLAN
+**Status:** Completed — Ready for PLAN
 **Created:** 2026-03-04
 **Last Updated:** 2026-03-04
 **GitHub Issue:** [#62](https://github.com/terchris/urbalurba-infrastructure/issues/62)

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: After this plan, `./uis deploy postgresql && ./uis deploy gravitee` on a fresh local cluster produces a working Gravitee APIM 4.11 deployment with admin Console, Developer Portal, and API Gateway, backed by PostgreSQL — no MongoDB, no Elasticsearch, no Redis. `./uis undeploy gravitee --purge` cleanly tears down all Gravitee state.
 

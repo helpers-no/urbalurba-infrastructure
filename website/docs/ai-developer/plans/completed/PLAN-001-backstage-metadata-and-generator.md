@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Add `SCRIPT_KIND`, `SCRIPT_TYPE`, `SCRIPT_OWNER` metadata fields to all service definitions and build a catalog generator that produces Backstage-compatible YAML from them
 

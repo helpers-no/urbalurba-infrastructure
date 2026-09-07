@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog
+**Status:** Completed
 
 **Goal**: Determine the best approach for deploying Enonic XP as a UIS platform service
 

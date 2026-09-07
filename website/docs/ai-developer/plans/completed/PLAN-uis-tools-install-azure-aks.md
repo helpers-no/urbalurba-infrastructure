@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: ✅ Completed (2026-05-10)
+**Status:** Completed — ✅ Completed (2026-05-10)
 
 **Shipped in**: PR #154.
 **Verified end-to-end**: talk44 + talk46 R3 (cold install path), 2026-05-11 in-container smoke (warm re-run 0.015s, partial-state re-run restored tofu without disturbing az, list inspection shows ✅ Installed for all three rows).

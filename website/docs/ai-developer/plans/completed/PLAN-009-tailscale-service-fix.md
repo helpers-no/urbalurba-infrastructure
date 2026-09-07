@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Make `./uis deploy tailscale-tunnel` and `./uis undeploy tailscale-tunnel` work correctly end-to-end.
 

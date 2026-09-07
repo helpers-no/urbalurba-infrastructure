@@ -1,5 +1,7 @@
 # INVESTIGATE: Playbooks Using Old Kubeconfig Path
 
+**Status:** Completed
+
 **Related Plan**: [PLAN-004-secrets-cleanup](../completed/PLAN-004-secrets-cleanup.md)
 **Found by**: Tester during PLAN-004 verification (Round 2, 2026-02-19)
 **Severity**: Regression — playbooks fail when run via Ansible

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (talk54 R1-R10 PASS; 2 acceptance items marked open below — see notes)
+**Status:** Completed (talk54 R1-R10 PASS; 2 acceptance items marked open below — see notes)
 
 **Goal**: Write the user-facing Tailscale documentation against the new CLI, update the networking hub to surface the production-vs-developer framing and team-sharing semantic, and verify end-to-end with the tester against the real `dog-pence.ts.net` tailnet.
 

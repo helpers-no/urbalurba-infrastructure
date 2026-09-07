@@ -1,6 +1,6 @@
 # Plan: `./uis platform list / use` + per-command platform banner
 
-## Status: Completed — shipped 2026-05-12
+**Status:** Completed — shipped 2026-05-12
 
 **Shipped**: PRs #161 (initial implementation) + #162 (F15 kubeconf-all seeding) + #163 (F16 legacy lockstep sync) + #164 (F18 pre-merge seed) + #165 (F17 destroyed-context cleanup). All seven Phases of this plan delivered.
 

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (talk54 R1-R10 PASS on `dog-pence.ts.net`)
+**Status:** Completed (talk54 R1-R10 PASS on `dog-pence.ts.net`)
 
 **Goal**: Port Tailscale from `uis tailscale expose/unexpose/verify` + `uis deploy tailscale-tunnel` to a first-class `uis network <verb> tailscale` family symmetric with the Cloudflare port (PRs #169–#172), including per-service `expose`/`unexpose` sub-verbs.
 

@@ -6,7 +6,7 @@
 
 **Related**: [INVESTIGATE-documentation-rewrite](INVESTIGATE-documentation-rewrite.md)
 **Created**: 2026-02-27
-**Status**: Complete
+**Status:** Completed
 
 **Goal**: Standardize all service documentation using a consistent template, rename categories to align with cloud provider terminology, and create foundation docs (CLI reference, dependency matrix). This rewrite becomes the prototype and specification for future auto-generated documentation.
 

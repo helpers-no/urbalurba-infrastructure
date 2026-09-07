@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (2026-05-16)
+**Status:** Completed (2026-05-16)
 
 Implementation landed in `platforms/azure-aks/scripts/03-destroy.sh` via the shared `pf_remove_context` + `pf_lockstep_flip` helpers in `provision-host/uis/lib/platform-switching.sh`. All four acceptance-criteria items satisfied:
 

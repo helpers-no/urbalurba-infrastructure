@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — design questions locked 2026-05-11, ready for child PLAN(s)
+**Status:** Completed — design questions locked 2026-05-11, ready for child PLAN(s)
 
 **Last Updated**: 2026-05-11 — Q1/Q2/Q3/Q4/Q5 decisions locked after talk47 cycle. First gap-sweep settled implementation contracts (status.sh API for `list` consumption, external-context handling, env-file naming convention, banner ownership, performance budget). Second gap-sweep added the C-1 state-machine discriminator + rancher-desktop reinterpretation, renamed flags from `--probe`/`--no-probe` to `--deep`/`--offline` (the two probes are now unambiguous), and added C-9 spelling out that Layer 1's banner is a direct probe (not a `status.sh` consumer). Third gap-sweep unified `use --offline` with `list --offline` (single flag name), dropped `cluster-config.sh` from the `use` success output, specified banner output goes to stderr, fixed banner-format consistency (success one-liner, failure block), added the "no active context" hint pointing at rancher-desktop, and pinned the `use` / `list` consumption flow to `status.sh --summary`. **Layer 4 (`./uis platform list / use`) ships bundled with Layer 1 (per-command banner)** — switching without per-command visibility would leave the same gap talk47 surfaced. Inventory source: `platforms/*/scripts/init.sh` directory listing — see Q3 below.
 

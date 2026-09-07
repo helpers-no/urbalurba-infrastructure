@@ -1,6 +1,6 @@
 # INVESTIGATE: `./uis status` doesn't show multi-instance services
 
-**Status:** Investigation complete — ready for PLAN
+**Status:** Completed — ready for PLAN
 **Created:** 2026-05-14
 **Updated:** 2026-05-15 (decisions locked in; root cause confirmed)
 **Surfaced by:** talk53 F5 (Tailscale CLI port verification) — tester noticed `railway-postgrest` deployment running healthily but absent from `./uis status` output.

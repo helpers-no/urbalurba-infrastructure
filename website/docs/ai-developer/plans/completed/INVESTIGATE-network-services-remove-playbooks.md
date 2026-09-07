@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Investigate the full state of tailscale-tunnel and cloudflare-tunnel services — verify deploy works, create remove playbooks, and test the full deploy/undeploy cycle.
 

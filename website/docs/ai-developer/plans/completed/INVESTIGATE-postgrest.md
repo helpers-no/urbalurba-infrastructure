@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog
+**Status:** Completed
 
 **Goal**: Decide whether and how to package PostgREST as a UIS service that turns a curated PostgreSQL schema into a public REST API, fitting the existing `./uis deploy` flow and the contributor conventions in [`website/docs/contributors/`](../../../contributors/index.md).
 

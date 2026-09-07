@@ -2,7 +2,7 @@
 
 > **Purpose**: Design a new distribution model for UIS that allows users to install and update without forking the repo or editing core files.
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: Design a container-based distribution model for UIS.
 

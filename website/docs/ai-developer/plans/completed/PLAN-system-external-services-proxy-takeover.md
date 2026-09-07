@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: A service declared in `.uis.extend/external-services.yaml` is genuinely served from
 outside the cluster, the verify can prove which topology answered, and removing the declaration

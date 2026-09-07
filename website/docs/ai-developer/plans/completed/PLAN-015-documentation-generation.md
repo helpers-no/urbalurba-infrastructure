@@ -6,7 +6,7 @@
 
 **Related**: [INVESTIGATE-documentation-generation](INVESTIGATE-documentation-generation.md), [INVESTIGATE-documentation-rewrite](INVESTIGATE-documentation-rewrite.md)
 **Created**: 2026-03-02
-**Status**: Complete
+**Status:** Completed
 **Completed**: 2026-03-02
 
 **Goal**: Build a bash script that auto-generates service documentation pages from script metadata, using the manually written PLAN-014 pages as the template specification.

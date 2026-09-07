@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: Build the `uis template` command in UIS and the first UIS stack template (PostgreSQL demo) in TMP. The two together validate the end-to-end template flow.
 

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active
+**Status:** Completed
 
 **Goal**: Shrink the Tailscale secret variable set from 8 to 5 (4 cluster-side OAuth values + 1 renamed cloud-init / VM-bootstrap key) and delete the dead-code files (internal-mode, 801-setup, 804-delete, AUTH_KEY template) ahead of the network CLI port.
 

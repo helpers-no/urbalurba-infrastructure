@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (2026-05-05, Round 10 PASS)
+**Status:** Completed (2026-05-05, Round 10 PASS)
 
 **Round 9 lever resolution (2026-05-05)**: after a four-round lever search (Rounds 8 → 8.5 → 8.6 → 9), the actual lever is a post-Liquibase psql `INSERT INTO parameters … ON CONFLICT … DO UPDATE`. The `https://api.company.com` placeholder is a hardcoded fallback in `gravitee-apim-rest-api-model-*.jar` returned when no row exists for the `portal.entrypoint` settings key. Round 9 tester validated live — INSERT a row, API immediately serves the new value, no pod restart. Mirrors PLAN-001 task 27's psql shape exactly.
 

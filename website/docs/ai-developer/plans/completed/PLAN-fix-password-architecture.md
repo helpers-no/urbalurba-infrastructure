@@ -6,7 +6,7 @@
 
 **Related**: [INVESTIGATE-passwords](../completed/INVESTIGATE-passwords.md)
 **Created**: 2026-02-26
-**Status**: Complete
+**Status:** Completed
 **Completed**: 2026-02-27
 
 **Goal**: Make `default-secrets.env` the true single source of truth — all DEFAULT_ variables must flow through to templates, and no credentials should be hardcoded in templates.

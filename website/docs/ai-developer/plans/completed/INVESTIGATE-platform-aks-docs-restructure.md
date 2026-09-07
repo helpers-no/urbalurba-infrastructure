@@ -5,7 +5,7 @@ sidebar_label: INVESTIGATE — Multi-platform docs
 
 # INVESTIGATE — Multi-platform docs restructure
 
-## Status: Completed — produced [PLAN-multi-platform-docs-restructure](../completed/PLAN-multi-platform-docs-restructure.md) (now in completed/; deliverables shipped piecemeal across multiple PRs)
+**Status:** Completed — produced [PLAN-multi-platform-docs-restructure](../completed/PLAN-multi-platform-docs-restructure.md) (now in completed/; deliverables shipped piecemeal across multiple PRs)
 
 **Decisions** (2026-05-12, all leans accepted):
 - **Q1** = **A** — promote Platforms to ~3rd in the sidebar, right after Getting Started.

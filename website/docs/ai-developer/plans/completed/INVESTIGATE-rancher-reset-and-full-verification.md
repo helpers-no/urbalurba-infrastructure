@@ -2,7 +2,7 @@
 
 **Related**: [STATUS-service-migration](STATUS-service-migration.md), [INVESTIGATE-unity-catalog-crashloop](INVESTIGATE-unity-catalog-crashloop.md)
 **Created**: 2026-02-19
-**Status**: COMPLETE
+**Status:** Completed
 **Completed**: 2026-02-20
 
 ## Goal

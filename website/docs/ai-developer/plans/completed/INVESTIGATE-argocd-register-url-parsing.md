@@ -1,6 +1,6 @@
 # INVESTIGATE: ArgoCD Register Command Redesign
 
-**Status:** Investigation Complete — PLAN implemented and verified
+**Status:** Completed — PLAN implemented and verified
 **Created:** 2026-03-03
 **Last Updated:** 2026-03-03
 **Related to:** [INVESTIGATE-argocd-migration](INVESTIGATE-argocd-migration.md) (completed)

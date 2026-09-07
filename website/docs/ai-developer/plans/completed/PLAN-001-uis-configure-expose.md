@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (Phases 1-3, 5. Phase 4 deferred — separate plans per service handler.)
+**Status:** Completed (Phases 1-3, 5. Phase 4 deferred — separate plans per service handler.)
 
 **Goal**: Implement `uis configure` and `uis expose` commands so DCT templates can create per-app databases/users and reach K8s services from the devcontainer.
 

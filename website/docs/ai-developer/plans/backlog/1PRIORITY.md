@@ -45,7 +45,7 @@ that is missing ([ANALYSIS-nais-uis](./ANALYSIS-nais-uis.md) §4 item 4).
 already routes every app on ``HostRegexp(`<prefix>\..+`)``, which matches any suffix, and PostgREST
 already sets `PGRST_SERVER_CORS_ALLOWED_ORIGINS: "*"` — so it needs a Host header and a name that
 resolves, not platform work. Same ruling as
-[roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md): *installation
+[roaming-dependency-addresses](../completed/INVESTIGATE-system-roaming-dependency-addresses.md): *installation
 implementation, not UIS*. The one unmeasured thing is whether a given host's Traefik listens off
 loopback; if it does not, that is a new investigation and not a fold-in.
 
@@ -365,7 +365,7 @@ and three fixed the same day; see
 
 ## What changed 2026-08-21
 
-- **New investigation landed and closed the same day: [roaming-dependency-addresses](INVESTIGATE-system-roaming-dependency-addresses.md)** — not ranked, nothing to investigate next.
+- **New investigation landed and closed the same day: [roaming-dependency-addresses](../completed/INVESTIGATE-system-roaming-dependency-addresses.md)** — not ranked, nothing to investigate next.
   Arrived as a productisation request from ops for a running `ollama-endpoint-manager`,
   and was answered rather than deferred: LiteLLM **partly** covers it. Ordered
   address preference (`order`) and health-check-driven routing are native; the

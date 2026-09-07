@@ -20,7 +20,7 @@ documentation all read it from one place instead of each rediscovering it.
 consumes what this produces, and contains a factual error this plan corrects
 (see Implementation Notes).
 
-**Note**: [INVESTIGATE-system-roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md)
+**Note**: [INVESTIGATE-system-roaming-dependency-addresses](../completed/INVESTIGATE-system-roaming-dependency-addresses.md)
 briefly challenged the "Endpoints are not reconciled" note below. **Challenge
 withdrawn 2026-08-21** — this plan is unaffected and needs no amendment.
 
@@ -235,7 +235,7 @@ would reintroduce the coupling this removes.
 arguably a different thing from discovery — the operator still writes down every
 address here, and one that is not declared is never used. That distinction was
 raised by
-[INVESTIGATE-system-roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md)
+[INVESTIGATE-system-roaming-dependency-addresses](../completed/INVESTIGATE-system-roaming-dependency-addresses.md)
 and then withdrawn: the reconciler motivating it was ruled installation-specific,
 so nothing in UIS currently needs it. Recorded so the argument does not have to
 be rediscovered, not as an open item. The note above stands as written.

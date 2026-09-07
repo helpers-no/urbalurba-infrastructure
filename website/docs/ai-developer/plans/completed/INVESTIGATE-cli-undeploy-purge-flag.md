@@ -1,6 +1,6 @@
 # INVESTIGATE: Undeploy --purge flag
 
-**Status**: Completed (2026-05-16) — `--purge` flag implemented in `provision-host/uis/manage/uis-cli.sh` (lines 393-453). Includes confirmation prompt + `--yes` for scripted use.
+**Status:** Completed (2026-05-16) — `--purge` flag implemented in `provision-host/uis/manage/uis-cli.sh` (lines 393-453). Includes confirmation prompt + `--yes` for scripted use.
 **Source**: Tester feedback during PLAN-002 (Backstage deployment testing, 2026-03-12)
 
 ## Problem

@@ -2,7 +2,7 @@
 
 **Related**: [PLAN-004-secrets-cleanup](./PLAN-004-secrets-cleanup.md), [STATUS-service-migration](STATUS-service-migration.md), [INVESTIGATE-secrets-consolidation](./INVESTIGATE-secrets-consolidation.md)
 **Created**: 2026-02-22
-**Status**: INVESTIGATION COMPLETE
+**Status:** Completed
 
 ## Background
 

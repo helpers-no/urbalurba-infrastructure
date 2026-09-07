@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (implementation shipped via PR #152; installers exercised across talk52-55 fresh-`:latest` pull cycles)
+**Status:** Completed (implementation shipped via PR #152; installers exercised across talk52-55 fresh-`:latest` pull cycles)
 
 **Goal**: Make every `provision-host/uis/tools/install-*.sh` script (a) safely re-runnable any number of times and (b) return a non-zero exit code if any installation step fails — including silent failures inside piped `curl | bash` invocations and sequential `apt-get` commands.
 

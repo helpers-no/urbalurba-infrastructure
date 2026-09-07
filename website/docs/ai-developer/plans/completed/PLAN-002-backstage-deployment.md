@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: Deploy Red Hat Developer Hub (RHDH) in UIS following the adding-a-service guide, with the generated catalog loaded, the Kubernetes plugin showing live service status, and the Grafana plugin linking services to their dashboards
 

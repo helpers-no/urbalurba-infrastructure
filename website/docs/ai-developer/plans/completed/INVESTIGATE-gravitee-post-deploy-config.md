@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Closed (2026-05-05) — all in-scope findings resolved
+**Status:** Completed (2026-05-05) — all in-scope findings resolved
 
 All actionable findings shipped or accept-with-doc'd via PLAN-gravitee-disable-hpa-dev (Finding 8), PLAN-001-gravitee-org-name (Finding 3), and PLAN-002-gravitee-db-baked-urls (Finding 2). Finding 4-Console + 4-Portal closed inline (relative baseURLs, sub-path consolidation). Finding 1 closed as a side-effect of Finding 4-Portal. Finding 5 demoted (does not reproduce). Findings 6 and 7 confirmed out-of-scope / non-actionable. Finding 4-api-side accept-with-doc'd in `gravitee.md` ("Cross-domain redirects use chart-baked URLs") — chart has no surface for `forwardHeadersStrategy` and the api pod's Spring URI constructor rejects relative `installation.api.url`; closing this for cross-domain installs requires an upstream Gravitee patch. Round 9 also surfaced an unrelated upstream chart bug (`templates/api/api-deployment.yaml` emits a literal-dot `portal.entrypoint` env var that POSIX rules silently strip) worth filing against `gravitee-io/helm-charts` when convenient.
 

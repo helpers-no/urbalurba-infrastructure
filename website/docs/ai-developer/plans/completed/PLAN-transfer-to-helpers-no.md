@@ -1,6 +1,6 @@
 # Plan: Transfer urbalurba-infrastructure to helpers-no
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Transfer this repo from `terchris/urbalurba-infrastructure` to `helpers-no/urbalurba-infrastructure` with zero downtime.
 

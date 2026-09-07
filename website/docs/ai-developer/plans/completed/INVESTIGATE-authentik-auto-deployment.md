@@ -1,6 +1,6 @@
 # INVESTIGATE: Authentik Automatic Deployment
 
-**Status:** Complete ✅
+**Status:** Completed
 **Created:** 2026-01-28
 **Completed:** 2026-01-31
 **Implemented in:** [PLAN-007](PLAN-007-authentik-auto-secrets.md)

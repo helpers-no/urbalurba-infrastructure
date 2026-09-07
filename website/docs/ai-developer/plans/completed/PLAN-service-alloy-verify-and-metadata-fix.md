@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed 2026-08-14 — all phases shipped and verified
+**Status:** Completed — 2026-08-14 — all phases shipped and verified
 
 **Goal**: Bring the Alloy service into actual compliance with
 [adding-a-service.md](../../../contributors/guides/adding-a-service.md), so its

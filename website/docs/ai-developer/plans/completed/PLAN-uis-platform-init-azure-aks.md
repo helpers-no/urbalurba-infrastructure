@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: ✅ Completed (2026-05-10, hardened through 2026-05-11)
+**Status:** Completed — ✅ Completed (2026-05-10, hardened through 2026-05-11)
 
 **Shipped in**: PR #155. Hardening fixes in PR #156 (F1 — env-file 4th var, write_env_atomically derives state-storage-account name) and PR #158 (F10 — `az` logged-in preflight in status; not strictly an `init` bug, surfaced in the same login path).
 **Verified end-to-end**: talk43 (`UIS_IMAGE=:local` cold run), talk44 (post-merge against `:latest`, F1 surfaced + fixed in #156), talk46 R3 (final cold run on the patched wizard, env file written correctly, end-to-end through up + deploy + down).

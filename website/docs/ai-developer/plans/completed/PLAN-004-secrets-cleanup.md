@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Remove backwards compatibility code, delete deprecated files (`topsecret/`, `secrets/`), and update tests. The new `.uis.secrets/` and `.uis.extend/` structure is fully operational — this plan removes the old scaffolding.
 
