@@ -196,8 +196,27 @@ tenant verifies the data*: `uis verify postgrest --app <n>`
 (`088-test-postgrest.yml`) already proves the whole pipe using a probe table it
 creates and drops, so it can neither be fooled by an empty tenant nor corrupt a
 full one; the tenant's own freshness check proves the data. If a template can
-compose the two, `uis verify <app>` need not exist. Open: what the declaration
-for that composition looks like.
+compose the two, `uis verify <app>` need not exist.
+
+The tenant proposed a `verify:` block naming both halves, and argued the tenant half must be able
+to **fail** the verify — otherwise an install with a `LOADED` code location, an answering API and
+zero rows passes.
+
+🔴 **But they then found the problem with their own proposal, and it is the real question here: on a
+first install the tenant's data check legitimately fails, because no ingest has run yet.** A verify
+that reds on a correct install is worse than no verify — it trains people to ignore it.
+
+**Provisional answer, for the plan to accept or reject: "the install worked" and "data is flowing"
+are two different assertions and should not be one command.** Freshness is not a verify at all — it
+is a **monitor**, and UIS already has that convention queued rather than absent
+(`.uis.extend/monitors.yaml` and `lib/monitors.py`;
+[PLAN-system-observability-006-service-probes](./PLAN-system-observability-006-service-probes.md);
+[INVESTIGATE-system-monitor-definitions-with-services](./INVESTIGATE-system-monitor-definitions-with-services.md)).
+A monitor that is red between install and first ingest is *correct and visible*; a verify that is
+red there is a bug. That reframing dissolves the first-install paradox instead of special-casing
+it — and it means what a template should ship is a **monitor** alongside its services, which is the
+artifact convention those two documents are already deciding. **Do not settle TPL-Q4 before that
+convention is settled**; it is the third consumer of it, exactly as Tier 3 #20 warns.
 
 **TPL-Q5 — is `install_type: stack` still the right discriminator?**
 `_validate_template_info` hard-rejects anything but `stack`. If an application
@@ -241,13 +260,104 @@ investigation, not folded in here.**
 
 ---
 
+## Part 4b — the tenant's declaration, and two blockers it exposed
+
+The application author supplied the declaration they *want* to write (`urb-agents#159`,
+2026-09-07). It is reproduced here as the requirements section: the point of option A is that this
+file is the specification, not UIS's guess at one.
+
+```yaml
+install_type: stack
+params:
+  app_name: atlas
+
+provides:
+  - service: postgresql
+    config:
+      database: "{{ params.app_name }}"
+      namespace: dagster
+      secret_name_prefix: "{{ params.app_name }}-database"
+      init: migrations/            # 49 numbered DDL files creating raw.*
+
+  - service: dagster
+    config:
+      code_location:
+        name: "{{ params.app_name }}-data"
+        image: ghcr.io/terchris/atlas-data
+        tag: <immutable; never :latest>
+        module: atlas_data.definitions
+        why: "Atlas ingest and dbt transforms; without it marts.* and api_v1 stop refreshing"
+        env_secrets: ["{{ params.app_name }}-database-db"]
+
+  - service: postgrest
+    config:
+      app: "{{ params.app_name }}"
+      schemas: <pending — see below>
+      url_prefix: api-atlas
+```
+
+Confirmed against the tenant: the code location reads `DATABASE_URL` (with a fallback), so
+**`configure postgresql`'s hardcoded key is accepted and no `--secret-key` flag is needed.** That
+closes one option from the doc-fork question. The author also wrote `atlas-database-db` out
+literally rather than templating it, because the `-db` suffix is the trap.
+
+⚠️ **`schemas:` is deliberately unfilled.** The running instance serves `api_v1`; `PLAN-007`
+shipped `api_v1,marts,raw` at this tenant's request and the consuming frontend renders endpoints
+across all three; the anon role has no `USAGE` on the other two, so widening is a re-configure and
+not a flag change. **That value is a product decision, not a design one.**
+
+### TPL-F7 — `init:` accepts one file, and this tenant has a directory of 49
+
+`template.sh:424-431` resolves `init` to a single path, rejects it with *"Init file not found"* if
+`[[ ! -f ]]`, and `cat`s it into `uis configure --init-file -`. **A directory fails outright.**
+
+Real DDL arrives as ordered numbered files, so this is not specific to one tenant. Whatever fixes
+it must preserve **apply order** — concatenating in sorted order is probably right, and is a
+decision rather than an implementation detail, because a partial apply is what
+`configure-postgresql`'s rollback exists to undo.
+
+### TPL-F8 — 🔴 priority order cannot express an intra-application dependency, and it breaks this install
+
+The author asked whether `provides:` executes in **declaration order** or **service-priority
+order**. Measured: `_resolve_provides` (`template.sh:262-268`) reads each service's `priority` from
+`services.json` and `sort -t'|' -k1,1n`. **Priority order. Declaration order is discarded.**
+
+The priorities:
+
+| service | priority |
+|---|---|
+| postgresql | 30 |
+| **postgrest** | **50** |
+| **dagster** | **56** |
+
+The tenant needs `postgresql → dagster → postgrest`. **Priority order inverts the last two.**
+
+And this is not a cosmetic reordering — it is a hard failure. `api_v1` does not exist until a
+transform has run at least once, and `configure-postgrest.sh:303` **refuses when a named schema is
+absent**:
+
+> "Schema '<s>' does not exist in database '<db>'. Create it first (typically via the consuming
+> app's migration), then retry"
+
+So `uis template install atlas` would deploy PostgreSQL, then fail configuring PostgREST, having
+never reached Dagster. **The first real application cannot be installed in priority order at all.**
+
+This is a design finding, not a bug to patch by renumbering. Service priority expresses *platform
+boot order* — a global property of a service. What this needs is *intra-application* ordering, which
+is a property of one declaration. Renumbering `dagster` below `postgrest` would satisfy this tenant
+and mis-state the platform. Options for the plan to weigh: honour declaration order within
+`provides:`; add explicit `after:` edges; or split install into phases the way the four manual steps
+already are. **Whichever is chosen, TPL-F8 must be resolved before TPL-F4, because it changes what
+`config:` has to mean.**
+
 ## Part 5 — proposed plan split
 
 Not yet approved; the questions in Part 3 come first.
 
 | Plan | Scope | Depends on |
 |---|---|---|
-| `PLAN-templates-001-multi-instance-deploy` | TPL-F3 + TPL-F4: `--app` on the deploy call, and the missing `config:` fields | none — smallest useful increment, and independently correct |
+| `PLAN-templates-000-install-ordering` | **TPL-F8**: how a declaration expresses intra-application order. Gates 001, because it changes what `config:` must mean | none — and it is the only one that blocks an install outright |
+| `PLAN-templates-001-multi-instance-deploy` | TPL-F3 + TPL-F4 + TPL-F7: `--app` on the deploy call, the missing `config:` fields, and a multi-file `init:` | TPL-F8 |
 | `PLAN-templates-002-code-location-contrib` | TPL-F5: a writer for `.uis.extend/dagster-code-locations.yaml` and the `provides:` vocabulary for it | TPL-Q1, TPL-Q2 |
 | `PLAN-templates-003-app-owned-templates` | TPL-F6: a template shipped from the application's repository | TPL-Q3 — **needs a product ruling, not a design** |
 
@@ -255,3 +365,8 @@ TPL-F3 is worth fixing on its own merits regardless of what this investigation
 concludes: today the deploy and configure halves of one loop disagree about
 whether a service is multi-instance, which is a latent defect for any
 multi-instance service, not just this tenant.
+
+**TPL-F8 is the one that changes the shape of the answer**, which is why it is numbered 000 and not
+folded into 001. Every other finding is a missing field or a missing call; F8 says the execution
+model itself cannot express what one application needs, and no amount of `config:` vocabulary fixes
+an install that runs its steps in the wrong order.
