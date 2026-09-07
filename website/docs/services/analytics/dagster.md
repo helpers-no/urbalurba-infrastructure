@@ -96,7 +96,8 @@ code_locations:
     module: myapp_data.definitions
     why: "What this installation loses if it stops running"
     env_secrets:
-      - myapp-database-url        # secrets in the `dagster` namespace
+      - myapp-database-url        # a secret in the `dagster` namespace;
+                                  # its keys become env vars — see below
 ```
 
 Then:
@@ -117,13 +118,50 @@ passes it to Helm. Nothing in the product changes.
 | `tag` | required | an immutable tag — **`latest` is rejected** |
 | `module` | required | Python module exposing `definitions` |
 | `why` | required | what this installation loses if it stops running |
-| `env_secrets` | optional | secrets **in the `dagster` namespace** to expose to the pods — see below |
+| `env_secrets` | optional | secrets **in the `dagster` namespace** to expose to the pods. ⚠️ Every key becomes an environment variable, and the two ways to create the secret produce **different** key names — see below |
 
 ### Creating a secret for `env_secrets`
 
 `env_secrets` names secrets that must already exist **in the `dagster`
-namespace**. UIS does not create them for you — your application's installer
-does, the same way it writes the declaration:
+namespace**. There are **two ways to create one, and they produce different
+environment-variable names.** Pick one deliberately — the difference is invisible
+until a run pod fails to connect.
+
+Every key in the secret becomes an environment variable in the code-location pod
+**and in every run pod it spawns**. So the key you choose *is* the variable your
+code reads.
+
+#### Path 1 — `uis configure` (also creates the database)
+
+If the secret is a PostgreSQL connection string, UIS will create the database,
+its owning role, *and* the secret in one command:
+
+```bash
+./uis configure postgresql --app myapp \
+  --namespace dagster --secret-name-prefix myapp-database \
+  --json
+```
+
+⚠️ Two things about the result that you cannot guess from the flags:
+
+- the Secret is named **`myapp-database-db`** — `--secret-name-prefix` is a
+  prefix, and `-db` is appended
+- its key is always **`DATABASE_URL`**. The name is hardcoded; there is no flag
+  for it
+
+So the declaration must read:
+
+```yaml
+    env_secrets:
+      - myapp-database-db       # supplies DATABASE_URL
+```
+
+and your code reads `DATABASE_URL`.
+
+#### Path 2 — `kubectl`, when you want the name you choose
+
+Use this when the secret is not a database URL, or when your code already reads a
+prefixed variable:
 
 ```bash
 kubectl create secret generic myapp-database-url \
@@ -131,9 +169,31 @@ kubectl create secret generic myapp-database-url \
   --from-literal=MYAPP_DATABASE_URL='postgresql://user:pass@postgresql.default:5432/myapp'
 ```
 
-Every key in the secret becomes an environment variable in the code-location pod
-**and in every run pod it spawns**. If the secret is missing the pods will not
-start, and `./uis verify dagster` reports the location as unreachable.
+```yaml
+    env_secrets:
+      - myapp-database-url      # supplies MYAPP_DATABASE_URL
+```
+
+Here the secret name and the key are both yours, and your code reads
+`MYAPP_DATABASE_URL`.
+
+#### Which to use
+
+| | Path 1 (`uis configure`) | Path 2 (`kubectl`) |
+|---|---|---|
+| Creates the database and role | ✅ yes | ❌ no — do it first |
+| Applies your migrations | ✅ `--init-file -`, with rollback | ❌ no |
+| Secret name | `<prefix>-db`, derived | yours |
+| Variable your code reads | `DATABASE_URL`, fixed | yours |
+| Password handling | generated, not stored by UIS | you supply it |
+
+Path 1 is the shorter install and the one to prefer for a Postgres-backed tenant.
+Path 2 is the escape hatch. **What is not supported is assuming Path 1 and
+reading a prefixed variable** — that pod starts clean, reports `LOADED`, and then
+every run fails at connect time.
+
+If the secret is missing entirely the pods will not start, and
+`./uis verify dagster` reports the location as unreachable.
 
 ### Why two of those are enforced rather than advised
 
