@@ -1,6 +1,6 @@
 # Validation record: the summer's work on a clean Rancher Desktop, 21 August 2026
 
-## Status: Reference — a record of a test run, not a plan
+**Status:** Completed — reference: a record of a test run, not a plan
 
 **What**: first end-to-end validation of the 18 July – 19 August work on a
 factory-reset Rancher Desktop cluster, on the iMac.

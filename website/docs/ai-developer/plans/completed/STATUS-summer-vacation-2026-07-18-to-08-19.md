@@ -1,6 +1,6 @@
 # Summer vacation work summary: 18 July – 19 August 2026
 
-## Status: Reference — a retrospective, not a plan
+**Status:** Completed — reference: a retrospective, not a plan
 
 **Scope**: everything merged to `main` between 2026-07-18 and 2026-08-19.
 **Volume**: 145 commits, 58 pull requests, 4 new services, 30 plans and
