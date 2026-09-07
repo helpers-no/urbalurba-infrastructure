@@ -779,6 +779,8 @@ UIS has two separate deployment concepts:
 
 If you're packaging a platform service, follow this guide. If you're deploying a user-facing app from a GitHub repo, see the [ArgoCD pipeline docs](../../developing/argocd-pipeline.md).
 
+⚠️ **Which path an application takes is a decided rule, not a preference** — and one application can need both. See [Rules for Deploying Applications](../rules/application-deployment.md).
+
 ## Reference services
 
 Use these existing services as examples:

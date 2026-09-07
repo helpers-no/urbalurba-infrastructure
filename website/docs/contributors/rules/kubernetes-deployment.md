@@ -14,6 +14,9 @@ For **how to write individual Ansible playbooks**, see:
 For **file and resource naming patterns**, see:
 > [Naming Conventions](./naming-conventions.md)
 
+For **how an application (not a platform service) gets deployed**, see:
+> [Rules for Deploying Applications](./application-deployment.md) - `uis` provisions, ArgoCD deploys
+
 ## Core Principles
 
 0. **Every service runs on a developer's laptop.** A UIS service MUST be
