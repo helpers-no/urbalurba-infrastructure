@@ -47,6 +47,22 @@ code_locations: []
 #     env_secrets:
 #       - atlas-database-url        # supplies ATLAS_DATABASE_URL to the pods
 #
+# ⚠️ THE SECRET'S KEYS BECOME THE ENV VARS, AND THERE ARE TWO WAYS TO CREATE ONE.
+#    They do not produce the same names, and picking the wrong one is invisible
+#    until a run pod fails to connect:
+#
+#      ./uis configure postgresql --app atlas \
+#          --namespace dagster --secret-name-prefix atlas-database
+#        -> Secret `atlas-database-db` (the prefix gains `-db`), key always
+#           `DATABASE_URL`. Also creates the database and its owning role.
+#
+#      kubectl create secret generic atlas-database-url --namespace dagster \
+#          --from-literal=ATLAS_DATABASE_URL=...
+#        -> the name and the key are both yours. The database is NOT created.
+#
+#    The example above is the kubectl form. Full comparison:
+#    /docs/services/analytics/dagster
+#
 # Fields:
 #   name        required  the code-location name Dagster shows in its UI
 #   image       required  repository, without the tag
@@ -59,4 +75,6 @@ code_locations: []
 #                         Same rule as prometheus-targets.yaml — a tenant nobody
 #                         can justify is one nobody maintains
 #   env_secrets optional  secrets in the `dagster` namespace to expose to the
-#                         code-location pod and its run pods
+#                         code-location pod and its run pods. Every key in the
+#                         secret becomes an environment variable verbatim — see
+#                         the warning above about which name you get

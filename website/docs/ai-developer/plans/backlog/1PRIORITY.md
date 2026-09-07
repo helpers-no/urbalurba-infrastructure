@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-08-30 (eleventh refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-09-07 (twelfth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -10,9 +10,44 @@
 
 ---
 
-## Current status — tor-agent, 2026-08-30 (end of day)
+## Current status — tor-agent, 2026-09-07
 
-**`state: idle`.** Nothing is in flight, nothing is blocked, and `active/` is empty.
+**`state: one investigation filed, unstarted`.** `active/` is still empty.
+
+**The first real application arrived, and it changed what the top of this queue is for.** The
+`atlas` agent asked, through `urb-agents#159`, whether UIS should grow an `Application` type to
+install an app that needs a database, a Dagster code location and a PostgREST instance as one thing.
+The answer was no — and the reason is that **this repository had already priced that decision**:
+[ANALYSIS-nais-uis](./ANALYSIS-nais-uis.md) §4 ranks a UIS `Application` manifest last of thirteen,
+at L effort, explicitly deferred behind three capabilities that have not landed.
+
+⚠️ **Two of the four "missing" steps in that request already existed and had never been used.**
+`./uis configure postgresql --namespace <ns> --secret-name-prefix <p>` creates the per-app database,
+its owning role, applies migrations from stdin with rollback, *and* writes the secret into another
+service's namespace. The first application it was built for did not use it, because
+`docs/services/analytics/dagster.md` told tenants **"UIS does not create them for you."**
+
+That is the finding of the day, and it is not really about Dagster: **a capability that is
+documented not to exist does not exist.** The doc defect is fixed; the class it belongs to is worth
+watching, because `SCRIPT_CONFIGURABLE` advertises the reverse shape — six services claim a handler
+that is missing ([ANALYSIS-nais-uis](./ANALYSIS-nais-uis.md) §4 item 4).
+
+### What came out of it
+
+| | What |
+|---|---|
+| [templates: multi-surface application](INVESTIGATE-templates-multi-surface-application.md) | **NEW, Tier 1.** `uis template install` is already the unit above a service — `provides:`, `params:`, deploy-then-configure in priority order. Four specific things stop it installing this tenant. One of them, TPL-F3, is a latent defect for *any* multi-instance service: `template.sh:405` deploys without `--app` while the configure call two lines later passes it |
+| docs: the two secret paths | Fixed in the same change. `uis configure` yields key `DATABASE_URL` in a secret named `<prefix>-db`; `kubectl` yields whatever you choose. Both are valid, nothing said they diverge, and the divergence is invisible until a run pod fails to connect |
+
+### Not taken on, deliberately
+
+**Reaching an installation from a second machine on the same LAN is not a UIS feature.** Traefik
+already routes every app on ``HostRegexp(`<prefix>\..+`)``, which matches any suffix, and PostgREST
+already sets `PGRST_SERVER_CORS_ALLOWED_ORIGINS: "*"` — so it needs a Host header and a name that
+resolves, not platform work. Same ruling as
+[roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md): *installation
+implementation, not UIS*. The one unmeasured thing is whether a given host's Traefik listens off
+loopback; if it does not, that is a new investigation and not a fold-in.
 
 ⚠️ **The proxy plan reopened after it closed, and that is the finding of the day.** It was closed
 against a laptop fixture. The platform manager then ran the new verify against the **production**
@@ -24,7 +59,7 @@ of [the plan](../completed/PLAN-system-external-services-proxy-takeover.md) reco
 gap the topology-coverage requirement was written about, and it is the second time this week that
 production found what no fixture could.
 
-### Two workstreams closed today
+### Two workstreams closed 2026-08-30
 
 **1. The external-services proxy** — six defects across three rounds, all merged. The proxy now takes
 over the Service it stands in for, the verify proves which topology answered rather than reading it
@@ -36,7 +71,7 @@ from the config file, and the round trip returns cleanly. Recorded in
 produced the 1.6.5 release, because the bump republished the container with a moved digest and an
 unchanged `version.txt`, which `./uis pull` could not see.
 
-### Three investigations filed, none started
+### Three investigations filed 2026-08-30, none started
 
 Each was a *class* found underneath a specific fix, filed rather than patched away:
 
@@ -126,6 +161,31 @@ shipped, so the triage view had drifted badly from the repo:
   `image-size` with no published patch — a floor, not a backlog item.
 - The first local build surfaced **pre-existing broken links and one broken
   anchor** in the docs. Warnings, not failures. Currently owned by nobody.
+
+---
+
+## What changed 2026-09-07 (twelfth refresh) — the first application tenant, and A over B
+
+One investigation filed, one documentation defect fixed, one architectural option refused.
+
+**Filed**: [templates-multi-surface-application](INVESTIGATE-templates-multi-surface-application.md),
+Tier 1. Six findings and five open questions about extending `uis template install` to cover an
+application that spans a database, a Dagster code location and a per-app PostgREST instance.
+
+**Refused**: a UIS `Application` type, on this repository's own prior reasoning rather than on fresh
+judgement. That matters more than the refusal — [ANALYSIS-nais-uis](./ANALYSIS-nais-uis.md) was
+written 2026-08-15 as an analysis with no approved work in it, and three weeks later it answered a
+live design question with a ranking, an effort estimate and a stated precondition. **An analysis that
+prices deferred options earns its keep the first time someone asks for one of them.**
+
+**Fixed**: `docs/services/analytics/dagster.md` said "UIS does not create them for you" about
+secrets that `uis configure` has been able to create since PLAN-001. The two creation paths yield
+different environment-variable names (`DATABASE_URL` versus one you choose) and nothing said so.
+
+**The pattern worth carrying forward**: the request named four missing capabilities and two of them
+already shipped. Before designing anything for a tenant, read what the CLI can already do — and
+distrust the docs in both directions, since `SCRIPT_CONFIGURABLE` advertises the opposite error
+(six services claim a handler that does not exist).
 
 ---
 
@@ -360,6 +420,7 @@ INVESTIGATEs that still live in `backlog/` because their work isn't fully shippe
 
 | # | Investigation | Effort | Why this tier |
 |---|---|---|---|
+| **NEW** | [templates-multi-surface-application](INVESTIGATE-templates-multi-surface-application.md) | S–M | **Filed 2026-09-07 from the first real application tenant** (`urb-agents#159`). Ranked Tier 1 for two independent reasons. First, **there is a person waiting**: a front-end is being built against this tenant's API, so the install being four hand-sequenced steps is on someone's critical path. Second, **TPL-F3 is a latent defect regardless of this tenant** — `template.sh:405` calls `uis deploy "$svc"` with no `--app` while the configure call two lines below passes `--app`, so the two halves of one loop disagree about whether a service is multi-instance; any multi-instance service is unusable from a template today. ⚠️ **This is option A and it must stay option A.** Do not let it grow into a UIS `Application` type — [ANALYSIS-nais-uis](./ANALYSIS-nais-uis.md) §4 item 13 defers that behind items 1, 3 and 5, none of which have landed, and §4's own note is that building the declaration before the capabilities is the way to get a half-built abstraction. The mechanism to extend already exists and is called a template. **TPL-Q3 (may an app ship its own template from its own repo?) needs a product ruling from Terje, not a design** — it means executing a deploy plan, and piping an init file into `psql`, from an arbitrary repository. |
 | **NEW** | [system-topology-coverage](INVESTIGATE-system-topology-coverage.md) | M | **Filed 2026-08-26 from an ops requirement.** Three defects in one morning, all the same class: an assumption true only of the development topology. The tester and production differ on exactly two axes — context name and postgres shape — and all three defects lived there. Ranked Tier 1 because it is the systemic version of a failure that has already cost four hand-found production defects, and because part of the answer is cheap: a **lint**, not a second cluster. Outcomes 1 and 4 shipped; **outcome 2 (exercise the proxy topology) is open**. ⚠️ Do not "fix" this by switching the tester to production's shape — in-cluster postgres is a supported configuration and swapping moves the blind spot. |
 | 1 | [secrets-template-defaults-clarity](INVESTIGATE-secrets-template-defaults-clarity.md) | S | Foundational fix to the secrets workflow every service depends on. The current silent-overwrite confusion between `00-common-values.env.template` and `default-secrets.env` produces bug reports from contributors and slows every onboarding. Investigation already half-shipped via the existing template scaffolding; closing it out is a small read-and-decide. |
 | 2 | [verification-playbooks-usage](INVESTIGATE-system-verification-playbooks-usage.md) | M | **Promoted from Tier 2 on evidence, and the evidence keeps arriving.** Written 2026-03-12, it states the risk as "verification playbooks present but not wired into active setup or test flows → deployments report success when no real validation happened." Three separate confirmations since: (1) `031-test-alloy.yml` was reachable by no command at all while its docs page told users to run it; (2) uptime-kuma's verify was invisible to `test-all`; (3) **`kubectl run --rm -i` silently returns rc=0 with empty stdout** when the container outlives the attach — every `until:` asserting on stdout then reads a successful call as a failure. (3) is the serious one: the same idiom appears across other services' verify playbooks, so an unknown number of them can fail or pass for reasons unrelated to the service. All three are fixed ad-hoc; this investigation is the systematic version. **Stays Tier 1, not Tier 0, on purpose** — its child plans are point fixes to the services that happened to break, not the investigation's output. |
