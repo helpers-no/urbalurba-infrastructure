@@ -117,6 +117,25 @@ UIS supports two networking providers — Cloudflare (production-grade tunnels w
 
 Services can be marked for automatic deployment.
 
+:::warning "Autostart" does not mean "starts at boot"
+Nothing in UIS runs when the machine boots. The enabled list only decides what
+`./uis deploy` deploys **when you run it with no arguments** — it is a default
+argument list, not a startup mechanism.
+
+What actually happens after a host restart:
+
+- **Deployed services come back on their own.** Deployments, Services,
+  IngressRoutes, Secrets and database roles are cluster state; once the cluster
+  is running again the kubelet restarts the pods. **Nothing needs redeploying,
+  and re-running `./uis deploy` is not the fix.**
+- **The cluster itself is not started by UIS.** Rancher Desktop is installed at
+  OS level, so whether it comes up with the machine is a host setting outside
+  UIS's control.
+
+So if services are unreachable after a reboot, check whether the **cluster** is
+running before redeploying anything.
+:::
+
 | Command | Description |
 |---------|-------------|
 | `./uis enable <service-id>` | Add service to autostart (deploys on next `./uis deploy`) |
