@@ -45,6 +45,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [---](PLAN-cli-uis-docs-writes-outside-repo.md) | — | 2026-09-08 |
 | [Fix: `test-all` hides work in `--dry-run` and skips a service permanently](PLAN-cli-test-all-coverage-and-dry-run.md) | `test-all` reports what it will do and what it did not do. | 2026-09-08 |
 | [Plan: one constructor for a monitor, not two](PLAN-cli-monitors-unify-constructors.md) | `provision-host/uis/lib/monitors.py` builds a monitor object in **one** | 2026-09-08 |
+| [Plan: advertise only the `configure` handlers that exist](PLAN-cli-configure-retract-unimplemented.md) | `SCRIPT_CONFIGURABLE="true"` appears only on services that actually have a | 2026-09-08 |
 | [---](PLAN-ci-third-party-download-fails-the-whole-image-build.md) | — | 2026-09-08 |
 | [Investigate: install an application that spans several services, from one declaration](INVESTIGATE-templates-multi-surface-application.md) | Let one declaration install an application that needs *several* platform | 2026-09-08 |
 | [Investigate: First UIS Stack Template](INVESTIGATE-templates-first-uis-template.md) | Decide which UIS stack template to create first, then build it as the reference implementation for `uis template`. | 2026-09-08 |
