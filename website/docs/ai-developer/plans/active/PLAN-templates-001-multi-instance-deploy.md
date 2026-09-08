@@ -129,8 +129,16 @@ canonical form.
 
 ### Phase 3 — multi-instance deploy (TPL-F3)
 
-- [ ] 3.1 Pass `--app "$app_name"` to `uis deploy` when `services.json` says the
+- [x] 3.1 Pass `--app "$app_name"` to `uis deploy` when `services.json` says the
       service is `multiInstance`
+- [x] 3.1b 🔴 **The flag was only half of TPL-F3.** A multi-instance install still
+      failed after 3.1, because the runner deployed *before* configuring and
+      `088-setup-postgrest.yml` needs the per-app secret `configure` creates —
+      it says so itself. Found end-to-end by the tester on `urb-agents#335`,
+      after 1.6.8 had shipped claiming F3 closed. Deploy/configure order is now
+      per-service: single-instance deploys then configures, multi-instance
+      configures then deploys. **Lesson: the symptom had two causes and finding
+      one made the claim look proven.**
 - [ ] 3.2 A unit test asserting the flag is added for `postgrest` and omitted for
       `postgresql`, driven by fixture JSON rather than the live file
 
