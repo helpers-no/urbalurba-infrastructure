@@ -257,6 +257,13 @@ the caller's environment, so a variable the launcher does not forward is silentl
 ignored from the host while working inside the container — set them on the
 `./uis` command line as above and they will arrive.
 
+**There is deliberately no fixture template in the registry.** It was considered
+and declined on 2026-09-09: the registry is what `uis template list` shows a
+user, so anything in it is something someone may install, and a fixture whose
+purpose is to exercise edge cases is not that. The local override above covers
+the testing need it would have served, and an example belongs in documentation —
+where it can be read without being installable.
+
 ### Multi-instance services, and the order of operations
 
 `./uis deploy` receives `--app <app_name>` automatically for any service whose
