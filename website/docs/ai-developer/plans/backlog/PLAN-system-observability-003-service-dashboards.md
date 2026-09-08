@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — mechanism proven with one worked example; wiring into `uis deploy` outstanding
+**Status:** Backlog — mechanism proven with one worked example; wiring into `uis deploy` outstanding
 
 **Goal**: `uis deploy <service>` on a cluster with Grafana yields a dashboard for
 that service, with no manual steps and nothing to import.

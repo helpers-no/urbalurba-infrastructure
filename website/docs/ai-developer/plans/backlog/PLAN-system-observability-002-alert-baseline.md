@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — deployed and delivering on the reference installation; 48h quiet period running
+**Status:** Backlog — deployed and delivering on the reference installation; 48h quiet period running
 
 **Goal**: `uis stack install observability` produces a platform that **tells you
 before things break**, not one that records that they did.

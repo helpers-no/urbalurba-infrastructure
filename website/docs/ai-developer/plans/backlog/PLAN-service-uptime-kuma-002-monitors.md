@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — all 19 monitors defined and reconciling; **nothing notifies
+**Status:** Backlog — all 19 monitors defined and reconciling; **nothing notifies
 anyone yet, and no monitor has been seen to go red**
 
 **How they are defined changed.** When this plan was written the assumption was

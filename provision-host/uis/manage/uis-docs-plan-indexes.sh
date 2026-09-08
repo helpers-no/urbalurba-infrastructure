@@ -66,8 +66,32 @@ _extract_field() {
 }
 
 # Get file modification date (YYYY-MM-DD)
+# ⚠️ The date comes from GIT, not from mtime. mtime is a checkout artefact: a
+# fresh clone stamps every file with the clone time, so the "Updated"/"Completed"
+# column read 2026-09-04 for all 125 completed plans (a clone date), then
+# 2026-09-07 for all of them (a CI runner's checkout date). It has never once
+# held the date anything was completed, and CI overwrote it on every run.
+#
+# Requires a non-shallow checkout. With fetch-depth 1 `git log -1 -- <file>`
+# returns nothing for any file not touched by the single fetched commit, which
+# would make this silently revert to the old behaviour — so the fallback WARNS,
+# once, rather than degrading quietly. That is the failure mode this repository
+# hit three times last week: a correct-looking mechanism defeated by its
+# environment, in a path nobody watches.
+_PLAN_DATE_FELL_BACK=0
 _file_date() {
-    local file="$1"
+    local file="$1" d
+    d="$(git -C "$(dirname "$file")" log -1 --format=%cs -- "$(basename "$file")" 2>/dev/null)"
+    if [[ -n "$d" ]]; then
+        echo "$d"
+        return 0
+    fi
+    if [[ "$_PLAN_DATE_FELL_BACK" -eq 0 ]]; then
+        _PLAN_DATE_FELL_BACK=1
+        echo "⚠️  git gave no date for $(basename "$file") — falling back to file mtime," >&2
+        echo "    which is a checkout artefact. If this ran in CI, the checkout is" >&2
+        echo "    shallow: generate-uis-docs.yml needs fetch-depth: 0." >&2
+    fi
     # macOS
     stat -f '%Sm' -t '%Y-%m-%d' "$file" 2>/dev/null && return 0
     # Linux (GNU coreutils)
@@ -190,7 +214,16 @@ sidebar_position: 1
 
 All completed plans and investigations, sorted by date. Kept for reference.
 
-| Plan | Goal | Completed |
+⚠️ **"Last updated" is the last commit that touched the file, not a completion
+date.** It was labelled "Completed" and read from file mtime, which made it a
+checkout artefact — every row showed whichever day the repository was last
+cloned. Git dates are honest but they still move when a file is edited for any
+reason: a bulk Status normalisation on 2026-09-08 is why most rows share a date.
+
+Where a real completion date matters it lives in the plan's own `**Status:**`
+line, which carries one for the plans whose authors recorded it.
+
+| Plan | Goal | Last updated |
 |------|------|-----------|
 HEADER
             ;;

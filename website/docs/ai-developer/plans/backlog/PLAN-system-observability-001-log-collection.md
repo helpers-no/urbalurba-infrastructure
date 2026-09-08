@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — deployed and collecting; retention decision (Phase 3) outstanding
+**Status:** Backlog — deployed and collecting; retention decision (Phase 3) outstanding
 
 **Goal**: Logs from every pod are searchable in Grafana, automatically, so that
 when an alert fires there is something to look at.

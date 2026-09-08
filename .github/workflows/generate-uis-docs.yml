@@ -44,6 +44,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # ⚠️ Full history, because uis-docs-plan-indexes.sh dates each plan from
+          # the last commit that touched it. With the default shallow fetch,
+          # `git log -1 -- <file>` returns nothing for almost every file and the
+          # generator falls back to mtime — the checkout date — which is the bug
+          # being fixed. The generator warns if that happens; this is what stops
+          # it happening.
+          fetch-depth: 0
 
       - name: Install jq
         run: sudo apt-get install -y jq

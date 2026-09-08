@@ -317,6 +317,25 @@ Technical details, gotchas, code patterns to follow.
 | `Blocked` | Waiting on something else | `plans/backlog/` or `plans/active/` |
 | `Completed` | Done | `plans/completed/` |
 
+⚠️ **The folder is the state.** Where the two disagree, the folder wins and the
+`Status:` line is what changes — decided by Terje on 2026-09-08 for `completed/`,
+and it applies here for the same reason: a reader trusts the folder they found
+the file in.
+
+So a plan in `backlog/` says `Backlog`, however much of it has shipped. Nine
+files said `Active` while `active/` was empty, which made `state: idle` and nine
+in-flight plans both true-looking at once. **Describe the progress in the clause,
+not in the state word:**
+
+```
+**Status:** Backlog — Phases 1-3 done and verified; Phase 4 open
+```
+
+That keeps what those lines were carrying — "deployed and load-bearing, plan not
+finished", which is the normal condition here — without claiming a folder the
+file is not in. `1PRIORITY.md`'s **Tier 0 — in flight** is where in-flight-ness
+is actually tracked, and it is prose, so it can say what a one-word field cannot.
+
 ---
 
 ## Updating Plans During Implementation
