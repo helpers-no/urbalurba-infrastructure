@@ -36,6 +36,15 @@ UIS_FORWARDED_ENV=(
     UIS_TARGET_HOST         # which cluster `./uis verify` asks. VERIFY ONLY —
                             # deploy/undeploy act on the ACTIVE kubectl context
                             # and refuse if this disagrees with it.
+    # lib/template.sh — where `uis template` fetches the registry and the
+    # template folder. Overridable so a template can be exercised BEFORE it is
+    # published; useless without being forwarded, which is how it shipped in
+    # 1.6.9: the override worked inside the container and was silently ignored
+    # from the host, which is the only place a user sets it. imac measured both
+    # sides at the same moment (urb-agents#335).
+    TEMPLATE_REPO
+    REGISTRY_URL_PRIMARY
+    REGISTRY_URL_FALLBACK
 )
 
 # TARGET_HOST is the name an operator naturally reaches for, but the container's

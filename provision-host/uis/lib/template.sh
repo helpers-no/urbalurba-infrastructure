@@ -28,7 +28,13 @@ STACKS_JSON="${STACKS_JSON:-${UIS_BASE}/website/src/data/stacks.json}"
 # Same shape as SERVICES_JSON above and UIS_BASE in the launcher: default to the
 # real thing, let a caller point elsewhere.
 #
-#   URB_TEMPLATE_REPO=/path/to/local/checkout ./uis template install my-fixture
+#   TEMPLATE_REPO=/path/to/local/checkout ./uis template install my-fixture
+#
+# ⚠️ The variable is TEMPLATE_REPO. This comment said URB_TEMPLATE_REPO when
+# the override shipped in 1.6.9 — a documented command that could not work,
+# in the commit whose whole purpose was making the override usable. It must
+# also be listed in UIS_FORWARDED_ENV in the launcher, or it never reaches
+# the container: `docker exec` does not inherit the caller's environment.
 REGISTRY_URL_PRIMARY="${REGISTRY_URL_PRIMARY:-https://raw.githubusercontent.com/helpers-no/dev-templates/main/website/src/data/template-registry.json}"
 REGISTRY_URL_FALLBACK="${REGISTRY_URL_FALLBACK:-https://tmp.sovereignsky.no/data/template-registry.json}"
 REGISTRY_CACHE="/tmp/uis-template-registry.json"
@@ -528,10 +534,17 @@ cmd_template_install() {
     echo "Template folder: $folder"
     echo ""
     echo "Deployment plan (in priority order):"
+    # The preview states the ORDER, because it is per-service and a reader who
+    # sees only "deploy + configure" cannot tell which way round it runs.
     echo "$plan" | while IFS='|' read -r priority svc; do
-        local action="deploy"
-        [[ -s "$plan_dir/${svc}.conf" ]] && action="deploy + configure"
-        _service_is_multi_instance "$svc" && action="$action (per-app instance)"
+        local action
+        if _service_is_multi_instance "$svc"; then
+            action="configure, then deploy --app (per-app instance)"
+        elif [[ -s "$plan_dir/${svc}.conf" ]]; then
+            action="deploy, then configure"
+        else
+            action="deploy"
+        fi
         echo "  [$priority] $svc — $action"
     done
     echo ""
@@ -547,22 +560,42 @@ cmd_template_install() {
         [[ -z "$svc" ]] && continue
         local conf="$plan_dir/${svc}.conf"
 
-        # Deploy service.
+        # ⚠️ WHICH COMES FIRST, deploy or configure, IS PER-SERVICE.
         #
-        # ⚠️ --app is required for a multi-instance service and wrong for a
-        # single-instance one. This used to deploy without it unconditionally
-        # while the configure call below always passed it, so the two halves of
-        # one loop disagreed and no multi-instance service could be installed
-        # from a template at all (TPL-F3). Driven by services.json rather than a
-        # list, so a future multi-instance service needs no edit here.
+        # It follows from what multi-instance means, rather than from one
+        # example:
+        #
+        #   single-instance — the service is shared and already running, and
+        #       configure adds per-app resources INSIDE it. `configure
+        #       postgresql` execs into the running pod, so it needs the deploy
+        #       to have happened.  =>  deploy, then configure.
+        #
+        #   multi-instance — `deploy --app` CREATES the per-app instance, and
+        #       that instance consumes what configure produced.
+        #       088-setup-postgrest.yml fails outright without the per-app
+        #       secret and says so: "The configure step must run before deploy."
+        #       configure cannot want the instance running, because the instance
+        #       does not exist yet.  =>  configure, then deploy.
+        #
+        # Found by imac end-to-end on urb-agents#335, after the --app fix. TPL-F3
+        # said "no multi-instance service could be installed from a template at
+        # all" — that stayed true with the flag corrected, because the symptom had
+        # two causes and I had only found one. The install failed on a missing
+        # secret instead of a missing flag.
+        local configure_first=false
+        _service_is_multi_instance "$svc" && configure_first=true
+
         local deploy_args=("$svc")
         if _service_is_multi_instance "$svc"; then
             deploy_args+=(--app "$app_name")
         fi
-        log_info "Deploying ${deploy_args[*]}..."
-        if ! uis deploy "${deploy_args[@]}" >&2; then
-            log_error "Deploy failed for $svc"
-            return 1
+
+        if [[ "$configure_first" == false ]]; then
+            log_info "Deploying ${deploy_args[*]}..."
+            if ! uis deploy "${deploy_args[@]}" >&2; then
+                log_error "Deploy failed for $svc"
+                return 1
+            fi
         fi
 
         # Configure if this service has any config at all.
@@ -627,8 +660,25 @@ cmd_template_install() {
                     return 1
                     ;;
             esac
+        elif [[ "$configure_first" == true ]]; then
+            # A multi-instance service with no config: `deploy --app` would have
+            # nothing to consume. Refuse rather than fail inside the playbook.
+            log_error "Service '$svc' is multi-instance but the template declares no config for it."
+            echo "A per-app instance needs configure to run first, and there is nothing to configure." >&2
+            return 1
         else
             results+="$svc: deployed"$'\n'
+        fi
+
+        # The multi-instance half of the per-service ordering above: the per-app
+        # instance is created only now that configure has produced its inputs.
+        if [[ "$configure_first" == true ]]; then
+            log_info "Deploying ${deploy_args[*]}..."
+            if ! uis deploy "${deploy_args[@]}" >&2; then
+                log_error "Deploy failed for $svc"
+                return 1
+            fi
+            results+="$svc: configured + deployed"$'\n'
         fi
     done <<< "$plan"
 

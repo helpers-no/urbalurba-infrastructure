@@ -144,6 +144,26 @@ first=$(echo "$out2" | grep -m1 -o -- "-- >>> [0-9_a-z]*\.sql")
 assert_equals "-- >>> 100_hundred.sql" "$first" "lexicographic order is still what is applied"
 
 # ============================================================================
+# TPL-F3 (part 2) — the per-service deploy/configure ORDER
+#
+# The --app flag was only half of TPL-F3. A multi-instance install still failed,
+# because the runner deployed before configuring and 088-setup-postgrest.yml
+# needs the per-app secret configure creates. Found end-to-end by imac on
+# urb-agents#335 after the flag fix. These assert the decision, which is what
+# the executor branches on.
+# ============================================================================
+print_test_section "TPL-F3 part 2: configure-before-deploy for multi-instance"
+
+start_test "multi-instance means configure runs first"
+_service_is_multi_instance postgrest && pass_test || fail_test "postgrest must select configure-first"
+
+start_test "single-instance means deploy runs first"
+_service_is_multi_instance postgresql && fail_test "postgresql must not select configure-first" || pass_test
+
+start_test "the reasoning holds for an unknown service (deploy first, the safe default)"
+_service_is_multi_instance whatever && fail_test "unknown must default to deploy-first" || pass_test
+
+# ============================================================================
 # TPL-F4 — _write_service_conf (needs yq)
 # ============================================================================
 print_test_section "TPL-F4: config parsing and validation (needs yq)"

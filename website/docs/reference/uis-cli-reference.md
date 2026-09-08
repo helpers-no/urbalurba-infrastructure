@@ -252,13 +252,29 @@ registry:
 TEMPLATE_REPO=/path/to/local/dev-templates ./uis template install my-fixture
 ```
 
-### Multi-instance services
+⚠️ These are forwarded into the container by name. `docker exec` does not inherit
+the caller's environment, so a variable the launcher does not forward is silently
+ignored from the host while working inside the container — set them on the
+`./uis` command line as above and they will arrive.
+
+### Multi-instance services, and the order of operations
 
 `./uis deploy` receives `--app <app_name>` automatically for any service whose
 `multiInstance` is true in `services.json` (today: `postgrest`). `configure`
 always receives `--app`, because a single-instance service can still hold
 per-app resources — `configure postgresql --app` creates a per-app database in
 the shared instance.
+
+⚠️ **Which runs first is per-service, and the install prints it.** It follows
+from what multi-instance means:
+
+| | order | why |
+|---|---|---|
+| single-instance | **deploy, then configure** | the service is shared and already running; `configure postgresql` execs into the running pod |
+| multi-instance | **configure, then deploy `--app`** | `deploy --app` *creates* the per-app instance and consumes what configure produced. `configure` cannot want the instance running, because it does not exist yet |
+
+A multi-instance service declared with **no** `config:` is rejected: a per-app
+instance would have nothing to consume.
 
 :::warning A template does not yet cover every surface
 A **Dagster code location** cannot be declared in `provides:` — it is a
