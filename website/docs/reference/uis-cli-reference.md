@@ -163,6 +163,99 @@ Stacks are pre-configured groups of related services deployed together.
 
 Available stacks: `observability`, `ai-local`, `analytics`
 
+## Template Management
+
+A **template** installs an application that spans several services — a database
+with migrations, per-app instances, exposures — under one name and one
+`app_name`. It is the `uis` half of
+[Rules for Deploying Applications](../contributors/rules/application-deployment.md):
+templates provision, ArgoCD deploys workloads.
+
+| Command | Description |
+|---------|-------------|
+| `./uis template list` | List available UIS templates from the registry |
+| `./uis template info <id>` | Show one template's details |
+| `./uis template install <id> [--param k=v]...` | Deploy and configure every service the template declares |
+
+### The declaration
+
+A template ships a `template-info.yaml`:
+
+```yaml
+install_type: stack
+params:
+  app_name: myapp            # substituted anywhere as {{ params.app_name }}
+
+provides:
+  services:
+    - service: postgresql
+      config:
+        database: "{{ params.app_name }}"
+        init: migrations/                    # a file OR a directory
+        namespace: dagster                   # where to write the secret
+        secret_name_prefix: "{{ params.app_name }}-database"
+    - service: postgrest
+      config:
+        schemas: api_v1
+        url_prefix: api-myapp
+  stacks:
+    - observability                          # expanded to its services, deploy-only
+```
+
+### `config:` keys
+
+Every key maps to a `uis configure` flag. **An unrecognised key is rejected**, so
+a typo such as `url-prefix` fails the install rather than being silently ignored.
+
+| Key | Passed as | Notes |
+|---|---|---|
+| `database` | `--database` | |
+| `init` | `--init-file -` | a file, or a directory — see below |
+| `schemas` | `--schemas` | PostgREST |
+| `url_prefix` | `--url-prefix` | PostgREST |
+| `namespace` | `--namespace` | ⚠️ **requires `secret_name_prefix`** |
+| `secret_name_prefix` | `--secret-name-prefix` | ⚠️ **requires `namespace`** |
+
+⚠️ The resulting Secret is named **`<secret_name_prefix>-db`** and its key is
+always **`DATABASE_URL`** — see
+[Dagster's tenant contract](../services/analytics/dagster.md) for why that
+matters when another service consumes it.
+
+### `init:` — a file or an ordered directory
+
+- **a file** — applied as-is
+- **a directory** — every `*.sql` in it, concatenated in `LC_ALL=C sort` order
+
+Order is part of the contract: migrations are numbered (`001_…`, `050_…`)
+because DDL is order-dependent. The count and the ordered file list are printed
+before anything is applied, so a partial apply is recoverable from the log.
+Non-`.sql` files are ignored, and an **empty directory fails** rather than
+installing nothing.
+
+`{{ params.* }}` is substituted into the concatenated content, so a parameter may
+appear in any file.
+
+### Multi-instance services
+
+`./uis deploy` receives `--app <app_name>` automatically for any service whose
+`multiInstance` is true in `services.json` (today: `postgrest`). `configure`
+always receives `--app`, because a single-instance service can still hold
+per-app resources — `configure postgresql --app` creates a per-app database in
+the shared instance.
+
+:::warning A template does not yet cover every surface
+A **Dagster code location** cannot be declared in `provides:` — it is a
+contribution to another service's `.uis.extend` file, not a service instance. It
+remains a manual edit of `.uis.extend/dagster-code-locations.yaml` followed by
+`./uis deploy dagster`.
+
+So installing an application that orchestrates with Dagster is **two steps**, not
+one. Tracked as TPL-F5 in
+[INVESTIGATE-templates-multi-surface-application](../ai-developer/plans/backlog/INVESTIGATE-templates-multi-surface-application.md).
+:::
+
+---
+
 ## Secrets Management
 
 | Command | Description |
