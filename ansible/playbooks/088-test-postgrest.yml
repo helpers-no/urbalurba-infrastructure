@@ -198,14 +198,35 @@
     # worse than no verify: it turns a failed test into a data-cleanup task.
     - name: "Probe the instance, always cleaning up afterwards"
       block:
-      - name: "A1. Create the probe table as the app would, in {{ _schema }}"
+      # ⚠️ `SET ROLE` is what makes this "as the app would" true rather than a
+      # claim. This task connects as `postgres` because that is the only
+      # credential UIS holds — the app role's password is generated and
+      # deliberately not stored. Creating the probe table AS ADMIN made the
+      # verify structurally unable to see the defect it should have caught:
+      #
+      #   `configure postgrest` recorded ALTER DEFAULT PRIVILEGES keyed to the
+      #   CONNECTING role (postgres), so it only ever covered admin-created
+      #   objects. A tenant's views are created by the tenant's own role and got
+      #   no grant — an API answering an empty schema, forever, silently. The
+      #   probe was created by the same admin role that owned the default ACL,
+      #   so the grant fired, the read succeeded, and the verify went green.
+      #
+      # A probe that takes the one path a real tenant never takes proves the
+      # path nobody uses. Found by atlas on urb-agents#323, after the fix in
+      # configure-postgrest.sh emitted `FOR ROLE`.
+      #
+      # No password needed: `SET ROLE` from a superuser session assumes the role
+      # for the rest of the transaction.
+      - name: "A1. Create the probe table AS THE APP ROLE, in {{ _schema }}"
         ansible.builtin.command: >
           kubectl exec -n {{ _pg_ns }} {{ _pgpods.resources[0].metadata.name }} --context {{ _target }} --
           env PGPASSWORD={{ _pgpw.stdout }}
           psql -h 127.0.0.1 -U postgres -d {{ _db }} -v ON_ERROR_STOP=1 -c
-          "CREATE TABLE IF NOT EXISTS {{ _schema }}.{{ _tbl }}(id int primary key, msg text);
+          "SET ROLE {{ _app_name | replace('-', '_') }};
+           CREATE TABLE IF NOT EXISTS {{ _schema }}.{{ _tbl }}(id int primary key, msg text);
            INSERT INTO {{ _schema }}.{{ _tbl }} VALUES (1,'uis-verify')
-           ON CONFLICT (id) DO UPDATE SET msg=EXCLUDED.msg;"
+           ON CONFLICT (id) DO UPDATE SET msg=EXCLUDED.msg;
+           RESET ROLE;"
         register: _seed
         changed_when: true
         no_log: true
@@ -228,9 +249,12 @@
         ansible.builtin.assert:
           that: _seed.rc == 0
           fail_msg: >-
-            Could not write the probe row into {{ _db }}.{{ _schema }}. The
-            database or schema this instance is configured for is not usable.
-          success_msg: "Probe row written by the app side."
+            Could not write the probe row into {{ _db }}.{{ _schema }} as role
+            {{ _app_name | replace('-', '_') }}. Either that role does not exist
+            (run `uis configure postgresql --app {{ _app_name }}` first), or it
+            cannot CREATE in this schema — which a real tenant's own tooling
+            would hit too, so this is a finding and not a test artefact.
+          success_msg: "Probe row written by the app role, as a tenant would."
 
       # --- Test B: read it back through the HTTP API ---
       - name: "B1. GET the row through {{ _app_name }}-postgrest"

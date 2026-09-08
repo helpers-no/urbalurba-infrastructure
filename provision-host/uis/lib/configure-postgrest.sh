@@ -310,9 +310,35 @@ _pgrst_check_schemas_exist() {
 # Build the per-schema GRANT block (USAGE on schema + SELECT on existing
 # tables + DEFAULT PRIVILEGES for future tables) for one role across a
 # comma-separated schema list. Caller wraps the result in a transaction.
+#
+# ⚠️ TWO `ALTER DEFAULT PRIVILEGES` statements per schema, and the second one is
+# the one that matters. Without `FOR ROLE`, the statement records an entry keyed
+# to the CONNECTING role (`pg_default_acl.defaclrole`) and applies only to
+# objects THAT role goes on to create. This function runs as `postgres`
+# (`_pgrst_exec_db` passes `-U "$PG_ADMIN_USER"`), so the unqualified form only
+# ever covered admin-created objects.
+#
+# A real tenant's views are created by its OWN role — dbt, a migration runner, a
+# generated-SQL script — so they got no grant, the anon role could not read them,
+# and the API answered with an empty schema forever. Silent: the install
+# succeeds, the code location loads, PostgREST is healthy, and every request
+# returns nothing.
+#
+# Verified on PostgreSQL 15.18 (atlas, urb-agents#323):
+#
+#   ALTER DEFAULT PRIVILEGES run as   | later view created by app role readable
+#   ----------------------------------|----------------------------------------
+#   admin (postgres)                  | f
+#   the app role                      | t
+#   admin, WITH `FOR ROLE <app>`      | t
+#
+# Both statements are emitted rather than replacing one with the other: the
+# unqualified form still covers objects an operator creates as admin, which the
+# verify playbook and manual fixups do.
 _pgrst_build_grant_sql() {
     local schemas="$1"
     local role="$2"
+    local owner="${3:-}"
     local IFS=','
     local s out=""
     for s in $schemas; do
@@ -320,6 +346,10 @@ _pgrst_build_grant_sql() {
 GRANT SELECT ON ALL TABLES IN SCHEMA $s TO $role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA $s GRANT SELECT ON TABLES TO $role;
 "
+        if [[ -n "$owner" ]]; then
+            out+="ALTER DEFAULT PRIVILEGES FOR ROLE $owner IN SCHEMA $s GRANT SELECT ON TABLES TO $role;
+"
+        fi
     done
     printf '%s' "$out"
 }
@@ -712,7 +742,11 @@ EOF
     # Per-schema GRANT block (USAGE + SELECT on existing tables + DEFAULT
     # PRIVILEGES for future tables) — used by all three SQL paths.
     local grant_sql
-    grant_sql=$(_pgrst_build_grant_sql "$schemas" "$web_anon_role")
+    # $app_user is the database's owning role, created by `uis configure
+    # postgresql --app <name>` with the same '-' -> '_' derivation. It is the
+    # role a tenant's own tooling connects as, so it is the role whose future
+    # objects need the default grant.
+    grant_sql=$(_pgrst_build_grant_sql "$schemas" "$web_anon_role" "$app_user")
 
     # Decide password handling per path. For Reconfigure-preserve-URI the
     # password is unchanged; we don't touch the role's stored password and we
