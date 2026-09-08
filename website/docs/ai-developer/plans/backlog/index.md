@@ -23,6 +23,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Ship container logs to Loki](PLAN-system-observability-001-log-collection.md) | Logs from every pod are searchable in Grafana, automatically, so that | 2026-09-08 |
 | [Fix: the provision-host ships a Kubernetes client 12 major versions too old](PLAN-system-k8s-client-version-pin.md) | The Ansible layer talks to the cluster with a client the collection | 2026-09-08 |
 | [Fix: 16 of 24 Helm-based services take whatever the chart repo serves that day](PLAN-system-helm-chart-version-pinning.md) | Every `helm upgrade --install` in UIS names the chart version it was | 2026-09-08 |
+| [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-08 |
 | [Declare external dependencies as shim Services](PLAN-system-dependencies-shim-services.md) | Every dependency UIS has on something outside the cluster is declared | 2026-09-08 |
 | [Fix: 21 playbooks declare a variable named `namespace`, which Ansible reserves](PLAN-system-ansible-reserved-var-names.md) | No playbook shadows an Ansible reserved name. | 2026-09-08 |
 | [Ship the monitor pipeline as part of the service](PLAN-service-uptime-kuma-005-ship-the-pipeline.md) | `uis deploy uptime-kuma` gives a watchdog that is **already monitoring | 2026-09-08 |
