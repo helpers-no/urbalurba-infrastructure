@@ -16,14 +16,26 @@ UIS_BASE="${UIS_BASE:-/mnt/urbalurbadisk}"
 SERVICES_JSON="${SERVICES_JSON:-${UIS_BASE}/website/src/data/services.json}"
 STACKS_JSON="${STACKS_JSON:-${UIS_BASE}/website/src/data/stacks.json}"
 
-# Registry fetch config
-REGISTRY_URL_PRIMARY="https://raw.githubusercontent.com/helpers-no/dev-templates/main/website/src/data/template-registry.json"
-REGISTRY_URL_FALLBACK="https://tmp.sovereignsky.no/data/template-registry.json"
+# Registry and template source.
+#
+# ⚠️ Overridable, so a template can be exercised BEFORE it is published. These
+# were plain assignments, and combined with _fetch_template_folder's `rm -rf` of
+# the cache directory there was no supported way to supply a fixture at all —
+# only editing this file, which changes the code under test. imac hit that
+# testing templates-001 (urb-agents#335) and could not take it end to end,
+# because the one published template uses none of the new vocabulary.
+#
+# Same shape as SERVICES_JSON above and UIS_BASE in the launcher: default to the
+# real thing, let a caller point elsewhere.
+#
+#   URB_TEMPLATE_REPO=/path/to/local/checkout ./uis template install my-fixture
+REGISTRY_URL_PRIMARY="${REGISTRY_URL_PRIMARY:-https://raw.githubusercontent.com/helpers-no/dev-templates/main/website/src/data/template-registry.json}"
+REGISTRY_URL_FALLBACK="${REGISTRY_URL_FALLBACK:-https://tmp.sovereignsky.no/data/template-registry.json}"
 REGISTRY_CACHE="/tmp/uis-template-registry.json"
 REGISTRY_CACHE_TTL=3600  # 1 hour
 
 # Template fetch config
-TEMPLATE_REPO="https://github.com/helpers-no/dev-templates.git"
+TEMPLATE_REPO="${TEMPLATE_REPO:-https://github.com/helpers-no/dev-templates.git}"
 TEMPLATE_CACHE_DIR="/tmp/uis-templates"
 
 # Check if registry cache is fresh
@@ -363,6 +375,33 @@ _collect_init_sql() {
         n=$(printf '%s\n' "$files" | grep -c .)
         echo "Init directory: $n .sql file(s), applied in this order:" >&2
         printf '%s\n' "$files" | while IFS= read -r f; do echo "    $(basename "$f")" >&2; done
+
+        # ⚠️ Lexicographic order is the contract, and it INVERTS on un-padded
+        # numeric prefixes: 9_, 10_, 100_ sort as 100_, 10_, 9_. Zero-padded
+        # names (001_, 026_, 050_) are immune, which is why the convention
+        # exists — but `1_, 2_, ... 10_` is a common way to number migrations,
+        # and the result is out-of-order DDL that SUCCEEDS and leaves the wrong
+        # schema. That is precisely the silent failure this feature exists to
+        # prevent, reached from the one direction the contract does not cover.
+        # Found by imac on urb-agents#335.
+        #
+        # A warning rather than an error: lexicographic is documented and
+        # deliberate, and a tenant may have meant it. But it must not pass
+        # unremarked, because nothing downstream can tell a wrong order from an
+        # intended one.
+        local numeric_sorted lexical_sorted
+        lexical_sorted=$(printf '%s\n' "$files" | while IFS= read -r f; do basename "$f"; done)
+        numeric_sorted=$(printf '%s\n' "$lexical_sorted" | LC_ALL=C sort -t'_' -k1,1n -s)
+        if [ "$lexical_sorted" != "$numeric_sorted" ]; then
+            echo "" >&2
+            log_warn "Apply order is lexicographic and differs from numeric order."
+            echo "    These names are not zero-padded, so e.g. 10_ sorts before 9_." >&2
+            echo "    Numeric order would be:" >&2
+            printf '%s\n' "$numeric_sorted" | while IFS= read -r f; do echo "      $f" >&2; done
+            echo "    If that is what you meant, pad the numbers: 001_, 002_, ... 010_." >&2
+            echo "    Applying in the LEXICOGRAPHIC order listed above." >&2
+            echo "" >&2
+        fi
         printf '%s\n' "$files" | while IFS= read -r f; do
             printf -- '-- >>> %s\n' "$(basename "$f")"
             cat "$f"

@@ -124,6 +124,25 @@ _collect_init_sql "$TMP/nosql" >/dev/null 2>&1 && fail_test "must fail with no .
 start_test "a path that is neither file nor directory fails"
 _collect_init_sql "$TMP/does-not-exist" >/dev/null 2>&1 && fail_test "must fail" || pass_test
 
+start_test "un-padded numeric prefixes trigger a warning (order inverts)"
+mkdir -p "$TMP/unpadded"
+for f in 9_nine 10_ten 100_hundred; do echo "SELECT 1;" > "$TMP/unpadded/$f.sql"; done
+warn=$(_collect_init_sql "$TMP/unpadded" 2>&1 >/dev/null)
+echo "$warn" | grep -qi "lexicographic" && pass_test || fail_test "no padding warning: $warn"
+
+start_test "the warning shows what numeric order would have been"
+echo "$warn" | grep -A3 "Numeric order" | grep -q "9_nine.sql" && pass_test \
+    || fail_test "numeric order not shown: $warn"
+
+start_test "zero-padded names produce NO warning"
+warn2=$(_collect_init_sql "$TMP/migrations" 2>&1 >/dev/null)
+echo "$warn2" | grep -qi "lexicographic" && fail_test "warned on padded names" || pass_test
+
+start_test "the warning does not change the order actually applied"
+out2=$(_collect_init_sql "$TMP/unpadded" 2>/dev/null)
+first=$(echo "$out2" | grep -m1 -o -- "-- >>> [0-9_a-z]*\.sql")
+assert_equals "-- >>> 100_hundred.sql" "$first" "lexicographic order is still what is applied"
+
 # ============================================================================
 # TPL-F4 — _write_service_conf (needs yq)
 # ============================================================================
