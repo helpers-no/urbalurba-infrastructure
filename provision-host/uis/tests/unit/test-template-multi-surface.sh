@@ -217,4 +217,29 @@ YAML
     fi
 fi
 
+# ============================================================================
+# set -e and command substitution — the shape that made two handlers dead code
+#
+# `x=$(cmd)` where cmd fails ABORTS under `set -e`, so a following `x_exit=$?`
+# and everything testing it is unreachable. It defeated the configure-failure
+# handler in template.sh (silent failures, urb-agents#335) and the Cancel path
+# in menu-helpers.sh. These assert the IDIOM, which is what both fixes rely on.
+# ============================================================================
+print_test_section "set -e: capturing exit status from a substitution"
+
+start_test "a bare assignment aborts before the handler (the defect)"
+out=$(bash -c 'set -e; f(){ local r; r=$(bash -c "echo J; exit 1"); echo "HANDLER:$r"; }; f' 2>/dev/null || true)
+assert_empty "$out" "handler must NOT be reached with a bare assignment"
+
+start_test "|| rc=\$? reaches the handler and preserves the output (the fix)"
+out=$(bash -c 'set -e; f(){ local r rc=0; r=$(bash -c "echo J; exit 1") || rc=$?; echo "HANDLER:$r:$rc"; }; f' 2>/dev/null || true)
+assert_equals "HANDLER:J:1" "$out" "handler reached, stdout and status both kept"
+
+start_test "no bare assign-then-\$? remains in the uis libs"
+lib_dir="$UIS_LIB"
+found=$(for f in "$lib_dir"/*.sh; do
+    awk 'prev ~ /^[[:space:]]*(local +)?[a-z_]+=\$\(/ && $0 ~ /^[[:space:]]*(local +)?[a-z_]+=\$\?[[:space:]]*$/ {print FILENAME": "NR} {prev=$0}' "$f"
+done)
+assert_empty "$found" "libs must capture with || rc=\$? under set -e"
+
 print_summary

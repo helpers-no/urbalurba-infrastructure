@@ -629,16 +629,24 @@ cmd_template_install() {
                 init_content=$(_substitute_params "$init_content" "$params_file")
                 configure_args+=(--init-file -)
                 log_info "Configuring $svc with init from '$resolved_init' ($(wc -l <<< "$init_content") lines)"
-                result=$(echo "$init_content" | uis configure "${configure_args[@]}")
-                configure_exit=$?
+                # ⚠️ `|| configure_exit=$?`, not a bare assignment. uis-cli.sh:9 sets
+                # `set -e`, so `result=$(uis configure ...)` ABORTS the function the
+                # moment configure exits non-zero — before configure_exit is read
+                # and long before the status handling below. Every configure failure
+                # in a template install was therefore silent: imac hit a one-line
+                # usage error and got a 135-line log whose last line was
+                # "Dependency 'postgresql' is running." (urb-agents#335).
+                configure_exit=0
+                result=$(echo "$init_content" | uis configure "${configure_args[@]}") || configure_exit=$?
             else
-                result=$(uis configure "${configure_args[@]}")
-                configure_exit=$?
+                configure_exit=0
+                result=$(uis configure "${configure_args[@]}") || configure_exit=$?
             fi
 
             # Show the raw result for debugging
             if [[ -z "$result" ]]; then
-                log_error "Configure returned empty output (exit code: $configure_exit)"
+                log_error "Configure produced no output for $svc (exit code: $configure_exit)"
+                echo "Command was: uis configure ${configure_args[*]}" >&2
                 return 1
             fi
 
@@ -656,6 +664,12 @@ cmd_template_install() {
                     ;;
                 *)
                     log_error "Configure failed for $svc (exit: $configure_exit)"
+                    # configure emits a JSON error with a `detail` that is usually
+                    # the whole answer — surface it rather than making a reader
+                    # parse raw output.
+                    local detail
+                    detail=$(echo "$result" | jq -r '.detail // empty' 2>/dev/null || true)
+                    [[ -n "$detail" ]] && echo "  $detail" >&2
                     echo "Raw output: $result" >&2
                     return 1
                     ;;
