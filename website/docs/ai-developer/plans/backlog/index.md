@@ -15,6 +15,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Plan: reject a valid `config:` key on the wrong service, at parse time](PLAN-templates-config-keys-per-service.md) | A template declaring a supported `config:` key on a service that does | 2026-09-08 |
 | [Ship an availability probe with every service](PLAN-system-observability-006-service-probes.md) | `uis deploy <service>` results in that service being monitored by the | 2026-09-08 |
 | [Monitor the components that are not in the cluster](PLAN-system-observability-004-external-targets.md) | The parts of a production install that live outside Kubernetes — the | 2026-09-08 |
 | [Ship a dashboard with the service](PLAN-system-observability-003-service-dashboards.md) | `uis deploy <service>` on a cluster with Grafana yields a dashboard for | 2026-09-08 |
