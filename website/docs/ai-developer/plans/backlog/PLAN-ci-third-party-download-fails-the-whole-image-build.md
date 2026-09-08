@@ -43,7 +43,16 @@ E: Some index files failed to download.
 ```
 
 **An Ubuntu mirror mid-sync — `apt-get update`, not a k9s release download.**
-A plain re-run was the fix again.
+
+🔴 **And the re-run failed too, which breaks this plan's central assumption.**
+Run `34243142437` re-run, ~9 minutes later: identical error, a *different* mirror
+IP (`91.189.91.102` vs `.103`), so Canonical's sync was still propagating across
+the pool. **`Installing k9s` succeeded on the re-run** — it was three lines above
+the failure, which retires the k9s hypothesis outright.
+
+So "a plain re-run passed both times" is no longer the observed behaviour, and
+any fix that assumes retry-eventually-works is unsafe: the outage lasted longer
+than a retry cycle and was not addressable from this repository at all.
 
 🔴 **That matters for the fix.** Two instances pointing at k9s invited a narrow
 remedy: pin or vendor k9s. A third instance with an unrelated upstream — Canonical's
@@ -66,6 +75,13 @@ provisioning path; the commit being built was a PostgREST SQL fix. That is now
 three for three on "the failure had nothing to do with the change", which is the
 strongest argument for treating it as infrastructure rather than as a flaky test
 someone should watch.
+
+⚠️ **Operational consequence while this is red**, and it is the reason this is not
+merely cosmetic: the image is never pushed, so `ghcr.io/helpers-no/uis-provision-host:latest`
+still serves the **previous** build. Every change merged in that window — including
+the PostgREST default-privileges fix — is on `main` and **not** in the image a user
+gets from `./uis pull`. A green `main` with a red image build means the repository
+and the shipped artifact disagree, silently, and nothing surfaces that to a user.
 
 
 ## Why it costs more than a re-run
