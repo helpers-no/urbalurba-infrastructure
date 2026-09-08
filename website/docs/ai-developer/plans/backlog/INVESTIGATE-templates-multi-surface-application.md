@@ -340,9 +340,14 @@ absent**:
 > app's migration), then retry"
 
 So `uis template install atlas` would deploy PostgreSQL, then fail configuring PostgREST, having
-never reached Dagster. **The first real application cannot be installed in priority order at all.**
+never reached Dagster.
 
-This is a design finding, not a bug to patch by renumbering. Service priority expresses *platform
+🔴 **CORRECTED 2026-09-08 — this is the symptom, not the cause, and reordering does not fix it.**
+See TPL-F9. F8 is a real defect and it is **not** what blocks the first application; it is now a
+documented latent defect rather than a blocker, and it no longer gates PLAN-templates-001.
+
+This is a design finding, not a bug to patch by renumbering. **It is also no longer urgent** —
+see TPL-F9 for why the first application does not need it. Service priority expresses *platform
 boot order* — a global property of a service. What this needs is *intra-application* ordering, which
 is a property of one declaration. Renumbering `dagster` below `postgrest` would satisfy this tenant
 and mis-state the platform. Options for the plan to weigh: honour declaration order within
@@ -350,14 +355,67 @@ and mis-state the platform. Options for the plan to weigh: honour declaration or
 already are. **Whichever is chosen, TPL-F8 must be resolved before TPL-F4, because it changes what
 `config:` has to mean.**
 
+### TPL-F9 — 🔴 the real blocker: the schema does not exist at install time, in any order
+
+Reordering `dagster` before `postgrest` fails one step later, for a reason that has nothing to do
+with ordering:
+
+- **`uis deploy dagster` registers a code location. It runs nothing.** `360-setup-dagster.yml`
+  contains no materialize, launch, backfill or GraphQL call. A tenant's ingest cadence is
+  declarative on its own assets, so the first transform runs on its schedule — possibly hours after
+  install.
+- **The tenant's `api_v1` is built by dbt, not by its migrations.** So it does not exist when
+  `configure postgrest --schemas api_v1` runs, and `configure-postgrest.sh:288` refuses a schema
+  absent from `pg_namespace`.
+
+**Any install that configures an exposure over a schema its own pipeline produces has this problem**,
+independent of ordering. That generalises past this tenant: it is the difference between a
+dependency on a *step* and a dependency on a *condition*, and a sequencer can only express the first.
+
+#### The resolution, and it is the tenant's line rather than the platform's
+
+The check is on **schema existence, not views**:
+
+```sql
+SELECT 1 FROM pg_namespace WHERE nspname='api_v1'
+```
+
+So the tenant's migrations add `CREATE SCHEMA IF NOT EXISTS api_v1;` — and the mechanism then
+carries itself, because `configure postgrest` already emits per schema:
+
+```sql
+GRANT USAGE ON SCHEMA <s> TO <app>_web_anon;
+GRANT SELECT ON ALL TABLES IN SCHEMA <s> TO <app>_web_anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA <s> GRANT SELECT ON TABLES TO <app>_web_anon;
+```
+
+The third statement means **views the pipeline creates later are readable automatically** — no
+re-grant, no re-configure, no second visit after the first materialization. An empty-schema install
+is the mechanism working as designed, not a stopgap.
+
+With that line, the required order is **postgresql first, then dagster and postgrest in either
+order** — which priority order (30 → 50 → 56) already satisfies. Sent to the tenant as
+`urb-agents#323`.
+
+⚠️ **The consequence to accept deliberately:** a successful install now produces an API serving an
+empty schema — answering, zero endpoints, healthy-looking. That is only the right trade because of
+where TPL-Q4 puts the assertion: **freshness is a monitor, not a verify.** Had the install verify
+asserted data, this would trade one broken install for another.
+
+#### What this should have taught earlier
+
+TPL-F8 was found by reading the sequencer and TPL-F9 by reading what the sequenced steps actually
+do. **The first is a faster read and produces a confident wrong answer** — an ordering plan for a
+problem ordering cannot solve. A dependency on a condition is invisible in a dependency graph.
+
 ## Part 5 — proposed plan split
 
 Not yet approved; the questions in Part 3 come first.
 
 | Plan | Scope | Depends on |
 |---|---|---|
-| `PLAN-templates-000-install-ordering` | **TPL-F8**: how a declaration expresses intra-application order. Gates 001, because it changes what `config:` must mean | none — and it is the only one that blocks an install outright |
-| `PLAN-templates-001-multi-instance-deploy` | TPL-F3 + TPL-F4 + TPL-F7: `--app` on the deploy call, the missing `config:` fields, and a multi-file `init:` | TPL-F8 |
+| `PLAN-templates-001-multi-instance-deploy` | TPL-F3 + TPL-F4 + TPL-F7: `--app` on the deploy call, the missing `config:` fields, and a multi-file `init:` | none — **now the first plan**, since TPL-F9 removed F8 from the critical path |
+| `PLAN-templates-00X-install-ordering` | **TPL-F8**: how a declaration expresses intra-application order. **Deferred** — build it the first time a second application needs it, and let that application's real dependency define the syntax | a second application that needs it |
 | `PLAN-templates-002-code-location-contrib` | TPL-F5: a writer for `.uis.extend/dagster-code-locations.yaml` and the `provides:` vocabulary for it | TPL-Q1, TPL-Q2 |
 | `PLAN-templates-003-app-owned-templates` | TPL-F6: a template shipped from the application's repository | TPL-Q3 — **needs a product ruling, not a design** |
 
@@ -366,7 +424,7 @@ concludes: today the deploy and configure halves of one loop disagree about
 whether a service is multi-instance, which is a latent defect for any
 multi-instance service, not just this tenant.
 
-**TPL-F8 is the one that changes the shape of the answer**, which is why it is numbered 000 and not
-folded into 001. Every other finding is a missing field or a missing call; F8 says the execution
+**TPL-F8 changes the shape of the answer but not the schedule**, which is why it is deferred rather
+than numbered 000. Every other finding is a missing field or a missing call; F8 says the execution
 model itself cannot express what one application needs, and no amount of `config:` vocabulary fixes
 an install that runs its steps in the wrong order.
