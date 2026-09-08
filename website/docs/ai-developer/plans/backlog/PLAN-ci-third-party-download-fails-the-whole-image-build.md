@@ -30,6 +30,44 @@ Neither failure was caused by the commit being built — the first was a
 launcher-only change, the second touched `uis` and `version.txt`. Nothing in
 either goes near the provisioning path.
 
+## Third instance, 2026-09-08 — and it was NOT k9s
+
+Run `34243142437`, `linux/arm64`, same script, same "Continuing with next
+script" followed by an overall exit 1. But the proximate cause was different:
+
+```
+E: Failed to fetch http://ports.ubuntu.com/ubuntu-ports/dists/jammy-security/
+   restricted/binary-arm64/Packages.gz
+   File has unexpected size (7771348 != 7777009). Mirror sync in progress?
+E: Some index files failed to download.
+```
+
+**An Ubuntu mirror mid-sync — `apt-get update`, not a k9s release download.**
+A plain re-run was the fix again.
+
+🔴 **That matters for the fix.** Two instances pointing at k9s invited a narrow
+remedy: pin or vendor k9s. A third instance with an unrelated upstream — Canonical's
+own mirror — shows the class is *any* network fetch in the provisioning path, and
+there are many. Pinning k9s would have closed one door in a corridor.
+
+⚠️ **And it sharpens what the actual defect is.** `Dockerfile.uis-provision-host:81`
+says `DOCKER_BUILD=true` "allows provision scripts to continue on non-critical
+failures", and the log shows it working per-script — *"Error executing
+provision-host-02-kubetools.sh. Continuing with next script."* — and then the run
+**still fails**, because the provisioning summary exits 1 regardless. So the
+tolerate-failure mechanism is half-wired: it continues, and then the exit code
+undoes the continuing. Whatever ships here should decide **one** thing — either a
+failed tool install is fatal (and stop claiming otherwise) or it is not (and the
+summary must not exit 1) — because right now the comment and the behaviour
+disagree, which is the same class as three other defects found this week.
+
+Context: found while merging five unrelated PRs (#304–#308). None touches the
+provisioning path; the commit being built was a PostgREST SQL fix. That is now
+three for three on "the failure had nothing to do with the change", which is the
+strongest argument for treating it as infrastructure rather than as a flaky test
+someone should watch.
+
+
 ## Why it costs more than a re-run
 
 The build takes **11–13 minutes**. A failure means noticing, diagnosing whether
