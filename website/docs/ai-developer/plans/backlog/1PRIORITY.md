@@ -2,11 +2,55 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-09-07 (twelfth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-09-07 (thirteenth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
 **UIS lifecycle convention**: an INVESTIGATE moves from `backlog/` to `completed/` once every child PLAN has shipped (or the investigation is otherwise closed). Once moved, it disappears from this doc — see [`completed/`](../completed/index.md) for the historical list.
+
+---
+
+## Decision — how applications get deployed (Terje, 2026-09-07)
+
+**Answered in writing for the first time**, and it settles the question that
+`urb-agents#163` was opened to ask. Recorded normatively in
+[Rules for Deploying Applications](../../../contributors/rules/application-deployment.md).
+
+> **`uis` provisions. ArgoCD deploys. The seam is `uis configure`, which writes a Secret
+> the application's own manifest reads.**
+
+Both mechanisms are **permanent**. The choice is **per-object, not per-application** —
+one application can need both, and the first real one does: Atlas's pipeline has no
+workload of its own (Dagster launches its image), while its frontend is an ordinary
+`Deployment` and belongs to ArgoCD.
+
+**No UIS `Application` type.** Deferred per [ANALYSIS-nais-uis](./ANALYSIS-nais-uis.md)
+§4 item 13 — and it would not have covered Atlas anyway: NAIS's two workload kinds both
+run the application's *own* pods, and there is no NAIS concept for handing an image to a
+shared orchestrator. Atlas's shape is a consequence of UIS making Dagster a multi-tenant
+platform service, which NAIS has no analogue for.
+
+### The sequence, and the dependency people get wrong
+
+| | Work | Effort | State |
+|---|---|---|---|
+| 1 | Atlas via templates — [templates-000 ordering](./INVESTIGATE-templates-multi-surface-application.md), then the `config:` fields | M | in flight |
+| 2 | Atlas frontend via `uis argocd register` | free | ready, blocked by nothing |
+| 3 | [Retract `SCRIPT_CONFIGURABLE` where no handler exists](./PLAN-cli-configure-retract-unimplemented.md) | S | **filed today** |
+| 4 | Per-workload named secrets (§4 item 1) | M | not started |
+| 5 | Reconsider a UIS `Application` type | L | deferred |
+
+⚠️ **"We need GitOps before we onboard developers" is the wrong dependency.** ArgoCD
+already exists and already self-heals. What a developer cannot get today is a database
+with a credential *in a declaration* — that is item 4, and it gates external developers
+and whole-lifecycle GitOps alike. 🔴 And the limit to state honestly meanwhile: because
+`uis configure` mints a password UIS deliberately does not store, **a cluster rebuilt
+from git alone comes up with no application secrets.**
+
+**Item 3 is the cheapest thing here and the one that was not on anyone's list.** Eight
+services advertise `configure`; two have handlers. The two that work are exactly the two
+Atlas needs — so the provisioning half of the rule works for the first tenant and fails
+for the second. Retract the six; build none on speculation.
 
 ---
 

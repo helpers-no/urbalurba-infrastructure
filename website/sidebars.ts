@@ -315,6 +315,7 @@ const sidebars: SidebarsConfig = {
           },
           items: [
             'contributors/rules/kubernetes-deployment',
+            'contributors/rules/application-deployment',
             'contributors/rules/ingress-traefik',
             'contributors/rules/secrets-management',
             'contributors/rules/provisioning',
