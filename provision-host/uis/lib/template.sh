@@ -9,8 +9,12 @@
 # See: PLAN-002-uis-template-command.md
 
 UIS_BASE="${UIS_BASE:-/mnt/urbalurbadisk}"
-SERVICES_JSON="${UIS_BASE}/website/src/data/services.json"
-STACKS_JSON="${UIS_BASE}/website/src/data/stacks.json"
+# Overridable so unit tests can point at a fixture. UIS_BASE above already
+# respects an existing value; these two did not, which made every assertion
+# about service metadata depend on the live generated file — so a metadata
+# change elsewhere could turn a passing test red for reasons unrelated to it.
+SERVICES_JSON="${SERVICES_JSON:-${UIS_BASE}/website/src/data/services.json}"
+STACKS_JSON="${STACKS_JSON:-${UIS_BASE}/website/src/data/stacks.json}"
 
 # Registry fetch config
 REGISTRY_URL_PRIMARY="https://raw.githubusercontent.com/helpers-no/dev-templates/main/website/src/data/template-registry.json"
@@ -196,13 +200,78 @@ _validate_template_info() {
     return 0
 }
 
-# Resolve `provides` into an ordered deployment plan
-# Outputs one entry per line: <priority>|<service_id>|<database>|<init_file>
+# The `config:` keys a provides entry may set. Anything else is a typo and is
+# rejected: a silently-ignored `url-prefix` is the failure mode this whole
+# investigation exists to document.
+TEMPLATE_CONFIG_KEYS="database init schemas url_prefix namespace secret_name_prefix"
+
+# Write one service's config to $plan_dir/<service_id>.conf as key=value lines.
+#
+# ⚠️ The plan line carries only <priority>|<service_id>; configuration lives in
+# these files. Four fields fitted on a pipe-delimited line, nine do not — and
+# `IFS='|' read -r` mis-binds silently the first time a value contains a pipe.
+# Files also keep this bash 3.x-safe (macOS default: no associative arrays) and
+# leave something greppable behind when an install goes wrong.
+_write_service_conf() {
+    local plan_dir="$1" info_file="$2" idx="$3" svc="$4"
+    local conf="$plan_dir/${svc}.conf"
+    : > "$conf"
+
+    # Reject unknown config keys before reading any of them.
+    local keys k
+    keys=$(yq -r ".provides.services[$idx].config // {} | keys | .[]" "$info_file" 2>/dev/null)
+    while IFS= read -r k; do
+        [[ -z "$k" ]] && continue
+        case " $TEMPLATE_CONFIG_KEYS " in
+            *" $k "*) ;;
+            *)  log_error "Unknown config key '$k' for service '$svc'."
+                echo "Supported keys: $TEMPLATE_CONFIG_KEYS" >&2
+                return 1 ;;
+        esac
+    done <<< "$keys"
+
+    local v
+    for k in $TEMPLATE_CONFIG_KEYS; do
+        v=$(yq -r ".provides.services[$idx].config.$k // \"\"" "$info_file" 2>/dev/null)
+        [[ -n "$v" ]] && printf '%s=%s\n' "$k" "$v" >> "$conf"
+    done
+
+    # `configure.sh` requires --namespace and --secret-name-prefix together.
+    # Catch it here, where we can say which one is missing, rather than letting
+    # configure reject it later with less context.
+    local ns sp
+    ns=$(_conf_get "$conf" namespace); sp=$(_conf_get "$conf" secret_name_prefix)
+    if [[ -n "$ns" && -z "$sp" ]]; then
+        log_error "Service '$svc': config.namespace requires config.secret_name_prefix."
+        return 1
+    fi
+    if [[ -n "$sp" && -z "$ns" ]]; then
+        log_error "Service '$svc': config.secret_name_prefix requires config.namespace."
+        return 1
+    fi
+    return 0
+}
+
+# Read one key from a conf file. Empty output when absent.
+_conf_get() {
+    local conf="$1" key="$2"
+    [[ -f "$conf" ]] || return 0
+    sed -n "s/^${key}=//p" "$conf" | head -1
+}
+
+# Resolve `provides` into an ordered deployment plan.
+#
+# Outputs one entry per line: <priority>|<service_id>
+# Per-service configuration is written to $plan_dir/<service_id>.conf.
 _resolve_provides() {
     local info_file="$1"
     local template_dir="$2"
+    local plan_dir="$3"
 
-    # Collect services from provides.stacks (expand via stacks.json)
+    mkdir -p "$plan_dir" || return 1
+
+    # Collect services from provides.stacks (expand via stacks.json). These are
+    # deploy-only: a stack names services, not per-app configuration.
     local stack_services=""
     local stacks
     stacks=$(yq -r '.provides.stacks[]? // empty' "$info_file" 2>/dev/null)
@@ -213,61 +282,96 @@ _resolve_provides() {
         stack_services+="$svcs"$'\n'
     done <<< "$stacks"
 
-    # Collect services from provides.services — both plain strings and objects
-    # Format each as: <service_id>|<database>|<init_file>
+    # provides.services — plain strings (deploy only) and objects (with config).
     local direct_services=""
     local service_count
     service_count=$(yq -r '.provides.services // [] | length' "$info_file" 2>/dev/null)
+    local i
     for ((i=0; i<service_count; i++)); do
-        local entry_type
+        local entry_type svc
         entry_type=$(yq -r ".provides.services[$i] | type" "$info_file" 2>/dev/null)
         if [[ "$entry_type" == "!!str" ]]; then
-            # Plain string — deploy only
-            local svc
             svc=$(yq -r ".provides.services[$i]" "$info_file" 2>/dev/null)
-            direct_services+="${svc}||"$'\n'
+            : > "$plan_dir/${svc}.conf"
         else
-            # Object with service + config
-            local svc db init
             svc=$(yq -r ".provides.services[$i].service" "$info_file" 2>/dev/null)
-            db=$(yq -r ".provides.services[$i].config.database // \"\"" "$info_file" 2>/dev/null)
-            init=$(yq -r ".provides.services[$i].config.init // \"\"" "$info_file" 2>/dev/null)
-            direct_services+="${svc}|${db}|${init}"$'\n'
+            if [[ -z "$svc" || "$svc" == "null" ]]; then
+                log_error "provides.services[$i] has no 'service' field"
+                return 1
+            fi
+            _write_service_conf "$plan_dir" "$info_file" "$i" "$svc" || return 1
         fi
+        direct_services+="${svc}"$'\n'
     done
 
-    # Combine stack services (deploy only) and direct services
-    # Deduplicate by service ID (keep direct services if duplicated — they have config)
+    # Stack services first, direct services after, so direct entries win.
     local all_services=""
-    # First add stack services (deploy-only)
     while IFS= read -r svc; do
         [[ -z "$svc" ]] && continue
-        all_services+="${svc}||"$'\n'
+        [[ -f "$plan_dir/${svc}.conf" ]] || : > "$plan_dir/${svc}.conf"
+        all_services+="${svc}"$'\n'
     done <<< "$stack_services"
-    # Then append direct services (may override stack entries)
     all_services+="$direct_services"
 
-    # Deduplicate: keep the last entry for each service (direct services win)
-    local dedup=""
-    local seen=""
-    # Process in reverse to keep first (direct) occurrence
-    local reversed
+    # Deduplicate by service id, keeping the LAST occurrence (direct wins),
+    # by walking the list in reverse and keeping the first one seen.
+    local dedup="" seen="" reversed
     reversed=$(echo "$all_services" | tac)
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        local svc="${line%%|*}"
-        if [[ -z "$svc" ]]; then continue; fi
+    while IFS= read -r svc; do
+        [[ -z "$svc" ]] && continue
         if [[ ",$seen," != *",$svc,"* ]]; then
             seen="$seen,$svc"
-            # Add priority prefix for sorting
             local priority
             priority=$(jq -r --arg id "$svc" '.services[] | select(.id == $id) | .priority // 999' "$SERVICES_JSON" 2>/dev/null)
-            dedup+="${priority}|${line}"$'\n'
+            dedup+="${priority}|${svc}"$'\n'
         fi
     done <<< "$reversed"
 
-    # Sort by priority (numeric)
     echo "$dedup" | grep -v '^$' | sort -t'|' -k1,1n
+}
+
+# Is this service multi-instance? Drives whether `uis deploy` gets --app.
+# Read from services.json rather than a hardcoded list, so a future
+# multi-instance service needs no edit here.
+_service_is_multi_instance() {
+    local svc="$1"
+    [[ "$(jq -r --arg id "$svc" '.services[] | select(.id == $id) | .multiInstance // false' "$SERVICES_JSON" 2>/dev/null)" == "true" ]]
+}
+
+# Resolve an `init:` value to SQL on stdout. Accepts a single file or a
+# directory of *.sql applied in LC_ALL=C sort order.
+#
+# ⚠️ Order is part of the contract, not a convenience. Tenants number their
+# migrations (001_, 050_) precisely because DDL is order-dependent, and a
+# partial apply is what configure-postgresql's rollback exists to undo — so the
+# ordered list is printed before anything is applied and stays in the log.
+_collect_init_sql() {
+    local path="$1"
+    if [[ -f "$path" ]]; then
+        echo "Init file: $(basename "$path")" >&2
+        cat "$path"
+        return 0
+    fi
+    if [[ -d "$path" ]]; then
+        local files
+        files=$(LC_ALL=C find "$path" -maxdepth 1 -type f -name '*.sql' | LC_ALL=C sort)
+        if [[ -z "$files" ]]; then
+            log_error "Init directory '$path' contains no .sql files."
+            return 1
+        fi
+        local n
+        n=$(printf '%s\n' "$files" | grep -c .)
+        echo "Init directory: $n .sql file(s), applied in this order:" >&2
+        printf '%s\n' "$files" | while IFS= read -r f; do echo "    $(basename "$f")" >&2; done
+        printf '%s\n' "$files" | while IFS= read -r f; do
+            printf -- '-- >>> %s\n' "$(basename "$f")"
+            cat "$f"
+            printf '\n'
+        done
+        return 0
+    fi
+    log_error "Init path '$path' is neither a file nor a directory."
+    return 1
 }
 
 # Substitute {{ params.* }} references using a params file (key=value lines)
@@ -370,9 +474,11 @@ cmd_template_install() {
     log_info "Effective params:"
     sed 's/^/  /' "$params_file" >&2
 
-    # Resolve provides into deployment plan
+    # Resolve provides into a deployment plan. Per-service configuration lands
+    # in $plan_dir/<service_id>.conf; the plan itself is <priority>|<service_id>.
+    local plan_dir="$template_dir/.plan"
     local plan
-    plan=$(_resolve_provides "$info_file" "$template_dir")
+    plan=$(_resolve_provides "$info_file" "$template_dir" "$plan_dir") || return 1
 
     if [[ -z "$plan" ]]; then
         log_error "Deployment plan is empty — no services in provides"
@@ -383,9 +489,10 @@ cmd_template_install() {
     echo "Template folder: $folder"
     echo ""
     echo "Deployment plan (in priority order):"
-    echo "$plan" | while IFS='|' read -r priority svc db init; do
+    echo "$plan" | while IFS='|' read -r priority svc; do
         local action="deploy"
-        [[ -n "$db" || -n "$init" ]] && action="deploy + configure"
+        [[ -s "$plan_dir/${svc}.conf" ]] && action="deploy + configure"
+        _service_is_multi_instance "$svc" && action="$action (per-app instance)"
         echo "  [$priority] $svc — $action"
     done
     echo ""
@@ -397,40 +504,59 @@ cmd_template_install() {
 
     # Execute plan
     local results=""
-    while IFS='|' read -r priority svc db init; do
+    while IFS='|' read -r priority svc; do
         [[ -z "$svc" ]] && continue
+        local conf="$plan_dir/${svc}.conf"
 
-        # Deploy service
-        log_info "Deploying $svc..."
-        if ! uis deploy "$svc" >&2; then
+        # Deploy service.
+        #
+        # ⚠️ --app is required for a multi-instance service and wrong for a
+        # single-instance one. This used to deploy without it unconditionally
+        # while the configure call below always passed it, so the two halves of
+        # one loop disagreed and no multi-instance service could be installed
+        # from a template at all (TPL-F3). Driven by services.json rather than a
+        # list, so a future multi-instance service needs no edit here.
+        local deploy_args=("$svc")
+        if _service_is_multi_instance "$svc"; then
+            deploy_args+=(--app "$app_name")
+        fi
+        log_info "Deploying ${deploy_args[*]}..."
+        if ! uis deploy "${deploy_args[@]}" >&2; then
             log_error "Deploy failed for $svc"
             return 1
         fi
 
-        # Configure if config is present
-        if [[ -n "$db" || -n "$init" ]]; then
-            # Substitute params in db and init file path
-            local resolved_db resolved_init
-            resolved_db=$(_substitute_params "$db" "$params_file")
-            resolved_init=$(_substitute_params "$init" "$params_file")
+        # Configure if this service has any config at all.
+        if [[ -s "$conf" ]]; then
+            local resolved_db resolved_init resolved_schemas resolved_prefix
+            local resolved_ns resolved_secret_prefix
+            resolved_db=$(_substitute_params "$(_conf_get "$conf" database)" "$params_file")
+            resolved_init=$(_substitute_params "$(_conf_get "$conf" init)" "$params_file")
+            resolved_schemas=$(_substitute_params "$(_conf_get "$conf" schemas)" "$params_file")
+            resolved_prefix=$(_substitute_params "$(_conf_get "$conf" url_prefix)" "$params_file")
+            resolved_ns=$(_substitute_params "$(_conf_get "$conf" namespace)" "$params_file")
+            resolved_secret_prefix=$(_substitute_params "$(_conf_get "$conf" secret_name_prefix)" "$params_file")
 
+            # --app is unconditional here and that is deliberate: a
+            # single-instance service can still hold per-app resources, which is
+            # exactly what `configure postgresql --app` creates.
             local configure_args=("$svc" "--app" "$app_name" "--json")
             [[ -n "$resolved_db" ]] && configure_args+=(--database "$resolved_db")
+            [[ -n "$resolved_schemas" ]] && configure_args+=(--schemas "$resolved_schemas")
+            [[ -n "$resolved_prefix" ]] && configure_args+=(--url-prefix "$resolved_prefix")
+            [[ -n "$resolved_ns" ]] && configure_args+=(--namespace "$resolved_ns")
+            [[ -n "$resolved_secret_prefix" ]] && configure_args+=(--secret-name-prefix "$resolved_secret_prefix")
 
             log_info "Configuring $svc (args: ${configure_args[*]})..."
             local result configure_exit
             if [[ -n "$resolved_init" ]]; then
-                # Substitute params in init file content, pipe via stdin
+                # A file or a directory of ordered *.sql — see _collect_init_sql.
                 local init_path="$template_dir/$resolved_init"
-                if [[ ! -f "$init_path" ]]; then
-                    log_error "Init file not found: $init_path"
-                    return 1
-                fi
                 local init_content
-                init_content=$(cat "$init_path")
+                init_content=$(_collect_init_sql "$init_path") || return 1
                 init_content=$(_substitute_params "$init_content" "$params_file")
                 configure_args+=(--init-file -)
-                log_info "Configuring $svc with init file: $resolved_init ($(wc -l <<< "$init_content") lines)"
+                log_info "Configuring $svc with init from '$resolved_init' ($(wc -l <<< "$init_content") lines)"
                 result=$(echo "$init_content" | uis configure "${configure_args[@]}")
                 configure_exit=$?
             else
