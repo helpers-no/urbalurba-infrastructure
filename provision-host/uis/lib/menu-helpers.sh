@@ -88,8 +88,12 @@ show_inputbox() {
 
     if [[ -n "$cmd" ]]; then
         local result
-        result=$("$cmd" --title "$title" --inputbox "$prompt" 10 50 "$default" 3>&1 1>&2 2>&3)
-        local status=$?
+        # ⚠️ `|| status=$?`. Under `set -e` (uis-cli.sh:9) a bare assignment
+        # aborts the moment the dialog exits non-zero — which is exactly what
+        # Cancel does — so `return $status` below was unreachable and pressing
+        # Cancel killed the CLI instead of returning to the caller.
+        local status=0
+        result=$("$cmd" --title "$title" --inputbox "$prompt" 10 50 "$default" 3>&1 1>&2 2>&3) || status=$?
         echo "$result"
         return $status
     else
@@ -113,8 +117,12 @@ show_menu() {
 
     if [[ -n "$cmd" ]]; then
         local result
-        result=$("$cmd" --title "$title" --menu "$prompt" 20 60 12 "$@" 3>&1 1>&2 2>&3)
-        local status=$?
+        # ⚠️ `|| status=$?`. Under `set -e` (uis-cli.sh:9) a bare assignment
+        # aborts the moment the dialog exits non-zero — which is exactly what
+        # Cancel does — so `return $status` below was unreachable and pressing
+        # Cancel killed the CLI instead of returning to the caller.
+        local status=0
+        result=$("$cmd" --title "$title" --menu "$prompt" 20 60 12 "$@" 3>&1 1>&2 2>&3) || status=$?
         echo "$result"
         return $status
     else
@@ -152,8 +160,12 @@ show_checklist() {
 
     if [[ -n "$cmd" ]]; then
         local result
-        result=$("$cmd" --title "$title" --checklist "$prompt" 20 60 12 "$@" 3>&1 1>&2 2>&3)
-        local status=$?
+        # ⚠️ `|| status=$?`. Under `set -e` (uis-cli.sh:9) a bare assignment
+        # aborts the moment the dialog exits non-zero — which is exactly what
+        # Cancel does — so `return $status` below was unreachable and pressing
+        # Cancel killed the CLI instead of returning to the caller.
+        local status=0
+        result=$("$cmd" --title "$title" --checklist "$prompt" 20 60 12 "$@" 3>&1 1>&2 2>&3) || status=$?
         echo "$result"
         return $status
     else
@@ -205,8 +217,10 @@ show_radiolist() {
 
     if [[ -n "$cmd" ]]; then
         local result
-        result=$("$cmd" --title "$title" --radiolist "$prompt" 20 60 12 "$@" 3>&1 1>&2 2>&3)
-        local status=$?
+        # ⚠️ `|| status=$?` — see the note on the inputbox above. A bare
+        # assignment under `set -e` makes Cancel abort the CLI.
+        local status=0
+        result=$("$cmd" --title "$title" --radiolist "$prompt" 20 60 12 "$@" 3>&1 1>&2 2>&3) || status=$?
         echo "$result"
         return $status
     else
