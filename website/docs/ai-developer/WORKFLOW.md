@@ -183,6 +183,55 @@ include it in the same PR.
 | **MINOR** `1.x.0` | new capability, or a command behaves newly | the ambient update notice; `./uis browserless verify-session`; a new service |
 | **MAJOR** `x.0.0` | someone's working setup breaks | a renamed command; a changed config file format; a removed flag |
 
+### When a bump is REQUIRED, not merely appropriate (Terje, 2026-09-08)
+
+> **A merge that changes what hosts run must be detectable by `./uis pull`.**
+
+That is mechanical, not a matter of taste, and it follows from how detection
+works:
+
+| | reads |
+|---|---|
+| `installed_version()` | `/mnt/urbalurbadisk/version.txt` **inside the image** |
+| `remote_version()` | `version.txt` on `main`, via `raw.githubusercontent.com` |
+
+`uis pull` compares those two strings **and nothing else** — not the image
+digest, not the commit. So a merge that changes shipped code and leaves
+`version.txt` alone republishes the image with a moved digest, an unchanged
+version, and **`./uis pull` reporting "up to date" on every host.** The fix is
+invisible to everyone who has one.
+
+**The rule:** if a PR touches any path the container build ships, it bumps
+`version.txt` in the same PR. Those paths are exactly the trigger list in
+[`build-uis-container.yml`](https://github.com/helpers-no/urbalurba-infrastructure/blob/main/.github/workflows/build-uis-container.yml):
+
+```
+ansible/  manifests/  hosts/  cloud-init/  networking/  provision-host/
+platforms/  scripts/  Dockerfile.uis-provision-host  version.txt
+```
+
+A `website/**`-only change ships nothing to a host and needs no bump.
+
+⚠️ **Enforced by CI, deliberately.** `Test UIS Scripts` fails a PR that touches
+a shipping path without touching `version.txt`. This rule was already written
+above as "set the version yourself, do not ask" and was still missed on
+2026-09-08 — by the maintainer, on a PostgREST fix, costing a release. A rule
+held by review alone is a rule that fails at the moment everyone is busy, which
+is the same argument that put the docs build on pull requests.
+
+### ⚠️ The publish lag, and why `pull` can look wrong for ten minutes
+
+`remote_version()` sees `main` the moment a bump merges. The **image** only
+carries the new number once `Build UIS Container` finishes and pushes. In
+between, `./uis pull` correctly reports an update, pulls, and still shows the old
+version — because the image it pulled predates the bump.
+
+That is not a defect and needs no engineering. It does need knowing, because the
+alternative is someone debugging a correct mechanism. If the build has failed
+rather than merely being slow, the gap is permanent until it is fixed — see
+[PLAN-ci-third-party-download-fails-the-whole-image-build](./plans/backlog/PLAN-ci-third-party-download-fails-the-whole-image-build.md),
+where a red build left `main` and the shipped artifact disagreeing silently.
+
 ### ⚠️ Current series: stay on `1.6.x` (Terje, 2026-08-25)
 
 **Until every service runs on asgard, the minor number does not move.** Bump the

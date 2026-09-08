@@ -17,6 +17,21 @@ on:
       # so its bumped pins merged unexercised. See
       # INVESTIGATE-system-workflow-paths-filter-drift.
       - '.github/workflows/test-uis.yml'
+      # ⚠️ The remaining shipping paths are here ONLY so the version-bump guard
+      # below can run when they change. Without them, a PR touching just
+      # manifests/ or hosts/ would ship code to every host and the guard that
+      # exists to catch exactly that would never execute — a paths filter
+      # narrower than what the job depends on, which is the third time this
+      # repository has hit that shape (ansible/** above, version.txt in
+      # docs.yml, and this). Keep in step with build-uis-container.yml.
+      - 'manifests/**'
+      - 'hosts/**'
+      - 'cloud-init/**'
+      - 'networking/**'
+      - 'platforms/**'
+      - 'scripts/**'
+      - 'Dockerfile.uis-provision-host'
+      - 'version.txt'
   push:
     branches: [main]
     paths:
@@ -27,6 +42,57 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ⚠️ A merge that changes what hosts run must be detectable by `./uis pull`,
+  # and `pull` compares exactly two strings: version.txt inside the image, and
+  # version.txt on main. Nothing else - not the digest, not the commit. So a PR
+  # that ships code without bumping the version republishes the image with a
+  # moved digest, an unchanged version, and every host reporting "up to date".
+  #
+  # WORKFLOW.md has said "set the version yourself, do not ask" for weeks and it
+  # was still missed on 2026-09-08, by the maintainer, on a PostgREST fix,
+  # costing a release. A rule held by review alone fails at the moment everyone
+  # is busy - the same argument that put the docs build on pull requests.
+  #
+  # The shipping paths are the trigger list in build-uis-container.yml. Keep the
+  # two lists in step: that is two places that must agree, which is exactly how
+  # the paths-filter defects happened, so this job names the file it mirrors.
+  version-bump:
+    name: Version Bump
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: A PR that ships code must bump version.txt
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "$BASE" "$HEAD")
+          ships=$(printf '%s\n' "$changed" | grep -E \
+            '^(ansible/|manifests/|hosts/|cloud-init/|networking/|provision-host/|platforms/|scripts/|Dockerfile\.uis-provision-host)' \
+            || true)
+          if [ -z "$ships" ]; then
+            echo "No shipped paths changed - no version bump required."
+            exit 0
+          fi
+          echo "This PR changes files the container ships:"
+          printf '  %s\n' $ships
+          if printf '%s\n' "$changed" | grep -qx 'version.txt'; then
+            echo "version.txt is bumped to $(cat version.txt). OK."
+            exit 0
+          fi
+          echo ""
+          echo "::error::This PR changes files the container image ships but does not bump version.txt."
+          echo "Without a bump, the image is republished with a moved digest and an unchanged"
+          echo "version, so './uis pull' reports 'up to date' on every host and the change never"
+          echo "reaches anyone. See WORKFLOW.md, 'When a bump is REQUIRED'."
+          echo "Current version: $(cat version.txt) - bump the PATCH during the 1.6.x series."
+          exit 1
+
   static-tests:
     name: Static Tests
     runs-on: ubuntu-latest
