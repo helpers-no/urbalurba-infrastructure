@@ -284,11 +284,20 @@
           that:
             - _read.stdout is search('uis-verify')
           fail_msg: >-
-            {{ _app_name }}-postgrest did not return the probe row. The pod may be
-            running while unable to reach {{ _db }}, or the schema
-            '{{ _schema }}' is not the one it serves. Response was:
+            {{ _app_name }}-postgrest did not return the probe row.
+            {% if '42501' in (_read.stdout | default('')) %}PostgreSQL returned
+            42501 (permission denied), so the pod and the schema are fine and the
+            anon role cannot READ what the app role created. That is the missing
+            default privilege: `configure postgrest` records ALTER DEFAULT
+            PRIVILEGES for the role it connects as, so objects created by
+            '{{ _app_name | replace('-', '_') }}' are covered only if a FOR ROLE
+            entry exists. Fix: re-run `./uis configure postgrest --app
+            {{ _app_name }}`, which reapplies the grants.
+            {% else %}The pod may be running while unable to reach {{ _db }}, or
+            the schema '{{ _schema }}' is not the one it serves.
+            {% endif %}Response was:
             {{ _read.stdout | default('<empty>') | truncate(200) }}
-          success_msg: "The API served data written by the app."
+          success_msg: "The API served data the app role wrote - default privileges cover tenant-created objects."
 
       # --- Test C: writes through the API must be refused (read-only by design) ---
       - name: "C1. POST through the API"
