@@ -310,9 +310,35 @@ _pgrst_check_schemas_exist() {
 # Build the per-schema GRANT block (USAGE on schema + SELECT on existing
 # tables + DEFAULT PRIVILEGES for future tables) for one role across a
 # comma-separated schema list. Caller wraps the result in a transaction.
+#
+# ⚠️ TWO `ALTER DEFAULT PRIVILEGES` statements per schema, and the second one is
+# the one that matters. Without `FOR ROLE`, the statement records an entry keyed
+# to the CONNECTING role (`pg_default_acl.defaclrole`) and applies only to
+# objects THAT role goes on to create. This function runs as `postgres`
+# (`_pgrst_exec_db` passes `-U "$PG_ADMIN_USER"`), so the unqualified form only
+# ever covered admin-created objects.
+#
+# A real tenant's views are created by its OWN role — dbt, a migration runner, a
+# generated-SQL script — so they got no grant, the anon role could not read them,
+# and the API answered with an empty schema forever. Silent: the install
+# succeeds, the code location loads, PostgREST is healthy, and every request
+# returns nothing.
+#
+# Verified on PostgreSQL 15.18 (atlas, urb-agents#323):
+#
+#   ALTER DEFAULT PRIVILEGES run as   | later view created by app role readable
+#   ----------------------------------|----------------------------------------
+#   admin (postgres)                  | f
+#   the app role                      | t
+#   admin, WITH `FOR ROLE <app>`      | t
+#
+# Both statements are emitted rather than replacing one with the other: the
+# unqualified form still covers objects an operator creates as admin, which the
+# verify playbook and manual fixups do.
 _pgrst_build_grant_sql() {
     local schemas="$1"
     local role="$2"
+    local owner="${3:-}"
     local IFS=','
     local s out=""
     for s in $schemas; do
@@ -320,6 +346,10 @@ _pgrst_build_grant_sql() {
 GRANT SELECT ON ALL TABLES IN SCHEMA $s TO $role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA $s GRANT SELECT ON TABLES TO $role;
 "
+        if [[ -n "$owner" ]]; then
+            out+="ALTER DEFAULT PRIVILEGES FOR ROLE $owner IN SCHEMA $s GRANT SELECT ON TABLES TO $role;
+"
+        fi
     done
     printf '%s' "$out"
 }
@@ -689,16 +719,66 @@ EOF
         path="first-time"
     fi
 
-    # ---- PHASE 5: no-op short-circuit ----
+    # ---- PHASE 4b: resolve the default-privileges owner, if there is one ----
+    #
+    # ⚠️ $app_user is NOT guaranteed to exist. The code once assumed it did,
+    # "because `uis configure postgresql --app <name>` created it" — but nothing
+    # requires that route: `configure postgrest --database <db>` accepts any
+    # database, however provisioned. imac measured the regression on
+    # urb-agents#330: with an unguarded `FOR ROLE`, an app whose role is absent
+    # went from `{"status":"ok"}` on main to a hard psql failure
+    # (`role "uisorphan" does not exist`).
+    #
+    # That population is real, not hypothetical — the tester's own long-lived
+    # instance has `<app>_web_anon` and `<app>_authenticator` but no `<app>`,
+    # with every object owned by `postgres`. For exactly those installs the
+    # UNQUALIFIED default-privileges entry is the one that works, which is the
+    # second reason both statements are emitted.
+    local grant_owner=""
+    if _pgrst_role_exists "$app_user" "$admin_pass"; then
+        grant_owner="$app_user"
+    else
+        echo "Note: role '$app_user' does not exist, so no FOR ROLE default privileges are set." >&2
+        echo "      Objects created by '$app_user' would not be readable by '$web_anon_role'." >&2
+        echo "      This is correct when the database's objects are owned by postgres." >&2
+        echo "      If a tenant's own tooling creates objects, run:" >&2
+        echo "        ./uis configure postgresql --app $app_name" >&2
+        echo "      then re-run this command." >&2
+    fi
+
+    # ---- PHASE 5: already-configured — reapply grants so a re-run converges ----
     if [[ "$path" == "no-op" ]]; then
-        echo "PostgREST already configured for '$app_name' with schemas '$schemas' — nothing to do." >&2
+        # ⚠️ This path used to `return 0` before any SQL ran, which made the
+        # documented remediation for the FOR ROLE defect a NO-OP: an operator
+        # told to "re-run configure" got "nothing to do" and an instance still
+        # broken, believing it repaired (imac, urb-agents#330 Finding A).
+        #
+        # GRANT and ALTER DEFAULT PRIVILEGES are both idempotent, so applying
+        # them unconditionally costs one short transaction and makes `configure`
+        # converge instead of merely reporting. Nothing else about this path
+        # changes: no password is touched, no role created, no DROP OWNED.
+        local noop_grants noop_result noop_rc=0
+        noop_grants=$(_pgrst_build_grant_sql "$schemas" "$web_anon_role" "$grant_owner")
+        noop_result=$(_pgrst_exec_db "BEGIN;
+$noop_grants
+COMMIT;" "$admin_pass" "$database_name") || noop_rc=$?
+        if [[ $noop_rc -ne 0 ]]; then
+            local msg="Already configured, but reapplying grants failed in '$database_name' (psql exit $noop_rc): $noop_result"
+            if [[ "$json_output" == true ]]; then
+                _configure_error "reapply_grants" "$service_id" "$msg"
+            fi
+            log_error "$msg"
+            return 1
+        fi
+        echo "PostgREST already configured for '$app_name' with schemas '$schemas'; grants reapplied." >&2
         if [[ "$json_output" == true ]]; then
             cat <<EOF
-{"status":"already_configured","service":"postgrest","app":"$app_name","namespace":"$PGRST_NAMESPACE","secret":"$secret_name","schemas":"$schemas","public_url_prefix":"$url_prefix","next_step":"./uis deploy postgrest --app $app_name"}
+{"status":"already_configured","service":"postgrest","app":"$app_name","namespace":"$PGRST_NAMESPACE","secret":"$secret_name","schemas":"$schemas","public_url_prefix":"$url_prefix","grants_reapplied":true,"default_privileges_owner":"${grant_owner:-none}","next_step":"./uis deploy postgrest --app $app_name"}
 EOF
         else
             echo ""
-            echo "PostgREST already configured for '$app_name' (schemas: $schemas). To proceed:"
+            echo "PostgREST already configured for '$app_name' (schemas: $schemas)."
+            echo "Grants reapplied${grant_owner:+, including FOR ROLE $grant_owner}. To proceed:"
             echo "  ./uis deploy postgrest --app $app_name"
             echo ""
             echo "To rotate the password: ./uis configure postgrest --app $app_name --rotate"
@@ -712,7 +792,11 @@ EOF
     # Per-schema GRANT block (USAGE + SELECT on existing tables + DEFAULT
     # PRIVILEGES for future tables) — used by all three SQL paths.
     local grant_sql
-    grant_sql=$(_pgrst_build_grant_sql "$schemas" "$web_anon_role")
+    # $grant_owner is $app_user when that role exists and empty otherwise —
+    # resolved and explained in PHASE 4b. Never pass $app_user directly here:
+    # an unguarded FOR ROLE hard-fails on any database whose owning role was
+    # not created by `uis configure postgresql`.
+    grant_sql=$(_pgrst_build_grant_sql "$schemas" "$web_anon_role" "$grant_owner")
 
     # Decide password handling per path. For Reconfigure-preserve-URI the
     # password is unchanged; we don't touch the role's stored password and we

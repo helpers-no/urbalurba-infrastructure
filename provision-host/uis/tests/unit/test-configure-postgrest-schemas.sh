@@ -140,6 +140,42 @@ else
 fi
 
 # ============================================================================
+# _pgrst_build_grant_sql — the FOR ROLE clause
+#
+# Regression guard for urb-agents#323. Without `FOR ROLE <owner>`, ALTER DEFAULT
+# PRIVILEGES is keyed to the CONNECTING role — `postgres`, since
+# _pgrst_exec_db passes -U "$PG_ADMIN_USER" — and so covers only admin-created
+# objects. A tenant's own views got no grant and the API answered an empty
+# schema forever, silently. String-level here; the behaviour it protects is
+# PostgreSQL's and was measured on 15.18.
+# ============================================================================
+
+start_test "grant sql: emits FOR ROLE <owner> when an owner is given"
+out=$(_pgrst_build_grant_sql "api_v1" "atlas_web_anon" "atlas")
+echo "$out" | grep -q "ALTER DEFAULT PRIVILEGES FOR ROLE atlas IN SCHEMA api_v1 GRANT SELECT ON TABLES TO atlas_web_anon;" \
+    && pass_test || fail_test "missing FOR ROLE statement in: $out"
+
+start_test "grant sql: keeps the unqualified form too (admin-created objects)"
+out=$(_pgrst_build_grant_sql "api_v1" "atlas_web_anon" "atlas")
+echo "$out" | grep -q "ALTER DEFAULT PRIVILEGES IN SCHEMA api_v1 GRANT SELECT ON TABLES TO atlas_web_anon;" \
+    && pass_test || fail_test "unqualified ALTER DEFAULT PRIVILEGES was dropped: $out"
+
+start_test "grant sql: one FOR ROLE per schema across a list"
+out=$(_pgrst_build_grant_sql "api_v1,marts,raw" "atlas_web_anon" "atlas")
+n=$(echo "$out" | grep -c "ALTER DEFAULT PRIVILEGES FOR ROLE atlas IN SCHEMA")
+[[ "$n" -eq 3 ]] && pass_test || fail_test "expected 3 FOR ROLE statements, got $n"
+
+start_test "grant sql: omits FOR ROLE when no owner is passed (back-compat)"
+out=$(_pgrst_build_grant_sql "api_v1" "atlas_web_anon")
+echo "$out" | grep -q "FOR ROLE" && fail_test "emitted FOR ROLE with no owner: $out" || pass_test
+
+start_test "grant sql: USAGE and SELECT-on-all still emitted per schema"
+out=$(_pgrst_build_grant_sql "api_v1,marts" "atlas_web_anon" "atlas")
+u=$(echo "$out" | grep -c "^GRANT USAGE ON SCHEMA")
+a=$(echo "$out" | grep -c "^GRANT SELECT ON ALL TABLES IN SCHEMA")
+[[ "$u" -eq 2 && "$a" -eq 2 ]] && pass_test || fail_test "expected 2 each, got USAGE=$u ALL=$a"
+
+# ============================================================================
 # Summary
 # ============================================================================
 
