@@ -15,6 +15,15 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Monitor the components that are not in the cluster](PLAN-system-observability-004-external-targets.md) | The parts of a production install that live outside Kubernetes — the | 2026-09-09 |
+| [Ship a dashboard with the service](PLAN-system-observability-003-service-dashboards.md) | `uis deploy <service>` on a cluster with Grafana yields a dashboard for | 2026-09-09 |
+| [Baseline alert rules, and somewhere for them to go](PLAN-system-observability-002-alert-baseline.md) | `uis stack install observability` produces a platform that **tells you | 2026-09-09 |
+| [Ship container logs to Loki](PLAN-system-observability-001-log-collection.md) | Logs from every pod are searchable in Grafana, automatically, so that | 2026-09-09 |
+| [Ship the monitor pipeline as part of the service](PLAN-service-uptime-kuma-005-ship-the-pipeline.md) | `uis deploy uptime-kuma` gives a watchdog that is **already monitoring | 2026-09-09 |
+| [Make the watchdog able to wake someone — and watch itself](PLAN-service-uptime-kuma-003-alerting.md) | An alert reaches a human away from home, and the watchdog's own death | 2026-09-09 |
+| [Define what the watchdog watches](PLAN-service-uptime-kuma-002-monitors.md) | — | 2026-09-09 |
+| [Deploy Uptime Kuma as an external watchdog](PLAN-service-uptime-kuma-001-deploy.md) | — | 2026-09-09 |
+| [Plan: The Grafana deploy gate reports the stack, not the race](PLAN-service-grafana-deploy-gate-fix.md) | Make `uis deploy grafana` succeed deterministically on a healthy stack, | 2026-09-09 |
 | [Plan: reject a valid `config:` key on the wrong service, at parse time](PLAN-templates-config-keys-per-service.md) | A template declaring a supported `config:` key on a service that does | 2026-09-08 |
 | [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-08 |
 | [---](PLAN-ci-third-party-download-fails-the-whole-image-build.md) | — | 2026-09-08 |
@@ -24,9 +33,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Ship neko as an optional add-on — the honest case for and against](PLAN-service-neko-001-optional-addon.md) | — | 2026-09-07 |
 | [Plan: advertise only the `configure` handlers that exist](PLAN-cli-configure-retract-unimplemented.md) | `SCRIPT_CONFIGURABLE="true"` appears only on services that actually have a | 2026-09-07 |
 | [---](INVESTIGATE-system-launcher-image-version-drift.md) | — | 2026-08-31 |
-| [Ship the monitor pipeline as part of the service](PLAN-service-uptime-kuma-005-ship-the-pipeline.md) | `uis deploy uptime-kuma` gives a watchdog that is **already monitoring | 2026-08-30 |
-| [Define what the watchdog watches](PLAN-service-uptime-kuma-002-monitors.md) | — | 2026-08-30 |
-| [Deploy Uptime Kuma as an external watchdog](PLAN-service-uptime-kuma-001-deploy.md) | — | 2026-08-30 |
 | [A workflow's `paths:` filter and what the job actually depends on drift apart, silently](INVESTIGATE-system-workflow-paths-filter-drift.md) | Decide how a workflow's declared `paths:` can be kept honest against what its job really | 2026-08-30 |
 | [Investigate: should a service bring its own availability probe, and can Uptime Kuma accept one?](INVESTIGATE-system-monitor-definitions-with-services.md) | Decide how the external watchdog's monitors get created and stay in | 2026-08-30 |
 | [`uis deploy` reports one exit code for two different outcomes](INVESTIGATE-cli-deploy-revert-exit-code.md) | An operator or a script can tell "the topology change failed" apart from "the topology | 2026-08-30 |
@@ -61,12 +67,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Investigate: DCT One-Command ArgoCD Deployment](INVESTIGATE-service-argocd-dct-deploy.md) | Enable a developer to deploy their current project to the UIS Kubernetes cluster from inside the DCT devcontainer with a single command. | 2026-08-13 |
 | [Investigate: `./uis deploy <service>` semantics for services without a playbook](INVESTIGATE-cli-deploy-no-playbook-semantics.md) | Decide what `./uis deploy <service>` should do when the target service has `SCRIPT_PLAYBOOK=""` (and `SCRIPT_MANIFEST=""`) — the "metadata-only" case introduced when [`service-postgrest.sh`](https://github.com/helpers-no/urbalurba-infrastructure/blob/main/provision-host/uis/services/integration/service-postgrest.sh) shipped without a playbook (PLAN-001 documentation gate; PLAN-002 will add the playbook). | 2026-08-13 |
 | [Investigate: UIS Connect Commands for All Services](INVESTIGATE-cli-connect-add.md) | Build a generic `uis service connect <service> [arg]` surface that opens an interactive client into any deployed service. Replaces the per-service-verb framing (`uis connect postgresql …`) with a single umbrella verb under `uis service <verb>` (alongside future `uis service logs`, `uis service describe`, etc.). | 2026-08-13 |
-| [Plan: The Grafana deploy gate reports the stack, not the race](PLAN-service-grafana-deploy-gate-fix.md) | Make `uis deploy grafana` succeed deterministically on a healthy stack, | 2026-08-12 |
-| [Monitor the components that are not in the cluster](PLAN-system-observability-004-external-targets.md) | The parts of a production install that live outside Kubernetes — the | 2026-08-11 |
-| [Ship a dashboard with the service](PLAN-system-observability-003-service-dashboards.md) | `uis deploy <service>` on a cluster with Grafana yields a dashboard for | 2026-08-11 |
-| [Baseline alert rules, and somewhere for them to go](PLAN-system-observability-002-alert-baseline.md) | `uis stack install observability` produces a platform that **tells you | 2026-08-11 |
-| [Ship container logs to Loki](PLAN-system-observability-001-log-collection.md) | Logs from every pod are searchable in Grafana, automatically, so that | 2026-08-11 |
-| [Make the watchdog able to wake someone — and watch itself](PLAN-service-uptime-kuma-003-alerting.md) | An alert reaches a human away from home, and the watchdog's own death | 2026-08-10 |
 | [Ship an availability probe with every service](PLAN-system-observability-006-service-probes.md) | `uis deploy <service>` results in that service being monitored by the | 2026-08-09 |
 | [Plan: Grafana runs with only the datasources that exist](PLAN-service-grafana-optional-datasources.md) | Make Grafana deployable with Prometheus alone, provisioning Loki and | 2026-08-07 |
 | [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-08-07 |
