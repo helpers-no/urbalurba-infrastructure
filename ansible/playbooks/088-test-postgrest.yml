@@ -369,17 +369,36 @@
             {{ _app_name }}-postgrest did not return the probe row.
             {% if '42501' in (_read.stdout | default('')) %}PostgreSQL returned
             42501 (permission denied), so the pod and the schema are fine and the
-            anon role cannot READ what the app role created. That is the missing
-            default privilege: `configure postgrest` records ALTER DEFAULT
-            PRIVILEGES for the role it connects as, so objects created by
-            {{ _probe_role }} are covered only if a FOR ROLE
-            entry exists. Fix: re-run `./uis configure postgrest --app
-            {{ _app_name }}`, which reapplies the grants.
+            anon role cannot READ what role {{ _probe_role }} created. That is a
+            missing default privilege: `configure postgrest` records ALTER DEFAULT
+            PRIVILEGES for the role it connects as, plus a FOR ROLE entry for the
+            app role, so an object is covered only if its CREATOR has an entry.
+            {% if _probe_role == 'postgres' %}Here the creator is postgres, which
+            the unqualified entry should already cover — so this failing points at
+            the grant block itself rather than at a missing FOR ROLE.{% endif %}
+            Fix: re-run `./uis configure postgrest --app {{ _app_name }}`, which
+            reapplies the grants.
             {% else %}The pod may be running while unable to reach {{ _db }}, or
             the schema '{{ _schema }}' is not the one it serves.
             {% endif %}Response was:
             {{ _read.stdout | default('<empty>') | truncate(200) }}
-          success_msg: "The API served data the app role wrote - default privileges cover tenant-created objects."
+          # ⚠️ Parameterised by _probe_role, and the default-privileges clause
+          # appears ONLY on the app-role branch. A0b exists so a PASS cannot be
+          # misread across the two populations, and this string was hardcoded to
+          # the app-role case — so on a postgres-owned install the same run said
+          # "a FOR ROLE default privilege is not involved and not asserted"
+          # (A0b) and "default privileges cover tenant-created objects" (here).
+          # Found by imac on urb-agents#347, verifying the #344 fix.
+          #
+          # The disclosure and the success message have to say the same thing,
+          # or the weaker one is the one people quote.
+          success_msg: >-
+            {% if _probe_role == 'postgres' %}The API served data written by role
+            postgres, which owns this installation's objects — so the read path
+            works for the way this install actually creates them. No FOR ROLE
+            default privilege was involved, and none was asserted.
+            {% else %}The API served data written by role {{ _probe_role }}, so the
+            FOR ROLE default privilege covers tenant-created objects.{% endif %}
 
       # --- Test C: writes through the API must be refused (read-only by design) ---
       - name: "C1. POST through the API"
