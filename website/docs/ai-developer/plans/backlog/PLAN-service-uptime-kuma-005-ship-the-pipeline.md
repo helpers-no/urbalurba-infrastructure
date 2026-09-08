@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — Phases 1–4 done and the reference installation migrated; auto-discovery is single-cluster only
+**Status:** Backlog — Phases 1–4 done and the reference installation migrated; auto-discovery is single-cluster only
 
 **Goal**: `uis deploy uptime-kuma` gives a watchdog that is **already monitoring
 and already alerting**, rebuildable from nothing, with the only

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — Phase 1 done on the reference installation; Phases 2–4 open
+**Status:** Backlog — Phase 1 done on the reference installation; Phases 2–4 open
 
 **Goal**: The parts of a production install that live outside Kubernetes — the
 hypervisor, an external database, object storage — are visible in metrics, not

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — goal met; retention tuning (3.2) is all that remains
+**Status:** Backlog — goal met; retention tuning (3.2) is all that remains
 
 ⚠️ **Phases 1 and 2 were superseded on 2026-08-08.** The hand-written manifest
 they describe was removed and replaced by the UIS service definition in

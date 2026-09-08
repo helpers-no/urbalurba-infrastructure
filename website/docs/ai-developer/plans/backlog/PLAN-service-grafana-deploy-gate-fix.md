@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — Phases 1–3 done and verified; Phase 4 (move E2E to a verify playbook) open
+**Status:** Backlog — Phases 1–3 done and verified; Phase 4 (move E2E to a verify playbook) open
 
 **Goal**: Make `uis deploy grafana` succeed deterministically on a healthy stack,
 so an automated stand-up never reports failure for telemetry that merely had not

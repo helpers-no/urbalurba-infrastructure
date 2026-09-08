@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Active — alerting is live on the reference installation; two items
+**Status:** Backlog — alerting is live on the reference installation; two items
 outstanding (resend/maintenance windows, and true off-site dead-man cover)
 
 **Goal**: An alert reaches a human away from home, and the watchdog's own death
