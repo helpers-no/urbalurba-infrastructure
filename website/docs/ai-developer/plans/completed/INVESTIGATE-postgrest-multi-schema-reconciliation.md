@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog
+**Status:** Completed
 
 **Goal**: Decide what `./uis configure postgrest --app <name> --schemas <list>` means when called more than once with a *changing* list. The single-schema handler that PLAN-002 shipped never had to reconcile across calls; multi-schema does.
 

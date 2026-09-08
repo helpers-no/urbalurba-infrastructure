@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: ✅ Completed (2026-05-08, verification reframed 2026-05-11)
+**Status:** Completed — ✅ Completed (2026-05-08, verification reframed 2026-05-11)
 
 **Shipped in**: PR #146 (Phases 1–5 — the file-structure restructure).
 **Verified end-to-end**: talk46 R3 (2026-05-11) ran `uis platform up azure-aks` → `uis deploy nginx` → `uis platform down azure-aks` against the post-restructure file layout. The wizard ([PLAN-uis-platform-init-azure-aks.md](./PLAN-uis-platform-init-azure-aks.md), PR #155) writes `.uis.secrets/cloud-accounts/azure-default.env` directly, replacing this PLAN's originally-manual `cp + nano` flow in Phase 6.

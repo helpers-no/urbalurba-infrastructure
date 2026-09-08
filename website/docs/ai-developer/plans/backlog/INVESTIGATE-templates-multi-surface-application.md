@@ -248,7 +248,7 @@ resolves — a hosts entry — and no platform change. PostgREST also already se
 `PGRST_SERVER_CORS_ALLOWED_ORIGINS: "*"`
 (`templates/088-postgrest-config.yml.j2:75`), so a browser front-end calling
 cross-origin is not blocked. This follows the precedent set when
-[INVESTIGATE-system-roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md)
+[INVESTIGATE-system-roaming-dependency-addresses](../completed/INVESTIGATE-system-roaming-dependency-addresses.md)
 was closed with the ruling that the endpoint manager was *"installation
 implementation, not UIS"*.
 

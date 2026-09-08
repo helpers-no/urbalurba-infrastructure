@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: Deploy Backstage as the developer portal for UIS, modeling all existing services in a software catalog
 

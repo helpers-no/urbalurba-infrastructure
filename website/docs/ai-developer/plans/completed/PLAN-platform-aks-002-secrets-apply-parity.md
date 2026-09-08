@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Superseded (2026-05-16)
+**Status:** Completed — superseded (2026-05-16); the auto-apply-inside-post-apply approach was not taken
 
 The auto-apply-inside-post-apply approach was not taken. Instead, secrets management is now a separate top-level CLI surface:
 

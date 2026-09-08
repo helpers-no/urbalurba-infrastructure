@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (concrete first slice of [INVESTIGATE-cli-top-level-doc](../backlog/INVESTIGATE-cli-top-level-doc.md))
+**Status:** Completed (concrete first slice of [INVESTIGATE-cli-top-level-doc](../backlog/INVESTIGATE-cli-top-level-doc.md))
 
 **Goal**: Make the tools available inside `uis-provision-host` discoverable from the user-facing parts of the docs (today they're only in `contributors/`), and bring the existing contributor doc into line with reality (currently claims tools are pre-installed, lists `terraform`/`oci`/etc. that aren't actually in the system).
 

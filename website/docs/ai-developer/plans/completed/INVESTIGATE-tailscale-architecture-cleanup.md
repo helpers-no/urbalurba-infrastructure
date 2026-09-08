@@ -15,6 +15,8 @@ related:
 
 # INVESTIGATE: Tailscale architecture cleanup
 
+**Status:** Completed
+
 The Cloudflare CLI port (`uis network ... cloudflare`, PRs #169–#172) is shipped and verified end-to-end on rancher-desktop against `*.skryter.no`. This investigation prepares the equivalent cleanup for Tailscale.
 
 Tailscale is **harder than Cloudflare** to port, for three reasons:

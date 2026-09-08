@@ -1,6 +1,6 @@
 # INVESTIGATE: Dev Template IngressRoute Cleanup After Platform-Managed Routing
 
-**Status:** Investigation Complete — Ready for PLAN
+**Status:** Completed — Ready for PLAN
 **Created:** 2026-03-03
 **Last Updated:** 2026-03-03
 **Related to:** [PLAN-argocd-register-redesign](../completed/PLAN-argocd-register-redesign.md) (completed)

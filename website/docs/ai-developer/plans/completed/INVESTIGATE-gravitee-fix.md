@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog
+**Status:** Completed
 
 **Goal**: Deploy Gravitee API Management on the UIS local cluster as a working API gateway with admin UI, using **PostgreSQL** as the management store and **no Elasticsearch / no Redis / no MongoDB**, on the smallest sustainable resource footprint.
 

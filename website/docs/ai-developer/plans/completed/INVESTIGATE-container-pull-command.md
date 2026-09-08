@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog
+**Status:** Completed
 
 **Goal**: Add a `./uis pull` command that pulls the latest provision-host container image and restarts the container
 

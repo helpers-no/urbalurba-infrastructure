@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: ✅ Completed (2026-05-11)
+**Status:** Completed — ✅ Completed (2026-05-11)
 
 **Note on path**: this PLAN scoped a manual-walkthrough verification (run the four lifecycle scripts directly, then `./uis deploy nginx`, then `03-destroy.sh`). The actual verification happened differently — by the time the cold cycle ran end-to-end (talk46 R3), the four-PLAN AKS novice-onboarding sequence ([INVESTIGATE-platform-aks-novice-onboarding.md](./INVESTIGATE-platform-aks-novice-onboarding.md)) had also shipped, so verification ran through the new `uis platform up azure-aks` + `uis platform down azure-aks` wrappers instead of the raw scripts. The verification bar (`./uis deploy nginx` succeeds with the in-cluster connectivity tests passing, cluster cleanly torn down afterward) was met regardless. See the "Findings from first-run verification" subsection in [INVESTIGATE-system-platform-provisioning-layer.md](../backlog/INVESTIGATE-system-platform-provisioning-layer.md) for the full chronology.
 

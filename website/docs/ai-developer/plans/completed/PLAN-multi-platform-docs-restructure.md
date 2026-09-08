@@ -5,7 +5,7 @@ sidebar_label: PLAN — Multi-platform docs restructure
 
 # PLAN — Multi-platform docs restructure
 
-## Status: Completed (work shipped piecemeal across multiple PRs; Phase 0 tracked separately as [PLAN-platform-aks-destroy-kubeconfig-cleanup](PLAN-platform-aks-destroy-kubeconfig-cleanup.md))
+**Status:** Completed (work shipped piecemeal across multiple PRs; Phase 0 tracked separately as [PLAN-platform-aks-destroy-kubeconfig-cleanup](PLAN-platform-aks-destroy-kubeconfig-cleanup.md))
 
 **Spec**: [INVESTIGATE-platform-aks-docs-restructure.md](INVESTIGATE-platform-aks-docs-restructure.md) — all Q1–Q9 decisions locked in.
 

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: ✅ COMPLETE — independently verified 2026-08-23
+**Status:** Completed — ✅ COMPLETE — independently verified 2026-08-23
 
 **Tester verdict: PASS on all four criteria, first attempt, no defects returned.**
 
@@ -174,7 +174,7 @@ possible.
 ## The second-user test
 
 Applying the rule from
-[INVESTIGATE-system-roaming-dependency-addresses](../backlog/INVESTIGATE-system-roaming-dependency-addresses.md):
+[INVESTIGATE-system-roaming-dependency-addresses](./INVESTIGATE-system-roaming-dependency-addresses.md):
 *"the pattern generalises" ≠ "another installation would use it."*
 
 **browserless passes, and not on speculation.** The argument does not rest on

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Rename `TAILSCALE_CLUSTER_HOSTNAME` to `TAILSCALE_PUBLIC_HOSTNAME` and `TAILSCALE_INTERNAL_HOSTNAME` to `TAILSCALE_OPERATOR_PREFIX` to accurately describe what these UIS-invented variables actually control.
 

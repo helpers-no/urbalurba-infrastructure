@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Rename UIS-invented Tailscale hostname variables for clarity, and fix misleading comments in the secrets template.
 

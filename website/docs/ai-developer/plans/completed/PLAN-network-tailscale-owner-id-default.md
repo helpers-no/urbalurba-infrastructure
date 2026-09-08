@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (2026-05-16)
+**Status:** Completed (2026-05-16)
 
 PR #193 — talk57 R1-R7 + R8 retry all PASS. PLAN and its companion `INVESTIGATE-network-tailscale-owner-id-default.md` move to `completed/` together.
 

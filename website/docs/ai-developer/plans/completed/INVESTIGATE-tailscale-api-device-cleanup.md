@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Use the Tailscale API to clean up stale devices during deletehost/undeploy, and add a `uis verify tailscale` command to check prerequisites before deployment.
 

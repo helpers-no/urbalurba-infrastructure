@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: ✅ Completed (2026-05-11)
+**Status:** Completed — ✅ Completed (2026-05-11)
 
 **Shipped in**: PR #156 (the `up` + `down` bundle).
 **Verified end-to-end**: talk45 + talk46 — F9 safety branch later hardened in PR #157, all tester rounds green on CI-built `:latest`.

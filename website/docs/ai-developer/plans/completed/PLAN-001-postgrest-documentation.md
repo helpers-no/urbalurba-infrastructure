@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: Produce the PostgREST service documentation page using the established UIS workflow (metadata in `service-postgrest.sh` → generator stub → hand-augmented sections), then have the Atlas developer review it. Their feedback either unblocks implementation or sends the design back to the investigate.
 

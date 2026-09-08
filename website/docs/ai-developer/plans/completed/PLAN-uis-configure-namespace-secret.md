@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (9 unit tests + 19 integration tests passing)
+**Status:** Completed (9 unit tests + 19 integration tests passing)
 
 **Goal**: Add `--namespace` and `--secret-name-prefix` flags to `uis configure` so DCT app templates with `requires` can deploy successfully — by ensuring the K8s Secret referenced in their deployment manifest exists in the target namespace.
 

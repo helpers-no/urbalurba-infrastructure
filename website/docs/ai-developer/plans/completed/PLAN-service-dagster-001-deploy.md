@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed — 2026-08-23, independently verified
+**Status:** Completed — 2026-08-23, independently verified
 
 **Verified by the UIS tester (imac) on a prod-matched cluster**, k8s 1.36 /
 Traefik 3.7, across three rounds. Not self-certified — see below.

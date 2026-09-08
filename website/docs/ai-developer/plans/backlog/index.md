@@ -55,7 +55,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Investigate: Version Metadata in Service Scripts](INVESTIGATE-system-service-version-metadata.md) | Decide how service scripts should expose version information for docs generation and CLI display | 2026-09-07 |
 | [---](INVESTIGATE-system-service-category-taxonomy.md) | — | 2026-09-07 |
 | [---](INVESTIGATE-system-secrets-new-keys-on-existing-installs.md) | — | 2026-09-07 |
-| [Investigate: external dependencies whose address moves, and backends that sleep](INVESTIGATE-system-roaming-dependency-addresses.md) | — | 2026-09-07 |
 | [INVESTIGATE: Remote Deployment Targets & Target Management](INVESTIGATE-system-remote-deployment-targets.md) | — | 2026-09-07 |
 | [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-09-07 |
 | [INVESTIGATE: Provision-Host Tools and Provider Authentication](INVESTIGATE-system-provision-host-tools-and-auth.md) | — | 2026-09-07 |

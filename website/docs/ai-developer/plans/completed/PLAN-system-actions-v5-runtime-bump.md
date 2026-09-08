@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: Every `actions/*` step in this repository runs on a supported runtime, so the Node 20
 deprecation cannot take all four workflows down at once.

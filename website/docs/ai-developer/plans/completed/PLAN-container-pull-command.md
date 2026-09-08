@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: Add a `./uis pull` command to the repo-root wrapper that pulls the latest container image and restarts the container
 

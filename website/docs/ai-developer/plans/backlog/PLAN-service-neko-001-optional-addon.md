@@ -35,7 +35,7 @@ priority `95`, **shipped but never in a default profile** — explicit opt-in on
 
 browserless passed on a concrete unmet dependency in a service UIS already ships.
 neko has no such argument, and pretending otherwise would be the mistake the
-[endpoint-manager verdict](./INVESTIGATE-system-roaming-dependency-addresses.md)
+[endpoint-manager verdict](../completed/INVESTIGATE-system-roaming-dependency-addresses.md)
 was written to prevent.
 
 ### The case FOR

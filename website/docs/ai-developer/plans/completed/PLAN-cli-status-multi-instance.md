@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (talk56 R1-R7 all PASS after R4 fix)
+**Status:** Completed (talk56 R1-R7 all PASS after R4 fix)
 
 **Goal**: Make multi-instance service deployments individually visible in `./uis status` and `./uis list`. After this PLAN ships, deploying `postgrest --app atlas` + `postgrest --app railway` produces two rows in the status table (`atlas-postgrest`, `railway-postgrest`) instead of a single binary `postgrest ✅ Healthy` row, so the user can identify each instance by its Kubernetes Service name — the same string they need for `./uis network expose tailscale <name>`.
 

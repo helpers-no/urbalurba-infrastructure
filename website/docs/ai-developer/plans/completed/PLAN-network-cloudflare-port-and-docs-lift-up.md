@@ -5,7 +5,7 @@ sidebar_label: PLAN — Cloudflare network port + docs lift-up
 
 # PLAN — Cloudflare network port + docs lift-up
 
-## Status: Completed (work shipped piecemeal across PRs #169–#172)
+**Status:** Completed (work shipped piecemeal across PRs #169–#172)
 
 ---
 

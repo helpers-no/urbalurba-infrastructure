@@ -15,6 +15,7 @@ All completed plans and investigations, sorted by date. Kept for reference.
 
 | Plan | Goal | Completed |
 |------|------|-----------|
+| [Investigate: external dependencies whose address moves, and backends that sleep](INVESTIGATE-system-roaming-dependency-addresses.md) | — | 2026-09-07 |
 | [Summer vacation work summary: 18 July – 19 August 2026](STATUS-summer-vacation-2026-07-18-to-08-19.md) | — | 2026-09-07 |
 | [PLAN-008: Service Migration Status & Remaining Work](STATUS-service-migration.md) | Track migration status of all 26 UIS services and complete remaining work for services that are not fully migrated. | 2026-09-07 |
 | [Validation record: the summer's work on a clean Rancher Desktop, 21 August 2026](STATUS-rancher-desktop-validation-2026-08-21.md) | — | 2026-09-07 |

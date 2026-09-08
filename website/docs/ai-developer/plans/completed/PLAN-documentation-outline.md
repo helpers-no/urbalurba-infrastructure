@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Add a "Developing and Deploying" section to the documentation site with 5 new pages covering the developer workflow from template to deployment, and restructure the sidebar to group infrastructure topics under "Advanced".
 

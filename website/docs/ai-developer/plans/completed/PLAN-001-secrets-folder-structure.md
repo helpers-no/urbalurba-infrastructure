@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: Create the templates and initialization code that will generate `.uis.extend/` and `.uis.secrets/` folders when users run the UIS system.
 

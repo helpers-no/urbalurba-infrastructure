@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed (2026-05-04, Round 7.5 PASS)
+**Status:** Completed (2026-05-04, Round 7.5 PASS)
 
 **Goal**: Replace Gravitee's chart-default organisation name (`Default organization`) with whatever value is configured in `DEFAULT_ORGANIZATION_NAME`. Default to `UIS Local Dev` for fresh installs. Apply the value at deploy time via a post-`helm-install` `psql UPDATE` against `graviteedb.organizations`. Drop-database test passes — no post-deploy management-API patching.
 

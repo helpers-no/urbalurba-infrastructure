@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: Redesign `uis argocd register` to accept two required parameters (`<name>` and `<repo-url>`) instead of a single bare repo name, eliminating the GitHub username secrets dependency and preventing invalid namespace names.
 

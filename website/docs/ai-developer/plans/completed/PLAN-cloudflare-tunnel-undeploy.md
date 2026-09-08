@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Reduce Cloudflare tunnel from 2 replicas to 1, clean up confusing deploy output, and create `821-remove-network-cloudflare-tunnel.yml` so `./uis undeploy cloudflare-tunnel` works.
 

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: ✅ Completed (2026-05-11)
+**Status:** Completed — ✅ Completed (2026-05-11)
 
 **Shipped in**: PR #156 (bundled with PLAN #4).
 **Verified end-to-end**: talk44 (`UIS_IMAGE=:local`), talk45 + talk46 (post-merge against CI-built `:latest`) — cold cycle ran 00→01→02 successfully, F1–F5 surfaced and fixed in the same PR before merge, F11/F12 in the follow-on status command fixed in PR #158.

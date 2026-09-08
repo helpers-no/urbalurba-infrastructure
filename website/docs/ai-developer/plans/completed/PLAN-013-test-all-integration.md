@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Goal**: Automate the full integration test as `./uis test-all` — runs the same `./uis deploy`/`./uis undeploy` commands the manual tester runs, for all 23 services.
 

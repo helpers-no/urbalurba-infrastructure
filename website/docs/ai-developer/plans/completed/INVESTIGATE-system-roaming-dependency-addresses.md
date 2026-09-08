@@ -6,7 +6,7 @@
 
 **Created**: 2026-08-21
 
-## Status: Closed — product question decided, LiteLLM findings retained
+**Status:** Completed — product question decided, LiteLLM findings retained
 
 **Decision (Terje, 2026-08-21)**: the `ollama-endpoint-manager` is **installation
 implementation, not UIS**. It is not productised, not named as a service, and not
@@ -32,10 +32,10 @@ native, is not an oversight upstream, and cannot be configured around. The
 gap belongs in the **dependency layer**, not in the LiteLLM service.
 
 **Related**:
-- [PLAN-system-dependencies-shim-services](./PLAN-system-dependencies-shim-services.md) — this is where the work lands, and this investigation asks for one of its Implementation Notes to be amended
-- [PLAN-service-litellm-004-config-portability](./PLAN-service-litellm-004-config-portability.md) — defect F7 (`host.docker.internal`) is the same problem in miniature; see R4
-- [PLAN-system-observability-006-service-probes](./PLAN-system-observability-006-service-probes.md) — probes read the Service, and would read a reconciled one identically
-- [INVESTIGATE-system-external-or-in-cluster-services](./INVESTIGATE-system-external-or-in-cluster-services.md) — the same boundary, from the service-definition side
+- [PLAN-system-dependencies-shim-services](../backlog/PLAN-system-dependencies-shim-services.md) — this is where the work lands, and this investigation asks for one of its Implementation Notes to be amended
+- [PLAN-service-litellm-004-config-portability](../backlog/PLAN-service-litellm-004-config-portability.md) — defect F7 (`host.docker.internal`) is the same problem in miniature; see R4
+- [PLAN-system-observability-006-service-probes](../backlog/PLAN-system-observability-006-service-probes.md) — probes read the Service, and would read a reconciled one identically
+- [INVESTIGATE-system-external-or-in-cluster-services](../backlog/INVESTIGATE-system-external-or-in-cluster-services.md) — the same boundary, from the service-definition side
 
 **Priority**: Medium
 
@@ -448,7 +448,7 @@ UIS did not deploy the Macs and cannot be expected to know about them.
   call it is moot.
 - No `endpoint-reconciler` rendered from the dependency artifact.
 - The challenge this file raised against
-  [PLAN-system-dependencies-shim-services](./PLAN-system-dependencies-shim-services.md)
+  [PLAN-system-dependencies-shim-services](../backlog/PLAN-system-dependencies-shim-services.md)
   is **withdrawn** — it was argued on the strength of a reconciler UIS is not
   going to ship. That plan's "do not add address auto-discovery" note stands as
   written. The distinction between *declared candidate lists* and *discovery* is
@@ -503,7 +503,7 @@ UIS did not deploy the Macs and cannot be expected to know about them.
   `Endpoints` gives. Neither proxy reproduces that property, which is what
   Draft B asks for."
 - **The F7 connection to
-  [PLAN-service-litellm-004-config-portability](./PLAN-service-litellm-004-config-portability.md)**
+  [PLAN-service-litellm-004-config-portability](../backlog/PLAN-service-litellm-004-config-portability.md)**
   — a probe-a-candidate-list approach would fix `host.docker.internal`
   portably. Noted there for whoever picks that plan up; it does not need this
   file.

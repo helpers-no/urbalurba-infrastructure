@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed — proposed target flow shipped end-to-end; decisions Q1-Q3 implemented
+**Status:** Completed — proposed target flow shipped end-to-end; decisions Q1-Q3 implemented
 
 The target six-command novice flow is live and documented:
 

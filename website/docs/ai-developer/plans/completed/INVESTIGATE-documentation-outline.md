@@ -1,6 +1,6 @@
 # INVESTIGATE: Documentation Site Restructure — Add "Developing and Deploying" Section
 
-**Status:** Investigation Complete — PLAN implemented and verified
+**Status:** Completed — PLAN implemented and verified
 **Created:** 2026-03-04
 **Last Updated:** 2026-03-04
 **Related to:** [PLAN-dev-template-ingress-cleanup](../completed/PLAN-dev-template-ingress-cleanup.md) (completed)

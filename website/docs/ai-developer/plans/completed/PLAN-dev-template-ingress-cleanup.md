@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Remove redundant `ingress.yaml` and obsolete `urbalurba-scripts/` from dev templates — routing is now the platform's responsibility.
 

@@ -1,7 +1,7 @@
 # PLAN-005: Migrate Playbooks to New Kubeconfig Path
 
 **Related**: [INVESTIGATE-whoami-kubeconfig-path](INVESTIGATE-whoami-kubeconfig-path.md)
-**Status**: Backlog
+**Status:** Completed
 **Created**: 2026-02-19
 
 ## Background

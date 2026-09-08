@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Complete
+**Status:** Completed
 
 **Goal**: Deploy Cloudflare tunnel via `./uis deploy cloudflare-tunnel` using a token-based approach that follows the same secrets pattern as all other UIS services.
 

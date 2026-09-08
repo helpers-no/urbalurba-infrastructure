@@ -2,7 +2,7 @@
 
 **Related**: [INVESTIGATE-rancher-reset-and-full-verification](INVESTIGATE-rancher-reset-and-full-verification.md)
 **Created**: 2026-02-20
-**Status**: COMPLETE
+**Status:** Completed
 **Resolved**: 2026-02-20
 
 ## Problem

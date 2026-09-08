@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Completed
+**Status:** Completed
 
 **Completed**: 2026-05-04 — Round 5 PASS confirmed by UIS tester (`talk.md:1305+`). All four layers verified, default deploy yields 4 pods + 0 HPAs, `-e _gravitee_autoscaling=true` override re-enables HPAs (chart actually creates HPA templates for all four components, not just ui+portal — see Implementation Notes for the corollary). Round 3 OQ4 chart change unaffected.
 
