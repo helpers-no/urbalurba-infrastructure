@@ -235,6 +235,23 @@ installing nothing.
 `{{ params.* }}` is substituted into the concatenated content, so a parameter may
 appear in any file.
 
+⚠️ **Zero-pad your numbers.** Sorting is lexicographic, so `9_`, `10_`, `100_`
+apply in *reverse* — and out-of-order DDL can succeed while leaving the wrong
+schema, which is the one failure this ordering contract exists to prevent. UIS
+warns when numeric and lexicographic order disagree and shows what numeric order
+would have been, but it applies the lexicographic order regardless: it cannot
+know which you meant. `001_`, `002_`, … `010_` is immune.
+
+### Testing a template before publishing it
+
+`REGISTRY_URL_PRIMARY`, `REGISTRY_URL_FALLBACK` and `TEMPLATE_REPO` honour an
+environment override, so a template can be exercised before it reaches the
+registry:
+
+```bash
+TEMPLATE_REPO=/path/to/local/dev-templates ./uis template install my-fixture
+```
+
 ### Multi-instance services
 
 `./uis deploy` receives `--app <app_name>` automatically for any service whose

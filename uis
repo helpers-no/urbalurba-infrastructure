@@ -369,10 +369,26 @@ UIS_IMAGE_SOURCE="${UIS_IMAGE_SOURCE:-https://github.com/helpers-no/urbalurba-in
 
 # The version this machine is running: read from the image, which is the
 # artefact that carries it.
+# ⚠️ Each branch is captured and tested for CONTENT, not chained with `||`.
+#
+# The chained form was dead code: `||` binds to the whole PIPELINE, and a
+# pipeline's exit status is its LAST command — `tr` — which succeeds even when
+# `docker exec` fails and emits nothing. So the `docker run` fallback never ran,
+# and with the container stopped this returned "" while the image sat on disk,
+# readable. `./uis version` then printed "no image on this machine yet", which
+# is not merely unhelpful: it is false, on a launcher whose one job here is to
+# report what is installed. Masked after `pull` only because `pull` restarts the
+# container. Found by imac on urb-agents#335 with an isolated repro:
+#
+#   docker exec no_such_container cat /x 2>/dev/null | tr -d "[:space:]" \
+#       || echo "FALLBACK-RAN"      # prints nothing
 installed_version() {
-    docker exec "$CONTAINER_NAME" cat /mnt/urbalurbadisk/version.txt 2>/dev/null | tr -d "[:space:]" \
-        || docker run --rm --entrypoint cat "$IMAGE" /mnt/urbalurbadisk/version.txt 2>/dev/null | tr -d "[:space:]" \
-        || echo ""
+    local v
+    v="$(docker exec "$CONTAINER_NAME" cat /mnt/urbalurbadisk/version.txt 2>/dev/null | tr -d "[:space:]")"
+    if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+    v="$(docker run --rm --entrypoint cat "$IMAGE" /mnt/urbalurbadisk/version.txt 2>/dev/null | tr -d "[:space:]")"
+    if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+    printf ''
 }
 
 # The version published upstream.
