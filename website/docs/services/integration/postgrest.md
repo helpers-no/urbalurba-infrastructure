@@ -103,6 +103,21 @@ Equally, **do not copy this list into a different tenant.** Three schemas is Atl
 default. For a new instance the rule is: *name exactly what that application intends to serve
 publicly, and nothing else.* The anon role receives `SELECT` on every schema listed.
 
+⚠️ **And on every table added to that schema afterwards.** Alongside `GRANT SELECT ON ALL TABLES`,
+configure emits `ALTER DEFAULT PRIVILEGES … GRANT SELECT ON TABLES` per schema — which is what makes
+a later-created view readable without a re-configure, and is deliberate. The consequence is that
+naming a schema exposes **its future contents too**, with no per-table review at the point they
+appear.
+
+So `--schemas` is a **posture, not a value**: it says "everything that will ever be in these
+schemas is public", not "these tables are public". A schema a pipeline writes into is a standing
+commitment, and the person choosing the list needs that in front of them.
+
+The asymmetry that follows, and it is the useful part when deciding: **widening later is cheap and
+un-publishing is not.** A re-run with a different list is a wipe-and-rewrite in one transaction (see
+[Reconfigure semantics](#reconfigure-semantics)) — minutes, no drift to manage. Withdrawing a schema
+that consumers have already built against is a different kind of problem. When unsure, name fewer.
+
 If a tenant's list looks wrong, that is a conversation with the tenant — and, where it changes what a
 public API serves, with whoever owns the exposure decision. It is not a flag to tighten in passing.
 :::
