@@ -76,6 +76,16 @@ jobs:
         working-directory: website
         run: npm ci
 
+      # ⚠️ `npm run typecheck` exists in website/package.json and CI has never run
+      # it. `docusaurus build` does NOT run tsc, so a dependency bump that breaks
+      # types passes this job. Found 2026-09-07 while triaging 11 Dependabot alerts,
+      # all of which land in website/package-lock.json and are gated by this job
+      # alone - the same class of hole two other fleet agents found in their own
+      # pipelines the same week: a script that exists and CI does not call.
+      - name: Typecheck
+        working-directory: website
+        run: npm run typecheck
+
       - name: Build website
         working-directory: website
         run: npm run build
