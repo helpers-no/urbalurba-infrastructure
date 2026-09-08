@@ -182,6 +182,20 @@
       register: _pgpw
       changed_when: false
       no_log: true
+      # ⚠️ failed_when + a checked assert, for the same reason as A1: no_log is
+      # required here (this reads PGPASSWORD) and without failed_when a kubectl
+      # failure aborts with only a censored block. The assert below reports the
+      # cause from stderr, which carries kubectl's message and not the secret.
+      failed_when: false
+
+    - name: "0.5b Fail clearly if the admin password could not be read"
+      ansible.builtin.assert:
+        that: _pgpw.rc == 0 and (_pgpw.stdout | default('') | length) > 0
+        fail_msg: >-
+          Could not read PGPASSWORD from urbalurba-secrets in namespace {{ _pg_ns }}.
+          kubectl said: {{ _pgpw.stderr | default('<no stderr>') | trim | truncate(200) }}
+          Run `./uis secrets apply` if the secret is missing.
+        success_msg: "Admin password read."
 
     # --- Test A: the API is up and talking to the database ---
     # kubectl exec against the long-lived postgresql pod, NOT `kubectl run --rm -i`:
@@ -215,20 +229,82 @@
       # path nobody uses. Found by atlas on urb-agents#323, after the fix in
       # configure-postgrest.sh emitted `FOR ROLE`.
       #
-      # No password needed: `SET ROLE` from a superuser session assumes the role
-      # for the rest of the transaction.
-      - name: "A1. Create the probe table AS THE APP ROLE, in {{ _schema }}"
+      # ⚠️ WHICH ROLE THE PROBE IMPERSONATES IS NOT A FIXED CHOICE.
+      #
+      # It must be the role that actually creates objects in this schema,
+      # because the thing being proved is that the anon role can read what a
+      # tenant writes:
+      #
+      #   database provisioned by `uis configure postgresql --app <x>`
+      #       -> objects are created by role <x>          -> SET ROLE <x>
+      #
+      #   database provisioned any other way (hand-built, restored, migrated
+      #   in as postgres) -> <x>_web_anon and <x>_authenticator exist but <x>
+      #   does NOT, and every object is owned by postgres
+      #                                                   -> probe as postgres
+      #
+      # The second population is real: it is the tester's own long-lived atlas
+      # instance, which is HEALTHY - all 13 api_v1 views readable by
+      # atlas_web_anon, because they are postgres-owned and the unqualified
+      # default-ACL entry covers exactly that.
+      #
+      # 🔴 `SET ROLE` was unconditional, so every such instance was
+      # UNVERIFIABLE - and `configure` said the same instance was correctly
+      # configured, which it is. Two halves of the same tool contradicting each
+      # other on one install. I guarded configure for this population on #330
+      # and did not carry the guard here. Found by imac on urb-agents#344.
+      - name: "A0. Does the app role exist? It decides who the probe impersonates"
+        ansible.builtin.command: >
+          kubectl exec -n {{ _pg_ns }} {{ _pgpods.resources[0].metadata.name }} --context {{ _target }} --
+          env PGPASSWORD={{ _pgpw.stdout }}
+          psql -h 127.0.0.1 -U postgres -d {{ _db }} -tAc
+          "SELECT 1 FROM pg_roles WHERE rolname='{{ _app_name | replace('-', '_') }}'"
+        register: _approle
+        changed_when: false
+        failed_when: false
+        no_log: true
+
+      - name: "A0b. Record which role the probe will use"
+        ansible.builtin.set_fact:
+          _probe_role: "{{ (_approle.stdout | default('') | trim == '1') | ternary(_app_name | replace('-', '_'), 'postgres') }}"
+
+      - name: "A0c. Say so, because it changes what a PASS means"
+        ansible.builtin.debug:
+          msg: >-
+            {% if _probe_role == 'postgres' %}Role '{{ _app_name | replace('-', '_') }}'
+            does not exist, so the probe runs as postgres — which is correct for this
+            install: its objects are postgres-owned too, so this proves the path a
+            tenant here actually uses. A FOR ROLE default privilege is not involved
+            and not asserted.{% else %}Probing as role '{{ _probe_role }}', the role a
+            tenant's own tooling connects as. This asserts the FOR ROLE default
+            privilege as well as the pipe.{% endif %}
+
+      # `SET ROLE` needs no password: a superuser session can assume the role for
+      # the rest of the transaction. When the probe role IS postgres the SET ROLE
+      # is a harmless no-op rather than a special case.
+      - name: "A1. Create the probe table as role {{ _probe_role }}, in {{ _schema }}"
         ansible.builtin.command: >
           kubectl exec -n {{ _pg_ns }} {{ _pgpods.resources[0].metadata.name }} --context {{ _target }} --
           env PGPASSWORD={{ _pgpw.stdout }}
           psql -h 127.0.0.1 -U postgres -d {{ _db }} -v ON_ERROR_STOP=1 -c
-          "SET ROLE {{ _app_name | replace('-', '_') }};
+          "SET ROLE {{ _probe_role }};
            CREATE TABLE IF NOT EXISTS {{ _schema }}.{{ _tbl }}(id int primary key, msg text);
            INSERT INTO {{ _schema }}.{{ _tbl }} VALUES (1,'uis-verify')
            ON CONFLICT (id) DO UPDATE SET msg=EXCLUDED.msg;
            RESET ROLE;"
         register: _seed
         changed_when: true
+        # ⚠️ failed_when: false, with no_log KEPT. no_log is here because the task
+        # line carries PGPASSWORD, and that must not reach a log. But without
+        # failed_when the task ABORTS and Ansible prints only
+        # {"censored": "the output has been hidden ..."} — so a one-line
+        # "role does not exist" became a play with no cause in it, and imac had
+        # to reproduce it by hand to find out what happened.
+        #
+        # The diagnosis now happens in A2, which has no no_log and reads
+        # _seed.stderr — psql's error text, which does not contain the password.
+        # Keep the secret, return the reason.
+        failed_when: false
         no_log: true
 
       - name: "A1b. Tell PostgREST to reload its schema cache"
@@ -246,15 +322,21 @@
         no_log: true
 
       - name: "A2. Assert the seed landed"
+        # No no_log here, deliberately: this is where the reason is reported, and
+        # it reads _seed.stderr — psql's own error text — rather than _seed.cmd,
+        # which is the field that carries PGPASSWORD.
         ansible.builtin.assert:
           that: _seed.rc == 0
           fail_msg: >-
             Could not write the probe row into {{ _db }}.{{ _schema }} as role
-            {{ _app_name | replace('-', '_') }}. Either that role does not exist
-            (run `uis configure postgresql --app {{ _app_name }}` first), or it
-            cannot CREATE in this schema — which a real tenant's own tooling
-            would hit too, so this is a finding and not a test artefact.
-          success_msg: "Probe row written by the app role, as a tenant would."
+            '{{ _probe_role }}'. PostgreSQL said:
+            {{ _seed.stderr | default('<no stderr>') | trim | truncate(300) }}
+            —— Most likely that role cannot CREATE in this schema, which a real
+            tenant's own tooling would hit too, so this is a finding and not a
+            test artefact.
+          success_msg: >-
+            Probe row written by role {{ _probe_role }}{{ (_probe_role == 'postgres')
+            | ternary(' - the owner of this installation objects', ' - as a tenant would') }}.
 
       # --- Test B: read it back through the HTTP API ---
       - name: "B1. GET the row through {{ _app_name }}-postgrest"
@@ -290,7 +372,7 @@
             anon role cannot READ what the app role created. That is the missing
             default privilege: `configure postgrest` records ALTER DEFAULT
             PRIVILEGES for the role it connects as, so objects created by
-            '{{ _app_name | replace('-', '_') }}' are covered only if a FOR ROLE
+            {{ _probe_role }} are covered only if a FOR ROLE
             entry exists. Fix: re-run `./uis configure postgrest --app
             {{ _app_name }}`, which reapplies the grants.
             {% else %}The pod may be running while unable to reach {{ _db }}, or
