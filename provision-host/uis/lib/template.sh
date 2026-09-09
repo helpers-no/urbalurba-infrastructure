@@ -1575,6 +1575,32 @@ cmd_template_install() {
     if [[ "$dry_run" == true ]]; then
         print_section "Dry run: $template_id"
         echo "Commands that would run, in order:"
+    # 🔴 ONE APPLICATION, ONE DATABASE — and the plan already knows its name.
+    #
+    # Each handler used to derive it independently when its own `config:` did
+    # not carry `database:`, and they derive it DIFFERENTLY: postgresql keeps
+    # what it is told, postgrest falls back to `app_name` with `-` -> `_`. So
+    # `--param app_name=atlas-t` created the database `atlas-t` in step 2 and
+    # then looked for `atlas_t` in step 3, one step later than the hyphen defect
+    # 1.6.29 fixed (imac, urb-agents#481).
+    #
+    # They agreed for every earlier install only because no app_name had ever
+    # contained a hyphen. Two derivations that happen to match are one bug
+    # waiting for an input.
+    #
+    # So: whichever service in this plan declares `database:`, that is THE
+    # database, and every other configurable service is told it rather than
+    # guessing. Same rule as app_name in 1.6.29 — pass the resolved value, never
+    # re-derive it.
+    local plan_database=""
+    local _dbconf
+    for _dbconf in "$plan_dir"/*.conf; do
+        [[ -f "$_dbconf" ]] || continue
+        local _db
+        _db=$(_substitute_params "$(_conf_get "$_dbconf" database)" "$params_file")
+        if [[ -n "$_db" ]]; then plan_database="$_db"; break; fi
+    done
+
         echo ""
         local n=0
         while IFS='|' read -r priority svc; do
@@ -1589,7 +1615,8 @@ cmd_template_install() {
             if [[ -s "$conf" ]]; then
                 args=("$svc" "--app" "$app_name")
                 local v
-                v=$(_substitute_params "$(_conf_get "$conf" database)" "$params_file");            [[ -n "$v" ]] && args+=(--database "$v")
+                v=$(_substitute_params "$(_conf_get "$conf" database)" "$params_file")
+                v="${v:-$plan_database}";                                                          [[ -n "$v" ]] && args+=(--database "$v")
                 v=$(_substitute_params "$(_conf_get "$conf" schemas)" "$params_file");             [[ -n "$v" ]] && args+=(--schemas "$v")
                 v=$(_substitute_params "$(_conf_get "$conf" url_prefix)" "$params_file");          [[ -n "$v" ]] && args+=(--url-prefix "$v")
                 v=$(_substitute_params "$(_conf_get "$conf" namespace)" "$params_file");           [[ -n "$v" ]] && args+=(--namespace "$v")
@@ -1721,7 +1748,10 @@ cmd_template_install() {
             # single-instance service can still hold per-app resources, which is
             # exactly what `configure postgresql --app` creates.
             local configure_args=("$svc" "--app" "$app_name" "--json")
-            [[ -n "$resolved_db" ]] && configure_args+=(--database "$resolved_db")
+            # This service's own `database:` wins; otherwise it is told the
+            # plan's, so no handler has to infer a name the plan already has.
+            local effective_db="${resolved_db:-$plan_database}"
+            [[ -n "$effective_db" ]] && configure_args+=(--database "$effective_db")
             [[ -n "$resolved_schemas" ]] && configure_args+=(--schemas "$resolved_schemas")
             [[ -n "$resolved_prefix" ]] && configure_args+=(--url-prefix "$resolved_prefix")
             [[ -n "$resolved_ns" ]] && configure_args+=(--namespace "$resolved_ns")

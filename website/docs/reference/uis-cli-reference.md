@@ -255,7 +255,7 @@ a typo such as `url-prefix` fails the install rather than being silently ignored
 
 | Key | Passed as | Notes |
 |---|---|---|
-| `database` | `--database` | |
+| `database` | `--database` | Declared once, by whichever service owns it; **every other configurable service in the same install is passed the same value** rather than deriving its own |
 | `init` | `--init-file -` | a file, or a directory — see below |
 | `schemas` | `--schemas` | PostgREST |
 | `url_prefix` | `--url-prefix` | PostgREST |
@@ -422,6 +422,11 @@ is enough to install a real published artifact before the catalogue carries it:
 ⚠️ Set it on the `./uis` command line — `docker exec` does not inherit the
 caller's environment, and the launcher forwards these by name.
 
+🔴 **Put the file somewhere that survives `./uis pull`.** `/mnt/urbalurbadisk/`
+is inside the container, which is recreated on every pull, so a registry written
+there disappears and the symptom is "the entry is not published" rather than
+"the file is gone". `.uis.extend/` is mounted and survives.
+
 ✅ **Editing that file and re-running takes effect immediately.** The registry
 cache is keyed by the URL, and a `file://` source is never cached — read every
 time, because reading a local file is free and caching it is what makes editing
@@ -445,6 +450,23 @@ installing nothing.
 
 `{{ params.* }}` is substituted into the concatenated content, so a parameter may
 appear in any file.
+
+### What a fresh install actually gives you
+
+🔴 **An application whose data arrives from a pipeline serves an empty API on
+day one, and that is correct.** `template install` guarantees that the schema
+exists, the grants are right, and the API answers — not that there is anything
+in it. If the application's own orchestrator owns the migrations and the
+ingest, the first rows appear on its first run, not at install.
+
+This is worth stating because **an empty-but-correct API is indistinguishable
+from a broken install to someone seeing it for the first time**, and the
+instinct is to go looking for the failure. It is also why data freshness belongs
+in a monitor rather than in `uis verify`: the platform cannot know when an
+application's first pipeline run is due.
+
+An application's catalogue entry should say so in its own words —
+[atlas](https://github.com/terchris/atlas) does.
 
 ### `init:` on a database that already exists
 
