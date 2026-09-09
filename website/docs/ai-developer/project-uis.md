@@ -74,6 +74,37 @@ matter:
 A reader who finds `GIT.md` alone will be misled. It is kept unmodified so it does not drift from
 the fleet template; the override lives here, which is where the template says overrides belong.
 
+### Standing merge authorization — scoped, and it lapses
+
+**Terje, 2026-09-08 ("you have my go on merging") and again 2026-09-09: "you have rights to merge
+freely while developing atlas."** Recorded here because this is the file the next session reads
+before touching git, and because a standing authorization that lives only in a conversation is
+indistinguishable from none — the same reason the tenant agent recorded its own in
+`project-atlas.md`.
+
+**Scope**: the maintainer merges its own green PRs on this repository without waiting for Terje.
+**Until atlas is deployed and verified**, after which this reverts to asking.
+
+⚠️ **What it removes is the wait, not the test.** The bullet above — *never merge work an
+independent tester has not passed* — is genuinely relaxed by this, and pretending otherwise would
+make both rules useless. The honest statement is:
+
+- work may merge **before** the tester has passed it, so that the tester can `./uis pull` it rather
+  than reconstructing it by hand
+- it still **goes** to the tester, and a finding still comes back as a fix rather than as a note
+- **the agent still does not grade its own work.** A green unit suite is not a pass
+
+**What that cost and bought, measured over 1.6.9 → 1.6.16:** eight releases merged ahead of the
+tester, and the tester then found **five defects** in them — a launcher that could not see its own
+installed image, silent configure failures, an unverifiable instance, a success message asserting
+what a disclosure denied, and a multi-instance install that could not complete. Every one arrived
+as a fix within the hour because the tester could pull the release instead of patching files into a
+container.
+
+So the trade is real in both directions, and it is only sound while somebody is actually testing.
+🔴 **If the tester stops, this authorization stops meaning what it says**, and the right move is to
+go back to asking rather than to keep merging.
+
 ## Devcontainer
 
 **No — `DEVCONTAINER.md` does not apply to the maintainer agent, and is deliberately absent
