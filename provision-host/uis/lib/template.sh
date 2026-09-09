@@ -148,10 +148,42 @@ _fetch_registry() {
     return 1
 }
 
-# List UIS templates (context: uis) from the registry
+# List UIS templates (context: uis) from the registry.
+#
+# 🔴 This used to filter on `.folder | startswith("uis-")`, which made every
+# APPLICATION entry invisible to `uis template list`: an application has no
+# `folder` — it has a `source` — so `(.folder // "")` was "" and never matched.
+# `info` and `install` were unaffected (they go through `_get_template` on the
+# id), so atlas would have been installable only by someone who already knew
+# its id, and absent from the list a person browses. Found by injecting an
+# application entry into the live registry rather than by reading the filter.
+#
+# The registry already carries the field that answers this question: each
+# category has a `context` of `uis` or `dct`, and `_list_uis_categories` below
+# reads exactly that. The folder prefix was a proxy that correlated with it for
+# the one template the catalogue had. Join on the category instead.
+#
+# ⚠️ Bind the category value before the pipe. `$uis_categories | index(.category)`
+# rebinds `.` to the ARRAY, so `.category` indexes an array and jq errors —
+# which the fixture test below caught on the first run, because it is a real
+# registry rather than an assertion about one.
+#
+# `templateKind: application` is accepted as well, independent of the category,
+# because an application entry is a UIS install target by construction — an OCI
+# install definition has no other consumer. That keeps a miscategorised
+# application visible rather than silently absent, which is the failure this
+# comment exists to prevent recurring.
 _list_uis_templates() {
     _fetch_registry || return 1
-    jq -r '.templates[] | select((.folder // "") | startswith("uis-")) | "\(.id)|\(.name)|\(.description)"' "$REGISTRY_CACHE"
+    jq -r '
+        [.categories[] | select(.context == "uis") | .id] as $uis_categories
+        | .templates[]
+        | select(
+            ((.category // "") as $c | $uis_categories | index($c)) != null
+            or ((.templateKind // .kind // "") == "application")
+          )
+        | "\(.id)|\(.name)|\(.description)"
+    ' "$REGISTRY_CACHE"
 }
 
 # Get UIS categories from the registry

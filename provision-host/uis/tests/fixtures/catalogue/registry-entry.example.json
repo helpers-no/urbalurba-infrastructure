@@ -1,0 +1,61 @@
+{
+  "_comment": [
+    "The registry entry shape UIS reads for an APPLICATION. This is the seam",
+    "between helpers-no/dev-templates (which generates template-registry.json)",
+    "and `uis template install` (which consumes it).",
+    "",
+    "Only the fields UIS actually reads are marked required below. Everything",
+    "else in a real entry is display metadata for the website and for",
+    "`uis template info`, and UIS neither requires nor validates it.",
+    "",
+    "Verified against provision-host/uis/lib/template.sh at 1.6.25:",
+    "  templateKind  -> cmd_template_install, `.templateKind // .kind`",
+    "  source.*      -> _template_source_field, _require_source_fields",
+    "  visibility    -> _oras_login_if_private, defaults to public",
+    "  category      -> _list_uis_templates, joined to categories[].context"
+  ],
+
+  "categories": [
+    {
+      "id": "DATA",
+      "context": "uis",
+      "name": "Data Applications",
+      "emoji": "📊",
+      "_note": "context MUST be \"uis\" or the entry is invisible to `uis template list`. An application in a dct-context category is still listed, but only because template.sh accepts templateKind: application unconditionally as a safety net - do not rely on that."
+    }
+  ],
+
+  "templates": [
+    {
+      "id": "atlas",
+      "templateKind": "application",
+
+      "source": {
+        "artifact": "ghcr.io/terchris/atlas-data/uis",
+        "tag": "v20260909-abc1234",
+        "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "visibility": "public",
+
+      "category": "DATA",
+      "name": "Atlas",
+      "description": "Norwegian kommune data, ingested by Dagster and served as a REST API",
+
+      "_required": {
+        "templateKind": "Must be the literal \"application\". UIS reads `.templateKind // .kind`; the registry already has BOTH templateKind and install_type, so reuse one rather than adding a third discriminator. install refuses an entry it cannot classify BEFORE fetching anything.",
+        "source.artifact": "The OCI artifact holding the install definition - by convention <image>/uis, published beside the image at the same tag. NOT the application image itself. Must match the allowlist: ghcr.io/helpers-no/* or ghcr.io/terchris/* by default.",
+        "source.tag": "What the pin was published as. Shown to a human; NEVER pulled by. Refused if it is latest, main, master, head or empty.",
+        "source.digest": "What UIS actually pulls. sha256: plus 64 hex. The catalogue build MUST resolve tag -> digest at generation time - an entry with no digest is refused, because a tag alone is not a pin.",
+        "visibility": "public | private. Decides whether the pull needs `oras login`. Defaults to public when absent. On a private artifact with no credentials the error names the SECRET, not the URL.",
+        "category": "Must reference a category whose context is \"uis\", or the entry will not appear in `uis template list`."
+      },
+
+      "_not_read_by_uis": [
+        "folder, templateRepoPath, files, filesMdx - a stack template's fields; an application has no folder",
+        "resolvedServices, resolvedInitFiles, resolvedTools - generator conveniences",
+        "params, provides - these come from the ARTIFACT's template-info.yaml, which is the single source of truth. If the registry inlines a resolved copy for the website, UIS still reads the artifact.",
+        "logo, readme, links, maintainers, prerequisites, quickstart, architectureMdx, expectedOutputBlock"
+      ]
+    }
+  ]
+}

@@ -353,6 +353,42 @@ missing, the error names **the secret, not the URL**.
 application on an older provision host fails with `oras: not found` on a machine
 whose `./uis version` may look current — run `./uis pull`.
 
+### The registry entry — the seam with the catalogue
+
+The `source` block above lives in the **catalogue**, not in the artifact. The
+artifact carries the definition; the registry carries the pointer to it. These
+are the only fields `uis template install` reads from a catalogue entry:
+
+| field | required | what UIS does with it |
+|---|---|---|
+| `templateKind` | yes | Must be `application`. Read as `.templateKind // .kind`. ⚠️ The registry already has **both** `templateKind` and `install_type` — reuse one, do not add a third discriminator |
+| `source.artifact` | yes | The OCI artifact, by convention `<image>/uis`. Checked against the allowlist |
+| `source.tag` | yes | Shown to a human, never pulled by |
+| `source.digest` | yes | 🔴 **What is actually pulled.** The catalogue build must resolve tag → digest at generation time |
+| `visibility` | no | `public` (default) or `private`; decides whether the pull needs `oras login` |
+| `category` | yes | Must name a category whose `context` is `uis`, or the entry will not appear in `uis template list` |
+
+Everything else in an entry is display metadata for the website and
+`uis template info`. In particular `params:` and `provides:` come from the
+**artifact's** `template-info.yaml` — the single source of truth — even if the
+catalogue inlines a resolved copy for the site.
+
+A commented, valid worked example lives at
+`provision-host/uis/tests/fixtures/catalogue/registry-entry.example.json`.
+
+### Testing an application install with no catalogue at all
+
+`REGISTRY_URL_PRIMARY` accepts a `file://` URL, so a one-entry registry on disk
+is enough to install a real published artifact before the catalogue carries it:
+
+```bash
+./uis template install atlas \
+  REGISTRY_URL_PRIMARY=file:///mnt/urbalurbadisk/my-registry.json
+```
+
+⚠️ Set it on the `./uis` command line — `docker exec` does not inherit the
+caller's environment, and the launcher forwards these by name.
+
 ### `init:` — a file or an ordered directory
 
 - **a file** — applied as-is
