@@ -31,6 +31,13 @@ is its failure mode.
 | `helm` | install script | ❌ none |
 | `k9s` | 🔴 **`releases/latest`, resolved at build time** (`provision-host-02-kubetools.sh:231`) | ❌ none |
 | `oras` | ✅ pinned `1.3.4` | ✅ upstream `checksums.txt` |
+| `yq` | ✅ pinned `v4.44.1` — **in `Dockerfile.uis-provision-host`, not this script** | ❌ none |
+
+⚠️ **Corrected 2026-09-09**: an earlier draft of this plan implied nothing was
+pinned. `yq` is, and it lives in the Dockerfile rather than
+`provision-host-02-kubetools.sh` — so a scope that says "this script" misses it.
+The static test in 1.4 must cover **both** places, or it will pass while the
+Dockerfile's `wget` stays unverified.
 
 `grep -rniE 'sha256sum|shasum|checksum'` across `provision-host/*.sh` returns
 **nothing** but the `oras` block added today.

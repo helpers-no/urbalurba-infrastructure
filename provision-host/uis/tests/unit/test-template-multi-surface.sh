@@ -340,4 +340,56 @@ else
     unset UIS_ORAS_OCI_LAYOUT TEMPLATE_CACHE_DIR
 fi
 
+# ============================================================================
+# PLAN-templates-002 phase 3 — the code-location writer (TPL-F5)
+#
+# The write is filter-then-append keyed on `name`, which is what makes it
+# idempotent and what makes removal the same filter without the append. Needs
+# yq (mikefarah v4, pinned in the Dockerfile).
+# ============================================================================
+print_test_section "Phase 3: the code-location writer"
+
+if ! command -v yq >/dev/null 2>&1; then
+    for _ in 1 2 3 4 5 6; do skip_test "Skipping code-location tests: yq not installed"; done
+else
+    cl_dir="$TMP/cl"; mkdir -p "$cl_dir"
+
+    start_test "a code location is written in the shape the Dagster playbook reads"
+    ( EXTEND_DIR="$cl_dir"; _write_code_location atlas-data ghcr.io/terchris/atlas-data \
+        v20260909-abc1234 atlas_data.definitions "Ingests 41 sources" "atlas-database-db" ) >/dev/null 2>&1
+    f="$cl_dir/dagster-code-locations.yaml"
+    got=$(yq -r '.code_locations[0] | [.name,.image,.tag,.module,.env_secrets[0]] | join(" ")' "$f" 2>/dev/null)
+    assert_equals "atlas-data ghcr.io/terchris/atlas-data v20260909-abc1234 atlas_data.definitions atlas-database-db" "$got" "entry shape"
+
+    start_test "re-running at the same pin is byte-identical"
+    b=$(sha256sum "$f" | cut -d' ' -f1)
+    ( EXTEND_DIR="$cl_dir"; _write_code_location atlas-data ghcr.io/terchris/atlas-data \
+        v20260909-abc1234 atlas_data.definitions "Ingests 41 sources" "atlas-database-db" ) >/dev/null 2>&1
+    a=$(sha256sum "$f" | cut -d' ' -f1)
+    assert_equals "$b" "$a" "idempotent at the same pin"
+
+    start_test "a new pin changes the tag and does NOT duplicate the entry"
+    ( EXTEND_DIR="$cl_dir"; _write_code_location atlas-data ghcr.io/terchris/atlas-data \
+        v20260910-def5678 atlas_data.definitions "Ingests 41 sources" "atlas-database-db" ) >/dev/null 2>&1
+    got=$(yq -r '"\(.code_locations | length) \(.code_locations[0].tag)"' "$f" 2>/dev/null)
+    assert_equals "1 v20260910-def5678" "$got" "one entry, new tag"
+
+    start_test "a second tenant does not disturb the first"
+    ( EXTEND_DIR="$cl_dir"; _write_code_location other-data ghcr.io/helpers-no/other \
+        v9-zzz other.definitions "why two" "" ) >/dev/null 2>&1
+    got=$(yq -r '[.code_locations[].name] | sort | join(",")' "$f" 2>/dev/null)
+    assert_equals "atlas-data,other-data" "$got" "both present"
+
+    start_test "🔴 a crafted name cannot rewrite the document (strenv, not interpolation)"
+    ( EXTEND_DIR="$cl_dir"; _write_code_location 'x", "image": "evil' ghcr.io/x/y \
+        v1-ccc m.d "why" "" ) >/dev/null 2>&1
+    got=$(yq -r '[.code_locations[] | select(.name != "atlas-data" and .name != "other-data")] | .[0].image' "$f" 2>/dev/null)
+    assert_equals "ghcr.io/x/y" "$got" "the crafted name stayed a literal name"
+
+    start_test "removal is the same filter without the append"
+    ( EXTEND_DIR="$cl_dir"; _remove_code_location other-data ) >/dev/null 2>&1
+    yq -r '[.code_locations[].name] | join(",")' "$f" 2>/dev/null | grep -q "other-data" \
+        && fail_test "other-data should be gone" || pass_test
+fi
+
 print_summary

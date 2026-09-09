@@ -438,7 +438,13 @@ _validate_template_info() {
 # The `config:` keys a provides entry may set. Anything else is a typo and is
 # rejected: a silently-ignored `url-prefix` is the failure mode this whole
 # investigation exists to document.
-TEMPLATE_CONFIG_KEYS="database init schemas url_prefix namespace secret_name_prefix"
+TEMPLATE_CONFIG_KEYS="database init schemas url_prefix namespace secret_name_prefix code_location"
+
+# `code_location` is a MAPPING, not a scalar, and its subfields are flattened
+# into the conf file as code_location_<field>. That keeps the conf file flat —
+# D1's design — and is why the plan predicted this would drop in without
+# touching the executor's parsing.
+TEMPLATE_CODE_LOCATION_KEYS="name image tag module why env_secrets"
 
 # Write one service's config to $plan_dir/<service_id>.conf as key=value lines.
 #
@@ -467,9 +473,43 @@ _write_service_conf() {
 
     local v
     for k in $TEMPLATE_CONFIG_KEYS; do
+        [[ "$k" == "code_location" ]] && continue
         v=$(yq -r ".provides.services[$idx].config.$k // \"\"" "$info_file" 2>/dev/null)
         [[ -n "$v" ]] && printf '%s=%s\n' "$k" "$v" >> "$conf"
     done
+
+    # code_location, flattened. env_secrets is a list and is stored
+    # comma-joined; the writer splits it again.
+    if [[ "$(yq -r ".provides.services[$idx].config | has(\"code_location\")" "$info_file" 2>/dev/null)" == "true" ]]; then
+        local ck
+        for ck in $TEMPLATE_CODE_LOCATION_KEYS; do
+            if [[ "$ck" == "env_secrets" ]]; then
+                v=$(yq -r ".provides.services[$idx].config.code_location.env_secrets // [] | join(\",\")" "$info_file" 2>/dev/null)
+            else
+                v=$(yq -r ".provides.services[$idx].config.code_location.$ck // \"\"" "$info_file" 2>/dev/null)
+            fi
+            [[ -n "$v" ]] && printf 'code_location_%s=%s\n' "$ck" "$v" >> "$conf"
+        done
+        # Required by the Dagster playbook's own validator (360-setup-dagster.yml:277),
+        # so refuse here where the message can name the declaration rather than
+        # failing inside Ansible with less context.
+        local ckk
+        for ckk in name image tag module why; do
+            if [[ -z "$(_conf_get "$conf" "code_location_$ckk")" ]]; then
+                log_error "Service '$svc': config.code_location is missing '$ckk'."
+                echo "  A Dagster code location needs name, image, tag, module and why." >&2
+                echo "  'why' is required for the same reason prometheus-targets.yaml requires it:" >&2
+                echo "  a tenant nobody can justify is one nobody maintains." >&2
+                return 1
+            fi
+        done
+        if [[ "$(_conf_get "$conf" code_location_tag)" == "latest" ]]; then
+            log_error "Service '$svc': code_location tag 'latest' is refused."
+            echo "  Helm rolls the code-location pod only when the image field CHANGES," >&2
+            echo "  so 'latest' silently keeps serving old code after a successful deploy." >&2
+            return 1
+        fi
+    fi
 
     # `configure.sh` requires --namespace and --secret-name-prefix together.
     # Catch it here, where we can say which one is missing, rather than letting
@@ -563,6 +603,97 @@ _resolve_provides() {
     done <<< "$reversed"
 
     echo "$dedup" | grep -v '^$' | sort -t'|' -k1,1n
+}
+
+# ─── Contributing a Dagster code location ─────────────────────────────────────
+#
+# TPL-F5, and the answer to TPL-Q1/Q2 the plan deferred to this phase.
+#
+# ⚠️ THIS IS A CODE-LOCATION WRITER, NOT A GENERIC "contribute to another
+# service's extend file" MECHANISM — deliberately.
+#
+# Two other files would qualify for the generic form (prometheus-targets.yaml,
+# monitors.yaml) and the temptation is real. Rejected because the generic form
+# has to answer questions this one does not: what a list key is called in an
+# arbitrary file, what identity means for de-duplication, and what removal does
+# when two applications contributed to the same file. The spec needs one
+# consumer, and one consumer does not tell you the shape of three. Build the
+# generic version when a second one exists and can argue for its own syntax —
+# the same reasoning that deferred the `Application` type and the ordering work.
+#
+# TPL-Q2 (who owns idempotency and removal) is answered by construction below:
+# the write is filter-then-append keyed on `name`, so it converges, and removal
+# is the same filter without the append — which `template remove` will use in
+# phase 4 rather than needing its own logic.
+
+# Where the code-location declaration lives. Installation config, not product
+# config — the same relationship as prometheus-targets.yaml.
+_code_locations_file() {
+    echo "$(_uis_extend_dir)/dagster-code-locations.yaml"
+}
+
+# Add or replace one code location, then leave it to the caller to deploy.
+#
+# Idempotent by construction: entries with the same `name` are filtered out and
+# the new one appended, so re-running at the same pin produces a byte-identical
+# file and a new pin changes exactly the image field — which is what Helm needs
+# in order to roll the pod at all.
+_write_code_location() {
+    local cl_name="$1" cl_image="$2" cl_tag="$3" cl_module="$4" cl_why="$5" cl_env_secrets="${6:-}"
+    local file
+    file="$(_code_locations_file)"
+
+    if ! command -v yq >/dev/null 2>&1; then
+        log_error "yq is required to write $file and is not installed."
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$file")" || return 1
+    if [[ ! -f "$file" ]]; then
+        printf '# Written by `uis template install`. Hand edits are preserved for\n' > "$file"
+        printf '# entries this file already has; an install replaces only its own.\n' >> "$file"
+        printf 'code_locations: []\n' >> "$file"
+    fi
+
+    # ⚠️ Values go through strenv(), never string interpolation. These come from
+    # a third party's declaration, and interpolating them into a yq expression
+    # would let a crafted `name` rewrite the whole document.
+    local expr='.code_locations = ((.code_locations // [])
+        | map(select(.name != strenv(cl_name)))
+        + [{
+            "name":   strenv(cl_name),
+            "image":  strenv(cl_image),
+            "tag":    strenv(cl_tag),
+            "module": strenv(cl_module),
+            "why":    strenv(cl_why)
+          }])'
+
+    if ! cl_name="$cl_name" cl_image="$cl_image" cl_tag="$cl_tag"          cl_module="$cl_module" cl_why="$cl_why"          yq -i "$expr" "$file"; then
+        log_error "Failed to write the code location '$cl_name' into $file"
+        return 1
+    fi
+
+    if [[ -n "$cl_env_secrets" ]]; then
+        local sec_expr='(.code_locations[] | select(.name == strenv(cl_name)) | .env_secrets)
+            = (strenv(cl_env_secrets) | split(","))'
+        if ! cl_name="$cl_name" cl_env_secrets="$cl_env_secrets" yq -i "$sec_expr" "$file"; then
+            log_error "Failed to write env_secrets for '$cl_name'"
+            return 1
+        fi
+    fi
+
+    echo "Code location '$cl_name' written to $file" >&2
+    echo "  image: ${cl_image}:${cl_tag}" >&2
+    return 0
+}
+
+# Remove one code location. Phase 4's `template remove` uses this; it is the
+# same filter as the write, without the append.
+_remove_code_location() {
+    local cl_name="$1" file
+    file="$(_code_locations_file)"
+    [[ -f "$file" ]] || return 0
+    cl_name="$cl_name" yq -i '.code_locations = ((.code_locations // []) | map(select(.name != strenv(cl_name))))' "$file"
 }
 
 # Is this service multi-instance? Drives whether `uis deploy` gets --app.
@@ -827,6 +958,12 @@ cmd_template_install() {
             local deploy_args=("$svc")
             _service_is_multi_instance "$svc" && deploy_args+=(--app "$app_name")
 
+            if [[ -n "$(_conf_get "$conf" code_location_name)" ]]; then
+                n=$((n+1)); echo "  $n. uis deploy $svc"
+                n=$((n+1)); echo "  $n. (write code location '$(_substitute_params "$(_conf_get "$conf" code_location_name)" "$params_file")' to $(_code_locations_file))"
+                n=$((n+1)); echo "  $n. uis deploy $svc          # again, so the overlay picks it up"
+                continue
+            fi
             if [[ "$first" == true ]]; then
                 n=$((n+1)); echo "  $n. uis configure ${args[*]}"
                 n=$((n+1)); echo "  $n. uis deploy ${deploy_args[*]}"
@@ -889,6 +1026,40 @@ cmd_template_install() {
                 log_error "Deploy failed for $svc"
                 return 1
             fi
+        fi
+
+        # ─── a code-location contribution ────────────────────────────────────
+        #
+        # ⚠️ NOT a `configure` call. `dagster` has no configure handler and is
+        # not SCRIPT_CONFIGURABLE, so `uis configure dagster` would fail. A code
+        # location is contributed by writing the extend file and DEPLOYING AGAIN
+        # — which is why the spec's falsification expects "dagster deploy ×2
+        # with the extend entry written between".
+        #
+        # The second deploy is not belt-and-braces: the first one may have
+        # installed Dagster for the first time, and the Helm values overlay is
+        # rendered from the extend file at deploy time, so an entry written after
+        # a deploy is invisible until the next one.
+        if [[ -n "$(_conf_get "$conf" code_location_name)" ]]; then
+            local cl_n cl_i cl_t cl_m cl_w cl_s
+            cl_n=$(_substitute_params "$(_conf_get "$conf" code_location_name)" "$params_file")
+            cl_i=$(_substitute_params "$(_conf_get "$conf" code_location_image)" "$params_file")
+            cl_t=$(_substitute_params "$(_conf_get "$conf" code_location_tag)" "$params_file")
+            cl_m=$(_substitute_params "$(_conf_get "$conf" code_location_module)" "$params_file")
+            cl_w=$(_substitute_params "$(_conf_get "$conf" code_location_why)" "$params_file")
+            cl_s=$(_substitute_params "$(_conf_get "$conf" code_location_env_secrets)" "$params_file")
+
+            _write_code_location "$cl_n" "$cl_i" "$cl_t" "$cl_m" "$cl_w" "$cl_s" || return 1
+
+            log_info "Redeploying $svc so it picks up the code location..."
+            if ! uis deploy "$svc" >&2; then
+                log_error "Deploy failed for $svc after writing the code location"
+                echo "  The entry IS written to $(_code_locations_file)." >&2
+                echo "  Fix the cause and re-run './uis deploy $svc' — the entry is idempotent." >&2
+                return 1
+            fi
+            results+="$svc: code location '$cl_n' registered"$'\n'
+            continue
         fi
 
         # Configure if this service has any config at all.
