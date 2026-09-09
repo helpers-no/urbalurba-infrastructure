@@ -1,0 +1,2 @@
+CREATE SCHEMA IF NOT EXISTS apiv1;
+CREATE TABLE IF NOT EXISTS apiv1.t(id int primary key);
