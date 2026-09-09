@@ -242,4 +242,102 @@ found=$(for f in "$lib_dir"/*.sh; do
 done)
 assert_empty "$found" "libs must capture with || rc=\$? under set -e"
 
+# ============================================================================
+# PLAN-templates-002 phase 1 — the allowlist and the pin
+#
+# An application's definition is pulled and then fed to `configure --init-file`,
+# which applies it as the database owner. So these two checks are a security
+# boundary, not validation, and they are the cheapest thing to get wrong.
+# ============================================================================
+print_test_section "Phase 1: allowlist and immutability"
+
+start_test "an allowlisted artifact is accepted"
+_template_source_allowed "ghcr.io/terchris/atlas-data/uis" && pass_test || fail_test "should be allowed"
+
+start_test "the other default is accepted too"
+_template_source_allowed "ghcr.io/helpers-no/something/uis" && pass_test || fail_test "should be allowed"
+
+start_test "an artifact outside the allowlist is REFUSED"
+_template_source_allowed "ghcr.io/stranger/evil/uis" && fail_test "must be refused" || pass_test
+
+start_test "a lookalike registry is refused (docker.io, not ghcr.io)"
+_template_source_allowed "docker.io/terchris/atlas-data/uis" && fail_test "must be refused" || pass_test
+
+start_test "an empty artifact is refused rather than matching everything"
+_template_source_allowed "" && fail_test "empty must be refused" || pass_test
+
+start_test "an installation can extend the allowlist via .uis.extend"
+mkdir -p "$TMP/extend"
+printf '# a comment\n\nghcr.io/thirdparty/*\n' > "$TMP/extend/template-allowlist.conf"
+EXTEND_DIR="$TMP/extend" _template_source_allowed "ghcr.io/thirdparty/app/uis" && pass_test \
+    || fail_test "extend file should widen the allowlist"
+
+start_test "extending does not remove the defaults"
+EXTEND_DIR="$TMP/extend" _template_source_allowed "ghcr.io/terchris/x/uis" && pass_test \
+    || fail_test "defaults must survive"
+
+start_test "no digest is refused — a tag alone is not a pin"
+_template_pin_is_immutable "v20260909-abc1234" "" 2>/dev/null && fail_test "must refuse" || pass_test
+
+start_test "a malformed digest is refused"
+_template_pin_is_immutable "v20260909-abc1234" "sha256:nothex" 2>/dev/null && fail_test "must refuse" || pass_test
+
+start_test "latest is refused even with a valid digest"
+_template_pin_is_immutable "latest" "sha256:$(printf 'a%.0s' {1..64})" 2>/dev/null && fail_test "must refuse" || pass_test
+
+start_test "a branch-shaped tag is refused"
+_template_pin_is_immutable "main" "sha256:$(printf 'a%.0s' {1..64})" 2>/dev/null && fail_test "must refuse" || pass_test
+
+start_test "an immutable tag with a valid digest is accepted"
+_template_pin_is_immutable "v20260909-abc1234" "sha256:$(printf 'b%.0s' {1..64})" && pass_test || fail_test "should be accepted"
+
+start_test "a missing source field is named, not dereferenced"
+out=$(_require_source_fields '{"source":{"artifact":"ghcr.io/terchris/a/uis"}}' fixture 2>&1) && fail_test "must fail" || true
+echo "$out" | grep -q "source.digest" && pass_test || fail_test "should name the missing field: $out"
+
+# ============================================================================
+# Phase 1 — resolution, against an OCI layout on disk (needs oras; no network)
+# ============================================================================
+print_test_section "Phase 1: resolution via oras"
+
+if ! command -v oras >/dev/null 2>&1; then
+    skip_test "Skipping oras tests: oras not installed (it ships in uis-provision-host 1.6.16+)"
+    skip_test "Skipping oras tests: oras not installed"
+    skip_test "Skipping oras tests: oras not installed"
+else
+    layout="$TMP/layout"
+    ( mkdir -p "$TMP/def/migrations" && cd "$TMP/def" \
+      && printf 'id: fixture\ninstall_type: stack\n' > template-info.yaml \
+      && echo "SELECT 1;" > migrations/001_a.sql \
+      && oras push --oci-layout "$layout:v20260909-abc1234" template-info.yaml migrations/001_a.sql ) >/dev/null 2>&1
+    fixture_digest=$(oras manifest fetch --oci-layout --descriptor "$layout:v20260909-abc1234" 2>/dev/null \
+        | sed -n 's/.*"digest":"\([^"]*\)".*/\1/p')
+
+    export UIS_ORAS_OCI_LAYOUT=1 TEMPLATE_CACHE_DIR="$TMP/cache"
+
+    # ⚠️ Each case runs in a SUBSHELL with its own allowlist. The first version of
+    # these tests wrote `TEMPLATE_ALLOWLIST_DEFAULT="$layout" out=$(...)`, which is
+    # two variable assignments and NOT an env-prefixed command — the env-prefix
+    # form only applies when a command follows. So the allowlist leaked globally
+    # and the refusal case passed the check it was meant to fail. It failed
+    # honestly, which is the only reason I noticed.
+    start_test "resolution pulls the definition and echoes its path"
+    out=$( TEMPLATE_ALLOWLIST_DEFAULT="$layout"; _resolve_definition fixture "$layout" v20260909-abc1234 "$fixture_digest" public 2>/dev/null )
+    [[ -f "$out/template-info.yaml" ]] && pass_test || fail_test "no definition at '$out'"
+
+    start_test "the cache is keyed by digest, so a re-resolve is a hit"
+    out2=$( TEMPLATE_ALLOWLIST_DEFAULT="$layout"; _resolve_definition fixture "$layout" v20260909-abc1234 "$fixture_digest" public 2>&1 >/dev/null )
+    echo "$out2" | grep -qi "cached" && pass_test || fail_test "expected a cache hit: $out2"
+
+    start_test "an artifact outside the allowlist is refused before any pull"
+    ( _resolve_definition fixture "$layout" v20260909-abc1234 "$fixture_digest" public >/dev/null 2>&1 ) \
+        && fail_test "must refuse when not allowlisted" || pass_test
+
+    start_test "the refusal names the allowlist rather than just saying no"
+    err=$( _resolve_definition fixture "$layout" v20260909-abc1234 "$fixture_digest" public 2>&1 >/dev/null )
+    echo "$err" | grep -q "ghcr.io/terchris" && pass_test || fail_test "should list what IS allowed: $err"
+
+    unset UIS_ORAS_OCI_LAYOUT TEMPLATE_CACHE_DIR
+fi
+
 print_summary

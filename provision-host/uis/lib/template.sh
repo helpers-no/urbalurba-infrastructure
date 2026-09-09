@@ -42,7 +42,80 @@ REGISTRY_CACHE_TTL=3600  # 1 hour
 
 # Template fetch config
 TEMPLATE_REPO="${TEMPLATE_REPO:-https://github.com/helpers-no/dev-templates.git}"
-TEMPLATE_CACHE_DIR="/tmp/uis-templates"
+TEMPLATE_CACHE_DIR="${TEMPLATE_CACHE_DIR:-/tmp/uis-templates}"
+
+# ─── The allowlist ────────────────────────────────────────────────────────────
+#
+# An application's install definition is an OCI artifact UIS pulls and then
+# feeds to `configure --init-file`, which applies it as the database owner. So
+# the set of registries UIS will pull from is a security boundary, not a
+# convenience: a merged typo in the catalogue must not be able to point a
+# platform at a stranger's SQL (urb-agents#361, and the spec's own §4).
+#
+# Defaults live here; an installation may extend them in
+# `.uis.extend/template-allowlist.conf` — one glob per line, `#` comments. That
+# file is installation config, the same relationship as
+# dagster-code-locations.yaml: the product ships a default, the installation
+# decides what it trusts.
+TEMPLATE_ALLOWLIST_DEFAULT="ghcr.io/helpers-no/* ghcr.io/terchris/*"
+
+# Read the effective allowlist: the defaults plus anything the installation adds.
+_template_allowlist() {
+    local extend_file
+    extend_file="$(_uis_extend_dir 2>/dev/null || echo "")/template-allowlist.conf"
+    printf '%s\n' $TEMPLATE_ALLOWLIST_DEFAULT
+    if [[ -n "$extend_file" && -f "$extend_file" ]]; then
+        grep -vE '^\s*(#|$)' "$extend_file" | tr -d '\r'
+    fi
+}
+
+# Where .uis.extend lives. paths.sh defines EXTEND_DIR when sourced; fall back so
+# this lib is usable in a unit test that has not sourced it.
+_uis_extend_dir() {
+    if [[ -n "${EXTEND_DIR:-}" ]]; then echo "$EXTEND_DIR"; return 0; fi
+    if [[ -d "/mnt/urbalurbadisk/.uis.extend" ]]; then echo "/mnt/urbalurbadisk/.uis.extend"; return 0; fi
+    echo "${UIS_BASE}/.uis.extend"
+}
+
+# Is this artifact reference inside the allowlist?
+# Compares against the repository part only — a tag or digest cannot widen it.
+_template_source_allowed() {
+    local artifact="$1" pattern
+    [[ -n "$artifact" ]] || return 1
+    while IFS= read -r pattern; do
+        [[ -z "$pattern" ]] && continue
+        # shellcheck disable=SC2053  # glob match is the point
+        [[ "$artifact" == $pattern ]] && return 0
+    done < <(_template_allowlist)
+    return 1
+}
+
+# ⚠️ A tag is NOT a pin. Tags are mutable at a registry; digests are not, which
+# is why the catalogue records both and UIS pulls the digest (Terje, #361).
+# `latest` and bare branch-looking refs are refused outright, so a catalogue
+# entry cannot smuggle in a moving target even if the build let it through.
+_template_pin_is_immutable() {
+    local tag="$1" digest="$2"
+    if [[ -z "$digest" ]]; then
+        log_error "No digest recorded for this entry — refusing."
+        echo "  A tag alone is not a pin: tags are mutable at a registry." >&2
+        echo "  The catalogue build must resolve the tag to a digest and record both." >&2
+        return 1
+    fi
+    if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        log_error "Digest '$digest' is not a sha256 digest — refusing."
+        return 1
+    fi
+    case "${tag,,}" in
+        latest|main|master|head|"")
+            log_error "Tag '$tag' is not immutable — refusing."
+            echo "  Use an immutable tag such as v20260909-abc1234." >&2
+            echo "  Same rule UIS already applies to Dagster code-location images." >&2
+            return 1
+            ;;
+    esac
+    return 0
+}
 
 # Check if registry cache is fresh
 _registry_cache_fresh() {
@@ -181,6 +254,150 @@ _fetch_template_folder() {
     fi
 
     echo "$target_dir"
+}
+
+# ─── Resolving an application's install definition ────────────────────────────
+#
+# The definition is its own small OCI artifact beside the application's image
+# (Terje, urb-agents#361) — `<image>/uis` at the same tag. So resolving it is
+# `oras pull`, not a docker pull of a whole image and not a pod: a pod would be
+# a fetch through a scheduler, and everything the scheduler can do wrong would
+# become a way for `template install` to fail before installing anything.
+#
+# Public artifacts pull anonymously: the platform's token is never touched for
+# something the whole world can read.
+_oras_available() {
+    if ! command -v oras >/dev/null 2>&1; then
+        log_error "oras is not installed on this provision host."
+        echo "  Installing an application needs a provision host built after oras" >&2
+        echo "  was added (UIS 1.6.16). Run './uis pull' to update, then retry." >&2
+        echo "  This is not a missing application — it is a missing tool." >&2
+        return 1
+    fi
+    return 0
+}
+
+# Log in to ghcr for a private artifact, using the credential the installation
+# already holds. Same pair that becomes the `ghcr-credentials` pull secret, so
+# there is no second credential path to keep in step.
+_oras_login_if_private() {
+    local visibility="$1" artifact="$2"
+    [[ "$visibility" != "private" ]] && return 0
+
+    local registry="${artifact%%/*}"
+    local user="${GITHUB_USERNAME:-}" token="${GITHUB_ACCESS_TOKEN:-}"
+
+    if [[ -z "$user" || -z "$token" ]]; then
+        # ⚠️ Name the SECRET, not the URL. An operator who sees a 401 against a
+        # ghcr path starts debugging the registry; what is actually missing is a
+        # value in their own secrets file.
+        log_error "This application's artifact is private and no package credential is configured."
+        echo "  Set GITHUB_USERNAME and GITHUB_ACCESS_TOKEN in" >&2
+        echo "    .uis.secrets/00-common-values.env" >&2
+        echo "  then run './uis secrets generate && ./uis secrets apply'." >&2
+        echo "  (The same pair becomes the ghcr-credentials pull secret.)" >&2
+        return 1
+    fi
+
+    if ! printf '%s' "$token" | oras login "$registry" --username "$user" --password-stdin >/dev/null 2>&1; then
+        log_error "oras login to $registry failed for user '$user'."
+        echo "  The credential is present but was rejected. Check that the token" >&2
+        echo "  has read:packages scope and has not expired." >&2
+        return 1
+    fi
+    return 0
+}
+
+# Pull an install definition to a cache directory and echo the path.
+#
+# ⚠️ The cache is keyed by DIGEST, so two pins cannot collide and a re-install at
+# the same pin is a cache hit rather than a re-fetch. And it removes only its OWN
+# directory: the previous code `rm -rf`'d the shared parent before every fetch,
+# which made two concurrent installs clobber each other (imac, #335).
+_resolve_definition() {
+    local id="$1" artifact="$2" tag="$3" digest="$4" visibility="${5:-public}"
+
+    _oras_available || return 1
+    if ! _template_source_allowed "$artifact"; then
+        log_error "Artifact '$artifact' is not in the allowlist — refusing to pull."
+        echo "  Allowed:" >&2
+        _template_allowlist | sed 's/^/    /' >&2
+        echo "  An installation may extend this in .uis.extend/template-allowlist.conf." >&2
+        return 1
+    fi
+    _template_pin_is_immutable "$tag" "$digest" || return 1
+
+    local dest="$TEMPLATE_CACHE_DIR/$id/${digest#sha256:}"
+    if [[ -f "$dest/template-info.yaml" ]]; then
+        echo "Using cached definition for '$id' at $digest" >&2
+        echo "$dest"
+        return 0
+    fi
+
+    _oras_login_if_private "$visibility" "$artifact" || return 1
+
+    rm -rf "$dest"
+    mkdir -p "$dest" || { log_error "Could not create cache dir $dest"; return 1; }
+
+    echo "Pulling install definition: ${artifact}@${digest}" >&2
+    echo "  (tag ${tag} — the digest is what is pulled)" >&2
+
+    # ⚠️ UIS_ORAS_OCI_LAYOUT exists so the unit tests can pull from an OCI layout
+    # on disk: no network, no registry, no cluster. It is test surface and it is
+    # named as such rather than hidden, because the alternative is a resolution
+    # path that only a cluster can exercise — and this week proved what happens
+    # to code no test can reach.
+    local oras_args=(pull "${artifact}@${digest}" --output "$dest")
+    [[ -n "${UIS_ORAS_OCI_LAYOUT:-}" ]] && oras_args=(pull --oci-layout "${artifact}@${digest}" --output "$dest")
+
+    if ! oras "${oras_args[@]}" >&2; then
+        log_error "oras pull failed for ${artifact}@${digest}"
+        echo "  If the artifact is private, this installation needs a package credential." >&2
+        rm -rf "$dest"
+        return 1
+    fi
+
+    if [[ ! -f "$dest/template-info.yaml" ]]; then
+        log_error "The artifact contains no template-info.yaml."
+        echo "  Pulled ${artifact}@${digest} and found:" >&2
+        ls -1 "$dest" 2>/dev/null | sed 's/^/    /' >&2
+        echo "  An application's definition artifact must carry template-info.yaml at its root." >&2
+        rm -rf "$dest"
+        return 1
+    fi
+
+    echo "$dest"
+}
+
+# Read the source fields from a registry entry.
+#
+# ⚠️ These do not exist in template-registry.json yet — the generator change is
+# dev-templates' half of this and is not merged. Rather than guessing, an entry
+# missing them fails naming the field and whose job it is, so the error is
+# actionable instead of a null dereference three functions later.
+_template_source_field() {
+    local template="$1" field="$2"
+    echo "$template" | jq -r --arg f "$field" '.source[$f] // empty' 2>/dev/null
+}
+
+_require_source_fields() {
+    local template="$1" id="$2"
+    local missing=()
+    local a t d
+    a=$(_template_source_field "$template" artifact)
+    t=$(_template_source_field "$template" tag)
+    d=$(_template_source_field "$template" digest)
+    [[ -z "$a" ]] && missing+=("source.artifact")
+    [[ -z "$t" ]] && missing+=("source.tag")
+    [[ -z "$d" ]] && missing+=("source.digest")
+    if (( ${#missing[@]} )); then
+        log_error "Catalogue entry '$id' is missing: ${missing[*]}"
+        echo "  An application entry needs source.artifact, source.tag and source.digest." >&2
+        echo "  The catalogue build resolves the tag to a digest and records both;" >&2
+        echo "  if this entry predates that, the registry generator needs updating." >&2
+        return 1
+    fi
+    return 0
 }
 
 # Parse template-info.yaml field using yq
@@ -450,23 +667,40 @@ cmd_template_install() {
     shift || true
 
     if [[ -z "$template_id" ]]; then
-        log_error "Usage: uis template install <id> [--param key=value]..."
+        log_error "Usage: uis template install <id> [--dry-run] [--param key=value]..."
         return 1
     fi
 
-    # Parse --param flags
+    # Parse flags. ⚠️ An unknown flag is REFUSED, not shifted past: the old loop
+    # silently ignored anything it did not recognise, so `--dryrun` would have
+    # installed for real. Same reasoning as rejecting an unknown `config:` key.
     declare -A cli_params
+    local dry_run=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --dry-run)
+                dry_run=true
+                shift
+                ;;
             --param)
+                if [[ -z "${2:-}" ]]; then
+                    log_error "--param needs key=value"
+                    return 1
+                fi
                 local kv="$2"
                 local k="${kv%%=*}"
                 local v="${kv#*=}"
                 cli_params["$k"]="$v"
                 shift 2
                 ;;
+            -*)
+                log_error "Unknown option: $1"
+                echo "Usage: uis template install <id> [--dry-run] [--param key=value]..." >&2
+                return 1
+                ;;
             *)
-                shift
+                log_error "Unexpected argument: $1"
+                return 1
                 ;;
         esac
     done
@@ -553,6 +787,65 @@ cmd_template_install() {
     local app_name
     app_name=$(grep '^app_name=' "$params_file" 2>/dev/null | head -1 | cut -d'=' -f2-)
     [[ -z "$app_name" ]] && app_name="$template_id"
+
+    # ─── --dry-run ────────────────────────────────────────────────────────────
+    #
+    # Print every command the install would run, in order, with params resolved,
+    # and run nothing. The affordance every write tool on this platform now has.
+    #
+    # ⚠️ It is a dry run of the INSTALL, not of the FETCH. Resolving the pointer
+    # has already happened by this point — that is how we know what the plan is —
+    # so a `--dry-run` has pulled the definition artifact and written nothing
+    # else. Said in the output, because "dry run" otherwise implies untouched.
+    if [[ "$dry_run" == true ]]; then
+        print_section "Dry run: $template_id"
+        echo "Commands that would run, in order:"
+        echo ""
+        local n=0
+        while IFS='|' read -r priority svc; do
+            [[ -z "$svc" ]] && continue
+            local conf="$plan_dir/${svc}.conf"
+            local args=() first=false
+            _service_is_multi_instance "$svc" && first=true
+
+            # Same argument construction as the executor below, so the dry run
+            # cannot drift from what actually happens. Any change there belongs
+            # here too — and the falsification for this phase is that they agree.
+            if [[ -s "$conf" ]]; then
+                args=("$svc" "--app" "$app_name")
+                local v
+                v=$(_substitute_params "$(_conf_get "$conf" database)" "$params_file");            [[ -n "$v" ]] && args+=(--database "$v")
+                v=$(_substitute_params "$(_conf_get "$conf" schemas)" "$params_file");             [[ -n "$v" ]] && args+=(--schemas "$v")
+                v=$(_substitute_params "$(_conf_get "$conf" url_prefix)" "$params_file");          [[ -n "$v" ]] && args+=(--url-prefix "$v")
+                v=$(_substitute_params "$(_conf_get "$conf" namespace)" "$params_file");           [[ -n "$v" ]] && args+=(--namespace "$v")
+                v=$(_substitute_params "$(_conf_get "$conf" secret_name_prefix)" "$params_file");  [[ -n "$v" ]] && args+=(--secret-name-prefix "$v")
+                local init
+                init=$(_substitute_params "$(_conf_get "$conf" init)" "$params_file")
+                [[ -n "$init" ]] && args+=(--init-file -)
+            fi
+
+            local deploy_args=("$svc")
+            _service_is_multi_instance "$svc" && deploy_args+=(--app "$app_name")
+
+            if [[ "$first" == true ]]; then
+                n=$((n+1)); echo "  $n. uis configure ${args[*]}"
+                n=$((n+1)); echo "  $n. uis deploy ${deploy_args[*]}"
+            else
+                n=$((n+1)); echo "  $n. uis deploy ${deploy_args[*]}"
+                if [[ -s "$conf" ]]; then
+                    n=$((n+1)); echo "  $n. uis configure ${args[*]}"
+                fi
+            fi
+            if [[ -n "${init:-}" ]]; then
+                echo "       (stdin: $(_collect_init_sql "$template_dir/$init" 2>/dev/null | grep -c '' || echo 0) lines from '$init')"
+            fi
+            unset init
+        done <<< "$plan"
+        echo ""
+        echo "Nothing was installed. ⚠️ The definition artifact WAS pulled — that is"
+        echo "how the plan above is known — but no service was deployed or configured."
+        return 0
+    fi
 
     # Execute plan
     local results=""
