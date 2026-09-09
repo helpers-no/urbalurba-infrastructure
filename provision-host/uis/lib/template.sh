@@ -1057,13 +1057,41 @@ cmd_template_remove() {
         [[ -n "$svc" ]] && _service_is_multi_instance "$svc" && echo "  instance       $svc --app $template_id"
     done <<< "$svcs"
     echo "  the application record"
+    if [[ "$purge" == true ]]; then
+        while IFS= read -r svc; do
+            [[ -n "$svc" ]] && _service_is_multi_instance "$svc" \
+                && echo "  ⚠️ $svc per-app Postgres roles and its Secret (--purge)"
+        done <<< "$svcs"
+    fi
     echo ""
     echo "Will NOT remove (an application's data outlives its install):"
     while IFS= read -r svc; do
         [[ -n "$svc" ]] && ! _service_is_multi_instance "$svc" && echo "  $svc — shared, single-instance"
     done <<< "$svcs"
-    echo "  databases, roles and secrets"
-    [[ "$purge" == true ]] && echo "  ⚠️ --purge given: per-app Postgres roles and secrets WILL be dropped"
+
+    # ⚠️ Enumerate what --purge CANNOT reach, by name, before the prompt.
+    #
+    # `configure postgresql` has no --purge at all, so the application's own
+    # database, its owning role, and the Secret written by
+    # `--namespace/--secret-name-prefix` cannot be dropped by any UIS command
+    # today. An earlier version announced "per-app Postgres roles and secrets
+    # WILL be dropped" and dropped none of it — exit 0, twice-announced, nothing
+    # done (imac, urb-agents#367).
+    #
+    # That was the third announced-action-no-action in this feature. The lesson
+    # I am applying: derive the message from what is actually callable, and name
+    # the gap rather than rounding it off.
+    local app_user="${template_id//-/_}"
+    echo "  the '$template_id' database and its owning role '$app_user'"
+    echo "  any Secret written by configure postgresql --secret-name-prefix"
+    if [[ "$purge" == true ]]; then
+        echo ""
+        echo "⚠️ --purge does NOT cover those: configure postgresql has no purge."
+        echo "   To finish by hand afterwards:"
+        echo "     ./uis connect postgresql   then:  DROP DATABASE $template_id; DROP ROLE $app_user;"
+        echo "     kubectl delete secret <prefix>-db -n <namespace>"
+        echo "   Tracked as PLAN-cli-configure-postgresql-purge."
+    fi
     echo ""
 
     if [[ "$assume_yes" != true ]]; then
@@ -1087,19 +1115,56 @@ cmd_template_remove() {
         [[ -z "$svc" ]] && continue
         if _service_is_multi_instance "$svc"; then
             log_info "Undeploying $svc --app $template_id..."
-            local ud=("$svc" --app "$template_id" --yes)
-            [[ "$purge" == true ]] && ud+=(--purge)
-            uis undeploy "${ud[@]}" >&2 || log_warn "undeploy $svc --app $template_id failed; continuing"
+            if ! uis undeploy "$svc" --app "$template_id" --yes >&2; then
+                log_warn "undeploy $svc --app $template_id failed; continuing"
+            fi
+
+            # ⚠️ `configure --purge`, NOT `undeploy --purge`.
+            #
+            # undeploy removes Kubernetes objects and LEAVES the Postgres roles
+            # and the Secret — it says so in its own output, and the non-purge
+            # path prints `configure <svc> --app <name> --purge` as the hint for
+            # removing them. So the code already knew the right verb and called
+            # the other one: --purge announced the drop twice and performed
+            # none, exit 0 (imac, urb-agents#367).
+            #
+            # Reported from the handler's own JSON rather than assumed, because
+            # the whole defect was assuming a call did what its name suggested.
+            if [[ "$purge" == true ]]; then
+                log_info "Purging per-app roles and Secret for $svc..."
+                local purge_out purge_rc=0
+                purge_out=$(uis configure "$svc" --app "$template_id" --purge --json 2>&1) || purge_rc=$?
+                local purge_status
+                purge_status=$(echo "$purge_out" | jq -r '.status // empty' 2>/dev/null)
+                case "$purge_status" in
+                    purged)
+                        echo "  dropped: $(echo "$purge_out" | jq -r '(.roles_dropped // []) | join(", ")' 2>/dev/null)" >&2
+                        echo "  removed: $(echo "$purge_out" | jq -r '.secret_removed // "-"' 2>/dev/null)" >&2
+                        results+="$svc: purged"$'\n'
+                        ;;
+                    *)
+                        log_warn "Purge of $svc did not report success (exit $purge_rc)."
+                        echo "  $purge_out" >&2
+                        echo "  Roles and Secret for '$template_id' may still exist. To finish:" >&2
+                        echo "    ./uis configure $svc --app $template_id --purge" >&2
+                        results+="$svc: purge INCOMPLETE"$'\n'
+                        ;;
+                esac
+            fi
         fi
     done <<< "$svcs"
 
     _forget_application "$template_id"
     print_section "Removed: $template_id"
     if [[ "$purge" != true ]]; then
-        echo "Databases and roles were left in place. To drop them:"
+        echo "Per-app roles, Secrets and databases were left in place. To drop them:"
         while IFS= read -r svc; do
             [[ -n "$svc" ]] && _service_is_multi_instance "$svc" && echo "  ./uis configure $svc --app $template_id --purge"
         done <<< "$svcs"
+        echo "  and by hand, the database and owning role — see PLAN-cli-configure-postgresql-purge"
+    else
+        echo "The '$template_id' database and its owning role were NOT dropped."
+        echo "No UIS command does that yet; see PLAN-cli-configure-postgresql-purge."
     fi
     return 0
 }
