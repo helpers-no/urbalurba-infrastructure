@@ -12,7 +12,7 @@ exercised at least once, so a failure reports its cause instead of being
 swallowed by the mechanism meant to handle it.
 
 **Proposed by**: imac, `urb-agents#344`, after finding the third instance in one
-week. **Seven instances as of 1.6.24** (see the table). Its words: *"Each was invisible until something failed, and each made the
+week. **Nine instances as of 1.6.27** (see the table). Its words: *"Each was invisible until something failed, and each made the
 **next** failure harder to diagnose. Might be worth one deliberate pass over the
 error paths rather than three more of these arriving one at a time."*
 
@@ -29,9 +29,10 @@ error paths rather than three more of these arriving one at a time."*
 | `#367` | `template remove --purge` dropped the roles correctly, printed none of its reporting, skipped the record cleanup, and exited 4 | `x=$(… \| jq)` on a non-JSON stream — jq exits 4, the assignment inherits it, `set -e` kills the caller |
 | 1.6.24 | `template remove` **could never refuse** while a dependant was installed, though the CLI reference documented that it would | `_applications_requiring` read `.requires` out of the record; `_record_application` never wrote the field. A guard whose input nothing produces |
 | 1.6.24 | `_applications_requiring atlas` was **also** blocked by an application requiring `atlas-data` | `contains(["x"])` does **substring** matching on string array elements in jq and yq alike: `["atlas-data"] \| contains(["atlas"])` is true. A comparison that reads as membership and is not |
+| 1.6.27 | 🔴 `configure postgresql --init-file -` **discarded the SQL** on a database that already existed, exit 0 | Init is applied at line 273; the already-exists branch returns at 231/234. The whole application-catalogue install-time guarantee, undelivered and unreported |
 | 1.6.24 | 28 of 68 template tests reported **neither pass nor fail**, and the suite still printed `ALL TESTS PASSED` | `assert_equals "$a" "$b" "msg"` returned 0 and moved no counter. Failures were reported, so the verdict held — but the count could not be reconciled, and an unreconcilable number is one nobody checks |
 
-Seven instances, seven different mechanisms, one shape: **error handling that looks
+Nine instances, nine different mechanisms, one shape: **error handling that looks
 correct, defeated by the semantics of the construct it is written in, in a branch
 nothing executes until something else is already wrong.**
 
@@ -76,6 +77,31 @@ substitutes for.
 part and the reason this is worth a pass rather than three more fixes. The
 `no_log` case cost the tester a manual reproduction to learn what a single line
 of stderr would have said.
+
+## 🔴 The strongest evidence for a SWEEP rather than a queue of fixes
+
+**The ninth instance already had its fix written — in the other handler.**
+
+`configure postgrest` had exactly this defect: its `no-op` path `return 0`-ed
+before any SQL ran, so the documented remediation for the `FOR ROLE` defect did
+nothing and an operator was told "nothing to do" while holding a broken
+instance (imac, `#330` Finding A). It was fixed: PHASE 5 now reapplies grants so
+a re-run converges.
+
+`configure postgresql` — the sibling handler, the same `already-configured`
+shape, the same directory — kept it. Nobody looked across.
+
+That is the argument for tasks 1.1–1.5 being a **pass over the class** rather
+than a queue of individual fixes, and it is stronger than anything else in this
+plan: *when you fix one of these, the same defect is usually sitting in the
+nearest analogous code path, and fixing it there is nearly free at that moment
+and nearly invisible later.* Add to the workflow: **after fixing an instance,
+grep for the sibling.**
+
+⚠️ It also says something about the two-week gap. The postgrest fix landed
+`#330`; the postgresql twin survived until a static pre-flight of an unrelated
+install path went looking. Nothing in between would have found it, because
+nothing in between had a reason to read that branch.
 
 ## Why a pass rather than waiting for the fourth
 
