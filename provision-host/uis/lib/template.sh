@@ -993,14 +993,26 @@ _build_effective_params() {
 # application does not own it and removing an application must not take the
 # platform's database with it.
 cmd_template_remove() {
-    local template_id="${1:-}"; shift || true
-    local purge=false assume_yes=false
+    # Flags in any order, id anywhere — the same loop shape `configure` uses
+    # (configure.sh:90-140), where the first bare word is the subject. The
+    # positional-first version rejected `remove --yes uisfix` with "Unexpected
+    # argument", which is a confusing way to say "wrong order" for something the
+    # rest of the CLI accepts.
+    local template_id="" purge=false assume_yes=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --purge) purge=true; shift ;;
             --yes|-y) assume_yes=true; shift ;;
             -*) log_error "Unknown option: $1"; return 1 ;;
-            *)  log_error "Unexpected argument: $1"; return 1 ;;
+            *)
+                if [[ -z "$template_id" ]]; then
+                    template_id="$1"
+                else
+                    log_error "Unexpected argument: $1 (application id already given as '$template_id')"
+                    return 1
+                fi
+                shift
+                ;;
         esac
     done
 
@@ -1031,22 +1043,25 @@ cmd_template_remove() {
 
     local file svcs cls
     file="$(_applications_file)"
-    svcs=$(app_id="$template_id" yq -r '.applications[] | select(.id == strenv(app_id)) | (.services // []) | join(" ")' "$file" 2>/dev/null)
-    cls=$(app_id="$template_id" yq -r '.applications[] | select(.id == strenv(app_id)) | (.code_locations // []) | join(" ")' "$file" 2>/dev/null)
+    # Newline-separated and read line-wise: a name is a Kubernetes name and
+    # should never contain a space, but word-splitting a recorded value is
+    # exactly how the raw-template bug turned one entry into three tokens.
+    svcs=$(app_id="$template_id" yq -r '.applications[] | select(.id == strenv(app_id)) | (.services // []) | .[]' "$file" 2>/dev/null)
+    cls=$(app_id="$template_id" yq -r '.applications[] | select(.id == strenv(app_id)) | (.code_locations // []) | .[]' "$file" 2>/dev/null)
 
     print_section "Removing application: $template_id"
     echo "Will remove:"
     local svc
-    for svc in $cls; do echo "  code location  $svc"; done
-    for svc in $svcs; do
-        _service_is_multi_instance "$svc" && echo "  instance       $svc --app $template_id"
-    done
+    while IFS= read -r svc; do [[ -n "$svc" ]] && echo "  code location  $svc"; done <<< "$cls"
+    while IFS= read -r svc; do
+        [[ -n "$svc" ]] && _service_is_multi_instance "$svc" && echo "  instance       $svc --app $template_id"
+    done <<< "$svcs"
     echo "  the application record"
     echo ""
     echo "Will NOT remove (an application's data outlives its install):"
-    for svc in $svcs; do
-        _service_is_multi_instance "$svc" || echo "  $svc — shared, single-instance"
-    done
+    while IFS= read -r svc; do
+        [[ -n "$svc" ]] && ! _service_is_multi_instance "$svc" && echo "  $svc — shared, single-instance"
+    done <<< "$svcs"
     echo "  databases, roles and secrets"
     [[ "$purge" == true ]] && echo "  ⚠️ --purge given: per-app Postgres roles and secrets WILL be dropped"
     echo ""
@@ -1058,31 +1073,33 @@ cmd_template_remove() {
     fi
 
     local had_cl=false
-    for svc in $cls; do
+    while IFS= read -r svc; do
+        [[ -z "$svc" ]] && continue
         _remove_code_location "$svc" && had_cl=true
         echo "Removed code location '$svc'" >&2
-    done
+    done <<< "$cls"
     if [[ "$had_cl" == true ]]; then
         log_info "Redeploying dagster so the removal takes effect..."
         uis deploy dagster >&2 || log_warn "dagster redeploy failed; the entry IS removed — run './uis deploy dagster' when ready"
     fi
 
-    for svc in $svcs; do
+    while IFS= read -r svc; do
+        [[ -z "$svc" ]] && continue
         if _service_is_multi_instance "$svc"; then
             log_info "Undeploying $svc --app $template_id..."
             local ud=("$svc" --app "$template_id" --yes)
             [[ "$purge" == true ]] && ud+=(--purge)
             uis undeploy "${ud[@]}" >&2 || log_warn "undeploy $svc --app $template_id failed; continuing"
         fi
-    done
+    done <<< "$svcs"
 
     _forget_application "$template_id"
     print_section "Removed: $template_id"
     if [[ "$purge" != true ]]; then
         echo "Databases and roles were left in place. To drop them:"
-        for svc in $svcs; do
-            _service_is_multi_instance "$svc" && echo "  ./uis configure $svc --app $template_id --purge"
-        done
+        while IFS= read -r svc; do
+            [[ -n "$svc" ]] && _service_is_multi_instance "$svc" && echo "  ./uis configure $svc --app $template_id --purge"
+        done <<< "$svcs"
     fi
     return 0
 }
@@ -1502,9 +1519,20 @@ cmd_template_install() {
     # Record what was installed, at which pin, with its exports resolved.
     local inst_services inst_cls exports_json
     inst_services=$(echo "$plan" | awk -F'|' 'NF>1{printf "%s%s", sep, $2; sep=","}')
+    # ⚠️ SUBSTITUTED, not raw. The conf file holds the declaration verbatim —
+    # `{{ params.app_name }}-data` — and recording that meant `template remove`
+    # read a template instead of a name, word-split it into three tokens, and
+    # reported removing three code locations that never existed while the real
+    # one survived. A green removal with a live code location is worse than a
+    # failure. imac, urb-agents#367.
+    #
+    # Fixed here rather than in remove: install already substitutes when it
+    # WRITES the entry, so recording the same value keeps one source of truth
+    # instead of two places that must agree.
     inst_cls=$(for f in "$plan_dir"/*.conf; do
                    [[ -f "$f" ]] || continue
-                   n=$(_conf_get "$f" code_location_name); [[ -n "$n" ]] && echo "$n"
+                   n=$(_conf_get "$f" code_location_name)
+                   [[ -n "$n" ]] && _substitute_params "$n" "$params_file"
                done | paste -sd, -)
     exports_json=$(_collect_exports "$info_file" "$params_file")
 
@@ -1547,7 +1575,11 @@ run_template() {
             cmd_template_install "$@"
             ;;
         remove|uninstall)
-            shift
+            # ⚠️ NO `shift` here. run_template already shifted the subcommand off,
+            # and the second shift ate an argument — which broke every documented
+            # form: `remove uisfix --yes` passed only `--yes`, so the command
+            # reported that '--yes' was not installed. imac, urb-agents#367.
+            # Note that no sibling case shifts; this one was the odd one out.
             cmd_template_remove "$@"
             ;;
         ""|help|--help|-h)
