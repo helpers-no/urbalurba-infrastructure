@@ -406,13 +406,13 @@ else
     start_test "an installed application is recorded with its pin and exports"
     ( EXTEND_DIR="$ad"; _record_application atlas ghcr.io/terchris/atlas-data/uis \
         v20260909-abc1234 "$D64" "postgresql,dagster,postgrest" "atlas-data" \
-        '{"api-url":"http://api-atlas.localhost"}' ) >/dev/null 2>&1
+        '{"api-url":"http://api-atlas.localhost"}' "" atlas ) >/dev/null 2>&1
     got=$( EXTEND_DIR="$ad"; yq -r '.applications[0] | [.id,.pin,.exports["api-url"]] | join(" ")' "$ad/applications.yaml" )
     assert_equals "atlas $D64 http://api-atlas.localhost" "$got" "record shape"
 
     start_test "re-recording the same id converges rather than duplicating"
     ( EXTEND_DIR="$ad"; _record_application atlas ghcr.io/terchris/atlas-data/uis \
-        v20260910-def5678 "$D64" "postgresql" "atlas-data" '{}' ) >/dev/null 2>&1
+        v20260910-def5678 "$D64" "postgresql" "atlas-data" '{}' "" atlas ) >/dev/null 2>&1
     got=$( yq -r '"\(.applications | length) \(.applications[0].tag)"' "$ad/applications.yaml" )
     assert_equals "1 v20260910-def5678" "$got" "one entry, new pin"
 
@@ -429,7 +429,7 @@ else
     echo "$err" | grep -qi "not installed automatically" && pass_test || fail_test "should state the policy: $err"
 
     start_test "requires on an installed application with the export passes"
-    ( EXTEND_DIR="$ad"; _record_application atlas a v1-a "$D64" "" "" '{"api-url":"http://x"}' ) >/dev/null 2>&1
+    ( EXTEND_DIR="$ad"; _record_application atlas a v1-a "$D64" "" "" '{"api-url":"http://x"}' "" atlas ) >/dev/null 2>&1
     printf 'requires:\n  - application: atlas\n    provides: api-url\n' > "$TMP/req2.yaml"
     ( EXTEND_DIR="$ad"; _check_requires "$TMP/req2.yaml" atlas-frontend ) >/dev/null 2>&1 && pass_test || fail_test "should pass"
 
@@ -454,7 +454,7 @@ else
 
     start_test "🔴 the record carries requires, so the remove refusal has an input"
     ( EXTEND_DIR="$rd"; _record_application atlas-frontend ghcr.io/terchris/atlas-web/uis \
-        v20260909-abc1234 "$D64" "webapp" "" '{}' "atlas" ) >/dev/null 2>&1
+        v20260909-abc1234 "$D64" "webapp" "" '{}' "atlas" atlas-frontend ) >/dev/null 2>&1
     got=$( yq -r '.applications[0].requires | join(",")' "$rd/applications.yaml" )
     assert_equals "atlas" "$got" "requires is recorded, not dropped"
 
@@ -471,7 +471,7 @@ else
     # contains(), removing `atlas` was blocked by an application requiring
     # `atlas-data`, naming a dependant that does not depend on it.
     ( EXTEND_DIR="$rd"; _record_application data-consumer ghcr.io/terchris/dc/uis \
-        v20260909-abc1234 "$D64" "" "" '{}' "atlas-data" ) >/dev/null 2>&1
+        v20260909-abc1234 "$D64" "" "" '{}' "atlas-data" data-consumer ) >/dev/null 2>&1
     got=$( EXTEND_DIR="$rd"; _applications_requiring atlas )
     assert_equals "atlas-frontend" "$got" "only the exact dependant, not the prefix match"
 
@@ -490,6 +490,36 @@ else
     # ⚠️ The fixture could not catch this: uisfix's id and app_name were the
     # same string. These tests deliberately make them DIFFER.
     an="$TMP/apps-appname"; mkdir -p "$an"
+
+    # ── two tenants of one template ───────────────────────────────────────────
+    #
+    # 🔴 The record was keyed on the template ID, so a second install with a
+    # different `--param app_name` SILENTLY REPLACED the first's record. The
+    # first tenant stayed deployed, healthy and serving traffic, and could no
+    # longer be removed by the tool that installed it (imac, urb-agents#492).
+    tt="$TMP/two-tenants"; mkdir -p "$tt"
+
+    start_test "🔴 two tenants of one template are two records, not one"
+    ( EXTEND_DIR="$tt"; _record_application atlas ghcr.io/x/uis v1-a "$D64" "postgresql" "atlas-data"   '{}' "" atlas   ) >/dev/null 2>&1
+    ( EXTEND_DIR="$tt"; _record_application atlas ghcr.io/x/uis v1-a "$D64" "postgresql" "atlas-t-data" '{}' "" atlas-t ) >/dev/null 2>&1
+    assert_equals "2" "$(yq -r '.applications | length' "$tt/applications.yaml")" "both tenants recorded"
+
+    start_test "each keeps its own code locations"
+    got=$(yq -r '[.applications[] | .code_locations[0]] | sort | join(",")' "$tt/applications.yaml")
+    assert_equals "atlas-data,atlas-t-data" "$got" "not overwritten"
+
+    start_test "the template id reports how many tenants it has"
+    assert_equals "2" "$( EXTEND_DIR="$tt"; _application_count atlas )" "count by id"
+
+    start_test "forgetting one tenant leaves the other"
+    ( EXTEND_DIR="$tt"; _forget_application atlas-t ) >/dev/null 2>&1
+    assert_equals "atlas" "$(yq -r '.applications[].app_name' "$tt/applications.yaml" | tr -d '\n')" "the first survives"
+
+    start_test "🔴 recording with an EMPTY app_name is refused, not written"
+    n_before=$(yq -r '.applications | length' "$tt/applications.yaml")
+    ( EXTEND_DIR="$tt"; _record_application ghost g v1-a "$D64" "" "" '{}' "" "" ) >/dev/null 2>&1 \
+        && fail_test "must refuse: an empty key would wipe pre-1.6.29 records" || true
+    assert_equals "$n_before" "$(yq -r '.applications | length' "$tt/applications.yaml")" "nothing written"
 
     start_test "🔴 the record stores app_name, and it may differ from the id"
     ( EXTEND_DIR="$an"; _record_application atlas ghcr.io/terchris/atlas-data/uis \

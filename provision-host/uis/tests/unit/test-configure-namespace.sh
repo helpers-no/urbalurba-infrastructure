@@ -145,7 +145,11 @@ else
 fi
 
 # Line numbers of the three landmarks, so the assertions read as an ordering.
-_exists_branch=$(grep -n "already exists — resetting password" "$PG_HANDLER" | head -1 | cut -d: -f1)
+# ⚠️ Anchored on the BRANCH CONDITION, not on a log message. This used to grep
+# for "already exists — resetting password" and broke the moment 1.6.35 reworded
+# it — a test asserting the shape of the code rather than the property, which is
+# the same mistake as the 1.6.31 argument-list greps.
+_exists_branch=$(grep -n 'if _pg_database_exists "$database_name" "$admin_pass"; then' "$PG_HANDLER" | head -1 | cut -d: -f1)
 _first_return=$(awk -v s="$_exists_branch" 'NR>s && /^        return 0$/ {print NR; exit}' "$PG_HANDLER")
 _init_in_branch=$(awk -v s="$_exists_branch" -v e="$_first_return" \
                       'NR>s && NR<e && /_pg_apply_init_file/ {print NR; exit}' "$PG_HANDLER")
@@ -220,5 +224,67 @@ grep -q 'user_was_created' "$PG_HANDLER" && pass_test \
 start_test "the rollback does not drop a role that predates the command"
 grep -q 'if ! _pg_user_exists "$username" "$admin_pass"; then' "$PG_HANDLER" && pass_test \
     || fail_test "rollback must only drop a role this run created"
+
+# ============================================================================
+# Re-install must not rotate a credential nobody asked to rotate
+#
+# 🔴 The already-exists path minted a new password unconditionally. A re-install
+# then left a running application holding the old one: the Secret was updated,
+# the consumer's Deployment was unchanged so nothing restarted it, and the ETL
+# failed with "password authentication failed" on an install that had just
+# exited 0 (imac, urb-agents#492).
+#
+# The rotation existed because "UIS does not store per-app passwords". It does —
+# in the Secret it wrote. `kubectl` is stubbed here so the read-back is tested
+# rather than asserted.
+# ============================================================================
+print_test_section "Configure postgresql: re-install preserves the credential"
+
+_kstub="$(mktemp -d)"
+mkdir -p "$_kstub/bin"
+cat > "$_kstub/bin/kubectl" <<'KSTUB'
+#!/bin/bash
+# Answers only the one query _pg_password_from_secret makes.
+if [[ "$*" == *"jsonpath={.data.DATABASE_URL}"* ]]; then
+    [[ -n "${STUB_SECRET_URL:-}" ]] || exit 1
+    printf '%s' "$STUB_SECRET_URL" | base64 -w0
+    exit 0
+fi
+exit 1
+KSTUB
+chmod +x "$_kstub/bin/kubectl"
+
+# shellcheck disable=SC1090
+source "$PG_HANDLER" 2>/dev/null || true
+
+start_test "🔴 the password is read back out of the Secret UIS wrote"
+got=$( PATH="$_kstub/bin:$PATH" STUB_SECRET_URL='postgresql://atlas:s3cr3tpw@pg:5432/atlas' \
+       _pg_password_from_secret dagster atlas-database-db )
+assert_equals "s3cr3tpw" "$got" "recovered from DATABASE_URL"
+
+start_test "no namespace means nothing to read, and no error"
+got=$( PATH="$_kstub/bin:$PATH" STUB_SECRET_URL='postgresql://a:b@h:1/d' _pg_password_from_secret "" "" )
+assert_equals "" "$got" "empty, quietly"
+
+start_test "a missing Secret yields empty rather than failing the caller"
+out=$( set -e; v=$( PATH="$_kstub/bin:$PATH" _pg_password_from_secret dagster nosuch ); echo "REACHED:$v" )
+assert_equals "REACHED:" "$out" "caller survives"
+
+start_test "a malformed URL yields empty rather than a wrong password"
+got=$( PATH="$_kstub/bin:$PATH" STUB_SECRET_URL='not-a-url' _pg_password_from_secret dagster s )
+assert_equals "" "$got" "no colon, no guess"
+
+start_test "the handler reads the rotate flag configure.sh has always passed"
+grep -q 'local rotate="${10:-false}"' "$PG_HANDLER" && pass_test \
+    || fail_test "--rotate is still parsed by configure.sh and ignored here"
+
+start_test "the rotation warning fires only when a rotation happened"
+grep -q 'if \[\[ "$rotated" == true \]\]; then' "$PG_HANDLER" && pass_test \
+    || fail_test "the warning is unconditional again"
+
+start_test "the JSON says whether it rotated, so a caller need not infer"
+grep -q '"rotated":\$rotated' "$PG_HANDLER" && pass_test || fail_test "no rotated field"
+
+rm -rf "$_kstub"
 
 print_summary

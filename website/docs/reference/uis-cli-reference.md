@@ -176,7 +176,7 @@ templates provision, ArgoCD deploys workloads.
 | `./uis template list` | List available UIS templates from the registry |
 | `./uis template info <id>` | Show one template's details |
 | `./uis template install <id> [--dry-run] [--param k=v]...` | Deploy and configure every service the template declares |
-| `./uis template remove <id> [--purge] [--yes]` | Remove an installed application. **Data is kept unless `--purge`** |
+| `./uis template remove <id> [--app <name>] [--purge] [--yes]` | Remove an installed application. **Data is kept unless `--purge`.** `--app` picks one tenant when a template has several |
 
 ### `--dry-run`
 
@@ -184,6 +184,26 @@ Prints every `deploy`/`configure` the install would run, in order, with params
 resolved, and runs nothing. ⚠️ It is a dry run of the **install**, not of the
 **fetch** — the definition artifact is pulled, because that is how the plan is
 known. Nothing else is written.
+
+### Several tenants of one template
+
+`--param app_name=` installs a second, independent tenant — a live one and a
+test one, say. The record holds **one entry per tenant, keyed on `app_name`**,
+so they do not collide.
+
+🔴 **Before 1.6.35 the record was keyed on the template id**, so a second
+install silently replaced the first's record: the first tenant stayed deployed,
+healthy and serving traffic, and could no longer be removed by the tool that
+installed it.
+
+Consequences worth knowing:
+
+- `remove <id>` is **ambiguous** once a template has two tenants, and refuses,
+  listing the `--app` values it knows: `./uis template remove atlas --app atlas-t`
+- `requires: <id>` is ambiguous the same way and refuses for the same reason —
+  two tenants export different URLs and nothing can say which you meant
+- a record with **no** `app_name` (written before 1.6.29) cannot be keyed, so
+  recording one is refused rather than allowed to collide
 
 ### `--param app_name=` and what `remove` remembers
 
@@ -524,14 +544,19 @@ worth knowing what it does:
 | | |
 |---|---|
 | the database and its role | **kept**, never recreated |
-| the password | 🔴 **rotated.** UIS does not store per-app passwords, so it mints a new one and rewrites the Secret |
+| the password | **preserved.** It is read back from the Secret UIS wrote. `--rotate` mints a new one; nothing else does |
 | `init:` | **re-applied**, and the result reports `init_applied` |
 | a failing `init:` | refuses and leaves the database alone — **no rollback**, because that data predates the command |
 
-🔴 **The password rotation will break a running workload** until its pods
-restart and re-read the Secret. Environment-variable consumers — a Dagster code
-location, for instance — read the credential once at pod start. The command says
-so on stderr; plan for a restart.
+🔴 **`--rotate` will break a running workload** until its pods restart and
+re-read the Secret. Environment-variable consumers — a Dagster code location,
+for instance — read the credential once at pod start.
+
+⚠️ **This used to happen on every re-install, unasked.** The rotation existed
+because "UIS does not store per-app passwords" — but it does, in the Secret it
+wrote, so it now reads it back instead. A re-install that reports `EXIT=0` and
+leaves the application unable to authenticate is not a trade worth making for a
+credential nobody asked to change. The JSON reports `rotated` either way.
 
 ⚠️ **Re-applying `init:` is safe by contract, not by luck.** An `init:` must
 satisfy *the schema after one application equals the schema after two*. That is
