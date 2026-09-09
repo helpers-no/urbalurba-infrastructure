@@ -45,6 +45,22 @@ UIS_FORWARDED_ENV=(
     TEMPLATE_REPO
     REGISTRY_URL_PRIMARY
     REGISTRY_URL_FALLBACK
+    # lib/template.sh — makes `oras pull` read an OCI layout on disk instead of
+    # a registry, so the resolution path can be exercised without one. New in
+    # 1.6.20 and NOT added here, which broke every documented fixture command
+    # from the host while working inside the container (imac, urb-agents#367).
+    #
+    # ⚠️ That is the SECOND time a new override reached this mechanism without
+    # reaching this list — the comment above recording the first one did not
+    # prevent it. tests/static/test-forwarded-env.sh now derives the candidates
+    # from the code and fails on any that is neither forwarded nor exempted with
+    # a reason, because a note cannot check and a test can.
+    UIS_ORAS_OCI_LAYOUT
+    # Operator-settable and previously silent from the host: setting either of
+    # these on the ./uis command line did nothing at all. Found by the same
+    # derived check, not reported.
+    UIS_DEBUG
+    UIS_NONINTERACTIVE
 )
 
 # TARGET_HOST is the name an operator naturally reaches for, but the container's
