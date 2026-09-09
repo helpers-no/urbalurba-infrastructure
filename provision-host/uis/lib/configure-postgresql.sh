@@ -133,6 +133,31 @@ _pg_create_secret() {
 }
 
 # Build JSON fragment for namespace/secret fields (empty if not requested)
+# Read the password back out of the Secret this installation wrote.
+#
+# 🔴 UIS "does not store per-app passwords" — but it DOES: it wrote the
+# DATABASE_URL into a Kubernetes Secret and that URL carries the password. Not
+# reading it back is what forced a rotation on every re-install, and a rotation
+# is what broke a running application whose pod had already read the old value
+# (imac, urb-agents#492).
+#
+# Generated passwords are `openssl rand -base64 24 | tr -d '/+=' | head -c 32`,
+# so alphanumeric — the URL parse below cannot be confused by a delimiter.
+_pg_password_from_secret() {
+    local ns="$1" secret_name="$2"
+    [[ -n "$ns" && -n "$secret_name" ]] || return 0
+    local kubeconf="${KUBECONF:-/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all}"
+    local url
+    url=$(kubectl get secret "$secret_name" -n "$ns" --kubeconfig="$kubeconf" \
+            -o jsonpath='{.data.DATABASE_URL}' 2>/dev/null | base64 -d 2>/dev/null) || return 0
+    [[ -n "$url" ]] || return 0
+    # postgresql://user:PASSWORD@host:port/db
+    local rest="${url#*://}"
+    local creds="${rest%%@*}"
+    [[ "$creds" == *:* ]] || return 0
+    printf '%s' "${creds#*:}"
+}
+
 _pg_secret_json_fragment() {
     local namespace="$1"
     local secret_name="$2"
@@ -150,6 +175,11 @@ configure_service() {
     local json_output="$5"
     local namespace="${6:-}"
     local secret_name_prefix="${7:-}"
+    # 8=schemas 9=url_prefix are postgrest's; 10 is rotate, which configure.sh
+    # has always passed and this handler never read — so `--rotate` was a flag
+    # a user could set and nothing honoured, while a rotation happened
+    # unconditionally instead.
+    local rotate="${10:-false}"
 
     # Compute secret name once
     local secret_name=""
@@ -207,11 +237,34 @@ configure_service() {
     # Check idempotency — if database already exists, reset password and return credentials
     # (DCT needs full connection details on already_configured — see gap from DCT round 1)
     if _pg_database_exists "$database_name" "$admin_pass"; then
-        echo "Database '$database_name' already exists — resetting password." >&2
+        # 🔴 PRESERVE THE CREDENTIAL BY DEFAULT. Rotate only when asked.
+        #
+        # This path used to mint a new password unconditionally, and a re-install
+        # then left a running application holding the old one: the Secret was
+        # updated, the consumer's pod was not restarted because nothing about its
+        # Deployment changed, and the ETL failed with "password authentication
+        # failed" on an install that had just exited 0 (imac, urb-agents#492).
+        #
+        # The rotation existed because "UIS does not store per-app passwords".
+        # It does — in the Secret it wrote. Reading it back removes the reason.
+        # Where there is no Secret to read (no --namespace), a new password is
+        # the only way to return a usable credential, so it rotates and says so.
+        local app_password="" rotated=false
+        if [[ "$rotate" != "true" ]]; then
+            app_password="$(_pg_password_from_secret "$namespace" "$secret_name")"
+        fi
 
-        # Generate a fresh password and reset it (we don't store per-app passwords)
-        local app_password
-        app_password=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
+        if [[ -n "$app_password" ]]; then
+            echo "Database '$database_name' already exists — reusing the credential from '$secret_name'." >&2
+        else
+            if [[ "$rotate" == "true" ]]; then
+                echo "Database '$database_name' already exists — rotating the password as requested." >&2
+            else
+                echo "Database '$database_name' already exists — no stored credential to reuse; minting a new one." >&2
+            fi
+            app_password=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
+            rotated=true
+        fi
 
         local alter_result
         alter_result=$(_pg_exec "ALTER USER \"$username\" WITH PASSWORD '$app_password'" "$admin_pass" 2>&1)
@@ -292,15 +345,18 @@ EOF
         # normal case for a Dagster code location. Say so; a silent credential
         # rotation under a running application is the kind of thing that gets
         # diagnosed as a network fault.
-        log_warn "Password for '$username' was rotated. Workloads holding the old credential"
-        echo "         will fail until their pods restart and re-read '$secret_name'." >&2
+        if [[ "$rotated" == true ]]; then
+            log_warn "Password for '$username' was rotated. Workloads holding the old credential"
+            echo "         will fail until their pods restart and re-read '$secret_name'." >&2
+            echo "         Restart them, or re-run without --rotate once a Secret exists." >&2
+        fi
 
         local secret_fragment
         secret_fragment=$(_pg_secret_json_fragment "$namespace" "$secret_name")
 
         if [[ "$json_output" == true ]]; then
             cat <<EOF
-{"status":"already_configured","service":"postgresql","local":{"host":"host.docker.internal","port":$expose_port,"database_url":"postgresql://$username:$app_password@host.docker.internal:$expose_port/$database_name"},"cluster":{"host":"$PG_CLUSTER_HOST","port":$PG_INTERNAL_PORT,"database_url":"$cluster_url"},"database":"$database_name","username":"$username","password":"$app_password"$secret_fragment,"init_applied":$init_applied,"message":"Database and user already existed; password was reset and any init file was re-applied. Store these credentials — old ones are invalidated."}
+{"status":"already_configured","service":"postgresql","local":{"host":"host.docker.internal","port":$expose_port,"database_url":"postgresql://$username:$app_password@host.docker.internal:$expose_port/$database_name"},"cluster":{"host":"$PG_CLUSTER_HOST","port":$PG_INTERNAL_PORT,"database_url":"$cluster_url"},"database":"$database_name","username":"$username","password":"$app_password"$secret_fragment,"init_applied":$init_applied,"rotated":$rotated,"message":"Database and user already existed; any init file was re-applied. rotated=true means the previous credential is invalid and consumers must restart."}
 EOF
             return 0
         fi

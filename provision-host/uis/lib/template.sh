@@ -787,12 +787,31 @@ _applications_init() {
     return 0
 }
 
+# How many tenants of this template id are recorded?
+# More than one means `remove <id>` and `requires: <id>` are both ambiguous.
+_application_count() {
+    local id="$1" file
+    file="$(_applications_file)"
+    [[ -f "$file" ]] || { printf '0'; return 0; }
+    app_id="$id" yq -r '[.applications[] | select(.id == strenv(app_id))] | length' "$file" 2>/dev/null
+}
+
+# The app_names recorded for this template id, newline separated.
+_application_app_names() {
+    local id="$1" file
+    file="$(_applications_file)"
+    [[ -f "$file" ]] || return 0
+    app_id="$id" yq -r '.applications[] | select(.id == strenv(app_id)) | .app_name // ""' "$file" 2>/dev/null
+}
+
 # Is an application installed here?
 _application_installed() {
     local id="$1" file
     file="$(_applications_file)"
     [[ -f "$file" ]] || return 1
-    [[ "$(app_id="$id" yq -r '[.applications[] | select(.id == strenv(app_id))] | length' "$file" 2>/dev/null)" == "1" ]]
+    # AT LEAST one — a template may now have several tenants. Callers that
+    # cannot tolerate ambiguity check _application_count themselves.
+    [[ "$(app_id="$id" yq -r '[.applications[] | select(.id == strenv(app_id))] | length' "$file" 2>/dev/null)" -ge 1 ]]
 }
 
 # Read one export of an installed application.
@@ -828,8 +847,28 @@ _record_application() {
     file="$(_applications_file)"
     _applications_init || return 1
 
+    # ⚠️ Refuse an empty app_name. The filter below removes every entry whose
+    # app_name differs from this one, so recording with "" would wipe every
+    # record written before 1.6.29 — those carry no app_name at all. A missing
+    # app_name means the params file lost it: a bug worth stopping on, not a
+    # value worth writing.
+    if [[ -z "$app_name" ]]; then
+        log_error "Refusing to record '$app_id' with no app_name."
+        echo "  The record is keyed on app_name; an empty one would collide with" >&2
+        echo "  every record that predates 1.6.29." >&2
+        return 1
+    fi
+
+    # 🔴 KEYED ON app_name, NOT id. Two installs of one template with different
+    # `--param app_name` are two tenants, and keying on the template id made the
+    # second SILENTLY REPLACE the first's record — leaving the first deployed,
+    # healthy, serving traffic and unremovable by the tool that installed it
+    # (imac, urb-agents#492, reproduced on a clean cluster).
+    #
+    # That is the direct consequence of `--param app_name` existing, and it is
+    # the workflow this project recommends: a live tenant plus a test one.
     local expr='.applications = ((.applications // [])
-        | map(select(.id != strenv(app_id)))
+        | map(select(.app_name != strenv(app_name)))
         + [{
             "id":        strenv(app_id),
             "artifact":  strenv(artifact),
@@ -857,11 +896,12 @@ _record_application() {
     return 0
 }
 
+# Forget ONE tenant, by app_name — not every tenant of a template id.
 _forget_application() {
-    local app_id="$1" file
+    local app_name="$1" file
     file="$(_applications_file)"
     [[ -f "$file" ]] || return 0
-    app_id="$app_id" yq -i '.applications = ((.applications // []) | map(select(.id != strenv(app_id))))' "$file"
+    app_name="$app_name" yq -i '.applications = ((.applications // []) | map(select(.app_name != strenv(app_name))))' "$file"
 }
 
 # Which installed applications declare a requires on <id>?
@@ -903,6 +943,19 @@ _check_requires() {
         dep_id=$(yq -r ".requires[$i].application // \"\"" "$info_file" 2>/dev/null)
         dep_provides=$(yq -r ".requires[$i].provides // \"\"" "$info_file" 2>/dev/null)
         [[ -z "$dep_id" ]] && continue
+
+        # ⚠️ An id with several tenants cannot answer "which api-url?".
+        # Refuse rather than pick one — picking is what made a tenant
+        # unmanageable on urb-agents#492.
+        local dep_n
+        dep_n="$(_application_count "$dep_id")"
+        if [[ "${dep_n:-0}" -gt 1 ]]; then
+            log_error "'$template_id' requires '$dep_id', which has $dep_n installed tenants."
+            echo "  Their exports differ, and nothing here can say which one you mean:" >&2
+            _application_app_names "$dep_id" | sed 's/^/    /' >&2
+            echo "  Remove the tenants you do not want, or give the dependency its own id." >&2
+            return 1
+        fi
 
         if ! _application_installed "$dep_id"; then
             log_error "'$template_id' requires the application '$dep_id', which is not installed here."
@@ -1264,10 +1317,11 @@ cmd_template_remove() {
     # positional-first version rejected `remove --yes uisfix` with "Unexpected
     # argument", which is a confusing way to say "wrong order" for something the
     # rest of the CLI accepts.
-    local template_id="" purge=false assume_yes=false
+    local template_id="" purge=false assume_yes=false want_app=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --purge) purge=true; shift ;;
+            --app) want_app="${2:-}"; shift 2 ;;
             --yes|-y) assume_yes=true; shift ;;
             -*) log_error "Unknown option: $1"; return 1 ;;
             *)
@@ -1283,7 +1337,7 @@ cmd_template_remove() {
     done
 
     if [[ -z "$template_id" ]]; then
-        log_error "Usage: uis template remove <id> [--purge] [--yes]"
+        log_error "Usage: uis template remove <id> [--app <name>] [--purge] [--yes]"
         return 1
     fi
     if ! command -v yq >/dev/null 2>&1; then
@@ -1315,8 +1369,33 @@ cmd_template_remove() {
     # views, and named the live database in its own "will NOT remove" notice.
     local file svcs cls app_name
     file="$(_applications_file)"
-    app_name=$(app_id="$template_id" yq -r \
-        '.applications[] | select(.id == strenv(app_id)) | .app_name // ""' "$file" 2>/dev/null)
+    # 🔴 One template id may now have SEVERAL tenants (`--param app_name`).
+    # Removing by id alone is ambiguous the moment it does, and guessing is how
+    # the first tenant became unremovable in the first place.
+    local n_tenants
+    n_tenants="$(_application_count "$template_id")"
+    if [[ "${n_tenants:-0}" -gt 1 && -z "$want_app" ]]; then
+        log_error "'$template_id' has $n_tenants installed tenants — say which one."
+        echo "  Installed as:" >&2
+        _application_app_names "$template_id" | sed 's/^/    --app /' >&2
+        echo "  e.g. ./uis template remove $template_id --app $(_application_app_names "$template_id" | head -1)" >&2
+        return 1
+    fi
+
+    if [[ -n "$want_app" ]]; then
+        app_name="$want_app"
+        if ! app_name="$want_app" app_id="$template_id" yq -e \
+             '[.applications[] | select(.id == strenv(app_id) and .app_name == strenv(app_name))] | length == 1' \
+             "$file" >/dev/null 2>&1; then
+            log_error "No installed tenant of '$template_id' with app_name '$want_app'."
+            echo "  Installed as:" >&2
+            _application_app_names "$template_id" | sed 's/^/    /' >&2
+            return 1
+        fi
+    else
+        app_name=$(app_id="$template_id" yq -r \
+            '.applications[] | select(.id == strenv(app_id)) | .app_name // ""' "$file" 2>/dev/null)
+    fi
 
     if [[ -z "$app_name" ]]; then
         # A record written before 1.6.29 carries no app_name and there is no way
@@ -1340,8 +1419,10 @@ cmd_template_remove() {
     # Newline-separated and read line-wise: a name is a Kubernetes name and
     # should never contain a space, but word-splitting a recorded value is
     # exactly how the raw-template bug turned one entry into three tokens.
-    svcs=$(app_id="$template_id" yq -r '.applications[] | select(.id == strenv(app_id)) | (.services // []) | .[]' "$file" 2>/dev/null)
-    cls=$(app_id="$template_id" yq -r '.applications[] | select(.id == strenv(app_id)) | (.code_locations // []) | .[]' "$file" 2>/dev/null)
+    # Selected by app_name, so a second tenant's services and code locations are
+    # never read for the one being removed.
+    svcs=$(app_name="$app_name" yq -r '.applications[] | select(.app_name == strenv(app_name)) | (.services // []) | .[]' "$file" 2>/dev/null)
+    cls=$(app_name="$app_name" yq -r '.applications[] | select(.app_name == strenv(app_name)) | (.code_locations // []) | .[]' "$file" 2>/dev/null)
 
     print_section "Removing application: $template_id"
     echo "Will remove:"
@@ -1455,7 +1536,7 @@ cmd_template_remove() {
         fi
     done <<< "$svcs"
 
-    _forget_application "$template_id"
+    _forget_application "$app_name"
     print_section "Removed: $template_id"
     if [[ "$purge" != true ]]; then
         echo "Per-app roles, Secrets and databases were left in place. To drop them:"
