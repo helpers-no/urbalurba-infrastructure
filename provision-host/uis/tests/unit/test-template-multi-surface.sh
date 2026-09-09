@@ -546,6 +546,40 @@ fi
 # separate uses of $template_id where $app_name was meant; a tenth added later
 # would be just as dangerous and just as quiet.
 # ============================================================================
+# ============================================================================
+# One application, one database — no handler re-derives it
+#
+# 🔴 postgresql keeps the name it is told; postgrest fell back to
+# `app_name` with `-` -> `_`. So `--param app_name=atlas-t` created the database
+# `atlas-t` at step 2 and looked for `atlas_t` at step 3 (imac, urb-agents#481)
+# — one step later than the hyphen defect 1.6.29 fixed. They agreed for every
+# earlier install only because no app_name had ever contained a hyphen.
+#
+# Structural for the same reason as the others: running configure needs a
+# cluster. What is asserted is that BOTH the dry-run printer and the executor
+# fall back to the plan's database, since the printer's own comment makes
+# "these two agree" this phase's falsification.
+# ============================================================================
+print_test_section "one application, one database"
+
+_install_fn=$(sed -n '/^cmd_template_install()/,/^}/p' "$UIS_LIB/template.sh")
+
+start_test "the plan's database is computed once from the conf files"
+grep -q 'plan_database=""' <<< "$_install_fn" && pass_test \
+    || fail_test "no plan-level database is derived"
+
+start_test "🔴 the executor falls back to it rather than letting a handler guess"
+grep -q 'effective_db="${resolved_db:-$plan_database}"' <<< "$_install_fn" && pass_test \
+    || fail_test "a service with no database: of its own still gets none"
+
+start_test "the dry-run printer uses the same fallback, so the two cannot drift"
+grep -q 'v="${v:-$plan_database}"' <<< "$_install_fn" && pass_test \
+    || fail_test "the printed plan would differ from the executed one"
+
+start_test "a service declaring its own database: still wins"
+grep -q '${resolved_db:-' <<< "$_install_fn" && pass_test \
+    || fail_test "the plan value must not override an explicit one"
+
 print_test_section "remove: per-app names come from app_name, never the id"
 
 _remove_fn=$(sed -n '/^cmd_template_remove()/,/^}/p' "$UIS_LIB/template.sh")
