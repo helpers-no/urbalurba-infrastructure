@@ -5,7 +5,7 @@
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
 **Status:** Backlog — Phases 1-4 shipped (1.6.17-1.6.23) and verified on a cluster by
-`imac` (`urb-agents#367`); phases 1-4 falsified on a cluster 2026-09-09 (imac, #481) except `remove`, which is round 2. Phase 5 and 6.2 open. Phase 5 (`webapp`) waits on the Atlas
+`imac` (`urb-agents#367`); phases 1-4 falsified on a cluster including `remove` and the published catalogue (imac, #481/#487); three assertions open in round 3. Phase 5 and 6.2 open. Phase 5 (`webapp`) waits on the Atlas
 frontend actually needing it.
 
 **Goal**: `./uis template install <application>` installs an application on any UIS
@@ -355,6 +355,35 @@ could not run.
 **What the round establishes for this plan:** phases 1–4 are falsified on a
 cluster against a real tenant artifact, except `template remove`, which is
 round 2.
+
+## Cluster falsification, round 2 — imac, 2026-09-09 (`urb-agents#481`, `#487`)
+
+🟢 **The defect round 1 stopped at the prompt is fixed and verified.** The remove
+plan names the tenant (`postgrest --app atlast`), never the live instance, and
+the record carries `app_name`. **Item 7 passes in full**: code location gone,
+per-app instance undeployed, **database and roles kept**, record forgotten,
+`EXIT=0`.
+
+🟢 **Installed from the PUBLISHED catalogue**, not a staged file (`#487`, after
+`dev-templates` shipped the entry): plan identical to the staged one, `EXIT=0`,
+`api_v1` granted, API answering empty, Secret and code location correct, record
+pinned to the published digest. **`remove --purge --yes` closed cleanly** —
+`dropped: atlast_authenticator, atlast_web_anon`, `removed: atlast-postgrest`.
+
+🔴 **Two defects found, both fixed in 1.6.31, both awaiting round 3:**
+
+| | |
+|---|---|
+| a *successful* re-install reported as a failure | diagnostics were on **stdout**, so a rotation warning corrupted the `--json` document. See [PLAN-system-error-paths-audit](./PLAN-system-error-paths-audit.md), instance twelve |
+| `--param app_name=atlas-t` failed one step after 1.6.29 fixed it | `postgrest` re-derived the database name instead of being told it |
+
+**Live `atlas` byte-identical at the top and bottom of every round** — 13/13
+`api_v1` views, 122 `brreg_enheter` rows, postgrest restarts unchanged, across
+ten `uis deploy dagster` runs in total.
+
+**What remains for this plan's acceptance:** re-install convergence, the
+hyphenated `app_name`, and one re-read of the removal plan. Everything else in
+§10 that does not need `webapp` is falsified.
 
 ## Acceptance — the spec's §10, unchanged
 
