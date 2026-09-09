@@ -271,6 +271,90 @@ install_k9s() {
 }
 
 # Install Helm
+# ─── oras ─────────────────────────────────────────────────────────────────────
+#
+# Fetches an application's UIS install definition, which is published as its own
+# small OCI artifact beside the application's image (Terje, urb-agents#361). One
+# static binary; `uis template install` cannot resolve a pointer without it.
+#
+# ⚠️ PINNED TO AN EXACT VERSION AND CHECKSUM-VERIFIED, unlike its neighbours in
+# this file, and deliberately so (Terje, 2026-09-09):
+#
+#   - k9s above resolves `releases/latest` AT BUILD TIME, so two builds of the
+#     same commit can install different versions. The image is not reproducible,
+#     which sits badly against INVESTIGATE-system-version-pinning — that
+#     investigation exists because 16 Helm charts took whatever the repo served
+#     that day, and this is a binary in the product image.
+#   - nothing else in this file verifies a checksum at all.
+#   - and this particular binary is what fetches THIRD-PARTY SQL that
+#     `uis configure --init-file` then applies as the database owner. An
+#     unverified download in that position is the wrong place to save two lines.
+#
+# The checksums below are the values published in oras's own
+# `oras_<v>_checksums.txt`, not values computed from what a build happened to
+# receive — a self-computed sum attests to nothing.
+#
+# To bump: change ORAS_VERSION, then take both sums from
+#   https://github.com/oras-project/oras/releases/download/v<ver>/oras_<ver>_checksums.txt
+# Bringing kubectl/helm/k9s up to this standard is PLAN-system-pin-provisioned-binaries.
+ORAS_VERSION="1.3.4"
+ORAS_SHA256_amd64="f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454"
+ORAS_SHA256_arm64="15702c6e3a4a56a8bd8ac5c17efdbcab56d9bada661ccbcf017f5b10c1d89399"
+
+install_oras() {
+    if command -v oras &> /dev/null; then
+        add_status "oras" "Status" "Already installed ($(oras version 2>&1 | head -1 | tr -d '\r'))"
+        return 0
+    fi
+
+    echo "Installing oras ${ORAS_VERSION}"
+    check_architecture "oras" || return 1
+
+    local arch_name expected
+    if [ "$ARCHITECTURE" = "x86_64" ]; then
+        arch_name="amd64"; expected="$ORAS_SHA256_amd64"
+    elif [ "$ARCHITECTURE" = "aarch64" ]; then
+        arch_name="arm64"; expected="$ORAS_SHA256_arm64"
+    else
+        add_error "oras" "Unsupported architecture: $ARCHITECTURE"
+        return 1
+    fi
+
+    local tmp tarball url
+    tmp=$(mktemp -d)
+    tarball="${tmp}/oras.tar.gz"
+    url="https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_${arch_name}.tar.gz"
+
+    if ! curl -fsSL --retry 3 --retry-delay 2 "$url" -o "$tarball"; then
+        add_error "oras" "Failed to download oras ${ORAS_VERSION} for ${arch_name}"
+        rm -rf "$tmp"; return 1
+    fi
+
+    local actual
+    actual=$(sha256sum "$tarball" | cut -d' ' -f1)
+    if [ "$actual" != "$expected" ]; then
+        # Refuse rather than warn. A mismatch means the bytes are not what was
+        # pinned, and this binary goes on to fetch SQL that runs as the database
+        # owner.
+        add_error "oras" "Checksum mismatch for ${arch_name}: expected ${expected}, got ${actual}"
+        rm -rf "$tmp"; return 1
+    fi
+
+    if ! tar -xzf "$tarball" -C "$tmp" oras; then
+        add_error "oras" "Failed to extract oras"
+        rm -rf "$tmp"; return 1
+    fi
+
+    install -m 0755 "${tmp}/oras" /usr/local/bin/oras || {
+        add_error "oras" "Failed to install oras to /usr/local/bin"
+        rm -rf "$tmp"; return 1
+    }
+    rm -rf "$tmp"
+
+    add_status "oras" "Status" "Installed v${ORAS_VERSION} (checksum verified)"
+    return 0
+}
+
 install_helm() {
     if command -v helm &> /dev/null; then
         HELM_VERSION=$(helm version --short 2>&1 | cut -d'v' -f2)
@@ -343,6 +427,7 @@ main() {
     install_kubectl || return 1
     install_helm || return 1
     install_k9s || return 1
+    install_oras || return 1
     install_ansible_kubernetes || return 1
 
     print_summary
