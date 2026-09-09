@@ -12,7 +12,7 @@ exercised at least once, so a failure reports its cause instead of being
 swallowed by the mechanism meant to handle it.
 
 **Proposed by**: imac, `urb-agents#344`, after finding the third instance in one
-week. **Eleven instances as of 1.6.29** (see the table). Its words: *"Each was invisible until something failed, and each made the
+week. **Twelve instances as of 1.6.31** (see the table). Its words: *"Each was invisible until something failed, and each made the
 **next** failure harder to diagnose. Might be worth one deliberate pass over the
 error paths rather than three more of these arriving one at a time."*
 
@@ -29,14 +29,35 @@ error paths rather than three more of these arriving one at a time."*
 | `#367` | `template remove --purge` dropped the roles correctly, printed none of its reporting, skipped the record cleanup, and exited 4 | `x=$(… \| jq)` on a non-JSON stream — jq exits 4, the assignment inherits it, `set -e` kills the caller |
 | 1.6.24 | `template remove` **could never refuse** while a dependant was installed, though the CLI reference documented that it would | `_applications_requiring` read `.requires` out of the record; `_record_application` never wrote the field. A guard whose input nothing produces |
 | 1.6.24 | `_applications_requiring atlas` was **also** blocked by an application requiring `atlas-data` | `contains(["x"])` does **substring** matching on string array elements in jq and yq alike: `["atlas-data"] \| contains(["atlas"])` is true. A comparison that reads as membership and is not |
+| 1.6.31 | 🔴 **`log_warn`, `log_info`, `log_success`, `log_debug` and `log_progress` all wrote to STDOUT.** Only `log_error` went to stderr, so any diagnostic on a `--json` path corrupted the document a caller was capturing | A *successful* `configure` reported as a failure: the rotation warning landed ahead of the JSON, `_json_field` survived the parse but read an empty status, and the `*)` branch fired |
 | 1.6.29 | `make-fixture.sh` printed `./uis template install uisfix` and, two lines below, *"only works because make-fixture adds it"* — **make-fixture added nothing**; every command it printed failed on the allowlist | A script asserting an action it does not take. The class, in a test fixture: the thing meant to catch this had it |
 | 1.6.28 | The registry cache was **one file for any URL**, so switching `REGISTRY_URL_PRIMARY` served the previous registry for up to an hour | A cache keyed by nothing, in the documented testing path |
 | 1.6.27 | 🔴 `configure postgresql --init-file -` **discarded the SQL** on a database that already existed, exit 0 | Init is applied at line 273; the already-exists branch returns at 231/234. The whole application-catalogue install-time guarantee, undelivered and unreported |
 | 1.6.24 | 28 of 68 template tests reported **neither pass nor fail**, and the suite still printed `ALL TESTS PASSED` | `assert_equals "$a" "$b" "msg"` returned 0 and moved no counter. Failures were reported, so the verdict held — but the count could not be reconciled, and an unreconcilable number is one nobody checks |
 
-Eleven instances, eleven different mechanisms, one shape: **error handling that looks
+Twelve instances, twelve different mechanisms, one shape: **error handling that looks
 correct, defeated by the semantics of the construct it is written in, in a branch
 nothing executes until something else is already wrong.**
+
+🔴 **The twelfth is the first that is not silent, and imac's framing of that is
+the most useful thing on this page:**
+
+> *The first four were silent — the guard never ran. This one **runs, survives,
+> and reports the wrong answer.** That is progress and a new failure mode at
+> once, and it argues the assertion should be "a successful configure is
+> reported as success", not "the runner does not abort".*
+
+They are right, and it corrects something this plan had wrong. The `#367` fix
+(`_json_field`) made the caller survive a non-JSON stream — necessary, and I had
+been treating it as sufficient. Surviving the parse is not parsing it: an empty
+status falls through to the failure branch and a success is reported as a
+failure. **Assert on the outcome, not on the absence of a crash.**
+
+⚠️ **And the twelfth was introduced by the fix for the ninth.** The rotation
+warning added in 1.6.27 used `log_warn` for one line and an explicit `>&2` for
+the next — two halves of one message on two streams. That is the second time in
+this series a fix has carried the next instance (the fourth landed inside the
+fix for the third). Three of the twelve now have that provenance.
 
 🔴 **The fifth, sixth and seventh were found here, not by the tester** — the
 first three of the seven that were. Both came from the same move: reading the CLI reference against
@@ -126,6 +147,20 @@ thing in this plan**, in imac's words:
 > *`uisfix`'s template id and its `app_name` were the same string, so
 > id-and-app_name could not diverge. This is the first install where they
 > differ, and it is the first thing that broke.*
+
+⚠️ **Second instance of this neighbouring class, 1.6.31:** `configure postgrest`
+re-derived the database name (`app_name` with `-` → `_`) instead of being told
+the one `configure postgresql` had just used. They matched for every install
+ever run, because no `app_name` had contained a hyphen — **two derivations that
+happen to agree are one bug waiting for an input.** Fixed the same way as
+`app_name`: whichever service declares `database:` sets it for the whole
+install, and nobody re-derives it.
+
+So the cure has now been applied three times to three fields — the
+code-location name (1.6.21), `app_name` (1.6.29), the database name (1.6.31) —
+each found only when a real input made two "equal" things differ. **When a value
+is computed in two places, write down which one is authoritative before an input
+tells you.**
 
 **A fixture that conflates two values cannot test the difference between them.**
 The catalogue fixture now sets `id: uisfix` and `app_name: uisfixapp` on
