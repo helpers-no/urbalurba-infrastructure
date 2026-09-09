@@ -52,8 +52,20 @@ provides:
           tag: v20260906-5d77b13
           module: atlas_data.definitions
           why: "Fixture code location — proves a template can register one"
-          env_secrets:
-            - "{{ params.app_name }}-database-db"
+          # 🔴 DELIBERATELY ABSENT. UIS wires the Secret this install created
+          # (`<secret_name_prefix>-db`) into the code location on its own, and
+          # that is the shape a new tenant should copy — restating a name UIS
+          # constructed is a second place that must agree.
+          #
+          # This fixture used to declare it as a LIST, which is the one form
+          # that already worked. atlas declared a SCALAR — because my own
+          # example showed a scalar — and the flattener silently dropped it, so
+          # a clean install came up unable to reach its own database. Four
+          # fixture rounds could not see it (urb-agents#491).
+          #
+          # Both explicit forms are covered by unit tests now. The fixture
+          # exercises the path with no declaration at all, because that is the
+          # one a reader will copy.
 
     - service: postgrest
       config:

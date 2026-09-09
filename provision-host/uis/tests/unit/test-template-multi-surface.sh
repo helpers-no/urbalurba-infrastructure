@@ -562,6 +562,75 @@ fi
 # test-plan-equals-execution.sh; these now only check the structural facts that
 # make divergence unrepresentable.
 # ============================================================================
+# ============================================================================
+# env_secrets: a scalar is legal, and UIS wires its own Secret
+#
+# 🔴 The flattener only handled the LIST form. atlas declares a SCALAR —
+# because my own example on urb-agents#480 showed a scalar — so
+# `"a-string" | join(",")` errored, `2>/dev/null` swallowed it, and the field
+# was silently dropped. The fixture uses a list, so every fixture round passed.
+#
+# The consequence needed a clean slate to see: the code location came up with
+# no `envFrom`, so a freshly installed atlas could not reach the database UIS
+# had just created for it — EXIT=0, schema correct, API answering, ETL dead.
+# Four rounds missed it because a hand-written pre-catalogue entry on that
+# cluster was supplying the secret (imac, urb-agents#491).
+#
+# Both halves are tested separately BECAUSE they are now redundant: the
+# declaration and the auto-wiring each supply the name, so a test that looked
+# only at the final entry would pass with either one broken.
+# ============================================================================
+print_test_section "env_secrets: scalar, list, and the Secret UIS created"
+
+if ! command -v yq >/dev/null 2>&1; then
+    for _ in 1 2 3 4 5 6; do skip_test "needs yq"; done
+else
+    es="$TMP/envsec"; mkdir -p "$es"
+    _mk_cl() {
+        { printf 'kind: application\nprovides:\n  services:\n    - service: dagster\n      config:\n        code_location:\n'
+          printf '          name: a-data\n          image: ghcr.io/x/y\n          tag: v20260909-abc1234\n'
+          printf '          module: m.defs\n          why: because\n'
+          [[ -n "$1" ]] && printf '%s\n' "$1"
+        } > "$es/info.yaml"
+    }
+
+    start_test "🔴 a SCALAR env_secrets survives the conf round trip"
+    _mk_cl '          env_secrets: "one-db"'
+    rm -f "$es"/*.conf
+    _write_service_conf "$es" "$es/info.yaml" 0 dagster >/dev/null 2>&1
+    assert_equals "one-db" "$(_conf_get "$es/dagster.conf" code_location_env_secrets)" "scalar kept"
+
+    start_test "a LIST env_secrets still works, comma-joined"
+    _mk_cl $'          env_secrets:\n            - a-db\n            - b-db'
+    rm -f "$es"/*.conf
+    _write_service_conf "$es" "$es/info.yaml" 0 dagster >/dev/null 2>&1
+    assert_equals "a-db,b-db" "$(_conf_get "$es/dagster.conf" code_location_env_secrets)" "list joined"
+
+    start_test "absent env_secrets yields empty, not an error"
+    _mk_cl ""
+    rm -f "$es"/*.conf
+    _write_service_conf "$es" "$es/info.yaml" 0 dagster >/dev/null 2>&1
+    assert_equals "" "$(_conf_get "$es/dagster.conf" code_location_env_secrets)" "absent is empty"
+
+    ps="$TMP/plansec"; mkdir -p "$ps"
+    pf="$TMP/plansec.env"; printf 'app_name=atlas\n' > "$pf"
+
+    start_test "🔴 the Secret this install creates is derived from secret_name_prefix"
+    printf 'namespace=dagster\nsecret_name_prefix={{ params.app_name }}-database\n' > "$ps/postgresql.conf"
+    assert_equals "atlas-database-db" "$(_plan_env_secret "$ps" "$pf")" "<prefix>-db, substituted"
+
+    start_test "an install that creates no Secret wires nothing"
+    rm -f "$ps"/*.conf; printf 'database=x\n' > "$ps/postgresql.conf"
+    assert_equals "" "$(_plan_env_secret "$ps" "$pf")" "no secret_name_prefix, no wiring"
+
+    start_test "removing the LAST code location leaves [], not a bare key"
+    cl2="$TMP/lastcl"; mkdir -p "$cl2"
+    ( EXTEND_DIR="$cl2"; _write_code_location solo ghcr.io/x/y v20260909-abc1234 m.d why s1 ) >/dev/null 2>&1
+    ( EXTEND_DIR="$cl2"; _remove_code_location solo ) >/dev/null 2>&1
+    got=$(yq -r '.code_locations | tag' "$cl2/dagster-code-locations.yaml" 2>/dev/null)
+    assert_equals "!!seq" "$got" "an empty sequence, which ansible's loop accepts"
+fi
+
 print_test_section "one application, one database"
 
 _install_fn=$(sed -n '/^cmd_template_install()/,/^}/p' "$UIS_LIB/template.sh")

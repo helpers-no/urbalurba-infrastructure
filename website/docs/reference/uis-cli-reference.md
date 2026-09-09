@@ -296,10 +296,25 @@ provides:
 | `tag` | yes | ⚠️ Must be immutable — the same rule the Dagster validator applies |
 | `module` | yes | The Python module holding `Definitions` |
 | `why` | no | Free text, kept in the file for whoever reads it next |
-| `env_secrets` | no | A Secret whose keys become environment variables |
+| `env_secrets` | no | Extra Secrets whose keys become environment variables. **A scalar or a list; both are accepted.** See below — you usually do not need it |
 
 Re-installing at the same pin rewrites the same entry and changes nothing —
 Helm rolls only when the image field changes. A new pin rolls the tag.
+
+🔴 **UIS wires the Secret it created for you — do not restate it.** If the same
+install ran `configure postgresql --namespace <ns> --secret-name-prefix <p>`,
+the Secret `<p>-db` is added to the code location's `env_secrets`
+automatically. Naming it again in the definition is harmless (it is de-duped)
+but wrong in principle: the name is UIS's own construction, so a definition
+that repeats it is a second place that must agree — and one that hard-codes it
+breaks under `--param app_name`.
+
+Use `env_secrets` only for Secrets **this install did not create**.
+
+⚠️ **Without that wiring, a clean install comes up unable to reach its own
+database** — `EXIT=0`, schema present, API answering, and the pipeline dead on
+the first run. It took a machine that had never seen the application to expose
+it, because leftover state supplied the Secret on every cluster that had one.
 
 ⚠️ **This is a code-location writer, not a generic "contribute to another
 service's extend file" mechanism.** Two other files would qualify

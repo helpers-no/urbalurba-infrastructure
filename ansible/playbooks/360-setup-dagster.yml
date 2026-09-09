@@ -271,7 +271,22 @@
 
     - name: "22b. Parse them"
       ansible.builtin.set_fact:
-        _code_locations: "{{ (_cl_raw.content | b64decode | from_yaml).code_locations | default([]) }}"
+        # 🔴 `default([], true)`, not `default([])`. A hand-edited file with a
+        # bare `code_locations:` parses as NULL, and `default([])` only replaces
+        # UNDEFINED — so null flowed through to `loop:` and Ansible failed with
+        # "requires a list, got this instead: ." The boolean second argument
+        # makes it replace any falsy value too.
+        #
+        # UIS's own writer emits `code_locations: []` when it removes the last
+        # entry (verified), so this arises from a hand edit — and this file
+        # invites hand edits: its header says they are preserved. A file we ask
+        # humans to edit must tolerate the shapes humans write (imac,
+        # urb-agents#491).
+        #
+        # Fixed HERE, at the single assignment, rather than at the eleven
+        # downstream uses — which is the same reason the configure argument
+        # list became one function.
+        _code_locations: "{{ (_cl_raw.content | b64decode | from_yaml).code_locations | default([], true) }}"
       when: _cl_raw.content is defined
 
     - name: "22c. Require the fields a code location cannot work without"
