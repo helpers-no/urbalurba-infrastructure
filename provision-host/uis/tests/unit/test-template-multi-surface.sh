@@ -663,11 +663,20 @@ fi
 
 print_test_section "one application, one database"
 
-_install_fn=$(sed -n '/^cmd_template_install()/,/^}/p' "$UIS_LIB/template.sh")
+# 🔴 COMMENTS STRIPPED. A structural grep matches a comment as readily as code,
+# so a test asserting "the function reads .app_name" stayed green off a comment
+# of mine that merely NAMED it. atlas's formulation, on urb-agents#494: "it was
+# green when the property it tests did not hold" — and unlike a stale document
+# there is nothing to diff and nothing to notice.
+#
+# Stripped once here rather than in each assertion, so the next one written
+# cannot forget. An audit of every structural grep in the suite found exactly
+# one live instance; this removes the class.
+_install_fn=$(sed -n '/^cmd_template_install()/,/^}/p' "$UIS_LIB/template.sh" | grep -v '^[[:space:]]*#')
 
 start_test "there is exactly ONE argument builder, not two constructions"
 # Count INVOCATIONS, not mentions — a comment naming the function is not a call.
-n=$(grep -v '^\s*#' <<< "$_install_fn" | grep -c 'mapfile -t .*_build_configure_args')
+n=$(grep -c 'mapfile -t .*_build_configure_args' <<< "$_install_fn")
 [[ "$n" == "2" ]] && pass_test \
     || fail_test "expected the printer and the executor to call it once each; found $n invocations"
 
@@ -699,7 +708,8 @@ b=$(_build_configure_args postgrest "$conf" "$pf" myapp thedb json | grep -c '^-
 
 print_test_section "remove: per-app names come from app_name, never the id"
 
-_remove_fn=$(sed -n '/^cmd_template_remove()/,/^}/p' "$UIS_LIB/template.sh")
+# Comments stripped, for the reason given above the install extraction.
+_remove_fn=$(sed -n '/^cmd_template_remove()/,/^}/p' "$UIS_LIB/template.sh" | grep -v '^[[:space:]]*#')
 
 start_test "🔴 no per-app operation is keyed on the record id"
 if grep -q -- '--app "\?\$template_id' <<< "$_remove_fn"; then
@@ -708,9 +718,21 @@ else
     pass_test
 fi
 
-start_test "app_name is read out of the record"
-grep -q '\.app_name' <<< "$_remove_fn" && pass_test \
-    || fail_test "remove does not read app_name from the record"
+start_test "app_name is resolved from the record by its own selection"
+# ⚠️ THIS USED TO BE `grep -q '\.app_name'` AND COULD NOT FAIL. Deleting the
+# real read left three other lines in the function mentioning `.app_name`, so
+# the test stayed green while the property was gone — verified by injecting
+# exactly that defect and watching it pass.
+#
+# atlas's rule, urb-agents#494: *check why the green is green.* Unlike a stale
+# document there is nothing to diff, so the only way to know is to break the
+# thing and look.
+#
+# Narrowed to the selection that resolves a tenant. Still a proxy — the
+# behavioural version needs a cluster and is imac's — but it now fails for the
+# defect it names, which the previous version did not.
+grep -q 'select(.id == strenv(app_id)) | .app_name' <<< "$_remove_fn" && pass_test \
+    || fail_test "remove no longer resolves app_name from the record"
 
 start_test "a record without app_name refuses --yes rather than guessing silently"
 grep -q 'Refusing --yes on a record with no app_name' <<< "$_remove_fn" && pass_test \
