@@ -599,7 +599,26 @@ _write_service_conf() {
         local ck
         for ck in $TEMPLATE_CODE_LOCATION_KEYS; do
             if [[ "$ck" == "env_secrets" ]]; then
-                v=$(yq -r ".provides.services[$idx].config.code_location.env_secrets // [] | join(\",\")" "$info_file" 2>/dev/null)
+                # 🔴 A SCALAR IS LEGAL AND USED TO BE SILENTLY DISCARDED.
+                #
+                # This read only handled the list form: `"a-string" | join(",")`
+                # errors in yq, `2>/dev/null` swallowed it, `v` came back empty
+                # and the line was never written. atlas declares a scalar —
+                # because MY OWN example on urb-agents#480 showed a scalar —
+                # while the fixture uses a list, so every fixture round passed
+                # and the first real application lost the field.
+                #
+                # The consequence was invisible until a clean-slate install:
+                # the code location came up with no `envFrom`, so a freshly
+                # installed atlas could not reach the database UIS had just
+                # created for it. Four rounds missed it because a hand-written
+                # pre-catalogue entry on that cluster was supplying the secret
+                # (imac, urb-agents#491).
+                # `[x] | flatten | join(",")` accepts a scalar AND a list:
+                # ["s"] -> "s", [["a","b"]] -> "a,b", [""] -> "". mikefarah yq
+                # has no `if`, and a type switch in bash would be a second
+                # place for the two forms to disagree.
+                v=$(yq -r "[.provides.services[$idx].config.code_location.env_secrets // \"\"] | flatten | join(\",\")" "$info_file" 2>/dev/null)
             else
                 v=$(yq -r ".provides.services[$idx].config.code_location.$ck // \"\"" "$info_file" 2>/dev/null)
             fi
@@ -968,6 +987,27 @@ _build_configure_args() {
     [[ -n "$v" ]] && printf '%s\n' "--secret-name-prefix" "$v"
     v=$(_substitute_params "$(_conf_get "$conf" init)" "$params_file")
     [[ -n "$v" ]] && printf '%s\n' "--init-file" "-"
+    return 0
+}
+
+# The Secret THIS INSTALL creates, if any: `<secret_name_prefix>-db`.
+#
+# 🔴 UIS wires it into the code location itself rather than asking the
+# definition to name it. The name is UIS's own construction — `configure
+# postgresql --secret-name-prefix p` writes `p-db` — so requiring the artifact
+# to repeat it is the two-places-must-agree shape behind the last four defects,
+# and a definition that hard-codes it is wrong the moment someone installs with
+# `--param app_name`. imac's argument on urb-agents#491, and it is right.
+#
+# An explicit `env_secrets:` still works and is added alongside: an application
+# may need secrets this install did not create.
+_plan_env_secret() {
+    local plan_dir="$1" params_file="$2" f prefix
+    for f in "$plan_dir"/*.conf; do
+        [[ -f "$f" ]] || continue
+        prefix=$(_substitute_params "$(_conf_get "$f" secret_name_prefix)" "$params_file")
+        if [[ -n "$prefix" ]]; then printf '%s-db' "$prefix"; return 0; fi
+    done
     return 0
 }
 
@@ -1771,6 +1811,25 @@ cmd_template_install() {
             cl_m=$(_substitute_params "$(_conf_get "$conf" code_location_module)" "$params_file")
             cl_w=$(_substitute_params "$(_conf_get "$conf" code_location_why)" "$params_file")
             cl_s=$(_substitute_params "$(_conf_get "$conf" code_location_env_secrets)" "$params_file")
+
+            # 🔴 Wire the Secret THIS INSTALL created, without being asked to.
+            #
+            # `configure postgresql --namespace <ns> --secret-name-prefix <p>`
+            # wrote `<p>-db`, and the code location needs it or the application
+            # comes up unable to reach the database UIS just made for it — a
+            # clean install that reports EXIT=0 and cannot run its own ETL
+            # (imac, urb-agents#491). The definition should not have to restate
+            # a name UIS constructed; that is the two-places-must-agree shape,
+            # and it breaks under `--param app_name`.
+            #
+            # Added only if not already listed, so an explicit declaration is
+            # neither duplicated nor overridden.
+            local plan_secret
+            plan_secret="$(_plan_env_secret "$plan_dir" "$params_file")"
+            if [[ -n "$plan_secret" && ",$cl_s," != *",$plan_secret,"* ]]; then
+                cl_s="${cl_s:+$cl_s,}$plan_secret"
+                log_info "Wiring the Secret this install created into '$cl_n': $plan_secret"
+            fi
 
             _write_code_location "$cl_n" "$cl_i" "$cl_t" "$cl_m" "$cl_w" "$cl_s" || return 1
 
