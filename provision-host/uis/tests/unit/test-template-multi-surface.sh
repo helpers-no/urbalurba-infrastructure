@@ -392,4 +392,55 @@ else
         && fail_test "other-data should be gone" || pass_test
 fi
 
+# ============================================================================
+# PLAN-templates-002 phase 4 — the record, requires, exports, remove
+# ============================================================================
+print_test_section "Phase 4: applications.yaml, requires and exports"
+
+if ! command -v yq >/dev/null 2>&1; then
+    for _ in 1 2 3 4 5 6 7 8; do skip_test "Skipping phase-4 tests: yq not installed"; done
+else
+    ad="$TMP/apps"; mkdir -p "$ad"
+    D64="sha256:$(printf 'a%.0s' {1..64})"
+
+    start_test "an installed application is recorded with its pin and exports"
+    ( EXTEND_DIR="$ad"; _record_application atlas ghcr.io/terchris/atlas-data/uis \
+        v20260909-abc1234 "$D64" "postgresql,dagster,postgrest" "atlas-data" \
+        '{"api-url":"http://api-atlas.localhost"}' ) >/dev/null 2>&1
+    got=$( EXTEND_DIR="$ad"; yq -r '.applications[0] | [.id,.pin,.exports["api-url"]] | join(" ")' "$ad/applications.yaml" )
+    assert_equals "atlas $D64 http://api-atlas.localhost" "$got" "record shape"
+
+    start_test "re-recording the same id converges rather than duplicating"
+    ( EXTEND_DIR="$ad"; _record_application atlas ghcr.io/terchris/atlas-data/uis \
+        v20260910-def5678 "$D64" "postgresql" "atlas-data" '{}' ) >/dev/null 2>&1
+    got=$( yq -r '"\(.applications | length) \(.applications[0].tag)"' "$ad/applications.yaml" )
+    assert_equals "1 v20260910-def5678" "$got" "one entry, new pin"
+
+    start_test "installed / not-installed are answered from the record, not a probe"
+    ( EXTEND_DIR="$ad"; _application_installed atlas ) && \
+    ( EXTEND_DIR="$ad"; _application_installed nosuch ) && fail_test "nosuch must not be installed" || pass_test
+
+    start_test "requires on a missing application REFUSES and names the install command"
+    printf 'requires:\n  - application: nosuch\n' > "$TMP/req.yaml"
+    err=$( EXTEND_DIR="$ad"; _check_requires "$TMP/req.yaml" atlas-frontend 2>&1 ) && fail_test "must refuse" || true
+    echo "$err" | grep -q "template install nosuch" && pass_test || fail_test "should name the command: $err"
+
+    start_test "requires never auto-installs, and says so"
+    echo "$err" | grep -qi "not installed automatically" && pass_test || fail_test "should state the policy: $err"
+
+    start_test "requires on an installed application with the export passes"
+    ( EXTEND_DIR="$ad"; _record_application atlas a v1-a "$D64" "" "" '{"api-url":"http://x"}' ) >/dev/null 2>&1
+    printf 'requires:\n  - application: atlas\n    provides: api-url\n' > "$TMP/req2.yaml"
+    ( EXTEND_DIR="$ad"; _check_requires "$TMP/req2.yaml" atlas-frontend ) >/dev/null 2>&1 && pass_test || fail_test "should pass"
+
+    start_test "requires on an installed application MISSING the export refuses"
+    printf 'requires:\n  - application: atlas\n    provides: nope\n' > "$TMP/req3.yaml"
+    ( EXTEND_DIR="$ad"; _check_requires "$TMP/req3.yaml" atlas-frontend ) >/dev/null 2>&1 \
+        && fail_test "must refuse a missing export" || pass_test
+
+    start_test "{{ requires.<id>.<key> }} resolves from the record"
+    got=$( EXTEND_DIR="$ad"; _substitute_requires 'URL={{ requires.atlas.api-url }}/v1' )
+    assert_equals "URL=http://x/v1" "$got" "substitution"
+fi
+
 print_summary

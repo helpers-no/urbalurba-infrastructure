@@ -605,6 +605,169 @@ _resolve_provides() {
     echo "$dedup" | grep -v '^$' | sort -t'|' -k1,1n
 }
 
+# ─── The installed-applications record ────────────────────────────────────────
+#
+# `.uis.extend/applications.yaml` — installation config, not product config, the
+# same relationship as dagster-code-locations.yaml. It answers three questions
+# nothing else can: what is installed, at which pin, and what each application
+# exports for a dependant to read.
+#
+# ⚠️ It is also what makes `requires:` a refusal rather than a guess. Without a
+# record, "is atlas installed?" could only be answered by probing the cluster
+# for symptoms — a database here, a code location there — and a probe that
+# infers presence is a probe that eventually infers it wrongly.
+_applications_file() {
+    echo "$(_uis_extend_dir)/applications.yaml"
+}
+
+_applications_init() {
+    local file
+    file="$(_applications_file)"
+    mkdir -p "$(dirname "$file")" || return 1
+    if [[ ! -f "$file" ]]; then
+        printf '# Applications installed on THIS installation, written by\n' > "$file"
+        printf '# `uis template install`. Installation config, not product config.\n' >> "$file"
+        printf 'applications: []\n' >> "$file"
+    fi
+    return 0
+}
+
+# Is an application installed here?
+_application_installed() {
+    local id="$1" file
+    file="$(_applications_file)"
+    [[ -f "$file" ]] || return 1
+    [[ "$(app_id="$id" yq -r '[.applications[] | select(.id == strenv(app_id))] | length' "$file" 2>/dev/null)" == "1" ]]
+}
+
+# Read one export of an installed application.
+_application_export() {
+    local id="$1" key="$2" file
+    file="$(_applications_file)"
+    [[ -f "$file" ]] || return 0
+    app_id="$id" exp_key="$key" yq -r \
+        '.applications[] | select(.id == strenv(app_id)) | .exports[strenv(exp_key)] // ""' \
+        "$file" 2>/dev/null
+}
+
+# Record an installed application. Filter-then-append on `id`, the same shape as
+# the code-location writer, so a re-install converges rather than duplicating.
+# Values go through strenv() for the same reason.
+_record_application() {
+    local app_id="$1" artifact="$2" tag="$3" digest="$4" services="$5" code_locations="$6" exports_json="${7:-{\}}"
+    local file
+    file="$(_applications_file)"
+    _applications_init || return 1
+
+    local expr='.applications = ((.applications // [])
+        | map(select(.id != strenv(app_id)))
+        + [{
+            "id":        strenv(app_id),
+            "artifact":  strenv(artifact),
+            "tag":       strenv(tag),
+            "pin":       strenv(digest),
+            "installed": strenv(installed_at),
+            "services":       (strenv(services)       | split(",") | map(select(. != ""))),
+            "code_locations": (strenv(code_locations) | split(",") | map(select(. != ""))),
+            "exports":   (strenv(exports_json) | from_json)
+          }])'
+
+    if ! app_id="$app_id" artifact="$artifact" tag="$tag" digest="$digest" \
+         installed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+         services="$services" code_locations="$code_locations" \
+         exports_json="$exports_json" \
+         yq -i "$expr" "$file"; then
+        log_error "Failed to record application '$app_id' in $file"
+        return 1
+    fi
+    echo "Recorded '$app_id' at $digest in $file" >&2
+    return 0
+}
+
+_forget_application() {
+    local app_id="$1" file
+    file="$(_applications_file)"
+    [[ -f "$file" ]] || return 0
+    app_id="$app_id" yq -i '.applications = ((.applications // []) | map(select(.id != strenv(app_id))))' "$file"
+}
+
+# Which installed applications declare a requires on <id>?
+# Used by `template remove` to refuse while a dependant is still installed.
+_applications_requiring() {
+    local id="$1" file
+    file="$(_applications_file)"
+    [[ -f "$file" ]] || return 0
+    app_id="$id" yq -r \
+        '[.applications[] | select((.requires // []) | contains([strenv(app_id)])) | .id] | join(", ")' \
+        "$file" 2>/dev/null
+}
+
+# ⚠️ requires: REFUSES, it never auto-installs. Installing an application must
+# not silently install another: the second one's schemas:-type decisions are a
+# person's, and #350 is what that looks like when taken seriously.
+_check_requires() {
+    local info_file="$1" template_id="$2"
+    local n i dep_id dep_provides missing=0
+    n=$(yq -r '.requires // [] | length' "$info_file" 2>/dev/null)
+    [[ -z "$n" || "$n" == "0" ]] && return 0
+
+    for ((i=0; i<n; i++)); do
+        dep_id=$(yq -r ".requires[$i].application // \"\"" "$info_file" 2>/dev/null)
+        dep_provides=$(yq -r ".requires[$i].provides // \"\"" "$info_file" 2>/dev/null)
+        [[ -z "$dep_id" ]] && continue
+
+        if ! _application_installed "$dep_id"; then
+            log_error "'$template_id' requires the application '$dep_id', which is not installed here."
+            echo "  Install it first:" >&2
+            echo "    ./uis template install $dep_id" >&2
+            echo "  Not installed automatically on purpose: an application's own" >&2
+            echo "  exposure decisions are a person's to make." >&2
+            missing=1
+            continue
+        fi
+        if [[ -n "$dep_provides" ]]; then
+            if [[ -z "$(_application_export "$dep_id" "$dep_provides")" ]]; then
+                log_error "'$template_id' needs '$dep_provides' from '$dep_id', which records no such export."
+                echo "  '$dep_id' is installed but exports:" >&2
+                app_id="$dep_id" yq -r '.applications[] | select(.id == strenv(app_id)) | .exports | keys | .[]' \
+                    "$(_applications_file)" 2>/dev/null | sed 's/^/    /' >&2
+                echo "  Re-installing '$dep_id' at a newer pin may add it." >&2
+                missing=1
+            fi
+        fi
+    done
+    [[ "$missing" -eq 0 ]]
+}
+
+# Substitute {{ requires.<id>.<key> }} from the recorded exports.
+_substitute_requires() {
+    local text="$1"
+    local token id key val
+    while [[ "$text" =~ \{\{[[:space:]]*requires\.([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+)[[:space:]]*\}\} ]]; do
+        id="${BASH_REMATCH[1]}"; key="${BASH_REMATCH[2]}"
+        token="${BASH_REMATCH[0]}"
+        val="$(_application_export "$id" "$key")"
+        text="${text//"$token"/$val}"
+    done
+    echo "$text"
+}
+
+# Resolve the definition's `exports:` into a JSON object for the record.
+# Values may reference {{ params.* }} and {{ requires.*.* }}; _substitute_params
+# does both.
+_collect_exports() {
+    local info_file="$1" params_file="$2"
+    local keys k v out="{}"
+    keys=$(yq -r '.exports // {} | keys | .[]' "$info_file" 2>/dev/null)
+    while IFS= read -r k; do
+        [[ -z "$k" ]] && continue
+        v=$(yq -r ".exports.\"$k\" // \"\"" "$info_file" 2>/dev/null)
+        v=$(_substitute_params "$v" "$params_file")
+        out=$(exp_k="$k" exp_v="$v" echo "$out" | exp_k="$k" exp_v="$v" yq -o=json -I0 '.[strenv(exp_k)] = strenv(exp_v)' 2>/dev/null || echo "$out")
+    done <<< "$keys"
+    echo "$out"
+}
+
 # ─── Contributing a Dagster code location ─────────────────────────────────────
 #
 # TPL-F5, and the answer to TPL-Q1/Q2 the plan deferred to this phase.
@@ -767,7 +930,11 @@ _collect_init_sql() {
     return 1
 }
 
-# Substitute {{ params.* }} references using a params file (key=value lines)
+# Substitute {{ params.* }} references using a params file (key=value lines),
+# and {{ requires.<id>.<key> }} from the recorded exports of installed
+# applications. One function so every field gets both — the alternative is
+# remembering which call sites need which, which is how `schemas` and
+# `url_prefix` went unsubstituted in the first version of templates-001.
 _substitute_params() {
     local text="$1"
     local params_file="$2"
@@ -781,7 +948,7 @@ _substitute_params() {
         text="${text//\{\{params.$key\}\}/$value}"
     done < "$params_file"
 
-    echo "$text"
+    _substitute_requires "$text"
 }
 
 # Build effective params from YAML defaults + CLI overrides
@@ -792,7 +959,121 @@ _build_effective_params() {
     yq -r '.params // {} | to_entries | .[] | "\(.key)=\(.value)"' "$info_file" 2>/dev/null
 }
 
-# Command: uis template install <id>
+# Command: uis template remove <id> [--purge] [--yes]
+#
+# The inverse of install, and deliberately NOT symmetrical about data.
+#
+# UIS already draws this line: `undeploy` removes Kubernetes objects and leaves
+# roles, secrets and databases; `configure --purge` is the destructive one you
+# ask for. `template remove` follows it, because an application's database is
+# the one thing that cannot be reconstructed by reinstalling.
+#
+# So by default this removes what the install ADDED and nothing that the
+# application PRODUCED:
+#   - the code-location entries, then redeploy dagster
+#   - per-app instances of multi-instance services (undeploy <svc> --app <id>)
+#   - the application record
+# and leaves databases, roles and secrets, saying so.
+#
+# ⚠️ Single-instance services are never undeployed. `postgresql` is shared; an
+# application does not own it and removing an application must not take the
+# platform's database with it.
+cmd_template_remove() {
+    local template_id="${1:-}"; shift || true
+    local purge=false assume_yes=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --purge) purge=true; shift ;;
+            --yes|-y) assume_yes=true; shift ;;
+            -*) log_error "Unknown option: $1"; return 1 ;;
+            *)  log_error "Unexpected argument: $1"; return 1 ;;
+        esac
+    done
+
+    if [[ -z "$template_id" ]]; then
+        log_error "Usage: uis template remove <id> [--purge] [--yes]"
+        return 1
+    fi
+    if ! command -v yq >/dev/null 2>&1; then
+        log_error "yq is required to read the application record and is not installed."
+        return 1
+    fi
+    if ! _application_installed "$template_id"; then
+        log_error "'$template_id' is not recorded as installed on this installation."
+        echo "  Installed applications:" >&2
+        yq -r '.applications[].id' "$(_applications_file)" 2>/dev/null | sed 's/^/    /' >&2
+        return 1
+    fi
+
+    # Refuse while a dependant is installed.
+    local dependants
+    dependants="$(_applications_requiring "$template_id")"
+    if [[ -n "$dependants" ]]; then
+        log_error "Cannot remove '$template_id': still required by $dependants."
+        echo "  Remove the dependant first:" >&2
+        echo "    ./uis template remove ${dependants%%,*}" >&2
+        return 1
+    fi
+
+    local file svcs cls
+    file="$(_applications_file)"
+    svcs=$(app_id="$template_id" yq -r '.applications[] | select(.id == strenv(app_id)) | (.services // []) | join(" ")' "$file" 2>/dev/null)
+    cls=$(app_id="$template_id" yq -r '.applications[] | select(.id == strenv(app_id)) | (.code_locations // []) | join(" ")' "$file" 2>/dev/null)
+
+    print_section "Removing application: $template_id"
+    echo "Will remove:"
+    local svc
+    for svc in $cls; do echo "  code location  $svc"; done
+    for svc in $svcs; do
+        _service_is_multi_instance "$svc" && echo "  instance       $svc --app $template_id"
+    done
+    echo "  the application record"
+    echo ""
+    echo "Will NOT remove (an application's data outlives its install):"
+    for svc in $svcs; do
+        _service_is_multi_instance "$svc" || echo "  $svc — shared, single-instance"
+    done
+    echo "  databases, roles and secrets"
+    [[ "$purge" == true ]] && echo "  ⚠️ --purge given: per-app Postgres roles and secrets WILL be dropped"
+    echo ""
+
+    if [[ "$assume_yes" != true ]]; then
+        local reply
+        read -r -p "Proceed? [y/N] " reply
+        [[ "$reply" =~ ^[Yy]$ ]] || { echo "Aborted."; return 1; }
+    fi
+
+    local had_cl=false
+    for svc in $cls; do
+        _remove_code_location "$svc" && had_cl=true
+        echo "Removed code location '$svc'" >&2
+    done
+    if [[ "$had_cl" == true ]]; then
+        log_info "Redeploying dagster so the removal takes effect..."
+        uis deploy dagster >&2 || log_warn "dagster redeploy failed; the entry IS removed — run './uis deploy dagster' when ready"
+    fi
+
+    for svc in $svcs; do
+        if _service_is_multi_instance "$svc"; then
+            log_info "Undeploying $svc --app $template_id..."
+            local ud=("$svc" --app "$template_id" --yes)
+            [[ "$purge" == true ]] && ud+=(--purge)
+            uis undeploy "${ud[@]}" >&2 || log_warn "undeploy $svc --app $template_id failed; continuing"
+        fi
+    done
+
+    _forget_application "$template_id"
+    print_section "Removed: $template_id"
+    if [[ "$purge" != true ]]; then
+        echo "Databases and roles were left in place. To drop them:"
+        for svc in $svcs; do
+            _service_is_multi_instance "$svc" && echo "  ./uis configure $svc --app $template_id --purge"
+        done
+    fi
+    return 0
+}
+
+# Command: uis template install <id># Command: uis template install <id>
 cmd_template_install() {
     local template_id="${1:-}"
     shift || true
@@ -883,6 +1164,12 @@ cmd_template_install() {
 
     log_info "Effective params:"
     sed 's/^/  /' "$params_file" >&2
+
+    # ⚠️ requires: is checked BEFORE anything is deployed. A refusal after the
+    # first service has landed is worse than one before, because the operator is
+    # then holding a half-installed application and a message about a different
+    # one.
+    _check_requires "$info_file" "$template_id" || return 1
 
     # Resolve provides into a deployment plan. Per-service configuration lands
     # in $plan_dir/<service_id>.conf; the plan itself is <priority>|<service_id>.
@@ -1160,6 +1447,26 @@ cmd_template_install() {
         fi
     done <<< "$plan"
 
+    # Record what was installed, at which pin, with its exports resolved.
+    local inst_services inst_cls exports_json
+    inst_services=$(echo "$plan" | awk -F'|' 'NF>1{printf "%s%s", sep, $2; sep=","}')
+    inst_cls=$(for f in "$plan_dir"/*.conf; do
+                   [[ -f "$f" ]] || continue
+                   n=$(_conf_get "$f" code_location_name); [[ -n "$n" ]] && echo "$n"
+               done | paste -sd, -)
+    exports_json=$(_collect_exports "$info_file" "$params_file")
+
+    if [[ -n "${SOURCE_ARTIFACT:-}" ]]; then
+        _record_application "$template_id" "$SOURCE_ARTIFACT" "$SOURCE_TAG" "$SOURCE_DIGEST" \
+            "$inst_services" "$inst_cls" "$exports_json" || return 1
+    else
+        # A catalogue-less install (a local fixture, or a stack template that is
+        # not an application) has no pin to record. Say so rather than writing a
+        # record with empty fields that a later `requires` check would trust.
+        echo "Note: no artifact pin for '$template_id', so no application record written." >&2
+        echo "      A dependant's `requires: $template_id` will not see it." >&2
+    fi
+
     print_section "Template Installation Complete"
     echo "$results"
 
@@ -1187,6 +1494,10 @@ run_template() {
         install)
             cmd_template_install "$@"
             ;;
+        remove|uninstall)
+            shift
+            cmd_template_remove "$@"
+            ;;
         ""|help|--help|-h)
             echo "Usage: uis template <command> [args]"
             echo ""
@@ -1194,6 +1505,7 @@ run_template() {
             echo "  list              List available UIS templates"
             echo "  info <id>         Show template details"
             echo "  install <id>      Install a template (deploy + configure services)"
+            echo "  remove <id>       Remove an installed application (data is kept unless --purge)"
             echo ""
             echo "Examples:"
             echo "  uis template list"

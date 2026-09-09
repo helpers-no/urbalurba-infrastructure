@@ -175,7 +175,36 @@ templates provision, ArgoCD deploys workloads.
 |---------|-------------|
 | `./uis template list` | List available UIS templates from the registry |
 | `./uis template info <id>` | Show one template's details |
-| `./uis template install <id> [--param k=v]...` | Deploy and configure every service the template declares |
+| `./uis template install <id> [--dry-run] [--param k=v]...` | Deploy and configure every service the template declares |
+| `./uis template remove <id> [--purge] [--yes]` | Remove an installed application. **Data is kept unless `--purge`** |
+
+### `--dry-run`
+
+Prints every `deploy`/`configure` the install would run, in order, with params
+resolved, and runs nothing. ⚠️ It is a dry run of the **install**, not of the
+**fetch** — the definition artifact is pulled, because that is how the plan is
+known. Nothing else is written.
+
+### What `remove` does and does not do
+
+It removes what the install **added**, not what the application **produced**:
+
+| removed | kept |
+|---|---|
+| the code-location entries, then dagster is redeployed | databases, roles and secrets |
+| per-app instances of multi-instance services | single-instance shared services |
+| the application record | |
+
+⚠️ **Single-instance services are never undeployed.** `postgresql` is shared; an
+application does not own it, and removing an application must not take the
+platform's database with it.
+
+`--purge` additionally drops the per-app Postgres roles and secrets. An
+application's database is the one thing reinstalling cannot reconstruct, which is
+why it is opt-in — the same line `undeploy` and `configure --purge` already draw.
+
+**Removal refuses while another installed application `requires` it**, naming the
+dependant.
 
 ### The declaration
 
