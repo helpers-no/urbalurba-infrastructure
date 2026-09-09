@@ -789,8 +789,22 @@ _application_export() {
 # Record an installed application. Filter-then-append on `id`, the same shape as
 # the code-location writer, so a re-install converges rather than duplicating.
 # Values go through strenv() for the same reason.
+#
+# 🔴 `app_name` is recorded because REMOVAL DERIVES EVERY PER-APP NAME FROM IT.
+# It used to derive them from the record `id`, which is the same string only
+# when `--param app_name=` was not used. When they differ, `remove` targeted a
+# DIFFERENT TENANT: on imac's cluster the plan for removing `atlas` (installed
+# as `atlast`) listed `postgrest --app atlas` — the live tenant serving 13
+# views — and named the live database in its "will NOT remove" notice. Only the
+# confirmation prompt stood between that and an outage (urb-agents#481).
+#
+# ⚠️ The fixture rounds could not find it: `uisfix`'s template id and its
+# app_name were the same string, so the two could not diverge. imac's note is
+# worth keeping — a fixture whose id and app_name DIFFER would have caught this
+# on Tuesday. Storing the resolved value rather than reconstructing it is the
+# same lesson as the code-location name, one field further along.
 _record_application() {
-    local app_id="$1" artifact="$2" tag="$3" digest="$4" services="$5" code_locations="$6" exports_json="${7:-{\}}" requires_csv="${8:-}"
+    local app_id="$1" artifact="$2" tag="$3" digest="$4" services="$5" code_locations="$6" exports_json="${7:-{\}}" requires_csv="${8:-}" app_name="${9:-}"
     local file
     file="$(_applications_file)"
     _applications_init || return 1
@@ -806,6 +820,7 @@ _record_application() {
             "services":       (strenv(services)       | split(",") | map(select(. != ""))),
             "code_locations": (strenv(code_locations) | split(",") | map(select(. != ""))),
             "requires":       (strenv(requires_csv)   | split(",") | map(select(. != ""))),
+            "app_name":  strenv(app_name),
             "exports":   (strenv(exports_json) | from_json)
           }])'
 
@@ -813,6 +828,7 @@ _record_application() {
          installed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
          services="$services" code_locations="$code_locations" \
          requires_csv="$requires_csv" \
+         app_name="$app_name" \
          exports_json="$exports_json" \
          yq -i "$expr" "$file"; then
         log_error "Failed to record application '$app_id' in $file"
@@ -903,6 +919,14 @@ _substitute_requires() {
         text="${text//"$token"/$val}"
     done
     echo "$text"
+}
+
+# Read one key out of the effective-params file (key=value lines).
+# Used to record `app_name`, which removal depends on — see _record_application.
+_conf_param() {
+    local params_file="$1" key="$2"
+    [[ -f "$params_file" ]] || return 0
+    sed -n "s/^${key}=//p" "$params_file" | head -1
 }
 
 # Resolve the definition's `exports:` into a JSON object for the record.
@@ -1180,8 +1204,36 @@ cmd_template_remove() {
         return 1
     fi
 
-    local file svcs cls
+    # 🔴 Every per-app name below comes from the RECORDED app_name, never from
+    # the record id. They are the same string only when `--param app_name=` was
+    # not used; when they differ, deriving from the id targets a DIFFERENT
+    # TENANT. imac hit exactly that: removing `atlas` (installed as `atlast`)
+    # planned to undeploy `postgrest --app atlas`, the live instance serving 13
+    # views, and named the live database in its own "will NOT remove" notice.
+    local file svcs cls app_name
     file="$(_applications_file)"
+    app_name=$(app_id="$template_id" yq -r \
+        '.applications[] | select(.id == strenv(app_id)) | .app_name // ""' "$file" 2>/dev/null)
+
+    if [[ -z "$app_name" ]]; then
+        # A record written before 1.6.29 carries no app_name and there is no way
+        # to recover it — the definition is not fetched on the remove path. The
+        # id is the best guess and it is the guess that caused the defect, so it
+        # is used only with the operator looking at it.
+        log_warn "This record predates app_name and does not carry one."
+        echo "  Falling back to the application id '$template_id' for every per-app" >&2
+        echo "  name below. If this application was installed with --param app_name=," >&2
+        echo "  THOSE NAMES BELONG TO A DIFFERENT TENANT — check the plan before" >&2
+        echo "  confirming, and remove by hand if it names something you did not install." >&2
+        app_name="$template_id"
+        if [[ "$assume_yes" == true ]]; then
+            log_error "Refusing --yes on a record with no app_name."
+            echo "  The plan below cannot be verified against what was installed, and" >&2
+            echo "  the failure mode is undeploying somebody else's instance. Re-run" >&2
+            echo "  without --yes and read it." >&2
+            return 1
+        fi
+    fi
     # Newline-separated and read line-wise: a name is a Kubernetes name and
     # should never contain a space, but word-splitting a recorded value is
     # exactly how the raw-template bug turned one entry into three tokens.
@@ -1193,7 +1245,7 @@ cmd_template_remove() {
     local svc
     while IFS= read -r svc; do [[ -n "$svc" ]] && echo "  code location  $svc"; done <<< "$cls"
     while IFS= read -r svc; do
-        [[ -n "$svc" ]] && _service_is_multi_instance "$svc" && echo "  instance       $svc --app $template_id"
+        [[ -n "$svc" ]] && _service_is_multi_instance "$svc" && echo "  instance       $svc --app $app_name"
     done <<< "$svcs"
     echo "  the application record"
     if [[ "$purge" == true ]]; then
@@ -1220,14 +1272,14 @@ cmd_template_remove() {
     # That was the third announced-action-no-action in this feature. The lesson
     # I am applying: derive the message from what is actually callable, and name
     # the gap rather than rounding it off.
-    local app_user="${template_id//-/_}"
-    echo "  the '$template_id' database and its owning role '$app_user'"
+    local app_user="${app_name//-/_}"
+    echo "  the '$app_name' database and its owning role '$app_user'"
     echo "  any Secret written by configure postgresql --secret-name-prefix"
     if [[ "$purge" == true ]]; then
         echo ""
         echo "⚠️ --purge does NOT cover those: configure postgresql has no purge."
         echo "   To finish by hand afterwards:"
-        echo "     ./uis connect postgresql   then:  DROP DATABASE $template_id; DROP ROLE $app_user;"
+        echo "     ./uis connect postgresql   then:  DROP DATABASE \"$app_name\"; DROP ROLE $app_user;"
         echo "     kubectl delete secret <prefix>-db -n <namespace>"
         echo "   Tracked as PLAN-cli-configure-postgresql-purge."
     fi
@@ -1253,9 +1305,9 @@ cmd_template_remove() {
     while IFS= read -r svc; do
         [[ -z "$svc" ]] && continue
         if _service_is_multi_instance "$svc"; then
-            log_info "Undeploying $svc --app $template_id..."
-            if ! uis undeploy "$svc" --app "$template_id" --yes >&2; then
-                log_warn "undeploy $svc --app $template_id failed; continuing"
+            log_info "Undeploying $svc --app $app_name..."
+            if ! uis undeploy "$svc" --app "$app_name" --yes >&2; then
+                log_warn "undeploy $svc --app $app_name failed; continuing"
             fi
 
             # ⚠️ `configure --purge`, NOT `undeploy --purge`.
@@ -1277,7 +1329,7 @@ cmd_template_remove() {
                 # separately so the failure branch can still show it.
                 local purge_out purge_err purge_rc=0
                 purge_err="$(mktemp)"
-                purge_out=$(uis configure "$svc" --app "$template_id" --purge --json 2>"$purge_err") || purge_rc=$?
+                purge_out=$(uis configure "$svc" --app "$app_name" --purge --json 2>"$purge_err") || purge_rc=$?
                 local purge_status
                 purge_status="$(_json_field "$purge_out" '.status')"
                 case "$purge_status" in
@@ -1290,8 +1342,8 @@ cmd_template_remove() {
                         log_warn "Purge of $svc did not report success (exit $purge_rc)."
                         [[ -n "$purge_out" ]] && echo "  stdout: $purge_out" >&2
                         [[ -s "$purge_err" ]] && echo "  stderr: $(cat "$purge_err")" >&2
-                        echo "  Roles and Secret for '$template_id' may still exist. To finish:" >&2
-                        echo "    ./uis configure $svc --app $template_id --purge" >&2
+                        echo "  Roles and Secret for '$app_name' may still exist. To finish:" >&2
+                        echo "    ./uis configure $svc --app $app_name --purge" >&2
                         results+="$svc: purge INCOMPLETE"$'\n'
                         ;;
                 esac
@@ -1305,11 +1357,11 @@ cmd_template_remove() {
     if [[ "$purge" != true ]]; then
         echo "Per-app roles, Secrets and databases were left in place. To drop them:"
         while IFS= read -r svc; do
-            [[ -n "$svc" ]] && _service_is_multi_instance "$svc" && echo "  ./uis configure $svc --app $template_id --purge"
+            [[ -n "$svc" ]] && _service_is_multi_instance "$svc" && echo "  ./uis configure $svc --app $app_name --purge"
         done <<< "$svcs"
         echo "  and by hand, the database and owning role — see PLAN-cli-configure-postgresql-purge"
     else
-        echo "The '$template_id' database and its owning role were NOT dropped."
+        echo "The '$app_name' database and its owning role were NOT dropped."
         echo "No UIS command does that yet; see PLAN-cli-configure-postgresql-purge."
     fi
     return 0
@@ -1778,7 +1830,8 @@ cmd_template_install() {
 
     if [[ -n "${SOURCE_ARTIFACT:-}" ]]; then
         _record_application "$template_id" "$SOURCE_ARTIFACT" "$SOURCE_TAG" "$SOURCE_DIGEST" \
-            "$inst_services" "$inst_cls" "$exports_json" "$inst_requires" || return 1
+            "$inst_services" "$inst_cls" "$exports_json" "$inst_requires" \
+            "$(_conf_param "$params_file" app_name)" || return 1
     else
         # A catalogue-less install (a local fixture, or a stack template that is
         # not an application) has no pin to record. Say so rather than writing a

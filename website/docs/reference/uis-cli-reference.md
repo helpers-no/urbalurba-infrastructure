@@ -185,6 +185,23 @@ resolved, and runs nothing. ⚠️ It is a dry run of the **install**, not of th
 **fetch** — the definition artifact is pulled, because that is how the plan is
 known. Nothing else is written.
 
+### `--param app_name=` and what `remove` remembers
+
+The install records the **effective** `app_name` in `.uis.extend/applications.yaml`,
+and `remove` derives every per-app name from that — never from the application
+id. They are the same string only when `--param app_name=` was not used.
+
+🔴 **A record written before 1.6.29 has no `app_name`.** `remove` falls back to
+the id, says so loudly, and **refuses `--yes`**: the plan cannot be verified
+against what was installed, and the failure mode is undeploying a different
+tenant's instance. Read the plan and confirm interactively, or remove by hand.
+
+⚠️ **`app_name` becomes a SQL identifier and a Kubernetes name.** Letters,
+digits, underscore and hyphen only; anything else is refused before any SQL
+runs. A hyphen is fine — the database keeps it, the Postgres role converts it to
+an underscore — so `--param app_name=my-app` yields database `my-app` and role
+`my_app`.
+
 ### What `remove` does and does not do
 
 It removes what the install **added**, not what the application **produced**:

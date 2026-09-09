@@ -172,4 +172,53 @@ start_test "the password rotation is announced, not silent"
 grep -q "was rotated" "$PG_HANDLER" && pass_test \
     || fail_test "a credential rotation under a running workload must be stated"
 
+# ============================================================================
+# Hyphenated app names, and the SQL identifiers they become
+#
+# 🔴 `--param app_name=atlas-t` FAILED: the username is derived with `-` -> `_`
+# but the database name was passed through verbatim and UNQUOTED, so
+#   CREATE DATABASE atlas-t OWNER atlas_t
+# died at the hyphen — after creating the role, which was left orphaned for the
+# tester to drop by hand (imac, urb-agents#481, following an instruction of mine
+# that named exactly that parameter).
+#
+# Structural, like the block above: issuing SQL needs a cluster, so what is
+# asserted is that every identifier reaching the admin connection is quoted, and
+# that a name which could break the quoting is refused before anything runs.
+# ============================================================================
+print_test_section "Configure postgresql: hyphenated names and SQL quoting"
+
+start_test "🔴 CREATE DATABASE quotes its identifier"
+grep -q 'CREATE DATABASE \\"\$database_name\\"' "$PG_HANDLER" && pass_test \
+    || fail_test "an unquoted identifier is a syntax error for any name with a hyphen"
+
+start_test "CREATE USER quotes its identifier"
+grep -q 'CREATE USER \\"\$username\\"' "$PG_HANDLER" && pass_test || fail_test "unquoted"
+
+start_test "GRANT quotes both identifiers"
+grep -q 'ON DATABASE \\"\$database_name\\" TO \\"\$username\\"' "$PG_HANDLER" && pass_test || fail_test "unquoted"
+
+start_test "both rollback paths quote too"
+n=$(grep -c 'DROP \(DATABASE\|USER\) IF EXISTS \\"' "$PG_HANDLER")
+[[ "$n" -ge 3 ]] && pass_test || fail_test "expected every DROP to quote; found $n"
+
+start_test "no unquoted identifier interpolation is left in any SQL"
+if grep -nE '(CREATE|DROP|ALTER|GRANT)[A-Z ]*(DATABASE|USER|ROLE) +\$' "$PG_HANDLER" | grep -v '\\"'; then
+    fail_test "an identifier is still interpolated unquoted"
+else
+    pass_test
+fi
+
+start_test "an identifier that could break the quoting is refused before any SQL runs"
+grep -q 'Invalid identifier' "$PG_HANDLER" && grep -q '\^\[A-Za-z0-9_-\]+\$' "$PG_HANDLER" && pass_test \
+    || fail_test "no validation of the identifiers interpolated into admin SQL"
+
+start_test "a failed CREATE DATABASE drops the role this command created"
+grep -q 'user_was_created' "$PG_HANDLER" && pass_test \
+    || fail_test "the orphan role imac had to drop by hand is still left behind"
+
+start_test "the rollback does not drop a role that predates the command"
+grep -q 'if ! _pg_user_exists "$username" "$admin_pass"; then' "$PG_HANDLER" && pass_test \
+    || fail_test "rollback must only drop a role this run created"
+
 print_summary

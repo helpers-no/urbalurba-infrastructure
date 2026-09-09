@@ -398,7 +398,7 @@ fi
 print_test_section "Phase 4: applications.yaml, requires and exports"
 
 if ! command -v yq >/dev/null 2>&1; then
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do skip_test "Skipping phase-4 tests: yq not installed"; done
+    for _ in $(seq 1 18); do skip_test "Skipping phase-4 tests: yq not installed"; done
 else
     ad="$TMP/apps"; mkdir -p "$ad"
     D64="sha256:$(printf 'a%.0s' {1..64})"
@@ -479,6 +479,37 @@ else
     got=$( EXTEND_DIR="$rd"; _applications_requiring atlas-data )
     assert_equals "data-consumer" "$got" "exact match on the longer name"
 
+    # ── app_name: the field removal derives every per-app name from ──────────
+    #
+    # 🔴 Removal used to reconstruct per-app names from the record ID. They are
+    # the same string only when --param app_name= was not used. imac installed
+    # atlas as `atlast`; removing it planned to undeploy `postgrest --app atlas`
+    # — the LIVE tenant serving 13 views — and named the live database in its
+    # own "will NOT remove" notice (urb-agents#481). Only the prompt stopped it.
+    #
+    # ⚠️ The fixture could not catch this: uisfix's id and app_name were the
+    # same string. These tests deliberately make them DIFFER.
+    an="$TMP/apps-appname"; mkdir -p "$an"
+
+    start_test "🔴 the record stores app_name, and it may differ from the id"
+    ( EXTEND_DIR="$an"; _record_application atlas ghcr.io/terchris/atlas-data/uis \
+        v20260909-853c696 "$D64" "postgresql,postgrest,dagster" "atlast-data" \
+        '{"api-url":"http://api-atlast.localhost"}' "" "atlast" ) >/dev/null 2>&1
+    got=$( yq -r '.applications[0] | "\(.id) \(.app_name)"' "$an/applications.yaml" )
+    assert_equals "atlas atlast" "$got" "id and app_name are both recorded and differ"
+
+    start_test "an install with no override records app_name equal to the id"
+    ( EXTEND_DIR="$an"; _record_application plain a v1-a "$D64" "" "" '{}' "" "plain" ) >/dev/null 2>&1
+    got=$( app_id=plain yq -r '.applications[] | select(.id == strenv(app_id)) | .app_name' "$an/applications.yaml" )
+    assert_equals "plain" "$got" "the common case still records it"
+
+    start_test "_conf_param reads app_name out of the effective-params file"
+    printf 'app_name=atlast\nother=x\n' > "$TMP/eff.env"
+    assert_equals "atlast" "$(_conf_param "$TMP/eff.env" app_name)" "effective param read"
+
+    start_test "_conf_param yields empty for a key that is not there"
+    assert_equals "" "$(_conf_param "$TMP/eff.env" nosuch)" "absent key"
+
     start_test "the install reads requires from the definition as the record's CSV"
     printf 'requires:\n  - application: atlas\n    provides: api-url\n  - application: other\n' \
         > "$TMP/req4.yaml"
@@ -507,6 +538,37 @@ fi
 # Found while switching a local registry between two atlas digests: the install
 # printed the old pin. It printed it, which is the only reason it was visible.
 # ============================================================================
+# ============================================================================
+# Structural: no per-app name in `remove` may be derived from the record id
+#
+# The unit tests above prove app_name is RECORDED. This proves it is USED — and
+# it is a grep because exercising removal needs a cluster. The defect was NINE
+# separate uses of $template_id where $app_name was meant; a tenth added later
+# would be just as dangerous and just as quiet.
+# ============================================================================
+print_test_section "remove: per-app names come from app_name, never the id"
+
+_remove_fn=$(sed -n '/^cmd_template_remove()/,/^}/p' "$UIS_LIB/template.sh")
+
+start_test "🔴 no per-app operation is keyed on the record id"
+if grep -q -- '--app "\?\$template_id' <<< "$_remove_fn"; then
+    fail_test "a per-app operation still uses the record id instead of app_name"
+else
+    pass_test
+fi
+
+start_test "app_name is read out of the record"
+grep -q '\.app_name' <<< "$_remove_fn" && pass_test \
+    || fail_test "remove does not read app_name from the record"
+
+start_test "a record without app_name refuses --yes rather than guessing silently"
+grep -q 'Refusing --yes on a record with no app_name' <<< "$_remove_fn" && pass_test \
+    || fail_test "an unverifiable plan must not be auto-confirmed"
+
+start_test "the DROP DATABASE hint quotes the identifier"
+grep -q 'DROP DATABASE ' <<< "$_remove_fn" && grep -q 'DROP DATABASE \\"' <<< "$_remove_fn" && pass_test \
+    || fail_test "an app_name with a hyphen needs quoting in the hint too"
+
 print_test_section "registry cache: keyed by URL, file:// never cached"
 
 start_test "two different registry URLs get two different cache paths"

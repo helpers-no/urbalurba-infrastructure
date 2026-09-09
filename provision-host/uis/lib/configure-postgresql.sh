@@ -167,6 +167,26 @@ configure_service() {
     local username
     username=$(echo "${app_name}" | tr '-' '_')
 
+    # 🔴 Validate both identifiers BEFORE anything runs as the database admin.
+    #
+    # These are interpolated into SQL executed as the postgres superuser. The
+    # derived defaults are safe by construction, but --database is operator- and
+    # template-supplied: `{{ params.app_name }}` reaches here verbatim. A name
+    # containing a double quote would break out of the quoting added below, and
+    # this is the one command in UIS where that matters most.
+    local _ident
+    for _ident in "$app_name" "$database_name" "$username"; do
+        if [[ ! "$_ident" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            if [[ "$json_output" == true ]]; then
+                _configure_error "usage" "$service_id" "Invalid identifier '$_ident': letters, digits, underscore and hyphen only"
+            fi
+            log_error "Invalid identifier '$_ident'."
+            echo "  Letters, digits, underscore and hyphen only — these become SQL" >&2
+            echo "  identifiers and a Kubernetes Secret name." >&2
+            return 1
+        fi
+    done
+
     echo "Configuring PostgreSQL for app '$app_name'..." >&2
 
     # Get admin password
@@ -194,7 +214,7 @@ configure_service() {
         app_password=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
 
         local alter_result
-        alter_result=$(_pg_exec "ALTER USER $username WITH PASSWORD '$app_password'" "$admin_pass" 2>&1)
+        alter_result=$(_pg_exec "ALTER USER \"$username\" WITH PASSWORD '$app_password'" "$admin_pass" 2>&1)
         if [[ $? -ne 0 ]]; then
             if [[ "$json_output" == true ]]; then
                 _configure_error "create_resources" "$service_id" "Failed to reset password for user '$username': $alter_result"
@@ -294,9 +314,13 @@ EOF
 
     echo "Creating user '$username'..." >&2
 
-    # Create user
-    local create_user_result
-    create_user_result=$(_pg_exec "CREATE USER $username WITH PASSWORD '$app_password'" "$admin_pass" 2>&1)
+    # Create user. Track whether WE made it: the rollback below must not drop a
+    # role that predates this command.
+    local create_user_result user_was_created=false
+    if ! _pg_user_exists "$username" "$admin_pass"; then
+        user_was_created=true
+    fi
+    create_user_result=$(_pg_exec "CREATE USER \"$username\" WITH PASSWORD '$app_password'" "$admin_pass" 2>&1)
     if [[ $? -ne 0 ]] && ! _pg_user_exists "$username" "$admin_pass"; then
         if [[ "$json_output" == true ]]; then
             _configure_error "create_resources" "$service_id" "Failed to create user '$username': $create_user_result"
@@ -309,8 +333,22 @@ EOF
 
     # Create database
     local create_db_result
-    create_db_result=$(_pg_exec "CREATE DATABASE $database_name OWNER $username" "$admin_pass" 2>&1)
+    # ⚠️ QUOTE the database identifier. A hyphen is legal in a quoted identifier
+    # and a syntax error in an unquoted one, and the username is derived with
+    # `-` -> `_` while the database name is not — so `--param app_name=atlas-t`
+    # produced `CREATE DATABASE atlas-t OWNER atlas_t` and failed at the hyphen,
+    # AFTER creating the role, which was then left orphaned (imac,
+    # urb-agents#481, following an instruction of mine that named exactly that
+    # parameter). All-lowercase unquoted and quoted identifiers are the same
+    # object, so nothing existing changes.
+    create_db_result=$(_pg_exec "CREATE DATABASE \"$database_name\" OWNER \"$username\"" "$admin_pass" 2>&1)
     if [[ $? -ne 0 ]]; then
+        # Roll back the role we just created. Leaving it behind made the next
+        # attempt a two-step manual cleanup for the tester rather than a re-run.
+        if [[ "$user_was_created" == true ]]; then
+            echo "Rolling back: dropping user '$username' created moments ago..." >&2
+            _pg_exec "DROP USER IF EXISTS \"$username\"" "$admin_pass" >/dev/null 2>&1
+        fi
         if [[ "$json_output" == true ]]; then
             _configure_error "create_resources" "$service_id" "Failed to create database '$database_name': $create_db_result"
         fi
@@ -319,7 +357,7 @@ EOF
     fi
 
     # Grant privileges
-    _pg_exec "GRANT ALL PRIVILEGES ON DATABASE $database_name TO $username" "$admin_pass" >/dev/null 2>&1
+    _pg_exec "GRANT ALL PRIVILEGES ON DATABASE \"$database_name\" TO \"$username\"" "$admin_pass" >/dev/null 2>&1
 
     echo "Database '$database_name' created with user '$username'." >&2
 
@@ -336,8 +374,8 @@ EOF
 
             # Roll back: drop the database and user we just created
             echo "Rolling back: dropping database '$database_name' and user '$username'..." >&2
-            _pg_exec "DROP DATABASE IF EXISTS $database_name" "$admin_pass" >/dev/null 2>&1
-            _pg_exec "DROP USER IF EXISTS $username" "$admin_pass" >/dev/null 2>&1
+            _pg_exec "DROP DATABASE IF EXISTS \"$database_name\"" "$admin_pass" >/dev/null 2>&1
+            _pg_exec "DROP USER IF EXISTS \"$username\"" "$admin_pass" >/dev/null 2>&1
 
             if [[ "$json_output" == true ]]; then
                 # Build JSON detail from the full psql error output
