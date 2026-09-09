@@ -345,8 +345,19 @@ install_oras() {
         rm -rf "$tmp"; return 1
     fi
 
-    install -m 0755 "${tmp}/oras" /usr/local/bin/oras || {
-        add_error "oras" "Failed to install oras to /usr/local/bin"
+    # ⚠️ `sudo`, and `chmod` separately rather than `install -m`. The provisioning
+    # script does not run as root — kubectl (:190) and k9s (:250) both `sudo mv`
+    # for this reason, and I used a bare `install` on the first attempt: download
+    # and checksum both passed and the build died at
+    # `cannot create regular file '/usr/local/bin/oras': Permission denied`.
+    # Matching the neighbours here is right; the pinning is where this file should
+    # differ from them, not the privilege idiom.
+    sudo mv "${tmp}/oras" /usr/local/bin/oras || {
+        add_error "oras" "Failed to move oras to /usr/local/bin"
+        rm -rf "$tmp"; return 1
+    }
+    sudo chmod 0755 /usr/local/bin/oras || {
+        add_error "oras" "Failed to make oras executable"
         rm -rf "$tmp"; return 1
     }
     rm -rf "$tmp"
