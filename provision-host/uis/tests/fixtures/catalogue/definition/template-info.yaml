@@ -19,7 +19,18 @@ tags: [fixture, postgresql, postgrest, dagster]
 maintainers: [tor-agent]
 
 params:
-  app_name: uisfix
+  # 🔴 DELIBERATELY NOT THE SAME STRING AS `id:` ABOVE.
+  #
+  # The fixture used to set app_name: uisfix, matching the id, and four test
+  # rounds passed while `template remove` reconstructed every per-app name from
+  # the record ID instead of the effective app_name. The two could not diverge
+  # here, so the defect could not appear. The first install where they DID
+  # differ was imac's on a real cluster, and the remove plan named a live
+  # tenant's postgrest instance (urb-agents#481).
+  #
+  # Keep these different. Any fixture that conflates them cannot test the
+  # difference, and the difference is where the dangerous bug lives.
+  app_name: uisfixapp
 
 exports:
   api-url: "http://api-{{ params.app_name }}.localhost"

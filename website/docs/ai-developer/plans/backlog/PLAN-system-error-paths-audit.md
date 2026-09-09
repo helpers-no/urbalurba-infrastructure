@@ -12,7 +12,7 @@ exercised at least once, so a failure reports its cause instead of being
 swallowed by the mechanism meant to handle it.
 
 **Proposed by**: imac, `urb-agents#344`, after finding the third instance in one
-week. **Nine instances as of 1.6.27** (see the table). Its words: *"Each was invisible until something failed, and each made the
+week. **Eleven instances as of 1.6.29** (see the table). Its words: *"Each was invisible until something failed, and each made the
 **next** failure harder to diagnose. Might be worth one deliberate pass over the
 error paths rather than three more of these arriving one at a time."*
 
@@ -29,10 +29,12 @@ error paths rather than three more of these arriving one at a time."*
 | `#367` | `template remove --purge` dropped the roles correctly, printed none of its reporting, skipped the record cleanup, and exited 4 | `x=$(… \| jq)` on a non-JSON stream — jq exits 4, the assignment inherits it, `set -e` kills the caller |
 | 1.6.24 | `template remove` **could never refuse** while a dependant was installed, though the CLI reference documented that it would | `_applications_requiring` read `.requires` out of the record; `_record_application` never wrote the field. A guard whose input nothing produces |
 | 1.6.24 | `_applications_requiring atlas` was **also** blocked by an application requiring `atlas-data` | `contains(["x"])` does **substring** matching on string array elements in jq and yq alike: `["atlas-data"] \| contains(["atlas"])` is true. A comparison that reads as membership and is not |
+| 1.6.29 | `make-fixture.sh` printed `./uis template install uisfix` and, two lines below, *"only works because make-fixture adds it"* — **make-fixture added nothing**; every command it printed failed on the allowlist | A script asserting an action it does not take. The class, in a test fixture: the thing meant to catch this had it |
+| 1.6.28 | The registry cache was **one file for any URL**, so switching `REGISTRY_URL_PRIMARY` served the previous registry for up to an hour | A cache keyed by nothing, in the documented testing path |
 | 1.6.27 | 🔴 `configure postgresql --init-file -` **discarded the SQL** on a database that already existed, exit 0 | Init is applied at line 273; the already-exists branch returns at 231/234. The whole application-catalogue install-time guarantee, undelivered and unreported |
 | 1.6.24 | 28 of 68 template tests reported **neither pass nor fail**, and the suite still printed `ALL TESTS PASSED` | `assert_equals "$a" "$b" "msg"` returned 0 and moved no counter. Failures were reported, so the verdict held — but the count could not be reconciled, and an unreconcilable number is one nobody checks |
 
-Nine instances, nine different mechanisms, one shape: **error handling that looks
+Eleven instances, eleven different mechanisms, one shape: **error handling that looks
 correct, defeated by the semantics of the construct it is written in, in a branch
 nothing executes until something else is already wrong.**
 
@@ -102,6 +104,34 @@ grep for the sibling.**
 `#330`; the postgresql twin survived until a static pre-flight of an unrelated
 install path went looking. Nothing in between would have found it, because
 nothing in between had a reason to read that branch.
+
+## A NEIGHBOURING class, worth naming separately rather than inflating this one
+
+**Reconstructing a value that was recorded.** `template remove` stored the
+code-location name *resolved* but reconstructed every other per-app name from
+the record id — so an application installed with `--param app_name=X` planned a
+removal against a **different tenant's** live instance (imac, `urb-agents#481`;
+fixed 1.6.29 by recording `app_name`).
+
+🔴 **This is not the same defect as the eleven above and should not be counted
+with them.** Those are guards that cannot fire. This one fires perfectly and
+computes the wrong target. But it shares the cure, which is why it belongs on
+this page: **store the resolved value; never re-derive it from something that
+merely usually equals it.** The code-location name learned that in 1.6.21 and
+the app_name had to learn it again eight versions later, one field along.
+
+⚠️ **And the reason four fixture rounds missed it is the most transferable
+thing in this plan**, in imac's words:
+
+> *`uisfix`'s template id and its `app_name` were the same string, so
+> id-and-app_name could not diverge. This is the first install where they
+> differ, and it is the first thing that broke.*
+
+**A fixture that conflates two values cannot test the difference between them.**
+The catalogue fixture now sets `id: uisfix` and `app_name: uisfixapp` on
+purpose, with the reason in the file. Generalise it when building any fixture:
+list the pairs of fields that are *allowed* to differ, and make each pair
+actually differ.
 
 ## Why a pass rather than waiting for the fourth
 

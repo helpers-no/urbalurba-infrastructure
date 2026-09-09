@@ -5,7 +5,7 @@
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
 **Status:** Backlog — Phases 1-4 shipped (1.6.17-1.6.23) and verified on a cluster by
-`imac` (`urb-agents#367`); resolution verified against atlas's real artifact 2026-09-09; cluster falsification with imac (#481). Phase 5 and 6.2 open. Phase 5 (`webapp`) waits on the Atlas
+`imac` (`urb-agents#367`); phases 1-4 falsified on a cluster 2026-09-09 (imac, #481) except `remove`, which is round 2. Phase 5 and 6.2 open. Phase 5 (`webapp`) waits on the Atlas
 frontend actually needing it.
 
 **Goal**: `./uis template install <application>` installs an application on any UIS
@@ -322,6 +322,39 @@ on this host.** Both of us had read the artifact's *blobs* and neither had run
 the *pull* — the layer-shape question was live precisely because layer 1's
 declared media type disagrees with its content. Reading a blob is not running a
 fetcher, and the gap between those two is where the day's other defects lived.
+
+## Cluster falsification, round 1 — imac, 2026-09-09 (`urb-agents#481`)
+
+Installed as a **parallel tenant** against atlas's real published artifact. The
+plan matched the build-host dry-run **step for step, all seven, unmodified.**
+
+| item | result |
+|---|---|
+| 1. completes | ✅ `EXIT=0` |
+| 2. install-time guarantee | ✅ `api_v1` exists, `USAGE` granted, the `#308` `FOR ROLE` default-ACL entry present on a real application, **0 objects**, PostgREST `HTTP 200` with zero endpoints — correct, Dagster owns the 51 migrations |
+| 3. the seam | ✅ `atlast-database-db` in `dagster`, key `DATABASE_URL` |
+| 4. code location | ✅ literal `atlast-data`, **zero `{{` in the file**, visible in the workspace |
+| 5. the record | ✅ pin, three services, code location, export |
+| 6. convergence | ✅ **and Dagster does not roll** — file md5 unchanged, deploy generation 1, *same pod, older* (4m8s → 9m18s), workspace ConfigMap `resourceVersion` unchanged |
+| 7. removal | 🔴 **not run** — see below |
+
+🔴 **Item 7 was stopped at the confirmation prompt, correctly.** The remove plan
+named `postgrest --app atlas` — the **live tenant serving 13 views** — because
+removal reconstructed per-app names from the record id rather than the recorded
+`app_name`. Fixed in 1.6.29; the analysis is in
+[PLAN-system-error-paths-audit](./PLAN-system-error-paths-audit.md) under *A
+neighbouring class*. **The prompt was the only thing between this and an
+outage**, which is an argument for keeping it un-bypassable on anything that
+undeploys.
+
+Also found in that round, both fixed in 1.6.29: a hyphenated `--param
+app_name=` could not create its database (identifier unquoted, and the role was
+left orphaned when it failed), and the catalogue fixture's own printed commands
+could not run.
+
+**What the round establishes for this plan:** phases 1–4 are falsified on a
+cluster against a real tenant artifact, except `template remove`, which is
+round 2.
 
 ## Acceptance — the spec's §10, unchanged
 
