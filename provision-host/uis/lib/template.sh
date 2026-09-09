@@ -244,6 +244,12 @@ cmd_template_info() {
     fi
 
     print_section "Template: $template_id"
+
+    # ⚠️ `summary` and `docs` used to be printed here and NO registry entry has
+    # ever carried either — every template showed "Summary: N/A" and an empty
+    # "Docs:". Reading fields nothing writes, the cosmetic cousin of the
+    # `requires` defect in 1.6.24. Dropped rather than left looking like
+    # missing data.
     echo "$template" | jq -r '
         "Name:        \(.name)",
         "Version:     \(.version)",
@@ -253,12 +259,24 @@ cmd_template_info() {
         "Abstract:",
         "  \(.abstract // "N/A")",
         "",
-        "Summary:",
-        "  \(.summary // "N/A")",
-        "",
-        "Tags: \(if (.tags | type) == "array" then (.tags | join(", ")) else .tags end)",
-        "Docs: \(.docs // "")"
+        "Tags: \(if (.tags | type) == "array" then (.tags | join(", ")) else .tags end)"
     '
+
+    # An application's pin is the most important thing about it and `info` did
+    # not show it, so the only way to see what an install would fetch was to
+    # run the install.
+    local kind
+    kind="$(_json_field "$template" '.templateKind // .kind')"
+    if [[ "$kind" == "application" ]]; then
+        echo ""
+        echo "Kind:     application"
+        echo "Artifact: $(_template_source_field "$template" artifact)"
+        echo "Tag:      $(_template_source_field "$template" tag)"
+        echo "Pin:      $(_template_source_field "$template" digest)"
+        local vis
+        vis="$(_json_field "$template" '.visibility')"
+        echo "Visible:  ${vis:-public}"
+    fi
 }
 
 # Sparse-checkout a template folder from the TMP repo
@@ -462,11 +480,17 @@ _validate_template_info() {
     # Not collapsed into one field: the two are resolved differently (folder
     # checkout vs oras pull) and a reader needs to be able to tell which kind of
     # thing they are looking at from the file itself, without the registry.
+    #
+    # `install_type: application` is accepted as a third spelling, because the
+    # catalogue's own stub for an application authors exactly that field
+    # (dev-templates, urb-agents#479 — `templateKind` is DERIVED there, so
+    # `install_type` is the only field a human writes). A tenant who mirrors the
+    # catalogue stub in their artifact should not be refused for it.
     local install_type kind
     install_type=$(_yaml_field "$info_file" ".install_type")
     kind=$(_yaml_field "$info_file" ".kind")
-    if [[ "$install_type" != "stack" && "$kind" != "application" ]]; then
-        log_error "A definition needs either 'install_type: stack' or 'kind: application'."
+    if [[ "$install_type" != "stack" && "$install_type" != "application" && "$kind" != "application" ]]; then
+        log_error "A definition needs 'install_type: stack', 'install_type: application' or 'kind: application'."
         echo "  Got install_type='$install_type' kind='$kind'." >&2
         return 1
     fi
@@ -1351,6 +1375,31 @@ cmd_template_install() {
 
     # Validate
     if ! _validate_template_info "$info_file" "$template_dir"; then
+        return 1
+    fi
+
+    # ⚠️ The artifact must agree with the catalogue about what it is.
+    #
+    # Nothing compared these before: a registry entry `atlas` pointing at an
+    # artifact whose definition says `id: something-else` installed anyway and
+    # was RECORDED as atlas — so `applications.yaml`, `requires:` and `remove`
+    # would all have been reasoning about an identity the artifact never
+    # claimed. Two sides of a seam disagreeing in silence.
+    #
+    # An absent `id:` is tolerated (the field is not required by
+    # _validate_template_info and a fixture may omit it); a CONFLICTING one is
+    # refused, naming both, because a mismatch is either a mis-generated
+    # catalogue entry or a pointer at the wrong artifact and the operator
+    # cannot tell which from a success.
+    local definition_id
+    definition_id=$(_yaml_field "$info_file" ".id")
+    if [[ -n "$definition_id" && "$definition_id" != "$template_id" ]]; then
+        log_error "Identity mismatch: the catalogue entry is '$template_id' but the artifact says '$definition_id'."
+        echo "  Artifact: ${SOURCE_ARTIFACT:-<local>}@${SOURCE_DIGEST:-<none>}" >&2
+        echo "  Either the catalogue entry points at the wrong artifact, or the" >&2
+        echo "  artifact was published under the wrong id. Refusing rather than" >&2
+        echo "  recording '$template_id' for a definition that calls itself" >&2
+        echo "  '$definition_id'." >&2
         return 1
     fi
 

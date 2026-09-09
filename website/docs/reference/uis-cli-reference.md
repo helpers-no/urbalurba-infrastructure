@@ -366,7 +366,23 @@ are the only fields `uis template install` reads from a catalogue entry:
 | `source.tag` | yes | Shown to a human, never pulled by |
 | `source.digest` | yes | 🔴 **What is actually pulled.** The catalogue build must resolve tag → digest at generation time |
 | `visibility` | no | `public` (default) or `private`; decides whether the pull needs `oras login` |
-| `category` | yes | Must name a category whose `context` is `uis`, or the entry will not appear in `uis template list` |
+| `category` | yes | Must name a category whose `context` is `uis`. An `application` entry also stays listed on its `templateKind` alone, so a miscategorised one is visible rather than silently absent |
+| `version`, `name`, `description`, `abstract`, `tags` | for display | What `uis template info` prints |
+
+🔴 **`source.digest` must be authored, not resolved at catalogue-build time.**
+A build that re-resolves the tag on every run tracks the tag, so a tag
+re-pointed at a different artifact is *blessed* by the next unrelated build —
+and UIS cannot tell, because it reads whatever the latest published registry
+says and pins no version of it. Pulling a digest gives **integrity** (you get
+what the digest names); only a committed, reviewable digest gives
+**provenance** (a human approved this one). `dev-templates` established this on
+`urb-agents#479` against an earlier claim of mine that UIS could catch it at
+install time — it cannot, and does not try.
+
+⚠️ **The artifact must agree with the entry about its own `id`.** A definition
+whose `id:` conflicts with the entry it was fetched for is refused, naming both:
+installing it would record the application under a name its own definition never
+claimed.
 
 Everything else in an entry is display metadata for the website and
 `uis template info`. In particular `params:` and `provides:` come from the
