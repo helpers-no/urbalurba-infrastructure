@@ -10,10 +10,10 @@
 installation from a catalogue entry, in one command, with the install definition
 owned by the application and pinned to an immutable artifact.
 
-**Input**: `INVESTIGATE-application-catalogue` (urb-agents, `2992d05`), a design
-Terje has reviewed. It answers **TPL-Q3** — yes, through the catalogue — and
-supersedes the "may an application ship its own template" question filed as
-`urb-agents#354`.
+**Input**: `INVESTIGATE-application-catalogue` (urb-agents), a design Terje has
+reviewed — now at **rev 4**, which changed how the definition is fetched; this plan
+is amended to match (see *Amendment* below). It answers **TPL-Q3** — yes, and
+supersedes the hold filed as `urb-agents#354`, now closed.
 
 **Parent**: [INVESTIGATE-templates-multi-surface-application](./INVESTIGATE-templates-multi-surface-application.md)
 — this closes **TPL-F5** and **TPL-Q1/Q2**. **TPL-F7 is already shipped** (1.6.8);
@@ -26,42 +26,79 @@ registry generator and the website's two lists are `dev-templates`, not this pla
 
 ---
 
+## Amendment, 2026-09-09 — the definition is its own OCI artifact
+
+Terje decided (`urb-agents#361`), after reading my answers on `#358`:
+
+| | before | after |
+|---|---|---|
+| where the definition lives | inside the application's image, at `path` | **its own OCI artifact**, `<image>/uis`, at the same tag |
+| how UIS fetches it | pod from the image + `kubectl cp` (my proposal) | **`oras pull`** on the provision host — no pod, no docker, no cluster |
+| source forms | image **and** git | **one**: `{ artifact, tag, digest }` |
+| the pin | tag | **digest**; the tag is shown, the digest is pulled |
+| `oras` | — | in `Dockerfile.uis-provision-host` |
+
+🔴 **My cluster-pod proposal is superseded, and it was the weaker answer.** Two things
+I should have weighed and did not:
+
+- **a pod is a fetch through a scheduler.** Pending, image-pull backoff, eviction, a
+  node with no capacity — each becomes a way for `template install` to fail *before
+  it has installed anything*. I reused an existing credential path and never priced
+  the failure surface I was adding alongside it.
+- **I optimised retrieval instead of questioning the premise.** Pulling a whole image
+  to read a few kilobytes of YAML was the cost of putting the definition *in* the
+  image, and nothing needed it there. I took that from the spec as given — the same
+  reasoning-from-a-shape I have been correcting all week, arriving as an omission
+  rather than an error.
+
+What survives from my side is the credential finding, and it is why the private case
+stays free: `oras login` uses `GITHUB_USERNAME`/`GITHUB_ACCESS_TOKEN`, verified at
+`00-common-values.env.template:139-140` and built into `ghcr-credentials` at
+`00-master-secrets.yml.template:216-229`.
+
+---
+
 ## 🔴 Three places the spec's shape is wrong against the code
 
 The spec is a design; these are facts, measured on `main` at 1.6.14.
 
-### 1. There is no docker on the provision host — the image form cannot use it
+### 1. There is no docker on the provision host — and the fetch is now an OCI artifact
 
-§7 step 2 says *"image form → `docker pull` the pinned tag, `docker create`, copy
-`path` out"*, and open question 2 says *"start with docker; it is there."*
+**Superseded by Terje's decision of 2026-09-09 (`urb-agents#361`), which is better than
+what I proposed.** Kept because the finding underneath it still stands and explains
+why the design changed.
 
-**It is not there.** `Dockerfile.uis-provision-host` installs no docker client, and
-the launcher runs the container with `--network host --privileged` and **no
-`/var/run/docker.sock` mount**. So neither the CLI nor the daemon is reachable
-from where `template.sh` runs.
+The finding: §7 step 2 said *image form → `docker pull` the pinned tag, `docker
+create`, copy `path` out*, and open question 2 said *"start with docker; it is
+there."* **It is not.** `Dockerfile.uis-provision-host` installs no docker client
+and the launcher mounts no `/var/run/docker.sock`, so neither CLI nor daemon is
+reachable from where `template.sh` runs.
 
-**Proposed instead: resolve the image pointer through the cluster.** Run a
-short-lived pod from the pinned image, `kubectl cp` the `path` out, delete it.
-That is strictly better than adding docker or `oras`, on grounds that are
-properties of this platform rather than preferences:
+I proposed resolving through the cluster — a pod from the pinned image, `kubectl
+cp` the path out. **Terje's answer removes the need to resolve an image at all:**
 
-- **it reuses a credential that already exists.** `ghcr-credentials` is in
-  `00-master-secrets.yml.template`, applied to every namespace, and already wired
-  as `imagePullSecrets` on the Dagster chart (`manifests/360-dagster-config.yaml:22`).
-  So §6's *"a private one needs the installing platform's own package credential,
-  held in that installation's `urbalurba-secrets`"* is satisfied by something
-  shipped, with no second credential path and no token on the provision host
-- **`kubectl` is certainly present**; docker certainly is not
-- **it needs no new tool and no privilege escalation.** Mounting the docker socket
-  into a `--privileged` container to fetch a third party's SQL is the opposite of
-  what the allowlist is for
-- **it costs nothing in reach.** `template install` already requires a cluster —
-  it deploys services — so requiring one to resolve the pointer removes no
-  capability
+> the application publishes its install definition as **its own OCI artifact**,
+> beside its image, at the same tag — `oras push ghcr.io/<owner>/<image>/uis:<tag>`
+> with `template-info.yaml` and its files. UIS fetches it with `oras pull`. No pod,
+> no docker, no cluster for the fetch.
 
-⚠️ **What this trades**: `--dry-run` cannot show the resolved definition without a
-cluster, and an image whose entrypoint exits immediately needs a `command:`
-override to stay alive for the copy. Both are handled in Phase 1.
+Two reasons it is better than my proposal, and both are things I should have weighed:
+
+- **a pod is a fetch through a scheduler.** Everything the scheduler can do wrong —
+  pending, image-pull backoff, eviction, a node with no capacity — becomes a way
+  for `template install` to fail *before it has installed anything*. I was reusing
+  an existing credential path and did not price the failure surface I was adding.
+- **pulling a whole image to read a text file was the cost of putting the
+  definition inside the image, and nothing needed it there.** The artifact is a few
+  kilobytes. I took "the definition lives in the image" as given from the spec and
+  optimised the retrieval instead of questioning the premise.
+
+✅ **Verified, since the credential path is what my proposal was built on:**
+`GITHUB_USERNAME` and `GITHUB_ACCESS_TOKEN` are in
+`00-common-values.env.template:139-140`, and `00-master-secrets.yml.template:216-229`
+builds `ghcr-credentials` from exactly that pair. So `oras login ghcr.io` uses a
+credential the installation already has, and the private-artifact requirement stays
+free — which was the one good half of my proposal and it survives.
 
 ### 2. The registry carries none of `kind`, `source` or `pin`
 
@@ -114,7 +151,7 @@ PostgREST shape**, borrowing whoami's Host rule.
 | | Question | Answer |
 |---|---|---|
 | **1** | Does the registry carry `kind`/`source`/`pin`? | **No.** Schema change first. And prefer reusing `templateKind`/`install_type` over adding a third discriminator — see §2 above |
-| **2** | `docker create` or `oras`? | **Neither.** No docker on the provision host at all. Resolve through the cluster with `kubectl cp` — see §1 above |
+| **2** | `docker create` or `oras`? | **`oras`, on a separate artifact — Terje, `#361`.** No docker exists on the provision host, and the question dissolves once the definition is not inside the image. `oras` goes into `Dockerfile.uis-provision-host` |
 | **3** | Where do `exports` come from? | **The proposal is right and the data already exists.** `configure postgrest --json` emits `public_url_prefix` and `in_cluster_url`; `configure postgresql --json` emits `database`, `username`, `secret_name`, `secret_namespace`, `env_var`. Install parses the JSON it already captures and records the named exports. No handler change needed for the first application |
 | **4** | `webapp`: generic service or wrapper? | **Generic multi-instance service, PostgREST-shaped** — see §3 above |
 
@@ -126,14 +163,17 @@ entry the registry must carry:
 | field | why UIS needs it |
 |---|---|
 | the discriminator (`templateKind: application` or equivalent) | install refuses a non-installable kind before fetching anything |
-| `source.image` + `source.tag` + `source.path`, **or** `source.repo` + `source.ref` + `source.path` + `source.include` | the two pointer forms; UIS resolves, the generator does not inline the definition |
-| `visibility: public\|private` | decides whether the pull needs `ghcr-credentials`, and lets the error name the secret rather than the URL |
-| the pin, verbatim as published | UIS re-checks immutability at install; **the build refusing is not enough**, because a registry can be edited between build and install |
+| `source.artifact` | the OCI artifact, `<image>/uis`. **One form** — the git form is dropped (`#361`) |
+| `source.tag` | what the pin was published as; shown to a human, never pulled by |
+| `source.digest` | 🔴 **what UIS actually pulls.** Tags are mutable at a registry; digests are not |
+| `visibility: public\|private` | decides whether the pull needs `oras login`, and lets the error name the secret rather than the URL |
 | the display fields, resolved at the pin | so `template list`/`info` and the website describe what an install will actually get |
 
-⚠️ **UIS will re-validate the allowlist and immutability itself.** Not distrust of
-the build — a defence-in-depth the spec's own §4 rationale ("so a merged typo
-cannot point a platform at a stranger's SQL") argues for on both sides.
+⚠️ **UIS re-validates on its own side, and digest-pinning makes that stronger rather
+than redundant.** It refuses an entry with no digest, and refuses one whose `tag` no
+longer resolves to the recorded `digest` — which catches a tag re-pointed at a
+different artifact after the catalogue build, the one thing a build-time check
+structurally cannot see.
 
 ## Phases
 
@@ -144,24 +184,35 @@ cannot point a platform at a stranger's SQL") argues for on both sides.
 - [ ] 1.2 Immutability check: refuse `latest`, refuse a bare branch name, require
       `v<date>-<sha>` shape for images. Same rule the Dagster code-location
       validator already applies, and it should share the message wording
-- [ ] 1.3 Image-form resolution via the cluster: pod from the pinned image with a
-      `command:` override so it stays alive, `kubectl cp <path>`, delete. Use
-      `ghcr-credentials` when `visibility: private`; when it is missing, **name the
-      secret, not the URL**
-- [ ] 1.4 Git-form resolution: sparse checkout of `path` + `include` at `ref`
-- [ ] 1.5 Cache under `/tmp/uis-templates/<id>/<pin>`. ⚠️ Keyed by pin, and **do not
-      `rm -rf` a shared parent** — the current fixed-path `rm -rf` made two
+- [ ] 1.3 Fetch with `oras pull <artifact>@<digest>` into the cache. **Public:
+      anonymous — the platform token is never touched.** Private: `oras login
+      ghcr.io` with `GITHUB_USERNAME`/`GITHUB_ACCESS_TOKEN` from the master secrets
+      (verified present, and the same pair that becomes `ghcr-credentials`). When
+      they are missing, **name the secret, not the URL**
+- [ ] 1.4 `oras` into `Dockerfile.uis-provision-host`. ⚠️ `build-uis-container.yml`
+      rebuilds and `./uis pull` delivers it, so no new update path — **but the docs
+      must say that installing an application needs a provision host from after
+      that build**, because the failure otherwise is `oras: not found` on a machine
+      whose `./uis version` looks current
+- [ ] 1.5 Cache under `/tmp/uis-templates/<id>/<digest>`. ⚠️ Keyed by **digest** now,
+      which makes the cache correct by construction: two pins cannot collide. And
+      **do not `rm -rf` a shared parent** — the current fixed-path `rm -rf` made two
       concurrent installs clobber each other (imac, `#335`)
-- [ ] 1.6 Unit tests with fixtures for both forms; the image form needs a cluster
-      and is a tester task
+- [ ] 1.6 Unit tests with `oras --from-oci-layout` against a layout on disk: **no
+      network, no cluster.** A private-artifact fixture is one `oras push`
+- [ ] 1.7 ~~Git-form resolution~~ — **dropped (`#361`).** One source form. Publishing
+      an artifact is one command from CI or a laptop, so a second code path buys
+      nothing; and it would have been a second immutability rule (`ref` vs `digest`)
+      to keep in step, which is the hazard this repository keeps meeting
 
 ### Phase 2 — `--dry-run`
 
 - [ ] 2.1 Print every `uis deploy|configure` that would run, in order, with resolved
       params, and run nothing
-- [ ] 2.2 ⚠️ Resolution happens *before* the plan can be printed, so `--dry-run`
-      still fetches. Say so in the output: it is a dry run of the *install*, not of
-      the *fetch*
+- [ ] 2.2 ⚠️ Resolution still happens *before* the plan can be printed, so
+      `--dry-run` fetches the artifact. Say so in the output: it is a dry run of the
+      *install*, not of the *fetch*. ✅ **But it no longer needs a cluster** — that
+      was a cost of my pod proposal and Terje's decision removes it
 - [ ] 2.3 Falsification 1 is this phase's acceptance
 
 ### Phase 3 — the code-location entry (TPL-F5)
@@ -215,10 +266,13 @@ cannot point a platform at a stranger's SQL") argues for on both sides.
 All six falsifications are this plan's acceptance criteria. Two notes on how they
 are met:
 
-- 🔴 **Five of the six need a cluster, and I do not test my own work.** Each phase
+- 🔴 **Four of the six need a cluster, and I do not test my own work.** Each phase
   lands with the unit tests it can carry, and the falsification is a tester task.
-  The private-artifact one additionally needs a private image, which nothing in
-  this fleet has yet — flagged now rather than discovered at acceptance.
+  **Four, not five** — `--dry-run` and pointer resolution both come off the cluster
+  with `oras --from-oci-layout` (`#361`).
+- ✅ **The private-artifact falsification is now cheap.** It needed a private *image*,
+  which nothing in this fleet has; it needs a private **artifact**, which is one
+  `oras push`. That was the acceptance risk I flagged, and the decision removed it.
 - Falsification 2 says the install ends with *"an API that answers with an empty,
   correctly-granted `api_v1`"*. That is only true because the application's
   migrations create the schema — `CREATE SCHEMA IF NOT EXISTS api_v1`, TPL-F9. The
