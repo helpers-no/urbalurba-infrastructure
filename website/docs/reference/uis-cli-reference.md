@@ -451,6 +451,23 @@ installing nothing.
 `{{ params.* }}` is substituted into the concatenated content, so a parameter may
 appear in any file.
 
+### What a fresh install actually gives you
+
+🔴 **An application whose data arrives from a pipeline serves an empty API on
+day one, and that is correct.** `template install` guarantees that the schema
+exists, the grants are right, and the API answers — not that there is anything
+in it. If the application's own orchestrator owns the migrations and the
+ingest, the first rows appear on its first run, not at install.
+
+This is worth stating because **an empty-but-correct API is indistinguishable
+from a broken install to someone seeing it for the first time**, and the
+instinct is to go looking for the failure. It is also why data freshness belongs
+in a monitor rather than in `uis verify`: the platform cannot know when an
+application's first pipeline run is due.
+
+An application's catalogue entry should say so in its own words —
+[atlas](https://github.com/terchris/atlas) does.
+
 ### `init:` on a database that already exists
 
 Installing onto a database that is already there — a re-install, or an
