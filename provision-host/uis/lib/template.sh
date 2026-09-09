@@ -37,8 +37,35 @@ STACKS_JSON="${STACKS_JSON:-${UIS_BASE}/website/src/data/stacks.json}"
 # the container: `docker exec` does not inherit the caller's environment.
 REGISTRY_URL_PRIMARY="${REGISTRY_URL_PRIMARY:-https://raw.githubusercontent.com/helpers-no/dev-templates/main/website/src/data/template-registry.json}"
 REGISTRY_URL_FALLBACK="${REGISTRY_URL_FALLBACK:-https://tmp.sovereignsky.no/data/template-registry.json}"
-REGISTRY_CACHE="/tmp/uis-template-registry.json"
-REGISTRY_CACHE_TTL=3600  # 1 hour
+# 🔴 The cache is keyed by the URL, and `file://` is never cached.
+#
+# It used to be one fixed path for whatever registry was fetched last, with a
+# one-hour TTL and no override — so switching REGISTRY_URL_PRIMARY, the
+# DOCUMENTED way to test a template before it reaches the catalogue, silently
+# served the previous registry for up to an hour. Editing your own local
+# registry and re-running did the same. The install then resolved a pin the
+# operator had not asked for and printed it, which is the only reason this was
+# caught at all.
+#
+# Two changes, both needed:
+#   - the path is derived from the URL, so two registries cannot collide
+#   - a file:// URL is read every time. Reading a local file is free, and
+#     caching it is exactly what makes editing it confusing.
+REGISTRY_CACHE_TTL="${REGISTRY_CACHE_TTL:-3600}"  # 1 hour
+
+# Where this URL's registry is cached. Overridable, like every neighbour above.
+_registry_cache_path() {
+    if [[ -n "${REGISTRY_CACHE:-}" ]]; then echo "$REGISTRY_CACHE"; return 0; fi
+    local key
+    key=$(printf '%s' "$REGISTRY_URL_PRIMARY" | sha256sum 2>/dev/null | cut -c1-16)
+    [[ -z "$key" ]] && key="default"
+    echo "/tmp/uis-template-registry-${key}.json"
+}
+
+# Is this registry source cached at all? A local file never is.
+_registry_is_cacheable() {
+    [[ "$REGISTRY_URL_PRIMARY" != file://* ]]
+}
 
 # Template fetch config
 TEMPLATE_REPO="${TEMPLATE_REPO:-https://github.com/helpers-no/dev-templates.git}"
@@ -119,16 +146,23 @@ _template_pin_is_immutable() {
 
 # Check if registry cache is fresh
 _registry_cache_fresh() {
-    if [[ ! -f "$REGISTRY_CACHE" ]]; then
+    _registry_is_cacheable || return 1
+    local cache
+    cache="$(_registry_cache_path)"
+    if [[ ! -f "$cache" ]]; then
         return 1
     fi
     local age
-    age=$(($(date +%s) - $(stat -c %Y "$REGISTRY_CACHE" 2>/dev/null || echo 0)))
+    age=$(($(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0)))
     [[ "$age" -lt "$REGISTRY_CACHE_TTL" ]]
 }
 
 # Fetch registry from primary or fallback URL
 _fetch_registry() {
+    # Every reader goes through this, so resolving the path here means no
+    # caller has to know the cache is URL-keyed.
+    REGISTRY_CACHE="$(_registry_cache_path)"
+
     if _registry_cache_fresh; then
         return 0
     fi
@@ -137,6 +171,16 @@ _fetch_registry() {
 
     if curl -sfL "$REGISTRY_URL_PRIMARY" -o "$REGISTRY_CACHE" 2>/dev/null; then
         return 0
+    fi
+
+    # ⚠️ A file:// primary must NOT silently fall back to the network registry.
+    # The whole point of pointing at a local file is to test THAT file; falling
+    # through to the catalogue would resolve a different entry entirely and
+    # report success — the same shape as the defect this function just fixed.
+    if [[ "$REGISTRY_URL_PRIMARY" == file://* ]]; then
+        log_error "Could not read the local registry: ${REGISTRY_URL_PRIMARY#file://}"
+        echo "  Refusing to fall back to the catalogue: you asked for that file." >&2
+        return 1
     fi
 
     echo "Primary URL failed, trying fallback..." >&2

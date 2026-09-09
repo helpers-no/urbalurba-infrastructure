@@ -43,6 +43,11 @@ UIS_FORWARDED_ENV=(
     # from the host, which is the only place a user sets it. imac measured both
     # sides at the same moment (urb-agents#335).
     TEMPLATE_REPO
+    REGISTRY_CACHE_TTL      # lib/template.sh — `REGISTRY_CACHE_TTL=0 ./uis
+                            # template list` forces a refetch. Needed because
+                            # the registry is cached for an hour, and after
+                            # editing a local file:// registry an operator
+                            # should not have to wait it out or guess.
     REGISTRY_URL_PRIMARY
     REGISTRY_URL_FALLBACK
     # lib/template.sh — makes `oras pull` read an OCI layout on disk instead of

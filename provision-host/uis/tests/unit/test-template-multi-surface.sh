@@ -495,6 +495,53 @@ fi
 # who mirrors the catalogue stub writes `install_type: application` in their
 # artifact and used to be refused for it.
 # ============================================================================
+# ============================================================================
+# The registry cache must be keyed by the URL, and file:// must not be cached
+#
+# 🔴 The cache was ONE fixed path for whatever registry was fetched last, with
+# a one-hour TTL and no override. So switching REGISTRY_URL_PRIMARY — the
+# documented way to test a template before it reaches the catalogue — silently
+# served the PREVIOUS registry for up to an hour, and the install resolved a pin
+# the operator never asked for.
+#
+# Found while switching a local registry between two atlas digests: the install
+# printed the old pin. It printed it, which is the only reason it was visible.
+# ============================================================================
+print_test_section "registry cache: keyed by URL, file:// never cached"
+
+start_test "two different registry URLs get two different cache paths"
+a=$( REGISTRY_URL_PRIMARY="https://example.test/a.json"; REGISTRY_CACHE=""; _registry_cache_path )
+b=$( REGISTRY_URL_PRIMARY="https://example.test/b.json"; REGISTRY_CACHE=""; _registry_cache_path )
+[[ -n "$a" && -n "$b" && "$a" != "$b" ]] && pass_test \
+    || fail_test "same cache path for two URLs: '$a' vs '$b'"
+
+start_test "the same URL is stable across calls"
+a1=$( REGISTRY_URL_PRIMARY="https://example.test/a.json"; REGISTRY_CACHE=""; _registry_cache_path )
+assert_equals "$a" "$a1" "stable for one URL"
+
+start_test "an explicit REGISTRY_CACHE still wins (tests pin the path)"
+got=$( REGISTRY_URL_PRIMARY="https://example.test/a.json"; REGISTRY_CACHE="/tmp/pinned.json"; _registry_cache_path )
+assert_equals "/tmp/pinned.json" "$got" "explicit override honoured"
+
+start_test "🔴 a file:// registry is never cacheable"
+( REGISTRY_URL_PRIMARY="file:///tmp/local-registry.json"; _registry_is_cacheable ) \
+    && fail_test "a local file must be read every time, not cached" || pass_test
+
+start_test "an https registry is cacheable"
+( REGISTRY_URL_PRIMARY="https://example.test/a.json"; _registry_is_cacheable ) && pass_test \
+    || fail_test "a remote registry should still be cached"
+
+start_test "a fresh cache is not reported for a file:// source"
+( REGISTRY_URL_PRIMARY="file:///tmp/local-registry.json"; _registry_cache_fresh ) \
+    && fail_test "file:// must never be considered fresh" || pass_test
+
+start_test "a missing file:// registry refuses instead of falling back to the catalogue"
+err=$( REGISTRY_URL_PRIMARY="file:///nonexistent/registry.json" \
+       REGISTRY_URL_FALLBACK="https://example.test/fallback.json" \
+       _fetch_registry 2>&1 ) && fail_test "must refuse" || true
+echo "$err" | grep -q "Refusing to fall back" && pass_test \
+    || fail_test "should refuse the fallback and say so: $err"
+
 print_test_section "definition kinds: all three spellings"
 
 if ! command -v yq >/dev/null 2>&1; then

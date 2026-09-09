@@ -31,7 +31,14 @@ fail() { echo -e "  Testing: $1... \033[0;31mFAIL\033[0m"; [ -n "${2:-}" ] && ec
 #   UIS_BASE, UIS_BASE_PATH  container filesystem layout, not an operator knob
 #   TEMPLATE_CACHE_DIR       a path inside the container
 #   UIS_BANNER_PRINTED       an internal once-only flag
-EXEMPT="UIS_BASE UIS_BASE_PATH TEMPLATE_CACHE_DIR UIS_BANNER_PRINTED"
+#   REGISTRY_CACHE           a path inside the container; a host value would
+#                            name a file the container cannot see. It exists as
+#                            an override so a TEST can pin the path, not so an
+#                            operator can. REGISTRY_CACHE_TTL, by contrast, IS
+#                            forwarded — `REGISTRY_CACHE_TTL=0 ./uis template
+#                            list` is a real thing to want after editing a
+#                            registry.
+EXEMPT="UIS_BASE UIS_BASE_PATH TEMPLATE_CACHE_DIR UIS_BANNER_PRINTED REGISTRY_CACHE"
 
 echo "=== Forwarded environment overrides ==="
 

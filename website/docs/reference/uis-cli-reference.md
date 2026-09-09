@@ -405,6 +405,16 @@ is enough to install a real published artifact before the catalogue carries it:
 ⚠️ Set it on the `./uis` command line — `docker exec` does not inherit the
 caller's environment, and the launcher forwards these by name.
 
+✅ **Editing that file and re-running takes effect immediately.** The registry
+cache is keyed by the URL, and a `file://` source is never cached — read every
+time, because reading a local file is free and caching it is what makes editing
+it confusing. A remote registry is still cached for an hour;
+`REGISTRY_CACHE_TTL=0` forces a refetch.
+
+⚠️ **A `file://` registry that cannot be read refuses; it does not fall back to
+the catalogue.** You asked for that file, so silently resolving a different
+entry from the published registry would be worse than failing.
+
 ### `init:` — a file or an ordered directory
 
 - **a file** — applied as-is
