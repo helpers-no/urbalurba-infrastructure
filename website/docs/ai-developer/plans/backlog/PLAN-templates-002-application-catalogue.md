@@ -4,7 +4,9 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-**Status:** Backlog
+**Status:** Backlog — Phases 1-4 shipped (1.6.17-1.6.23) and verified on a cluster by
+`imac` (`urb-agents#367`); Phase 5 and 6.2 open (6.1 done in 1.6.24). Phase 5 (`webapp`) waits on the Atlas
+frontend actually needing it.
 
 **Goal**: `./uis template install <application>` installs an application on any UIS
 installation from a catalogue entry, in one command, with the install definition
@@ -179,26 +181,26 @@ structurally cannot see.
 
 ### Phase 1 — pointer resolution and the allowlist
 
-- [ ] 1.1 Allowlist check: `ghcr.io/helpers-no/*`, `ghcr.io/terchris/*`, configurable
+- [x] 1.1 Allowlist check: `ghcr.io/helpers-no/*`, `ghcr.io/terchris/*`, configurable
       via `.uis.extend/`. Refuse anything else, naming the value and the allowlist
-- [ ] 1.2 Immutability check: refuse `latest`, refuse a bare branch name, require
+- [x] 1.2 Immutability check: refuse `latest`, refuse a bare branch name, require
       `v<date>-<sha>` shape for images. Same rule the Dagster code-location
       validator already applies, and it should share the message wording
-- [ ] 1.3 Fetch with `oras pull <artifact>@<digest>` into the cache. **Public:
+- [x] 1.3 Fetch with `oras pull <artifact>@<digest>` into the cache. **Public:
       anonymous — the platform token is never touched.** Private: `oras login
       ghcr.io` with `GITHUB_USERNAME`/`GITHUB_ACCESS_TOKEN` from the master secrets
       (verified present, and the same pair that becomes `ghcr-credentials`). When
       they are missing, **name the secret, not the URL**
-- [ ] 1.4 `oras` into `Dockerfile.uis-provision-host`. ⚠️ `build-uis-container.yml`
+- [x] 1.4 `oras` into `Dockerfile.uis-provision-host`. ⚠️ `build-uis-container.yml`
       rebuilds and `./uis pull` delivers it, so no new update path — **but the docs
       must say that installing an application needs a provision host from after
       that build**, because the failure otherwise is `oras: not found` on a machine
       whose `./uis version` looks current
-- [ ] 1.5 Cache under `/tmp/uis-templates/<id>/<digest>`. ⚠️ Keyed by **digest** now,
+- [x] 1.5 Cache under `/tmp/uis-templates/<id>/<digest>`. ⚠️ Keyed by **digest** now,
       which makes the cache correct by construction: two pins cannot collide. And
       **do not `rm -rf` a shared parent** — the current fixed-path `rm -rf` made two
       concurrent installs clobber each other (imac, `#335`)
-- [ ] 1.6 Unit tests with `oras --from-oci-layout` against a layout on disk: **no
+- [x] 1.6 Unit tests with `oras --from-oci-layout` against a layout on disk: **no
       network, no cluster.** A private-artifact fixture is one `oras push`
 - [ ] 1.7 ~~Git-form resolution~~ — **dropped (`#361`).** One source form. Publishing
       an artifact is one command from CI or a laptop, so a second code path buys
@@ -207,22 +209,22 @@ structurally cannot see.
 
 ### Phase 2 — `--dry-run`
 
-- [ ] 2.1 Print every `uis deploy|configure` that would run, in order, with resolved
+- [x] 2.1 Print every `uis deploy|configure` that would run, in order, with resolved
       params, and run nothing
-- [ ] 2.2 ⚠️ Resolution still happens *before* the plan can be printed, so
+- [x] 2.2 ⚠️ Resolution still happens *before* the plan can be printed, so
       `--dry-run` fetches the artifact. Say so in the output: it is a dry run of the
       *install*, not of the *fetch*. ✅ **But it no longer needs a cluster** — that
       was a cost of my pod proposal and Terje's decision removes it
-- [ ] 2.3 Falsification 1 is this phase's acceptance
+- [x] 2.3 Falsification 1 is this phase's acceptance
 
 ### Phase 3 — the code-location entry (TPL-F5)
 
-- [ ] 3.1 A `provides` entry may contribute a `code_location` to
+- [x] 3.1 A `provides` entry may contribute a `code_location` to
       `.uis.extend/dagster-code-locations.yaml`, then run `uis deploy dagster`
-- [ ] 3.2 Idempotent: re-installing at the same pin rewrites the same entry and
+- [x] 3.2 Idempotent: re-installing at the same pin rewrites the same entry and
       changes nothing. A new pin rolls the tag — which the Dagster playbook already
       handles, since Helm rolls only when the image field changes
-- [ ] 3.3 ⚠️ **Answer TPL-Q1/Q2 in this phase, not before**: whether this is a
+- [x] 3.3 ⚠️ **Answer TPL-Q1/Q2 in this phase, not before**: whether this is a
       generic "contribute to another service's extend file" mechanism or a
       code-location special case. Two other files would qualify
       (`prometheus-targets.yaml`, `monitors.yaml`), so the generic form is tempting
@@ -231,13 +233,13 @@ structurally cannot see.
 
 ### Phase 4 — `requires` / `exports` / `applications.yaml`
 
-- [ ] 4.1 Record installed applications, their pin and their exports in
+- [x] 4.1 Record installed applications, their pin and their exports in
       `.uis.extend/applications.yaml`
-- [ ] 4.2 `requires:` is checked at install and **refuses**, naming the missing
+- [x] 4.2 `requires:` is checked at install and **refuses**, naming the missing
       application and the command that installs it. Never auto-install
-- [ ] 4.3 `exports:` resolved from handler `--json` output (see §11 answer 3) and
+- [x] 4.3 `exports:` resolved from handler `--json` output (see §11 answer 3) and
       substituted as `{{ requires.<id>.<name> }}`
-- [ ] 4.4 `uis template remove <id>` — the inverse, refusing while another installed
+- [x] 4.4 `uis template remove <id>` — the inverse, refusing while another installed
       application requires it
 
 ### Phase 5 — `webapp`, a multi-instance service
@@ -256,8 +258,12 @@ structurally cannot see.
 
 ### Phase 6 — docs, and the version bump
 
-- [ ] 6.1 Extend the CLI reference: the catalogue, both pointer forms, the
-      allowlist, `--dry-run`, `requires`/`exports`, `webapp`
+- [x] 6.1 Extend the CLI reference: the catalogue, the source/pin/allowlist,
+      `--dry-run`, `code_location`, `requires`/`exports`, `applications.yaml`
+      (1.6.24). ⚠️ `webapp` is not in it because it does not exist — and the
+      stale admonition saying a code location *cannot* be declared was still
+      there two versions after Phase 3 shipped, which is how the unreachable
+      `remove` refusal was found
 - [ ] 6.2 A service page for `webapp`
 - [ ] 6.3 ⚠️ Version bump in the same PR as any shipped phase — the guard enforces it
 

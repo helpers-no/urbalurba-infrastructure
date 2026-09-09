@@ -398,7 +398,7 @@ fi
 print_test_section "Phase 4: applications.yaml, requires and exports"
 
 if ! command -v yq >/dev/null 2>&1; then
-    for _ in 1 2 3 4 5 6 7 8; do skip_test "Skipping phase-4 tests: yq not installed"; done
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do skip_test "Skipping phase-4 tests: yq not installed"; done
 else
     ad="$TMP/apps"; mkdir -p "$ad"
     D64="sha256:$(printf 'a%.0s' {1..64})"
@@ -441,6 +441,50 @@ else
     start_test "{{ requires.<id>.<key> }} resolves from the record"
     got=$( EXTEND_DIR="$ad"; _substitute_requires 'URL={{ requires.atlas.api-url }}/v1' )
     assert_equals "URL=http://x/v1" "$got" "substitution"
+
+    # ── the remove-side refusal, and the field it reads ───────────────────────
+    #
+    # 🔴 The four tests above all exercise the INSTALL side of `requires`. The
+    # REMOVE side reads `.requires` back out of the record — and nothing wrote
+    # it, for two shipped versions, so `remove` could never refuse while the
+    # CLI reference said it would. Same class as `_json_field` below: a guard
+    # whose input nothing produces. These assert the ROUND TRIP, because
+    # testing the reader alone is what let it through.
+    rd="$TMP/apps-remove"; mkdir -p "$rd"
+
+    start_test "🔴 the record carries requires, so the remove refusal has an input"
+    ( EXTEND_DIR="$rd"; _record_application atlas-frontend ghcr.io/terchris/atlas-web/uis \
+        v20260909-abc1234 "$D64" "webapp" "" '{}' "atlas" ) >/dev/null 2>&1
+    got=$( yq -r '.applications[0].requires | join(",")' "$rd/applications.yaml" )
+    assert_equals "atlas" "$got" "requires is recorded, not dropped"
+
+    start_test "_applications_requiring names the dependant that blocks removal"
+    got=$( EXTEND_DIR="$rd"; _applications_requiring atlas )
+    assert_equals "atlas-frontend" "$got" "the dependant is found"
+
+    start_test "an application nothing requires is not blocked"
+    got=$( EXTEND_DIR="$rd"; _applications_requiring atlas-frontend )
+    assert_equals "" "$got" "no dependants"
+
+    start_test "🔴 a prefix is not a dependency (contains() does substring matching)"
+    # ["atlas-data"] | contains(["atlas"]) is TRUE in both jq and yq. With
+    # contains(), removing `atlas` was blocked by an application requiring
+    # `atlas-data`, naming a dependant that does not depend on it.
+    ( EXTEND_DIR="$rd"; _record_application data-consumer ghcr.io/terchris/dc/uis \
+        v20260909-abc1234 "$D64" "" "" '{}' "atlas-data" ) >/dev/null 2>&1
+    got=$( EXTEND_DIR="$rd"; _applications_requiring atlas )
+    assert_equals "atlas-frontend" "$got" "only the exact dependant, not the prefix match"
+
+    start_test "and the exact longer name is still found"
+    got=$( EXTEND_DIR="$rd"; _applications_requiring atlas-data )
+    assert_equals "data-consumer" "$got" "exact match on the longer name"
+
+    start_test "the install reads requires from the definition as the record's CSV"
+    printf 'requires:\n  - application: atlas\n    provides: api-url\n  - application: other\n' \
+        > "$TMP/req4.yaml"
+    got=$(yq -r '[.requires // [] | .[] | .application // ""] | map(select(. != "")) | join(",")' \
+             "$TMP/req4.yaml")
+    assert_equals "atlas,other" "$got" "the call site's extraction"
 fi
 
 # ============================================================================

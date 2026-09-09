@@ -244,11 +244,114 @@ a typo such as `url-prefix` fails the install rather than being silently ignored
 | `url_prefix` | `--url-prefix` | PostgREST |
 | `namespace` | `--namespace` | ⚠️ **requires `secret_name_prefix`** |
 | `secret_name_prefix` | `--secret-name-prefix` | ⚠️ **requires `namespace`** |
+| `code_location` | *(not a flag)* | A **mapping**, not a scalar — see below. Dagster only |
 
 ⚠️ The resulting Secret is named **`<secret_name_prefix>-db`** and its key is
 always **`DATABASE_URL`** — see
 [Dagster's tenant contract](../services/analytics/dagster.md) for why that
 matters when another service consumes it.
+
+### `code_location:` — contributing to Dagster
+
+A `provides` entry for `dagster` may carry a `code_location` mapping. The entry
+is written into `.uis.extend/dagster-code-locations.yaml` and Dagster is
+redeployed, so an application that orchestrates with Dagster installs in **one**
+step:
+
+```yaml
+provides:
+  services:
+    - service: dagster
+      config:
+        code_location:
+          name: "{{ params.app_name }}-data"
+          image: ghcr.io/terchris/atlas-data
+          tag: v20260909-abc1234
+          module: atlas_data.definitions
+          why: "the ETL that fills api_v1"
+          env_secrets: "{{ params.app_name }}-database-db"
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `name` | yes | The code-location name. `{{ params.* }}` is substituted **before** it is recorded |
+| `image` | yes | |
+| `tag` | yes | ⚠️ Must be immutable — the same rule the Dagster validator applies |
+| `module` | yes | The Python module holding `Definitions` |
+| `why` | no | Free text, kept in the file for whoever reads it next |
+| `env_secrets` | no | A Secret whose keys become environment variables |
+
+Re-installing at the same pin rewrites the same entry and changes nothing —
+Helm rolls only when the image field changes. A new pin rolls the tag.
+
+⚠️ **This is a code-location writer, not a generic "contribute to another
+service's extend file" mechanism.** Two other files would qualify
+(`prometheus-targets.yaml`, `monitors.yaml`) and the generic form was declined:
+one consumer does not tell you the shape of three.
+
+### `requires:` and `exports:` — one application reading another
+
+An application may export values a dependant needs, and declare what it needs:
+
+```yaml
+# in atlas
+exports:
+  api-url: "http://api-{{ params.app_name }}.localhost"
+
+# in atlas-frontend
+requires:
+  - application: atlas
+    provides: api-url
+params:
+  api_base: "{{ requires.atlas.api-url }}"
+```
+
+⚠️ **`requires:` refuses, it never auto-installs.** A missing dependency names
+the application and the command that installs it, and stops. Installing one
+application must not silently install another: the second one's exposure
+decisions are a person's to make.
+
+The install records what it installed in `.uis.extend/applications.yaml` — the
+id, artifact, tag, **pin (digest)**, the services and code locations it created,
+its `requires`, and its resolved `exports`. That record is what makes `requires`
+a refusal rather than a guess: without it, "is atlas installed?" could only be
+answered by probing the cluster for symptoms, and a probe that infers presence
+eventually infers it wrongly.
+
+⚠️ **A fixture or stack template installed with no artifact pin writes no
+record**, and says so. A dependant's `requires:` will not see it.
+
+### The source, the allowlist and the pin
+
+An application's install definition is its **own OCI artifact**, published beside
+its image and pulled with `oras` on the provision host — no pod, no cluster, no
+docker:
+
+```yaml
+source:
+  artifact: ghcr.io/terchris/atlas-data/uis
+  tag: v20260909-abc1234
+  digest: sha256:<64 hex>
+```
+
+| Check | Behaviour |
+|---|---|
+| **allowlist** | `ghcr.io/helpers-no/*` and `ghcr.io/terchris/*` by default. Anything else is refused, naming the value and the allowlist. Extend it in `.uis.extend/template-allowlist.conf` — one glob per line |
+| **pin** | The **digest** is pulled; the tag is only shown. A missing or malformed digest is refused — a tag alone is not a pin, because tags are mutable at a registry |
+| **immutable tag** | `latest`, `main`, `master`, `head` and an empty tag are refused even with a valid digest |
+
+The allowlist is a security boundary, not a convenience: the definition is fed to
+`configure --init-file`, which applies SQL **as the database owner**. A merged
+typo in the catalogue must not be able to point a platform at a stranger's SQL.
+
+Private artifacts use `oras login ghcr.io` with `GITHUB_USERNAME` /
+`GITHUB_ACCESS_TOKEN` from the master secrets. Public artifacts are pulled
+anonymously — the platform token is never touched. When the credentials are
+missing, the error names **the secret, not the URL**.
+
+⚠️ **`oras` ships in `uis-provision-host` 1.6.16 and later.** Installing an
+application on an older provision host fails with `oras: not found` on a machine
+whose `./uis version` may look current — run `./uis pull`.
 
 ### `init:` — a file or an ordered directory
 
@@ -313,14 +416,12 @@ A multi-instance service declared with **no** `config:` is rejected: a per-app
 instance would have nothing to consume.
 
 :::warning A template does not yet cover every surface
-A **Dagster code location** cannot be declared in `provides:` — it is a
-contribution to another service's `.uis.extend` file, not a service instance. It
-remains a manual edit of `.uis.extend/dagster-code-locations.yaml` followed by
-`./uis deploy dagster`.
-
-So installing an application that orchestrates with Dagster is **two steps**, not
-one. Tracked as TPL-F5 in
-[INVESTIGATE-templates-multi-surface-application](../ai-developer/plans/backlog/INVESTIGATE-templates-multi-surface-application.md).
+A **web frontend** has no service to declare: `webapp` — a multi-instance
+Deployment + Service + IngressRoute — is Phase 5 of
+[PLAN-templates-002](../ai-developer/plans/backlog/PLAN-templates-002-application-catalogue.md)
+and is not built. An application whose frontend is a container image still
+deploys that half through ArgoCD, which is the documented path for workloads
+anyway; only the *route* is missing from `provides:`.
 :::
 
 ---

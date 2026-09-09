@@ -4,14 +4,15 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-**Status:** Backlog
+**Status:** Backlog — 1.6 and 1.7 done and shipped (1.6.24), found while doing
+something else; the deliberate pass (1.1-1.5) is still open, and 1.8 is new.
 
 **Goal**: Every path that runs only when something has already failed is
 exercised at least once, so a failure reports its cause instead of being
 swallowed by the mechanism meant to handle it.
 
 **Proposed by**: imac, `urb-agents#344`, after finding the third instance in one
-week. Its words: *"Each was invisible until something failed, and each made the
+week. **Seven instances as of 1.6.24** (see the table). Its words: *"Each was invisible until something failed, and each made the
 **next** failure harder to diagnose. Might be worth one deliberate pass over the
 error paths rather than three more of these arriving one at a time."*
 
@@ -26,10 +27,29 @@ error paths rather than three more of these arriving one at a time."*
 | `#344` | `uis verify postgrest` failed with only `{"censored": ...}` on a healthy instance | `no_log: true` without `failed_when` — the task aborted and took the reason with it |
 
 | `#367` | `template remove --purge` dropped the roles correctly, printed none of its reporting, skipped the record cleanup, and exited 4 | `x=$(… \| jq)` on a non-JSON stream — jq exits 4, the assignment inherits it, `set -e` kills the caller |
+| 1.6.24 | `template remove` **could never refuse** while a dependant was installed, though the CLI reference documented that it would | `_applications_requiring` read `.requires` out of the record; `_record_application` never wrote the field. A guard whose input nothing produces |
+| 1.6.24 | `_applications_requiring atlas` was **also** blocked by an application requiring `atlas-data` | `contains(["x"])` does **substring** matching on string array elements in jq and yq alike: `["atlas-data"] \| contains(["atlas"])` is true. A comparison that reads as membership and is not |
+| 1.6.24 | 28 of 68 template tests reported **neither pass nor fail**, and the suite still printed `ALL TESTS PASSED` | `assert_equals "$a" "$b" "msg"` returned 0 and moved no counter. Failures were reported, so the verdict held — but the count could not be reconciled, and an unreconcilable number is one nobody checks |
 
-Four different mechanisms, one shape: **error handling that looks correct,
-defeated by the semantics of the construct it is written in, in a branch nothing
-executes until something else is already wrong.**
+Seven instances, seven different mechanisms, one shape: **error handling that looks
+correct, defeated by the semantics of the construct it is written in, in a branch
+nothing executes until something else is already wrong.**
+
+🔴 **The fifth, sixth and seventh were found here, not by the tester** — the
+first three of the seven that were. Both came from the same move: reading the CLI reference against
+the code while finishing the docs task, and running the test suite with `yq` on
+`PATH` for the first time. Neither needed a cluster.
+
+⚠️ **The sixth is the class turned on the tests themselves**, and it is the one
+worth keeping in view: every fix above landed "with tests", and a third of the
+tests around the newest of them were reporting nothing at all. `yq` is not
+installed on the maintainer's host, so the `yq`-dependent half of that suite had
+never once run there — the guard against the guard was itself unexercised.
+
+**Consequence, now implemented in `tests/lib/test-framework.sh`:** assertions
+report their own success, outcomes are idempotent per test, and `print_summary`
+**fails the suite** when started tests do not equal passed + failed + skipped.
+A suite that cannot account for its own tests must not report green.
 
 🔴 **The fourth landed inside the fix for the third.** The `INCOMPLETE` branch
 existed to stop a purge failure being rounded up to success, and `set -e` meant
@@ -95,7 +115,41 @@ a lint.
       cannot, and why, so the next reader does not assume the lint is complete
 - [ ] 1.5 For the highest-value paths, **make them fail on purpose once** and read
       what a human gets. That is what found all three of these
-- [ ] 1.6 Version bump if any shipped path changes
+- [x] 1.6 🔴 **A guard whose input nothing produces.** New sub-class, found at
+      1.6.24: `_applications_requiring` read a `.requires` field that
+      `_record_application` never wrote, so `template remove` could not refuse
+      while a dependant was installed — and the CLI reference documented the
+      refusal as real. **Sweep for readers with no writer**: every field read out
+      of `.uis.extend/*.yaml` should be greppable to the code that writes it.
+      Fixed for this one, with tests asserting the ROUND TRIP (record it, then
+      read it back) rather than the reader alone — testing the reader is exactly
+      what let it through. ⚠️ The same function held an eighth-shaped defect one
+      line away: `contains([x])` substring-matching where membership was meant.
+      Both were in code the round-trip test was written for, and only the
+      falsification run — reverting the fix and watching the test fail — proved
+      the test could see either
+- [x] 1.7 🔴 **The tests themselves.** `assert_x "$a" "$b" "msg"` counted no
+      outcome, so 28 of 68 template tests reported neither pass nor fail while
+      the suite printed `ALL TESTS PASSED`. Now: assertions self-report,
+      outcomes are idempotent per test, and `print_summary` **fails** on any
+      started test that reported nothing. All 24 unit and static suites
+      reconcile after the change
+- [ ] 1.8 ⚠️ **`oras` is installed nowhere the tests run.** Measured on the
+      1.6.24 CI run, not assumed: GitHub Actions **has `yq`** and reports the
+      same `73 / 70 / 3 skipped` as a local run with `yq` on PATH, so the
+      `yq`-dependent tests are covered. The three `oras` resolution tests are
+      skipped in CI *and* locally — they have never run anywhere except a
+      provision host. Provision `oras` in the test job, or accept that pointer
+      resolution is only ever exercised on a cluster and say so where a reader
+      will see it.
+
+      🔴 **The local half was mine, not CI's.** `yq` is absent on the
+      maintainer's build host, so I had been reading `ALL TESTS PASSED` off runs
+      that silently skipped 12 assertions CI was running for me. That is a
+      verification defect in how I check my own work, not a coverage gap — and
+      it is worth separating, because the first version of this task claimed
+      the coverage gap and would have sent someone to fix CI
+- [ ] 1.9 Version bump if any shipped path changes
 
 ## Acceptance
 

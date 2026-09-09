@@ -6,8 +6,14 @@
 # Usage:
 #   source /path/to/test-framework.sh
 #   start_test "My test"
-#   assert_equals "expected" "actual" && pass_test || fail_test
+#   assert_equals "expected" "actual" && pass_test || fail_test   # explicit
+#   assert_equals "expected" "actual" "message"                    # self-reporting
 #   print_summary
+#
+# Both assertion forms are correct and both count exactly once: assertions
+# report their own success, and pass/fail/skip are idempotent per test.
+# ⚠️ Every started test MUST report an outcome — print_summary fails the suite
+# on any that does not, rather than counting it as neither.
 
 # Colors
 readonly TEST_RED='\033[0;31m'
@@ -20,9 +26,31 @@ readonly TEST_NC='\033[0m'
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
+TESTS_SKIPPED=0
 
 # Current test name (for error messages)
 CURRENT_TEST=""
+
+# 🔴 Whether the current test has reported an outcome yet.
+#
+# Two call-site forms are both in wide use and both correct:
+#
+#   assert_equals "$a" "$b" && pass_test || fail_test "..."   # explicit
+#   assert_equals "$a" "$b" "message"                         # self-reporting
+#
+# The second form used to count NOTHING on success: the assertion returned 0
+# and no counter moved. 28 of this repository's 68 template tests were in that
+# shape, so the summary read "Total: 68  Passed: 40  Failed: 0" — a third of
+# the suite neither passing nor failing, and the verdict line still saying ALL
+# TESTS PASSED. Failures were reported (the asserts call fail_test themselves),
+# so the verdict was never wrong; the COUNT was, which is worse in the one way
+# that matters here — a number nobody can reconcile is a number nobody checks.
+#
+# The fix: every assertion now reports its own success, and pass/fail/skip are
+# idempotent per test, so the explicit form does not double-count. print_summary
+# then reconciles run against passed+failed+skipped and FAILS on a gap, because
+# a started test that never reported an outcome is a broken test, not a pass.
+CURRENT_TEST_RESOLVED=0
 
 # ============================================================================
 # Test Runner Functions
@@ -33,18 +61,30 @@ CURRENT_TEST=""
 start_test() {
     CURRENT_TEST="$1"
     TESTS_RUN=$((TESTS_RUN + 1))
+    CURRENT_TEST_RESOLVED=0
     echo -n "  Testing: $1... "
 }
 
-# Mark current test as passed
+# Mark current test as passed. Idempotent: the first outcome for a test wins,
+# so `assert_x && pass_test` counts once, not twice.
 pass_test() {
+    [[ "$CURRENT_TEST_RESOLVED" == "1" ]] && return 0
+    CURRENT_TEST_RESOLVED=1
     TESTS_PASSED=$((TESTS_PASSED + 1))
     echo -e "${TEST_GREEN}PASS${TEST_NC}"
 }
 
 # Mark current test as failed
 # Usage: fail_test [error_message]
+#
+# ⚠️ A failure after an outcome is already recorded still PRINTS — silence there
+# would hide a real assertion — but does not move the counters twice.
 fail_test() {
+    if [[ "$CURRENT_TEST_RESOLVED" == "1" ]]; then
+        [[ -n "$1" ]] && echo -e "    ${TEST_RED}→ (also) $1${TEST_NC}"
+        return 0
+    fi
+    CURRENT_TEST_RESOLVED=1
     TESTS_FAILED=$((TESTS_FAILED + 1))
     echo -e "${TEST_RED}FAIL${TEST_NC}"
     if [[ -n "$1" ]]; then
@@ -54,7 +94,16 @@ fail_test() {
 
 # Skip a test
 # Usage: skip_test [reason]
+#
+# Callable with or without a preceding start_test — the skip loops that stand in
+# for a whole yq-dependent block use it bare — so it increments TESTS_RUN itself
+# in that case, keeping the summary's arithmetic reconcilable either way.
 skip_test() {
+    if [[ "$CURRENT_TEST_RESOLVED" == "1" || -z "$CURRENT_TEST" ]]; then
+        TESTS_RUN=$((TESTS_RUN + 1))
+    fi
+    CURRENT_TEST_RESOLVED=1
+    TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
     echo -e "${TEST_YELLOW}SKIP${TEST_NC}"
     if [[ -n "$1" ]]; then
         echo -e "    ${TEST_YELLOW}→ $1${TEST_NC}"
@@ -66,7 +115,18 @@ skip_test() {
 print_summary() {
     echo ""
     echo "────────────────────────────────────"
-    echo "Total: $TESTS_RUN  Passed: $TESTS_PASSED  Failed: $TESTS_FAILED"
+    echo "Total: $TESTS_RUN  Passed: $TESTS_PASSED  Failed: $TESTS_FAILED  Skipped: $TESTS_SKIPPED"
+
+    # 🔴 Reconcile. A test that started and reported no outcome is a broken
+    # test, and a suite that cannot account for its own tests must not report
+    # green — that is the same rounding-up this repository has spent a week
+    # removing from `uis` itself.
+    local accounted=$((TESTS_PASSED + TESTS_FAILED + TESTS_SKIPPED))
+    if [[ "$accounted" -ne "$TESTS_RUN" ]]; then
+        echo -e "${TEST_RED}UNACCOUNTED: $((TESTS_RUN - accounted)) test(s) started and reported no outcome${TEST_NC}"
+        echo "  Each needs pass_test, fail_test, skip_test, or a self-reporting assert_*."
+        return 1
+    fi
 
     if [[ "$TESTS_FAILED" -eq 0 ]]; then
         echo -e "${TEST_GREEN}ALL TESTS PASSED${TEST_NC}"
@@ -97,7 +157,7 @@ assert_equals() {
     local message="${3:-Expected '$expected', got '$actual'}"
 
     if [[ "$expected" == "$actual" ]]; then
-        return 0
+        pass_test; return 0
     else
         fail_test "$message"
         return 1
@@ -112,7 +172,7 @@ assert_not_equals() {
     local message="${3:-Values should not be equal: '$actual'}"
 
     if [[ "$unexpected" != "$actual" ]]; then
-        return 0
+        pass_test; return 0
     else
         fail_test "$message"
         return 1
@@ -126,7 +186,7 @@ assert_not_empty() {
     local message="${2:-Value is empty}"
 
     if [[ -n "$value" ]]; then
-        return 0
+        pass_test; return 0
     else
         fail_test "$message"
         return 1
@@ -140,7 +200,7 @@ assert_empty() {
     local message="${2:-Value should be empty but was: '$value'}"
 
     if [[ -z "$value" ]]; then
-        return 0
+        pass_test; return 0
     else
         fail_test "$message"
         return 1
@@ -151,7 +211,7 @@ assert_empty() {
 # Usage: assert_success command [args...]
 assert_success() {
     if "$@" >/dev/null 2>&1; then
-        return 0
+        pass_test; return 0
     else
         fail_test "Command failed: $*"
         return 1
@@ -165,7 +225,7 @@ assert_failure() {
         fail_test "Command should have failed: $*"
         return 1
     else
-        return 0
+        pass_test; return 0
     fi
 }
 
@@ -176,7 +236,7 @@ assert_file_exists() {
     local message="${2:-File does not exist: $file}"
 
     if [[ -f "$file" ]]; then
-        return 0
+        pass_test; return 0
     else
         fail_test "$message"
         return 1
@@ -190,7 +250,7 @@ assert_dir_exists() {
     local message="${2:-Directory does not exist: $dir}"
 
     if [[ -d "$dir" ]]; then
-        return 0
+        pass_test; return 0
     else
         fail_test "$message"
         return 1
@@ -204,7 +264,7 @@ assert_executable() {
     local message="${2:-File is not executable: $file}"
 
     if [[ -x "$file" ]]; then
-        return 0
+        pass_test; return 0
     else
         fail_test "$message"
         return 1
@@ -219,7 +279,7 @@ assert_contains() {
     local message="${3:-String does not contain '$needle'}"
 
     if [[ "$haystack" == *"$needle"* ]]; then
-        return 0
+        pass_test; return 0
     else
         fail_test "$message"
         return 1
@@ -234,7 +294,7 @@ assert_matches() {
     local message="${3:-String does not match pattern '$regex'}"
 
     if [[ "$string" =~ $regex ]]; then
-        return 0
+        pass_test; return 0
     else
         fail_test "$message"
         return 1
@@ -248,7 +308,7 @@ assert_function_exists() {
     local message="${2:-Function not defined: $func}"
 
     if type "$func" &>/dev/null; then
-        return 0
+        pass_test; return 0
     else
         fail_test "$message"
         return 1
@@ -263,7 +323,7 @@ assert_var_defined() {
 
     # Use declare -p to check if variable exists (works for arrays too)
     if declare -p "$var" &>/dev/null; then
-        return 0
+        pass_test; return 0
     else
         fail_test "$message"
         return 1

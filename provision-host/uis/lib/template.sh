@@ -690,7 +690,7 @@ _application_export() {
 # the code-location writer, so a re-install converges rather than duplicating.
 # Values go through strenv() for the same reason.
 _record_application() {
-    local app_id="$1" artifact="$2" tag="$3" digest="$4" services="$5" code_locations="$6" exports_json="${7:-{\}}"
+    local app_id="$1" artifact="$2" tag="$3" digest="$4" services="$5" code_locations="$6" exports_json="${7:-{\}}" requires_csv="${8:-}"
     local file
     file="$(_applications_file)"
     _applications_init || return 1
@@ -705,12 +705,14 @@ _record_application() {
             "installed": strenv(installed_at),
             "services":       (strenv(services)       | split(",") | map(select(. != ""))),
             "code_locations": (strenv(code_locations) | split(",") | map(select(. != ""))),
+            "requires":       (strenv(requires_csv)   | split(",") | map(select(. != ""))),
             "exports":   (strenv(exports_json) | from_json)
           }])'
 
     if ! app_id="$app_id" artifact="$artifact" tag="$tag" digest="$digest" \
          installed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
          services="$services" code_locations="$code_locations" \
+         requires_csv="$requires_csv" \
          exports_json="$exports_json" \
          yq -i "$expr" "$file"; then
         log_error "Failed to record application '$app_id' in $file"
@@ -729,12 +731,27 @@ _forget_application() {
 
 # Which installed applications declare a requires on <id>?
 # Used by `template remove` to refuse while a dependant is still installed.
+#
+# 🔴 This reads `.requires` from the RECORD, so `_record_application` must write
+# it. It did not, for two shipped versions: the field was read by a refusal that
+# could therefore never fire, while the CLI reference documented the refusal as
+# real. Fifth instance of the class in `PLAN-system-error-paths-audit` — a guard
+# whose input nothing produces — and the reason the tests below assert the
+# round trip (record it, then read it back) rather than only the reader.
 _applications_requiring() {
     local id="$1" file
     file="$(_applications_file)"
     [[ -f "$file" ]] || return 0
+    # ⚠️ NOT `contains([strenv(app_id)])`. In jq and yq alike, `contains` does
+    # SUBSTRING matching on string elements: ["atlas-data"] | contains(["atlas"])
+    # is true. So removing `atlas` would have been blocked by an application that
+    # requires `atlas-data`, naming a dependant that does not depend on it — and
+    # `atlas-data` itself would not have been protected from `atlas`'s requires,
+    # because the substring relation runs one way only. Exact membership.
     app_id="$id" yq -r \
-        '[.applications[] | select((.requires // []) | contains([strenv(app_id)])) | .id] | join(", ")' \
+        '[.applications[]
+          | select([.requires // [] | .[] | select(. == strenv(app_id))] | length > 0)
+          | .id] | join(", ")' \
         "$file" 2>/dev/null
 }
 
@@ -1611,7 +1628,7 @@ cmd_template_install() {
     done <<< "$plan"
 
     # Record what was installed, at which pin, with its exports resolved.
-    local inst_services inst_cls exports_json
+    local inst_services inst_cls exports_json inst_requires
     inst_services=$(echo "$plan" | awk -F'|' 'NF>1{printf "%s%s", sep, $2; sep=","}')
     # ⚠️ SUBSTITUTED, not raw. The conf file holds the declaration verbatim —
     # `{{ params.app_name }}-data` — and recording that meant `template remove`
@@ -1629,10 +1646,14 @@ cmd_template_install() {
                    [[ -n "$n" ]] && _substitute_params "$n" "$params_file"
                done | paste -sd, -)
     exports_json=$(_collect_exports "$info_file" "$params_file")
+    # What this application requires, recorded so `remove` can refuse to take a
+    # dependency out from under it. Read from the definition, never inferred.
+    inst_requires=$(yq -r '[.requires // [] | .[] | .application // ""] | map(select(. != "")) | join(",")' \
+                       "$info_file" 2>/dev/null) || inst_requires=""
 
     if [[ -n "${SOURCE_ARTIFACT:-}" ]]; then
         _record_application "$template_id" "$SOURCE_ARTIFACT" "$SOURCE_TAG" "$SOURCE_DIGEST" \
-            "$inst_services" "$inst_cls" "$exports_json" || return 1
+            "$inst_services" "$inst_cls" "$exports_json" "$inst_requires" || return 1
     else
         # A catalogue-less install (a local fixture, or a stack template that is
         # not an application) has no pin to record. Say so rather than writing a
