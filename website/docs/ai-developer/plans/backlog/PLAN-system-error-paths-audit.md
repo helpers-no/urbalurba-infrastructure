@@ -12,7 +12,7 @@ exercised at least once, so a failure reports its cause instead of being
 swallowed by the mechanism meant to handle it.
 
 **Proposed by**: imac, `urb-agents#344`, after finding the third instance in one
-week. **Twelve instances as of 1.6.31** (see the table). Its words: *"Each was invisible until something failed, and each made the
+week. **Thirteen instances as of 1.6.34** (see the table). Its words: *"Each was invisible until something failed, and each made the
 **next** failure harder to diagnose. Might be worth one deliberate pass over the
 error paths rather than three more of these arriving one at a time."*
 
@@ -29,13 +29,14 @@ error paths rather than three more of these arriving one at a time."*
 | `#367` | `template remove --purge` dropped the roles correctly, printed none of its reporting, skipped the record cleanup, and exited 4 | `x=$(… \| jq)` on a non-JSON stream — jq exits 4, the assignment inherits it, `set -e` kills the caller |
 | 1.6.24 | `template remove` **could never refuse** while a dependant was installed, though the CLI reference documented that it would | `_applications_requiring` read `.requires` out of the record; `_record_application` never wrote the field. A guard whose input nothing produces |
 | 1.6.24 | `_applications_requiring atlas` was **also** blocked by an application requiring `atlas-data` | `contains(["x"])` does **substring** matching on string array elements in jq and yq alike: `["atlas-data"] \| contains(["atlas"])` is true. A comparison that reads as membership and is not |
+| 1.6.34 | 🔴 A clean install **created a Secret and never wired it** — `EXIT=0`, schema and grants correct, API answering, and the application unable to reach its own database | `env_secrets` read as a list only; a scalar errored inside `join()` and `2>/dev/null` swallowed it. **My docs showed the scalar, my code took the list, my fixture used the list** |
 | 1.6.31 | 🔴 **`log_warn`, `log_info`, `log_success`, `log_debug` and `log_progress` all wrote to STDOUT.** Only `log_error` went to stderr, so any diagnostic on a `--json` path corrupted the document a caller was capturing | A *successful* `configure` reported as a failure: the rotation warning landed ahead of the JSON, `_json_field` survived the parse but read an empty status, and the `*)` branch fired |
 | 1.6.29 | `make-fixture.sh` printed `./uis template install uisfix` and, two lines below, *"only works because make-fixture adds it"* — **make-fixture added nothing**; every command it printed failed on the allowlist | A script asserting an action it does not take. The class, in a test fixture: the thing meant to catch this had it |
 | 1.6.28 | The registry cache was **one file for any URL**, so switching `REGISTRY_URL_PRIMARY` served the previous registry for up to an hour | A cache keyed by nothing, in the documented testing path |
 | 1.6.27 | 🔴 `configure postgresql --init-file -` **discarded the SQL** on a database that already existed, exit 0 | Init is applied at line 273; the already-exists branch returns at 231/234. The whole application-catalogue install-time guarantee, undelivered and unreported |
 | 1.6.24 | 28 of 68 template tests reported **neither pass nor fail**, and the suite still printed `ALL TESTS PASSED` | `assert_equals "$a" "$b" "msg"` returned 0 and moved no counter. Failures were reported, so the verdict held — but the count could not be reconciled, and an unreconcilable number is one nobody checks |
 
-Twelve instances, twelve different mechanisms, one shape: **error handling that looks
+Thirteen instances, thirteen different mechanisms, one shape: **error handling that looks
 correct, defeated by the semantics of the construct it is written in, in a branch
 nothing executes until something else is already wrong.**
 
@@ -161,6 +162,17 @@ code-location name (1.6.21), `app_name` (1.6.29), the database name (1.6.31) —
 each found only when a real input made two "equal" things differ. **When a value
 is computed in two places, write down which one is authoritative before an input
 tells you.**
+
+🔴 **Third time, 1.6.34, and now with a rule.** The fixture declared
+`env_secrets` as a **list**; atlas declared a **scalar**; only the list worked.
+The fixture had picked the working side of a difference again — after `id` vs
+`app_name`, and after the id-and-app_name conflation before that.
+
+**The rule, generalised past "make the pair differ":** when a field accepts
+more than one shape, the fixture must use **the shape the documentation shows a
+tenant**, not the shape the code was written against. Mine showed a scalar and
+tested a list. The fixture now declares no `env_secrets` at all, which is the
+recommended shape, and both explicit forms are covered by unit tests instead.
 
 **A fixture that conflates two values cannot test the difference between them.**
 The catalogue fixture now sets `id: uisfix` and `app_name: uisfixapp` on

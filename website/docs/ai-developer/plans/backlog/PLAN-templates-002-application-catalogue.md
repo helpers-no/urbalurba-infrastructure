@@ -385,6 +385,33 @@ ten `uis deploy dagster` runs in total.
 hyphenated `app_name`, and one re-read of the removal plan. Everything else in
 §10 that does not need `webapp` is falsified.
 
+## 🔴 Acceptance requires a machine that has never seen the application
+
+Added 2026-09-09 after a clean-slate run found what four rounds on a live
+cluster could not (`imac`, `urb-agents#491`, on a teardown Terje authorised).
+
+`uis template install atlas` exited **0** with the schema, the grants and the
+API all correct — and the code location came up with no `envFrom`, so a freshly
+installed application could not reach the database UIS had just created for it.
+Every earlier round passed because that cluster carried a **hand-written
+pre-catalogue code-location entry** supplying the Secret. Nothing anyone
+asserted needed the ETL, so nothing noticed.
+
+imac's summary, which is the rule:
+
+> *the cleanest example yet of a test passing because of something the test did
+> not install.*
+
+**So this is an acceptance requirement, not a habit.** Falsifications 2–6 are
+only proven on an installation that has never held the application under test.
+A cluster that has is a cluster that may be supplying part of the answer, and
+the failure mode is a green run — which is the one you cannot investigate.
+
+⚠️ It also bounds what the build host can do. Everything up to and including
+the written code-location entry is reproducible without a cluster and was
+reproduced. **What is not reproducible is the state a previous install left
+behind**, and that is precisely where this defect lived.
+
 ## Acceptance — the spec's §10, unchanged
 
 All six falsifications are this plan's acceptance criteria. Two notes on how they
