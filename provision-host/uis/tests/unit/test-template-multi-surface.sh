@@ -443,4 +443,45 @@ else
     assert_equals "URL=http://x/v1" "$got" "substitution"
 fi
 
+# ============================================================================
+# _json_field — the guard that the previous guard needed
+#
+# `x=$(echo "$j" | jq -r '.f')` aborts under `set -e` when $j is not JSON: jq
+# exits 4 and the assignment inherits it, so no branch after it runs. That
+# killed the purge reporting AND _forget_application, inside the very branch
+# written to stop a failure being rounded up to success (imac, urb-agents#367 —
+# the fourth instance of this class, and the first to land inside a fix for the
+# third).
+#
+# ⚠️ The first case is the one that matters: a handler that writes a human line
+# to stderr before its JSON produces exactly that mixed stream when the caller
+# merges the streams. Asserting on it directly is what imac said would have
+# caught all four in their own domains.
+# ============================================================================
+print_test_section "_json_field: parsing survives non-JSON"
+
+start_test "a clean JSON object yields the field"
+assert_equals "purged" "$(_json_field '{"status":"purged"}' '.status')" "clean json"
+
+start_test "🔴 a human line before the JSON does not abort the caller"
+mixed='Removing secret from namespace postgrest...
+{"status":"purged","roles_dropped":["a","b"]}'
+out=$( set -e; v="$(_json_field "$mixed" '.status')"; echo "REACHED:$v" )
+echo "$out" | grep -q "REACHED:" && pass_test || fail_test "caller aborted: '$out'"
+
+start_test "the caller reaches its fallback branch instead of dying"
+out=$( set -e; v="$(_json_field 'not json at all' '.status')"; \
+       if [[ -z "$v" ]]; then echo "FALLBACK"; else echo "GOT:$v"; fi )
+assert_equals "FALLBACK" "$out" "fallback branch is reachable"
+
+start_test "an absent field yields empty, not the string 'null'"
+assert_equals "" "$(_json_field '{"status":"ok"}' '.detail')" "absent field"
+
+start_test "empty input yields empty and succeeds"
+out=$( set -e; v="$(_json_field '' '.status')"; echo "OK:$v" )
+assert_equals "OK:" "$out" "empty input"
+
+start_test "a jq expression with a filter still works"
+assert_equals "a, b" "$(_json_field '{"roles_dropped":["a","b"]}' '(.roles_dropped // []) | join(", ")')" "filter expression"
+
 print_summary

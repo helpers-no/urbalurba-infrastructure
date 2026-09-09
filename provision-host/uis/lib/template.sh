@@ -376,8 +376,9 @@ _resolve_definition() {
 # missing them fails naming the field and whose job it is, so the error is
 # actionable instead of a null dereference three functions later.
 _template_source_field() {
-    local template="$1" field="$2"
-    echo "$template" | jq -r --arg f "$field" '.source[$f] // empty' 2>/dev/null
+    local template="$1" field="$2" out
+    out=$(printf '%s' "$template" | jq -r --arg f "$field" '.source[$f] // empty' 2>/dev/null) || out=""
+    printf '%s' "$out"
 }
 
 _require_source_fields() {
@@ -617,6 +618,27 @@ _resolve_provides() {
     done <<< "$reversed"
 
     echo "$dedup" | grep -v '^$' | sort -t'|' -k1,1n
+}
+
+# Read one field from a JSON string, safely under `set -e`.
+#
+# ⚠️ `x=$(echo "$j" | jq -r '.f')` ABORTS the function when $j is not JSON: jq
+# exits 4, the assignment inherits it, and `set -e` kills the caller before any
+# branch that would have handled it. That is how `template remove --purge`
+# dropped the roles correctly, printed none of its reporting, skipped
+# _forget_application, and exited 4 (imac, urb-agents#367).
+#
+# The failure was *inside the guard written to stop the previous one*: the
+# INCOMPLETE branch existed to keep a failure from being rounded up to success,
+# and could never run. So the guard is a function now, with a test, rather than
+# a line repeated at six call sites.
+#
+# Returns empty and succeeds when the input is not JSON or the field is absent.
+# A caller that needs to tell those apart should test the value, not the status.
+_json_field() {
+    local json="$1" path="$2" out
+    out=$(printf '%s' "$json" | jq -r "$path // empty" 2>/dev/null) || out=""
+    printf '%s' "$out"
 }
 
 # ─── The installed-applications record ────────────────────────────────────────
@@ -1132,24 +1154,31 @@ cmd_template_remove() {
             # the whole defect was assuming a call did what its name suggested.
             if [[ "$purge" == true ]]; then
                 log_info "Purging per-app roles and Secret for $svc..."
-                local purge_out purge_rc=0
-                purge_out=$(uis configure "$svc" --app "$template_id" --purge --json 2>&1) || purge_rc=$?
+                # ⚠️ NO `2>&1`. `configure --purge --json` writes a human line to
+                # stderr before the JSON, so merging the streams made $purge_out
+                # not-JSON — which is what tripped the parse. stderr is captured
+                # separately so the failure branch can still show it.
+                local purge_out purge_err purge_rc=0
+                purge_err="$(mktemp)"
+                purge_out=$(uis configure "$svc" --app "$template_id" --purge --json 2>"$purge_err") || purge_rc=$?
                 local purge_status
-                purge_status=$(echo "$purge_out" | jq -r '.status // empty' 2>/dev/null)
+                purge_status="$(_json_field "$purge_out" '.status')"
                 case "$purge_status" in
                     purged)
-                        echo "  dropped: $(echo "$purge_out" | jq -r '(.roles_dropped // []) | join(", ")' 2>/dev/null)" >&2
-                        echo "  removed: $(echo "$purge_out" | jq -r '.secret_removed // "-"' 2>/dev/null)" >&2
+                        echo "  dropped: $(_json_field "$purge_out" '(.roles_dropped // []) | join(", ")')" >&2
+                        echo "  removed: $(_json_field "$purge_out" '.secret_removed')" >&2
                         results+="$svc: purged"$'\n'
                         ;;
                     *)
                         log_warn "Purge of $svc did not report success (exit $purge_rc)."
-                        echo "  $purge_out" >&2
+                        [[ -n "$purge_out" ]] && echo "  stdout: $purge_out" >&2
+                        [[ -s "$purge_err" ]] && echo "  stderr: $(cat "$purge_err")" >&2
                         echo "  Roles and Secret for '$template_id' may still exist. To finish:" >&2
                         echo "    ./uis configure $svc --app $template_id --purge" >&2
                         results+="$svc: purge INCOMPLETE"$'\n'
                         ;;
                 esac
+                rm -f "$purge_err"
             fi
         fi
     done <<< "$svcs"
@@ -1237,7 +1266,7 @@ cmd_template_install() {
     # has no artifact to point at, and removing its path would break the one
     # template the catalogue currently has.
     local template_dir template_kind
-    template_kind=$(echo "$template" | jq -r '.templateKind // .kind // empty')
+    template_kind="$(_json_field "$template" '.templateKind // .kind')"
 
     if [[ "$template_kind" == "application" ]]; then
         _require_source_fields "$template" "$template_id" || return 1
@@ -1245,7 +1274,7 @@ cmd_template_install() {
         SOURCE_TAG=$(_template_source_field "$template" tag)
         SOURCE_DIGEST=$(_template_source_field "$template" digest)
         local visibility
-        visibility=$(echo "$template" | jq -r '.visibility // "public"')
+        visibility="$(_json_field "$template" '.visibility')"; visibility="${visibility:-public}"
 
         template_dir=$(_resolve_definition "$template_id" \
             "$SOURCE_ARTIFACT" "$SOURCE_TAG" "$SOURCE_DIGEST" "$visibility") || return 1
@@ -1255,7 +1284,7 @@ cmd_template_install() {
         fi
     else
         local folder
-        folder=$(echo "$template" | jq -r '.folder // empty')
+        folder="$(_json_field "$template" '.folder')"
         if [[ -z "$folder" ]]; then
             log_error "Template '$template_id' is not an application and has no folder field."
             echo "  An application entry needs templateKind: application and a source;" >&2
@@ -1537,7 +1566,7 @@ cmd_template_install() {
 
             # Check result status
             local status
-            status=$(echo "$result" | jq -r '.status' 2>/dev/null)
+            status="$(_json_field "$result" '.status')"
             case "$status" in
                 ok|already_configured)
                     results+="$svc: $status"$'\n'
@@ -1553,7 +1582,7 @@ cmd_template_install() {
                     # the whole answer — surface it rather than making a reader
                     # parse raw output.
                     local detail
-                    detail=$(echo "$result" | jq -r '.detail // empty' 2>/dev/null || true)
+                    detail="$(_json_field "$result" '.detail')"
                     [[ -n "$detail" ]] && echo "  $detail" >&2
                     echo "Raw output: $result" >&2
                     return 1

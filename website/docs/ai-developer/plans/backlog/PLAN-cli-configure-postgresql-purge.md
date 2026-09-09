@@ -61,6 +61,19 @@ Three things need deciding, and none is obvious:
 - [ ] 1.1 Decide question 1. ⚠️ **A refusal that prints the exact SQL may be the
       right answer** — it is honest, it needs no new destructive path, and it is
       strictly better than today's silence. Do not assume the answer is "build it"
+
+      🟢 **Independently endorsed by the tester** (imac, `urb-agents#367`), which
+      matters because it is a second voice and not an echo of mine:
+
+      > *"`configure postgresql` created the database but not the data in it …
+      > so the question of who may destroy it is not answerable from inside the
+      > CLI. **A refusal that prints the exact SQL is a real answer**, not a
+      > placeholder; it puts the destructive act in a human's hands with no
+      > ambiguity about what it will destroy. I would ship that and treat the
+      > automated drop as the thing needing justification."*
+
+      That inverts the default: the burden is on building the drop, not on
+      declining to
 - [ ] 1.2 If dropping: `configure postgresql --app <n> --purge`, refusing while
       any other app's Secret references the database, and requiring `--yes`
 - [ ] 1.3 Remove the `<prefix>-db` Secret, or state why not (question 3)

@@ -25,9 +25,32 @@ error paths rather than three more of these arriving one at a time."*
 | `#335` | Every `configure` failure in a template install was silent; a one-line usage error produced a 135-line log with no cause | `set -e` aborts on `x=$(cmd)` before `x_exit=$?` is read — the handler was unreachable |
 | `#344` | `uis verify postgrest` failed with only `{"censored": ...}` on a healthy instance | `no_log: true` without `failed_when` — the task aborted and took the reason with it |
 
-Three different mechanisms, one shape: **error handling that looks correct,
+| `#367` | `template remove --purge` dropped the roles correctly, printed none of its reporting, skipped the record cleanup, and exited 4 | `x=$(… \| jq)` on a non-JSON stream — jq exits 4, the assignment inherits it, `set -e` kills the caller |
+
+Four different mechanisms, one shape: **error handling that looks correct,
 defeated by the semantics of the construct it is written in, in a branch nothing
 executes until something else is already wrong.**
+
+🔴 **The fourth landed inside the fix for the third.** The `INCOMPLETE` branch
+existed to stop a purge failure being rounded up to success, and `set -e` meant
+it could never say so. That is the strongest argument in this plan and it was not
+available when the plan was written.
+
+⚠️ **imac's diagnosis of the class, which is better than "be careful":**
+
+> *"Each one is a different construct … What they share is that **the guard and
+> the guarded thing are written in the same breath, and only the guarded thing
+> gets exercised.**"*
+
+And the consequence for task 1.5, in its words:
+
+> *"This purge branch would have been caught by one test that runs `--purge`
+> against an app with roles and asserts the exit code is 0 — which is the same
+> test that would have caught the previous three in their own domains."*
+
+So the highest-value work here is not reading code. It is **running each path in
+its failure mode once and asserting the exit code**, which no amount of review
+substitutes for.
 
 ⚠️ **Each one made the next failure harder to diagnose**, which is the compounding
 part and the reason this is worth a pass rather than three more fixes. The
