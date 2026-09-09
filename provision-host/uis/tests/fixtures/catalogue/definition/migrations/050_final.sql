@@ -1,0 +1,1 @@
+ALTER TABLE apiv1.t ADD COLUMN IF NOT EXISTS b text;

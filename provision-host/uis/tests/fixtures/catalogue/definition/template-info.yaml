@@ -1,0 +1,50 @@
+# Fixture install definition — exercises the FULL config: vocabulary.
+#
+# Not a real application: it exists so `uis template install` can be falsified
+# end to end without waiting on a tenant to publish an artifact and on
+# dev-templates to emit source.* in the registry.
+#
+# Shaped exactly like atlas's declaration (urb-agents#159), so a pass here is
+# evidence about that install and not about a toy.
+id: uisfix
+version: "1.0.0"
+name: UIS Catalogue Fixture
+kind: application
+description: Fixture application exercising every config key the runner supports
+abstract: >
+  A database with ordered migrations, a Dagster code location, and a per-app
+  PostgREST instance — the three surfaces templates-001 and 002 were built for.
+category: DATA
+tags: [fixture, postgresql, postgrest, dagster]
+maintainers: [tor-agent]
+
+params:
+  app_name: uisfix
+
+exports:
+  api-url: "http://api-{{ params.app_name }}.localhost"
+
+provides:
+  services:
+    - service: postgresql
+      config:
+        database: "{{ params.app_name }}"
+        init: migrations/
+        namespace: dagster
+        secret_name_prefix: "{{ params.app_name }}-database"
+
+    - service: dagster
+      config:
+        code_location:
+          name: "{{ params.app_name }}-data"
+          image: ghcr.io/terchris/atlas-data
+          tag: v20260906-5d77b13
+          module: atlas_data.definitions
+          why: "Fixture code location — proves a template can register one"
+          env_secrets:
+            - "{{ params.app_name }}-database-db"
+
+    - service: postgrest
+      config:
+        schemas: apiv1
+        url_prefix: "api-{{ params.app_name }}"

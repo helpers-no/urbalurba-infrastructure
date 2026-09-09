@@ -417,10 +417,24 @@ _validate_template_info() {
         return 1
     fi
 
-    local install_type
+    # ⚠️ TPL-Q5, answered by running it: `install_type: stack` is NOT the right
+    # discriminator for an application, and requiring it rejected the first
+    # fixture I wrote from the spec's own §5 shape — which declares
+    # `kind: application` and no install_type.
+    #
+    # So both are accepted, and they mean different things:
+    #   install_type: stack   Terje's April format, a catalogue-resident template
+    #   kind: application     an application shipping its own definition (#361)
+    #
+    # Not collapsed into one field: the two are resolved differently (folder
+    # checkout vs oras pull) and a reader needs to be able to tell which kind of
+    # thing they are looking at from the file itself, without the registry.
+    local install_type kind
     install_type=$(_yaml_field "$info_file" ".install_type")
-    if [[ "$install_type" != "stack" ]]; then
-        log_error "Expected install_type: stack, got: $install_type"
+    kind=$(_yaml_field "$info_file" ".kind")
+    if [[ "$install_type" != "stack" && "$kind" != "application" ]]; then
+        log_error "A definition needs either 'install_type: stack' or 'kind: application'."
+        echo "  Got install_type='$install_type' kind='$kind'." >&2
         return 1
     fi
 
@@ -1127,19 +1141,50 @@ cmd_template_install() {
         return 1
     fi
 
-    local folder
-    folder=$(echo "$template" | jq -r '.folder // empty')
-    if [[ -z "$folder" ]]; then
-        log_error "Template '$template_id' has no folder field in registry"
-        return 1
-    fi
+    # ─── resolve the definition ───────────────────────────────────────────────
+    #
+    # Two kinds of entry, and the discriminator is `templateKind`:
+    #
+    #   application  — ships its definition as its OWN OCI artifact beside its
+    #                  image; resolved with `oras pull` at a digest (#361).
+    #   stack        — Terje's April-format templates that live in the catalogue
+    #                  repository itself (e.g. postgresql-demo); resolved by a
+    #                  sparse checkout of `folder`.
+    #
+    # The git form was dropped for APPLICATIONS, not for these: a stack template
+    # has no artifact to point at, and removing its path would break the one
+    # template the catalogue currently has.
+    local template_dir template_kind
+    template_kind=$(echo "$template" | jq -r '.templateKind // .kind // empty')
 
-    # Fetch the template folder
-    local template_dir
-    template_dir=$(_fetch_template_folder "$folder")
-    if [[ -z "$template_dir" || ! -d "$template_dir" ]]; then
-        log_error "Failed to fetch template folder"
-        return 1
+    if [[ "$template_kind" == "application" ]]; then
+        _require_source_fields "$template" "$template_id" || return 1
+        SOURCE_ARTIFACT=$(_template_source_field "$template" artifact)
+        SOURCE_TAG=$(_template_source_field "$template" tag)
+        SOURCE_DIGEST=$(_template_source_field "$template" digest)
+        local visibility
+        visibility=$(echo "$template" | jq -r '.visibility // "public"')
+
+        template_dir=$(_resolve_definition "$template_id" \
+            "$SOURCE_ARTIFACT" "$SOURCE_TAG" "$SOURCE_DIGEST" "$visibility") || return 1
+        if [[ -z "$template_dir" || ! -d "$template_dir" ]]; then
+            log_error "Failed to resolve the install definition for '$template_id'"
+            return 1
+        fi
+    else
+        local folder
+        folder=$(echo "$template" | jq -r '.folder // empty')
+        if [[ -z "$folder" ]]; then
+            log_error "Template '$template_id' is not an application and has no folder field."
+            echo "  An application entry needs templateKind: application and a source;" >&2
+            echo "  a stack template needs a folder in the catalogue repository." >&2
+            return 1
+        fi
+        template_dir=$(_fetch_template_folder "$folder")
+        if [[ -z "$template_dir" || ! -d "$template_dir" ]]; then
+            log_error "Failed to fetch template folder"
+            return 1
+        fi
     fi
 
     local info_file="$template_dir/template-info.yaml"
@@ -1183,7 +1228,14 @@ cmd_template_install() {
     fi
 
     print_section "Installing Template: $template_id"
-    echo "Template folder: $folder"
+    # An application has no folder — it has an artifact and a pin. Printing an
+    # empty "Template folder:" was the first thing the fixture run showed.
+    if [[ "$template_kind" == "application" ]]; then
+        echo "Artifact: ${SOURCE_ARTIFACT}"
+        echo "Pin:      ${SOURCE_DIGEST}  (tag ${SOURCE_TAG})"
+    else
+        echo "Template folder: ${folder:-<none>}"
+    fi
     echo ""
     echo "Deployment plan (in priority order):"
     # The preview states the ORDER, because it is per-service and a reader who
