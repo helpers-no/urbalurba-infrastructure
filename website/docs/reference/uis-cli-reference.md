@@ -419,6 +419,31 @@ installing nothing.
 `{{ params.* }}` is substituted into the concatenated content, so a parameter may
 appear in any file.
 
+### `init:` on a database that already exists
+
+Installing onto a database that is already there — a re-install, or an
+application already running on the cluster — takes a different path, and it is
+worth knowing what it does:
+
+| | |
+|---|---|
+| the database and its role | **kept**, never recreated |
+| the password | 🔴 **rotated.** UIS does not store per-app passwords, so it mints a new one and rewrites the Secret |
+| `init:` | **re-applied**, and the result reports `init_applied` |
+| a failing `init:` | refuses and leaves the database alone — **no rollback**, because that data predates the command |
+
+🔴 **The password rotation will break a running workload** until its pods
+restart and re-read the Secret. Environment-variable consumers — a Dagster code
+location, for instance — read the credential once at pod start. The command says
+so on stderr; plan for a restart.
+
+⚠️ **Re-applying `init:` is safe by contract, not by luck.** An `init:` must
+satisfy *the schema after one application equals the schema after two*. That is
+a stronger requirement than "each statement is idempotent" — a set of
+individually-idempotent files can still converge on the wrong schema, which is
+exactly what happened to the first application's migrations and was only found
+by measuring pass 1 against pass 2 (`urb-agents#362`).
+
 ⚠️ **Zero-pad your numbers.** Sorting is lexicographic, so `9_`, `10_`, `100_`
 apply in *reverse* — and out-of-order DDL can succeed while leaving the wrong
 schema, which is the one failure this ordering contract exists to prevent. UIS

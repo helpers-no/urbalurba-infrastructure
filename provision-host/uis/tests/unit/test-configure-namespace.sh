@@ -120,4 +120,56 @@ fi
 # Summary
 # ============================================================
 
+
+# ============================================================
+# The already-exists path must apply init too
+#
+# 🔴 `--init-file -` was applied ONLY on the create path, which sits several
+# hundred lines below a `return 0` that the already-exists branch reaches
+# first. So on any database that already existed, the init SQL was read from
+# stdin and silently discarded: `template install` printed
+#   `configure postgresql ... --init-file -   (stdin: 35 lines)`
+# applied none of them, and exited 0.
+#
+# These are STRUCTURAL assertions rather than behavioural ones: applying init
+# needs a cluster (kubectl exec into the postgres pod), so what can be checked
+# here is that the call is REACHABLE from the branch — which is the property
+# that was actually missing. The behaviour is imac's on urb-agents#481.
+# ============================================================
+print_test_section "Configure postgresql: init on an existing database"
+
+if [[ -d "/mnt/urbalurbadisk/provision-host/uis" ]]; then
+    PG_HANDLER="/mnt/urbalurbadisk/provision-host/uis/lib/configure-postgresql.sh"
+else
+    PG_HANDLER="$(cd "$SCRIPT_DIR/../../lib" && pwd)/configure-postgresql.sh"
+fi
+
+# Line numbers of the three landmarks, so the assertions read as an ordering.
+_exists_branch=$(grep -n "already exists — resetting password" "$PG_HANDLER" | head -1 | cut -d: -f1)
+_first_return=$(awk -v s="$_exists_branch" 'NR>s && /^        return 0$/ {print NR; exit}' "$PG_HANDLER")
+_init_in_branch=$(awk -v s="$_exists_branch" -v e="$_first_return" \
+                      'NR>s && NR<e && /_pg_apply_init_file/ {print NR; exit}' "$PG_HANDLER")
+
+start_test "the already-exists branch exists and returns"
+if [[ -n "$_exists_branch" && -n "$_first_return" ]]; then pass_test
+else fail_test "could not locate the branch (start=$_exists_branch return=$_first_return)"; fi
+
+start_test "🔴 init is applied BEFORE that branch returns, not only on the create path"
+if [[ -n "$_init_in_branch" ]]; then pass_test
+else fail_test "no _pg_apply_init_file between line $_exists_branch and the return at $_first_return — init is silently discarded on an existing database"; fi
+
+start_test "the existing-database failure path does NOT drop the database"
+_rollback_in_branch=$(awk -v s="$_exists_branch" -v e="$_first_return" \
+                          'NR>s && NR<e && /DROP DATABASE/ {print NR; exit}' "$PG_HANDLER")
+if [[ -z "$_rollback_in_branch" ]]; then pass_test
+else fail_test "line $_rollback_in_branch drops a database that predates the command"; fi
+
+start_test "the JSON reports whether init ran, so a caller need not infer it"
+grep -q '"init_applied":\$init_applied' "$PG_HANDLER" && pass_test \
+    || fail_test "already_configured JSON does not carry init_applied"
+
+start_test "the password rotation is announced, not silent"
+grep -q "was rotated" "$PG_HANDLER" && pass_test \
+    || fail_test "a credential rotation under a running workload must be stated"
+
 print_summary
