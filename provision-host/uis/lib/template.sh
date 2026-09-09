@@ -921,6 +921,69 @@ _substitute_requires() {
     echo "$text"
 }
 
+# ─── The configure argument list — ONE construction, two callers ──────────────
+#
+# 🔴 The dry-run printer and the executor each built this list by hand, with a
+# comment on the printer saying "same argument construction as the executor
+# below … the falsification for this phase is that they agree." They did not
+# agree, and nothing ran the comparison.
+#
+# 1.6.31 fixed the `--database` fallback in the printer and left the executor
+# without it — I put the `plan_database` computation INSIDE the
+# `if [[ "$dry_run" == true ]]` branch, so a real install never computed it.
+# The printed plan said `configure postgrest --app atlas-t --database atlas-t`
+# and the run executed the same command WITHOUT `--database` (imac,
+# urb-agents#481 round 3).
+#
+# ⚠️ imac's point is the one that matters, and it is not about the hyphen:
+# `--dry-run` is the instrument an operator uses to decide whether an install
+# will touch a live tenant. Before the fix, plan and execution agreed and the
+# install failed honestly. After it, the plan was a description of something
+# that did not happen — which makes the safety check unsound, and is strictly
+# worse than the bug it replaced.
+#
+# So: not two lists and a test that they match. ONE list. Divergence is now
+# unrepresentable rather than merely asserted against.
+#
+# Emits one argument per line, so a caller reads it with `mapfile`.
+_build_configure_args() {
+    local svc="$1" conf="$2" params_file="$3" app_name="$4" plan_database="$5" want_json="${6:-}"
+
+    printf '%s\n' "$svc" "--app" "$app_name"
+    [[ -n "$want_json" ]] && printf '%s\n' "--json"
+
+    local v
+    v=$(_substitute_params "$(_conf_get "$conf" database)" "$params_file")
+    # This service's own `database:` wins; otherwise it is told the plan's, so
+    # no handler has to infer a name the plan already holds.
+    v="${v:-$plan_database}"
+    [[ -n "$v" ]] && printf '%s\n' "--database" "$v"
+    v=$(_substitute_params "$(_conf_get "$conf" schemas)" "$params_file")
+    [[ -n "$v" ]] && printf '%s\n' "--schemas" "$v"
+    v=$(_substitute_params "$(_conf_get "$conf" url_prefix)" "$params_file")
+    [[ -n "$v" ]] && printf '%s\n' "--url-prefix" "$v"
+    v=$(_substitute_params "$(_conf_get "$conf" namespace)" "$params_file")
+    [[ -n "$v" ]] && printf '%s\n' "--namespace" "$v"
+    v=$(_substitute_params "$(_conf_get "$conf" secret_name_prefix)" "$params_file")
+    [[ -n "$v" ]] && printf '%s\n' "--secret-name-prefix" "$v"
+    v=$(_substitute_params "$(_conf_get "$conf" init)" "$params_file")
+    [[ -n "$v" ]] && printf '%s\n' "--init-file" "-"
+    return 0
+}
+
+# The plan's database: whichever service declares one, that is THE database for
+# the whole install. Computed once, at function scope — putting this inside the
+# dry-run branch is precisely what made the printer and the executor disagree.
+_plan_database() {
+    local plan_dir="$1" params_file="$2" f db
+    for f in "$plan_dir"/*.conf; do
+        [[ -f "$f" ]] || continue
+        db=$(_substitute_params "$(_conf_get "$f" database)" "$params_file")
+        if [[ -n "$db" ]]; then printf '%s' "$db"; return 0; fi
+    done
+    return 0
+}
+
 # Read one key out of the effective-params file (key=value lines).
 # Used to record `app_name`, which removal depends on — see _record_application.
 _conf_param() {
@@ -1572,6 +1635,11 @@ cmd_template_install() {
     # has already happened by this point — that is how we know what the plan is —
     # so a `--dry-run` has pulled the definition artifact and written nothing
     # else. Said in the output, because "dry run" otherwise implies untouched.
+    # 🔴 FUNCTION SCOPE, not inside the dry-run branch. Declaring it in there is
+    # the exact mistake that made the printed plan differ from the executed one.
+    local plan_database
+    plan_database="$(_plan_database "$plan_dir" "$params_file")"
+
     if [[ "$dry_run" == true ]]; then
         print_section "Dry run: $template_id"
         echo "Commands that would run, in order:"
@@ -1592,15 +1660,6 @@ cmd_template_install() {
     # database, and every other configurable service is told it rather than
     # guessing. Same rule as app_name in 1.6.29 — pass the resolved value, never
     # re-derive it.
-    local plan_database=""
-    local _dbconf
-    for _dbconf in "$plan_dir"/*.conf; do
-        [[ -f "$_dbconf" ]] || continue
-        local _db
-        _db=$(_substitute_params "$(_conf_get "$_dbconf" database)" "$params_file")
-        if [[ -n "$_db" ]]; then plan_database="$_db"; break; fi
-    done
-
         echo ""
         local n=0
         while IFS='|' read -r priority svc; do
@@ -1609,21 +1668,14 @@ cmd_template_install() {
             local args=() first=false
             _service_is_multi_instance "$svc" && first=true
 
-            # Same argument construction as the executor below, so the dry run
-            # cannot drift from what actually happens. Any change there belongs
-            # here too — and the falsification for this phase is that they agree.
+            # ⚠️ THE SAME FUNCTION THE EXECUTOR CALLS. Not "the same
+            # construction" — the same code. `--json` is omitted here only
+            # because it is noise in a plan a human reads; every other argument
+            # is byte-identical by construction.
+            local init
             if [[ -s "$conf" ]]; then
-                args=("$svc" "--app" "$app_name")
-                local v
-                v=$(_substitute_params "$(_conf_get "$conf" database)" "$params_file")
-                v="${v:-$plan_database}";                                                          [[ -n "$v" ]] && args+=(--database "$v")
-                v=$(_substitute_params "$(_conf_get "$conf" schemas)" "$params_file");             [[ -n "$v" ]] && args+=(--schemas "$v")
-                v=$(_substitute_params "$(_conf_get "$conf" url_prefix)" "$params_file");          [[ -n "$v" ]] && args+=(--url-prefix "$v")
-                v=$(_substitute_params "$(_conf_get "$conf" namespace)" "$params_file");           [[ -n "$v" ]] && args+=(--namespace "$v")
-                v=$(_substitute_params "$(_conf_get "$conf" secret_name_prefix)" "$params_file");  [[ -n "$v" ]] && args+=(--secret-name-prefix "$v")
-                local init
+                mapfile -t args < <(_build_configure_args "$svc" "$conf" "$params_file" "$app_name" "$plan_database")
                 init=$(_substitute_params "$(_conf_get "$conf" init)" "$params_file")
-                [[ -n "$init" ]] && args+=(--init-file -)
             fi
 
             local deploy_args=("$svc")
@@ -1744,18 +1796,12 @@ cmd_template_install() {
             resolved_ns=$(_substitute_params "$(_conf_get "$conf" namespace)" "$params_file")
             resolved_secret_prefix=$(_substitute_params "$(_conf_get "$conf" secret_name_prefix)" "$params_file")
 
-            # --app is unconditional here and that is deliberate: a
-            # single-instance service can still hold per-app resources, which is
-            # exactly what `configure postgresql --app` creates.
-            local configure_args=("$svc" "--app" "$app_name" "--json")
-            # This service's own `database:` wins; otherwise it is told the
-            # plan's, so no handler has to infer a name the plan already has.
-            local effective_db="${resolved_db:-$plan_database}"
-            [[ -n "$effective_db" ]] && configure_args+=(--database "$effective_db")
-            [[ -n "$resolved_schemas" ]] && configure_args+=(--schemas "$resolved_schemas")
-            [[ -n "$resolved_prefix" ]] && configure_args+=(--url-prefix "$resolved_prefix")
-            [[ -n "$resolved_ns" ]] && configure_args+=(--namespace "$resolved_ns")
-            [[ -n "$resolved_secret_prefix" ]] && configure_args+=(--secret-name-prefix "$resolved_secret_prefix")
+            # ⚠️ THE SAME FUNCTION THE DRY-RUN PRINTER CALLS. --app is
+            # unconditional and that is deliberate: a single-instance service
+            # can still hold per-app resources, which is exactly what
+            # `configure postgresql --app` creates.
+            local configure_args
+            mapfile -t configure_args < <(_build_configure_args "$svc" "$conf" "$params_file" "$app_name" "$plan_database" json)
 
             log_info "Configuring $svc (args: ${configure_args[*]})..."
             local result configure_exit
@@ -1765,7 +1811,12 @@ cmd_template_install() {
                 local init_content
                 init_content=$(_collect_init_sql "$init_path") || return 1
                 init_content=$(_substitute_params "$init_content" "$params_file")
-                configure_args+=(--init-file -)
+                # ⚠️ NOT appended here — _build_configure_args already emitted
+                # `--init-file -` from the conf. Appending it again produced
+                # `--init-file - --init-file -` on the executed command and NOT
+                # on the printed one, which the plan-equals-execution test
+                # caught within seconds of being written. This branch's job is
+                # to produce the STDIN, not to add the flag.
                 log_info "Configuring $svc with init from '$resolved_init' ($(wc -l <<< "$init_content") lines)"
                 # ⚠️ `|| configure_exit=$?`, not a bare assignment. uis-cli.sh:9 sets
                 # `set -e`, so `result=$(uis configure ...)` ABORTS the function the

@@ -547,38 +547,56 @@ fi
 # would be just as dangerous and just as quiet.
 # ============================================================================
 # ============================================================================
-# One application, one database — no handler re-derives it
+# One application, one database — and ONE argument construction
 #
-# 🔴 postgresql keeps the name it is told; postgrest fell back to
-# `app_name` with `-` -> `_`. So `--param app_name=atlas-t` created the database
-# `atlas-t` at step 2 and looked for `atlas_t` at step 3 (imac, urb-agents#481)
-# — one step later than the hyphen defect 1.6.29 fixed. They agreed for every
-# earlier install only because no app_name had ever contained a hyphen.
+# 🔴 These used to grep for the two hand-maintained copies of the argument list
+# (`effective_db="${resolved_db:-$plan_database}"` in the executor,
+# `v="${v:-$plan_database}"` in the printer) and they PASSED while the two
+# disagreed — because I had put the plan-database computation inside the
+# dry-run branch, so the printer computed it and a real install did not. The
+# plan said `--database atlas-t` and the run omitted it (imac, #481 round 3).
 #
-# Structural for the same reason as the others: running configure needs a
-# cluster. What is asserted is that BOTH the dry-run printer and the executor
-# fall back to the plan's database, since the printer's own comment makes
-# "these two agree" this phase's falsification.
+# ⚠️ Those assertions were about the SHAPE of the implementation, not the
+# property. They could not fail for a scoping mistake, which is the mistake
+# that happened. The durable assertion is behavioural and lives in
+# test-plan-equals-execution.sh; these now only check the structural facts that
+# make divergence unrepresentable.
 # ============================================================================
 print_test_section "one application, one database"
 
 _install_fn=$(sed -n '/^cmd_template_install()/,/^}/p' "$UIS_LIB/template.sh")
 
-start_test "the plan's database is computed once from the conf files"
-grep -q 'plan_database=""' <<< "$_install_fn" && pass_test \
-    || fail_test "no plan-level database is derived"
+start_test "there is exactly ONE argument builder, not two constructions"
+# Count INVOCATIONS, not mentions — a comment naming the function is not a call.
+n=$(grep -v '^\s*#' <<< "$_install_fn" | grep -c 'mapfile -t .*_build_configure_args')
+[[ "$n" == "2" ]] && pass_test \
+    || fail_test "expected the printer and the executor to call it once each; found $n invocations"
 
-start_test "🔴 the executor falls back to it rather than letting a handler guess"
-grep -q 'effective_db="${resolved_db:-$plan_database}"' <<< "$_install_fn" && pass_test \
-    || fail_test "a service with no database: of its own still gets none"
+start_test "🔴 the plan database is computed at function scope, not in the dry-run branch"
+# The computation must appear BEFORE `if [[ "$dry_run" == true ]]`.
+calc_line=$(grep -n '_plan_database "' <<< "$_install_fn" | head -1 | cut -d: -f1)
+dry_line=$(grep -n 'if \[\[ "\$dry_run" == true \]\]' <<< "$_install_fn" | head -1 | cut -d: -f1)
+if [[ -n "$calc_line" && -n "$dry_line" && "$calc_line" -lt "$dry_line" ]]; then
+    pass_test
+else
+    fail_test "computed at line ${calc_line:-none}, dry-run branch at ${dry_line:-none} — inside the branch means a real install never computes it"
+fi
 
-start_test "the dry-run printer uses the same fallback, so the two cannot drift"
-grep -q 'v="${v:-$plan_database}"' <<< "$_install_fn" && pass_test \
-    || fail_test "the printed plan would differ from the executed one"
+start_test "the builder emits --database from the plan when the service declares none"
+conf="$TMP/nodb.conf"; : > "$conf"
+pf="$TMP/nodb.env"; printf 'app_name=x\n' > "$pf"
+got=$(_build_configure_args postgrest "$conf" "$pf" myapp thedb | tr '\n' ' ')
+[[ "$got" == *"--database thedb"* ]] && pass_test || fail_test "got: $got"
 
-start_test "a service declaring its own database: still wins"
-grep -q '${resolved_db:-' <<< "$_install_fn" && pass_test \
-    || fail_test "the plan value must not override an explicit one"
+start_test "a service declaring its own database: still wins over the plan's"
+printf 'database=mine\n' > "$conf"
+got=$(_build_configure_args postgrest "$conf" "$pf" myapp thedb | tr '\n' ' ')
+[[ "$got" == *"--database mine"* && "$got" != *"thedb"* ]] && pass_test || fail_test "got: $got"
+
+start_test "--json is emitted only when the caller asks (the executor, not the printer)"
+a=$(_build_configure_args postgrest "$conf" "$pf" myapp thedb | grep -c '^--json$')
+b=$(_build_configure_args postgrest "$conf" "$pf" myapp thedb json | grep -c '^--json$')
+[[ "$a" == "0" && "$b" == "1" ]] && pass_test || fail_test "printer=$a executor=$b"
 
 print_test_section "remove: per-app names come from app_name, never the id"
 
