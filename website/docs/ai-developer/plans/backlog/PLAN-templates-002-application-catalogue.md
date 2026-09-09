@@ -5,7 +5,7 @@
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
 **Status:** Backlog — Phases 1-4 shipped (1.6.17-1.6.23) and verified on a cluster by
-`imac` (`urb-agents#367`); Phase 5 and 6.2 open (6.1 done in 1.6.24). Phase 5 (`webapp`) waits on the Atlas
+`imac` (`urb-agents#367`); resolution verified against atlas's real artifact 2026-09-09; cluster falsification with imac (#481). Phase 5 and 6.2 open. Phase 5 (`webapp`) waits on the Atlas
 frontend actually needing it.
 
 **Goal**: `./uis template install <application>` installs an application on any UIS
@@ -293,6 +293,35 @@ non-gating alarm. That is `dev-templates`' model and it is the correct one.
       `remove` refusal was found
 - [ ] 6.2 A service page for `webapp`
 - [ ] 6.3 ⚠️ Version bump in the same PR as any shipped phase — the guard enforces it
+
+## Verified against the first real application, 2026-09-09
+
+`atlas` published its install definition as an OCI artifact
+(`ghcr.io/terchris/atlas-data/uis:v20260909-4b11f3f`,
+`sha256:a378a57d…dab72ec`). The whole resolution path was then run on the build
+host against that real digest — no cluster, no catalogue entry, using
+`REGISTRY_URL_PRIMARY=file://` and a one-entry registry.
+
+| | how it was established |
+|---|---|
+| the artifact pulls, by digest | `oras pull` at v1.3.4, checksum-matched to the pin in `provision-host-02-kubetools.sh` |
+| `init:` resolves from the artifact root | `uis/init/001_bootstrap.sql` lands where `$template_dir/$init` looks |
+| the odd layer shape is harmless | layer 1 declares `...layer.v1.tar` over **raw YAML**; `oras` writes it by title, and nothing in UIS reads layer titles as paths |
+| ordering | 30 → 50 → 56, postgrest **configure-then-deploy** because the per-app instance does not exist until deploy |
+| `{{ params.* }}` substitution | `atlas-data`, `atlas-database-db`, `http://api-atlas.localhost` |
+| code-location idempotency at a pin | generated entry byte-identical on re-write |
+| `list` and `info` | both show the entry, `info` shows the pin |
+
+⚠️ **This is not the acceptance below.** Everything above is resolution and
+planning; nothing was deployed or configured. It narrows the cluster
+falsification (`urb-agents#481`, `imac`) to the deploy/configure half rather
+than replacing it.
+
+🔴 **Two questions `atlas` could not answer and neither could I until `oras` was
+on this host.** Both of us had read the artifact's *blobs* and neither had run
+the *pull* — the layer-shape question was live precisely because layer 1's
+declared media type disagrees with its content. Reading a blob is not running a
+fetcher, and the gap between those two is where the day's other defects lived.
 
 ## Acceptance — the spec's §10, unchanged
 
