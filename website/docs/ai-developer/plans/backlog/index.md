@@ -26,6 +26,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Define what the watchdog watches](PLAN-service-uptime-kuma-002-monitors.md) | — | 2026-09-09 |
 | [Deploy Uptime Kuma as an external watchdog](PLAN-service-uptime-kuma-001-deploy.md) | — | 2026-09-09 |
 | [Plan: The Grafana deploy gate reports the stack, not the race](PLAN-service-grafana-deploy-gate-fix.md) | Make `uis deploy grafana` succeed deterministically on a healthy stack, | 2026-09-09 |
+| [Plan: `configure postgresql --purge`, or an honest refusal](PLAN-cli-configure-postgresql-purge.md) | A per-app database, its owning role, and the Secret written by | 2026-09-09 |
 | [Plan: reject a valid `config:` key on the wrong service, at parse time](PLAN-templates-config-keys-per-service.md) | A template declaring a supported `config:` key on a service that does | 2026-09-08 |
 | [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-08 |
 | [---](PLAN-ci-third-party-download-fails-the-whole-image-build.md) | — | 2026-09-08 |
