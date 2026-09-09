@@ -134,11 +134,21 @@ a lint.
       outcomes are idempotent per test, and `print_summary` **fails** on any
       started test that reported nothing. All 24 unit and static suites
       reconcile after the change
-- [ ] 1.8 ⚠️ **`yq` is not installed on the maintainer's build host**, so every
-      `yq`-dependent test has been skipping there since it was written — the
-      template suite skipped 12 assertions silently. Either provision `yq` and
-      `oras` where the tests run, or make a skip on the build host **loud** in
-      CI. A skip that looks like a pass is this plan's whole subject
+- [ ] 1.8 ⚠️ **`oras` is installed nowhere the tests run.** Measured on the
+      1.6.24 CI run, not assumed: GitHub Actions **has `yq`** and reports the
+      same `73 / 70 / 3 skipped` as a local run with `yq` on PATH, so the
+      `yq`-dependent tests are covered. The three `oras` resolution tests are
+      skipped in CI *and* locally — they have never run anywhere except a
+      provision host. Provision `oras` in the test job, or accept that pointer
+      resolution is only ever exercised on a cluster and say so where a reader
+      will see it.
+
+      🔴 **The local half was mine, not CI's.** `yq` is absent on the
+      maintainer's build host, so I had been reading `ALL TESTS PASSED` off runs
+      that silently skipped 12 assertions CI was running for me. That is a
+      verification defect in how I check my own work, not a coverage gap — and
+      it is worth separating, because the first version of this task claimed
+      the coverage gap and would have sent someone to fix CI
 - [ ] 1.9 Version bump if any shipped path changes
 
 ## Acceptance
