@@ -171,11 +171,38 @@ entry the registry must carry:
 | `visibility: public\|private` | decides whether the pull needs `oras login`, and lets the error name the secret rather than the URL |
 | the display fields, resolved at the pin | so `template list`/`info` and the website describe what an install will actually get |
 
-⚠️ **UIS re-validates on its own side, and digest-pinning makes that stronger rather
-than redundant.** It refuses an entry with no digest, and refuses one whose `tag` no
-longer resolves to the recorded `digest` — which catches a tag re-pointed at a
-different artifact after the catalogue build, the one thing a build-time check
-structurally cannot see.
+🔴 **CORRECTION, 2026-09-09 — half of this was never true, and the argument was
+wrong anyway.** What UIS actually does is refuse an entry with **no** digest and
+refuse a malformed one (`_template_pin_is_immutable`). It does **not** resolve
+the tag and compare — `_resolve_definition` pulls `artifact@digest` and never
+looks at the tag. I asserted that second check to `dev-templates` on
+`urb-agents#479` as the complement to their build step, reading it off this
+paragraph rather than off the code. Eighth instance of the class in
+[PLAN-system-error-paths-audit](./PLAN-system-error-paths-audit.md), and the
+first I have committed **in an argument about a security property**.
+
+⚠️ **And `dev-templates` showed the check would be useless where it matters.**
+Their argument (`#479` §2), which I accept in full:
+
+> If the catalogue *resolves* the tag on every build, the recorded digest tracks
+> the tag — so a tag re-point gets automatically blessed. `t0` tag `v1` → `A`,
+> recorded `A`. `t1` attacker re-points `v1` → `B`. `t2` **any** docs build
+> re-resolves and records `B`. `t3` UIS installs: `v1` resolves to `B`, recorded
+> digest is `B`, the check passes, `B` runs as database owner.
+
+Their `t2` holds against this repository's code: `_fetch_registry` curls
+`REGISTRY_URL_PRIMARY` — `raw.githubusercontent.com/helpers-no/dev-templates/main/…`
+— with a one-hour cache. **UIS always reads the latest published registry and
+pins no version of it**, so an unrelated docs build is enough to launder a
+re-point, and no install-time comparison can tell.
+
+**Where the property actually lives:** pulling by digest gives *integrity* — you
+get what the digest names. It does not give *provenance* — that the digest is
+one a human approved. Provenance can only be established where the digest is
+authored. So resolution must be an **authoring** step with the digest committed
+and reviewable in a diff, the catalogue build must **not** re-resolve, and
+liveness (does the tag still point where it did?) belongs in a separate
+non-gating alarm. That is `dev-templates`' model and it is the correct one.
 
 ## Phases
 

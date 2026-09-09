@@ -488,6 +488,40 @@ else
 fi
 
 # ============================================================================
+# _validate_template_info — the third spelling of "this is an application"
+#
+# `templateKind` is DERIVED in the catalogue's generator, so `install_type` is
+# the only field a human authors there (dev-templates, urb-agents#479). A tenant
+# who mirrors the catalogue stub writes `install_type: application` in their
+# artifact and used to be refused for it.
+# ============================================================================
+print_test_section "definition kinds: all three spellings"
+
+if ! command -v yq >/dev/null 2>&1; then
+    for _ in 1 2 3 4; do skip_test "Skipping kind tests: yq not installed"; done
+else
+    kd="$TMP/kinds"; mkdir -p "$kd"
+    _mk_def() { printf '%s\nprovides:\n  services:\n    - service: postgresql\n      config:\n        database: x\n' "$1" > "$kd/template-info.yaml"; }
+
+    start_test "kind: application is accepted"
+    _mk_def "kind: application"
+    ( _validate_template_info "$kd/template-info.yaml" "$kd" ) >/dev/null 2>&1 && pass_test || fail_test "kind: application refused"
+
+    start_test "install_type: stack is accepted"
+    _mk_def "install_type: stack"
+    ( _validate_template_info "$kd/template-info.yaml" "$kd" ) >/dev/null 2>&1 && pass_test || fail_test "install_type: stack refused"
+
+    start_test "🔴 install_type: application is accepted (the catalogue stub's spelling)"
+    _mk_def "install_type: application"
+    ( _validate_template_info "$kd/template-info.yaml" "$kd" ) >/dev/null 2>&1 && pass_test || fail_test "install_type: application refused"
+
+    start_test "a definition with neither is still refused, naming what it got"
+    _mk_def "install_type: overlay"
+    err=$( ( _validate_template_info "$kd/template-info.yaml" "$kd" ) 2>&1 ) && fail_test "must refuse" || true
+    echo "$err" | grep -q "overlay" && pass_test || fail_test "should name the value it got: $err"
+fi
+
+# ============================================================================
 # _list_uis_templates — an application entry must be VISIBLE
 #
 # 🔴 The filter was `.folder | startswith("uis-")`, and an application entry has
