@@ -488,6 +488,67 @@ else
 fi
 
 # ============================================================================
+# _list_uis_templates — an application entry must be VISIBLE
+#
+# 🔴 The filter was `.folder | startswith("uis-")`, and an application entry has
+# no `folder` — it has a `source`. So `uis template list` showed only the stack
+# template, and atlas would have been installable solely by someone who already
+# knew its id. `info` and `install` go through `_get_template` on the id and
+# were unaffected, which is why nothing failed: the broken surface was the only
+# one nobody scripts.
+#
+# The registry already carries the right field — each category has a `context`
+# of `uis` or `dct` — so these assert the join, and that an application entry
+# survives even if its category is a `dct` one.
+# ============================================================================
+print_test_section "template list: application entries are visible"
+
+reg="$TMP/registry.json"
+cat > "$reg" <<'REGJSON'
+{"categories":[
+  {"id":"DEMO","context":"uis","name":"Demo Stacks"},
+  {"id":"WEB_APP","context":"dct","name":"Web Application Templates"}
+],
+ "templates":[
+  {"id":"postgresql-demo","name":"PG Demo","description":"a stack","category":"DEMO",
+   "folder":"uis-stack-templates/postgresql-demo","templateKind":"stack"},
+  {"id":"designsystemet","name":"DS","description":"a dct app","category":"WEB_APP",
+   "folder":"templates/designsystemet","templateKind":"app"},
+  {"id":"atlas","name":"Atlas","description":"an application","category":"DEMO",
+   "templateKind":"application","visibility":"public",
+   "source":{"artifact":"ghcr.io/terchris/atlas-data/uis","tag":"v20260909-abc1234","digest":"sha256:aa"}},
+  {"id":"miscategorised","name":"Mis","description":"application in a dct category",
+   "category":"WEB_APP","templateKind":"application",
+   "source":{"artifact":"ghcr.io/terchris/x/uis","tag":"v20260909-abc1234","digest":"sha256:bb"}}
+]}
+REGJSON
+
+# _list_uis_templates reads $REGISTRY_CACHE and calls _fetch_registry first;
+# point the cache at the fixture and stub the fetch so no network is touched.
+REGISTRY_CACHE="$reg"
+_fetch_registry() { return 0; }
+
+start_test "🔴 an application entry appears in the list (it has no folder)"
+got=$(_list_uis_templates | cut -d'|' -f1 | sort | paste -sd, -)
+assert_equals "atlas,miscategorised,postgresql-demo" "$got" "application entries listed"
+
+start_test "a dct template is still excluded"
+_list_uis_templates | cut -d'|' -f1 | grep -qx designsystemet \
+    && fail_test "designsystemet is a dct template and must not be listed" || pass_test
+
+start_test "the uis stack template is still included"
+_list_uis_templates | cut -d'|' -f1 | grep -qx postgresql-demo && pass_test \
+    || fail_test "the stack template must stay listed"
+
+start_test "an application in a dct category is still visible, not silently absent"
+_list_uis_templates | cut -d'|' -f1 | grep -qx miscategorised && pass_test \
+    || fail_test "a miscategorised application must not vanish"
+
+start_test "the name and description survive the join"
+got=$(_list_uis_templates | grep '^atlas|')
+assert_equals "atlas|Atlas|an application" "$got" "all three fields"
+
+# ============================================================================
 # _json_field — the guard that the previous guard needed
 #
 # `x=$(echo "$j" | jq -r '.f')` aborts under `set -e` when $j is not JSON: jq
