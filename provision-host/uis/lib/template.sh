@@ -742,8 +742,16 @@ _applications_requiring() {
     local id="$1" file
     file="$(_applications_file)"
     [[ -f "$file" ]] || return 0
+    # ⚠️ NOT `contains([strenv(app_id)])`. In jq and yq alike, `contains` does
+    # SUBSTRING matching on string elements: ["atlas-data"] | contains(["atlas"])
+    # is true. So removing `atlas` would have been blocked by an application that
+    # requires `atlas-data`, naming a dependant that does not depend on it — and
+    # `atlas-data` itself would not have been protected from `atlas`'s requires,
+    # because the substring relation runs one way only. Exact membership.
     app_id="$id" yq -r \
-        '[.applications[] | select((.requires // []) | contains([strenv(app_id)])) | .id] | join(", ")' \
+        '[.applications[]
+          | select([.requires // [] | .[] | select(. == strenv(app_id))] | length > 0)
+          | .id] | join(", ")' \
         "$file" 2>/dev/null
 }
 

@@ -12,7 +12,7 @@ exercised at least once, so a failure reports its cause instead of being
 swallowed by the mechanism meant to handle it.
 
 **Proposed by**: imac, `urb-agents#344`, after finding the third instance in one
-week. **Six instances as of 1.6.24** (see the table). Its words: *"Each was invisible until something failed, and each made the
+week. **Seven instances as of 1.6.24** (see the table). Its words: *"Each was invisible until something failed, and each made the
 **next** failure harder to diagnose. Might be worth one deliberate pass over the
 error paths rather than three more of these arriving one at a time."*
 
@@ -28,14 +28,15 @@ error paths rather than three more of these arriving one at a time."*
 
 | `#367` | `template remove --purge` dropped the roles correctly, printed none of its reporting, skipped the record cleanup, and exited 4 | `x=$(… \| jq)` on a non-JSON stream — jq exits 4, the assignment inherits it, `set -e` kills the caller |
 | 1.6.24 | `template remove` **could never refuse** while a dependant was installed, though the CLI reference documented that it would | `_applications_requiring` read `.requires` out of the record; `_record_application` never wrote the field. A guard whose input nothing produces |
+| 1.6.24 | `_applications_requiring atlas` was **also** blocked by an application requiring `atlas-data` | `contains(["x"])` does **substring** matching on string array elements in jq and yq alike: `["atlas-data"] \| contains(["atlas"])` is true. A comparison that reads as membership and is not |
 | 1.6.24 | 28 of 68 template tests reported **neither pass nor fail**, and the suite still printed `ALL TESTS PASSED` | `assert_equals "$a" "$b" "msg"` returned 0 and moved no counter. Failures were reported, so the verdict held — but the count could not be reconciled, and an unreconcilable number is one nobody checks |
 
-Six instances, six different mechanisms, one shape: **error handling that looks
+Seven instances, seven different mechanisms, one shape: **error handling that looks
 correct, defeated by the semantics of the construct it is written in, in a branch
 nothing executes until something else is already wrong.**
 
-🔴 **The fifth and sixth were found here, not by the tester** — the first two of
-the six that were. Both came from the same move: reading the CLI reference against
+🔴 **The fifth, sixth and seventh were found here, not by the tester** — the
+first three of the seven that were. Both came from the same move: reading the CLI reference against
 the code while finishing the docs task, and running the test suite with `yq` on
 `PATH` for the first time. Neither needed a cluster.
 
@@ -122,7 +123,11 @@ a lint.
       of `.uis.extend/*.yaml` should be greppable to the code that writes it.
       Fixed for this one, with tests asserting the ROUND TRIP (record it, then
       read it back) rather than the reader alone — testing the reader is exactly
-      what let it through
+      what let it through. ⚠️ The same function held an eighth-shaped defect one
+      line away: `contains([x])` substring-matching where membership was meant.
+      Both were in code the round-trip test was written for, and only the
+      falsification run — reverting the fix and watching the test fail — proved
+      the test could see either
 - [x] 1.7 🔴 **The tests themselves.** `assert_x "$a" "$b" "msg"` counted no
       outcome, so 28 of 68 template tests reported neither pass nor fail while
       the suite printed `ALL TESTS PASSED`. Now: assertions self-report,
