@@ -373,16 +373,48 @@ whose `./uis version` may look current — run `./uis pull`.
 ### The registry entry — the seam with the catalogue
 
 The `source` block above lives in the **catalogue**, not in the artifact. The
-artifact carries the definition; the registry carries the pointer to it. These
-are the only fields `uis template install` reads from a catalogue entry:
+artifact carries the definition; the registry carries the pointer to it.
+
+🔴 **The shape first, because a list of field names is not a shape.** An earlier
+version of this section gave only the table below, and a reader authored
+`visibility` *inside* `source` from it — which UIS reads as null and defaults to
+`public`, so it works, ships, and keeps working until the first private artifact
+fails by never asking for credentials (`dev-templates`, `urb-agents#479`). Their
+words for it: **"correct by accident is the failure mode neither of us can
+see."** So:
+
+```json
+{
+  "id": "atlas",
+  "templateKind": "application",
+  "visibility": "public",
+  "category": "APPLICATION",
+  "version": "v20260909-853c696",
+  "name": "Atlas Data",
+  "description": "…",
+  "abstract": "…",
+  "tags": ["data", "dagster"],
+
+  "source": {
+    "artifact": "ghcr.io/terchris/atlas-data/uis",
+    "tag": "v20260909-853c696",
+    "digest": "sha256:def7b9d2…3d3a6c54"
+  }
+}
+```
+
+⚠️ **`visibility` is a sibling of `source`, not a member of it.** Nesting it is
+accepted silently and defaults to `public`.
+
+These are the only fields `uis template install` reads:
 
 | field | required | what UIS does with it |
 |---|---|---|
 | `templateKind` | yes | Must be `application`. Read as `.templateKind // .kind`. ⚠️ The registry already has **both** `templateKind` and `install_type` — reuse one, do not add a third discriminator |
 | `source.artifact` | yes | The OCI artifact, by convention `<image>/uis`. Checked against the allowlist |
 | `source.tag` | yes | Shown to a human, never pulled by |
-| `source.digest` | yes | 🔴 **What is actually pulled.** The catalogue build must resolve tag → digest at generation time |
-| `visibility` | no | `public` (default) or `private`; decides whether the pull needs `oras login` |
+| `source.digest` | yes | 🔴 **What is actually pulled — and it must be AUTHORED, not resolved by the catalogue build.** See below |
+| `visibility` | no | `public` (default) or `private`; decides whether the pull needs `oras login`. **Top-level, beside `source`** |
 | `category` | yes | Must name a category whose `context` is `uis`. An `application` entry also stays listed on its `templateKind` alone, so a miscategorised one is visible rather than silently absent |
 | `version`, `name`, `description`, `abstract`, `tags` | for display | What `uis template info` prints |
 
