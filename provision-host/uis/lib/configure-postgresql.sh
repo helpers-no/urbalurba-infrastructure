@@ -221,12 +221,66 @@ configure_service() {
             _pg_create_secret "$namespace" "$secret_name" "$cluster_url"
         fi
 
+        # 🔴 Apply the init file HERE TOO. It used to be applied only on the
+        # create path, several hundred lines below a `return 0` this branch
+        # reaches first — so on an existing database the init SQL was read from
+        # stdin and silently discarded.
+        #
+        # That is the install-time guarantee the whole application-catalogue
+        # design rests on: `template install` prints
+        #   `configure postgresql ... --init-file -   (stdin: 35 lines)`
+        # and then, on any database that already existed, applied none of them
+        # and exited 0. The second run of an install does something materially
+        # different from the first and reports the same success.
+        #
+        # ⚠️ Re-applying is safe BY CONTRACT, not by luck: an `init:` must
+        # satisfy "the schema after one application equals the schema after
+        # two" (atlas, urb-agents#362 — measured, and their migrations did not
+        # have that property until they fixed it). That requirement exists
+        # precisely so this path can exist.
+        local init_applied=false
+        if [[ "$init_file" == "-" ]]; then
+            echo "Applying init file from stdin (database already existed)..." >&2
+            local re_init_result re_init_exit
+            re_init_result=$(_pg_apply_init_file "$database_name" "$username" "$app_password") && re_init_exit=0 || re_init_exit=$?
+            if [[ $re_init_exit -ne 0 ]]; then
+                echo "Init file failed:" >&2
+                echo "$re_init_result" >&2
+                # ⚠️ NO ROLLBACK HERE, deliberately. The create path drops the
+                # database it just made; this database predates the command and
+                # may hold data nothing can reconstruct. Refuse loudly and leave
+                # it alone — dropping someone else's data to tidy up a failed
+                # re-run is not a trade this command gets to make.
+                if [[ "$json_output" == true ]]; then
+                    local re_escaped
+                    re_escaped=$(echo "$re_init_result" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read().strip())[1:-1])' 2>/dev/null || echo "$re_init_result" | tr '\n' ' ' | sed 's/"/\\"/g; s/\\/\\\\/g')
+                    cat <<EOF
+{"status":"error","phase":"init_file","service":"postgresql","detail":"$re_escaped","database_preserved":true}
+EOF
+                    exit 1
+                fi
+                log_error "Init file failed on an existing database. The database was NOT dropped."
+                return 1
+            fi
+            echo "Init file applied successfully." >&2
+            init_applied=true
+        fi
+
+        # ⚠️ The password was just rotated and UIS does not store it, so any
+        # workload holding the OLD one keeps failing until it re-reads the
+        # Secret. Env-var consumers re-read only on pod restart — which is the
+        # normal case for a Dagster code location. Say so; a silent credential
+        # rotation under a running application is the kind of thing that gets
+        # diagnosed as a network fault.
+        log_warn "Password for '$username' was rotated. Workloads holding the old credential"
+        echo "         will fail until their pods restart and re-read '$secret_name'." >&2
+
         local secret_fragment
         secret_fragment=$(_pg_secret_json_fragment "$namespace" "$secret_name")
 
         if [[ "$json_output" == true ]]; then
             cat <<EOF
-{"status":"already_configured","service":"postgresql","local":{"host":"host.docker.internal","port":$expose_port,"database_url":"postgresql://$username:$app_password@host.docker.internal:$expose_port/$database_name"},"cluster":{"host":"$PG_CLUSTER_HOST","port":$PG_INTERNAL_PORT,"database_url":"$cluster_url"},"database":"$database_name","username":"$username","password":"$app_password"$secret_fragment,"message":"Database and user already existed; password was reset. Store these credentials — old ones are invalidated."}
+{"status":"already_configured","service":"postgresql","local":{"host":"host.docker.internal","port":$expose_port,"database_url":"postgresql://$username:$app_password@host.docker.internal:$expose_port/$database_name"},"cluster":{"host":"$PG_CLUSTER_HOST","port":$PG_INTERNAL_PORT,"database_url":"$cluster_url"},"database":"$database_name","username":"$username","password":"$app_password"$secret_fragment,"init_applied":$init_applied,"message":"Database and user already existed; password was reset and any init file was re-applied. Store these credentials — old ones are invalidated."}
 EOF
             return 0
         fi
