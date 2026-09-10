@@ -134,7 +134,17 @@ deploy_single_service() {
         # Absent file / no entry => silence, and everything below runs unchanged.
         # A stock laptop install never reaches this branch.
         local _ext_playbook="" _ext_host="" _ext_port="" _ext_why="" _ext_tpl=""
-        if is_external_service "$service_id"; then
+        # 🔴 THREE-WAY. `is_external_service` returns 2 for "cannot tell" — the
+        # file is there and yq is missing, or the file does not parse. Taking
+        # that as "not external" is how a topology this deploy cannot read
+        # becomes a StatefulSet rolled out over a proxy (ops, urb-agents#600).
+        # The only safe move on an unreadable declaration is to stop.
+        local _ext_state=0
+        is_external_service "$service_id" || _ext_state=$?
+        if [[ $_ext_state -eq 2 ]]; then
+            die_config "Cannot determine whether '$service_id' is provided externally — refusing to deploy. See the error above."
+        fi
+        if [[ $_ext_state -eq 0 ]]; then
             local _ext_fields
             # ⚠️ NO DEFAULT PORT FROM HERE. SCRIPT_EXPOSE_PORT is the host-side
             # forwarded port (35432 for postgres), not the in-cluster one, and

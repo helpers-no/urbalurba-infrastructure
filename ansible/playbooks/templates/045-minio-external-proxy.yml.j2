@@ -52,8 +52,8 @@ spec:
           resources:
             requests: { cpu: 10m, memory: 16Mi }
             limits: { cpu: 200m, memory: 128Mi }
-        # Backplane addresses (vmbr1, host-only). Not the tailnet address -
-        # see docs: odin-backplane-network.md
+        # A private/host-only address, not the tunnelled one: traffic between
+        # two things on one machine must not depend on a tunnel being up.
         - name: socat-api
           image: alpine/socat:1.8.0.0
           args: ["TCP-LISTEN:9000,fork,reuseaddr","TCP:{{ _external_host }}:{{ _external_port | default(9000) }}"]
