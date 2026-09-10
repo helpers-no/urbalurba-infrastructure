@@ -35,11 +35,33 @@ versions behind what was asked for. **`rdctl start` exited 0.**
 
 The three modes, which is the useful form of this plan's argument:
 
-| | k9s (ours) | `updateCache` (imac's) |
-|---|---|---|
-| trigger | unauthenticated API, rate-limited | version-list fetch, connection reset |
-| result | **build red** | **wrong version, exit 0** |
-| who notices | immediately, CI | **nobody**, unless something asserts |
+| | k9s (ours) | `updateCache` (imac's) | `update.k3s.io` (imac's, #646) |
+|---|---|---|---|
+| trigger | unauthenticated API, rate-limited | version-list fetch, connection reset | endpoint **up** and serving an **invalid TLS certificate** |
+| duration | until the window resets | seconds | 🔴 **hours, and counting** |
+| result | **build red** | **wrong version, exit 0** | **wrong version, exit 0** |
+| who notices | immediately, CI | **nobody**, unless something asserts | **nobody**, unless something asserts |
+| does a retry help | yes | yes | 🔴 **no** |
+
+⚠️ **The fourth trigger is the one that limits this plan's reach, so it belongs
+here rather than in a footnote.** On 2026-09-10 `update.k3s.io` served a Traefik
+default certificate *to the whole world* — confirmed from a network path outside
+the house entirely, and `ops` eliminated every Traefik on our own network by
+certificate serial. Rancher Desktop's version-list fetch failed, it fell back to
+its bundled default, and `rdctl start` exited 0 having built **1.25.16** instead
+of the pinned **1.36.3** (imac, `urb-agents#646`, #641).
+
+🔴 **Nothing in this plan would have prevented it.** The unpinned fetch was
+*Rancher Desktop's*, not ours. Pinning every artifact UIS downloads does not
+help when a tool UIS depends on does its own unpinned fetch from a third party
+that is up and lying. What saved imac was the **assertion**, not any pin: their
+reset script compared the running version against the requested one and refused
+to bless the environment.
+
+**So the plan's own conclusion sharpens.** Pinning is the cheaper half and the
+one we control. **The half that actually catches the silent case is asserting
+that what arrived is what was asked for** — and that half works regardless of
+whose fetch broke. Where a pin is impossible, the assertion is not optional.
 
 🔴 **The fix differs for the silent case.** Pinning helps, but what makes the
 failure *visible* is an assertion downstream that compares what you got against
@@ -95,10 +117,26 @@ is its failure mode.
 | tool | version | checksum |
 |---|---|---|
 | `kubectl` | fetched from `k8s.io` | ❌ none |
-| `helm` | install script | ❌ none |
-| `k9s` | 🔴 **`releases/latest`, resolved at build time** (`provision-host-02-kubetools.sh:231`) | ❌ none |
+| `helm` | 🔴 install script fetched from **`main`** and **piped into `bash`** — `provision-host-04-helmrepo.sh:47,64` | ❌ none |
+| `cloudflared` | 🔴 **`api.github.com/.../releases/latest`** (`provision-host-03-net.sh:89`) — the exact call removed from the k9s path on 2026-09-10, still live here | ❌ none |
+| `k9s` | ✅ pinned `v0.51.0` — the `releases/latest` call is **deleted** (1.6.45) | ✅ per-arch `sha256` from upstream `checksums.txt` |
 | `oras` | ✅ pinned `1.3.4` | ✅ upstream `checksums.txt` |
 | `yq` | ✅ pinned `v4.44.1` — **in `Dockerfile.uis-provision-host`, not this script** | ❌ none |
+
+⚠️ **Table filled in 2026-09-10.** Two rows were thinner than the plan's own
+prose: `cloudflared` was discussed in detail above but absent from the
+inventory, and `helm` was described only as "install script" — task 1.2 already
+knew it "resolves its own version". **What was genuinely missing anywhere is the
+shape of the helm fetch**: the script comes from **`main`**, a moving branch, and
+is piped straight into `bash` at two sites. That is arbitrary code execution from
+a third party's default branch, which is a stronger statement than "unpinned".
+
+🔴 **And I nearly wrote that this plan had missed `cloudflared` entirely.** It
+had not; I had read the table and not the two paragraphs above it. Recording the
+near-miss because it is the third time today I have started to assert something
+about a document from a partial read of it — the failure `ops-dev` named as
+*"two readings both available, and I took the one reachable from where I was
+standing."*
 
 ⚠️ **Corrected 2026-09-09**: an earlier draft of this plan implied nothing was
 pinned. `yq` is, and it lives in the Dockerfile rather than
@@ -106,8 +144,14 @@ pinned. `yq` is, and it lives in the Dockerfile rather than
 The static test in 1.4 must cover **both** places, or it will pass while the
 Dockerfile's `wget` stays unverified.
 
-`grep -rniE 'sha256sum|shasum|checksum'` across `provision-host/*.sh` returns
-**nothing** but the `oras` block added today.
+⚠️ **And the `k9s` row was stale in the other direction** — it still described
+the defect that was fixed the same day it was written. A table that is wrong
+about what is *already done* costs the next reader a duplicate fix, which is
+the mirror of the rows that were wrong about what is *not* done.
+
+`grep -rniE 'sha256sum|shasum|checksum'` across `provision-host/*.sh` now
+returns the `oras` and `k9s` blocks. **Three of six rows remain unverified:**
+`kubectl`, `helm` and `cloudflared`.
 
 ## Why it matters, in the order the arguments actually bite
 
