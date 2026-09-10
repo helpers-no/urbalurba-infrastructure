@@ -621,6 +621,29 @@ worth knowing what it does:
 | `init:` | **re-applied**, and the result reports `init_applied` |
 | a failing `init:` | refuses and **does not drop the database** — that data predates the command. ⚠️ It is not left untouched: statements before the failure are already committed, so the schema can be left part-applied. See [PLAN-cli-init-file-partial-apply](../ai-developer/plans/backlog/PLAN-cli-init-file-partial-apply.md) |
 
+### A role that outlived its database
+
+Removing an application without `--purge` drops nothing, and dropping the
+database by hand afterwards leaves the per-app **role** behind. The next install
+therefore meets a *missing database and an existing role* — the **create** path,
+with the role already there.
+
+| | |
+|---|---|
+| the role | **kept**, never dropped — it may own objects this command knows nothing about |
+| its password | 🔴 **RESET** to the one this install publishes, and the command says so |
+| rollback | if a later step fails, a role that **predates** the command is never dropped; one this command created is |
+
+⚠️ **The reset invalidates any other consumer of that role** until its pods
+restart — the same hazard `--rotate` carries. It is still the right trade: the
+alternative is publishing a credential that is wrong for everyone.
+
+⚠️ **Before 1.6.49 this branch was silent and produced a broken install.**
+`CREATE USER` failed, the failure was discarded because a guard checked only
+that the role *existed*, and the install reported `status: ok` while writing a
+password that had never been set on the role. The application came up unable to
+authenticate (`ops`, `urb-agents#595`).
+
 🔴 **`--rotate` will break a running workload** until its pods restart and
 re-read the Secret. Environment-variable consumers — a Dagster code location,
 for instance — read the credential once at pod start.
