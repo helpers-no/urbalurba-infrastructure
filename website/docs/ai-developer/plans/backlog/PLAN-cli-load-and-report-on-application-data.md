@@ -75,6 +75,15 @@ under 20 seconds, creating the `raw` and `marts` schemas and 47 tables.
       which is where a novice stops (atlas, `urb-agents#629`)
 - [ ] 1.4 ⚠️ `./uis dagster` appears **nowhere** in the 172-line help. `imac`
       found it by guessing. Whatever else this plan does, that line gets added
+- [ ] 1.4b 🔴 **`--wait` must report run state and elapsed time, NOT step
+      counts.** atlas measured `transform_checks` looking hung — 45-second
+      blocking launch, a minute at `NOT_STARTED`, succeeding in ~105 s — and
+      **three people read it as a defect**, because all 647 checks run inside
+      **one op**, so `pipelineOrError` and `executionPlanOrError` return
+      *"1 op, 1 step"* instantly and cannot see the weight (atlas,
+      `urb-agents#629`). Those two are the obvious probes. A `--wait` built on
+      them would make UIS the fourth reader of a misleading signal, with the
+      platform's authority behind it
 - [ ] 1.5 The install summary should say which of the two a user probably wants
 - [x] 1.6 ✅ **Done in 1.6.52** — `--dry-run` is advertised in `template list`,
       in `template info` and in the subcommand help. It pulls the definition
