@@ -68,12 +68,38 @@
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       when: "'postgresql' not in helm_list.stdout"
 
-    - name: 8. Wait for PostgreSQL pod to be running
-      command: kubectl get pods -n default -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].status.phase}'
-      register: pod_status
-      until: pod_status.stdout == "Running"
-      retries: 20
-      delay: 15
+    # 🔴 READY, NOT Running. `status.phase == "Running"` is true the instant the
+    # container starts — and Bitnami's PostgreSQL then bounces its server twice
+    # while it initialises. Measured by imac on a cluster that had never run UIS
+    # (urb-agents#506):
+    #
+    #   07:46:36.5  container starts, phase Running   <- this task was satisfied
+    #   07:46:44.7  setup server stops — server DOWN
+    #   07:46:45.2  CREATE DATABASE fails, psql exit 2   ("connection went bad")
+    #   07:46:45.4  "database system is ready to accept connections"
+    #   07:46:47    pod Ready=True
+    #
+    # It missed a working server by 223 ms. Two later runs passed with ~6.5 s
+    # margin on the same host and the same code — the outcome is decided by
+    # where this 15 s poll lands against a ~9 s startup. **A coin flip skewed to
+    # pass is worse than a deterministic failure**: roughly one user in three
+    # hits an unretryable dead end and the rest conclude it works, which is how
+    # this survived four gradings on clusters where PostgreSQL already existed.
+    #
+    # The Ready condition is gated on Bitnami's own readiness probe — `pg_isready`
+    # against the real server — so it cannot be true while the server is down.
+    # That closes the whole 11-second window rather than narrowing it.
+    #
+    # ⚠️ Do NOT verify this by re-running until it passes. It passed two times in
+    # three before the fix. The check is that the wait now returns on the Ready
+    # condition; the timing margin is a consequence, not the assertion.
+    - name: 8. Wait for PostgreSQL pod to be READY (not merely Running)
+      command: >-
+        kubectl wait --for=condition=Ready pod
+        -l app.kubernetes.io/name=postgresql
+        -n default --timeout=300s
+      register: pod_ready
+      changed_when: false
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
 
