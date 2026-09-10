@@ -63,7 +63,7 @@ anywhere* — was met on 2026-09-10 (`imac`, `urb-agents#495`): absence proved,
 pre-teardown baseline (47 raw tables, 60 marts, 13 views, 122 rows). Installed
 from the **published catalogue**, not a staged file.
 
-**25 versions, 1.6.24 → 1.6.48**, almost all of them defects found by `imac`
+**1.6.24 → 1.6.51**, almost all of them defects found by `imac`
 grading UIS as a novice from a factory reset. The pattern worth recording: the
 platform stopped being the blocker at 1.6.35, and everything since has been the
 difference between *works* and *usable by someone who has never seen it*.

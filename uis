@@ -421,6 +421,27 @@ installed_version() {
     printf ''
 }
 
+# Is a version's image actually PUBLISHED, or does the tag merely not exist yet?
+#
+# 🔴 THREE ANSWERS, AND THE THIRD IS THE POINT. Echoes "yes", "no" or "unknown".
+# `docker manifest inspect` failing can mean the tag is absent OR that we are
+# offline, unauthenticated, or on a docker too old for the subcommand. Reporting
+# "not built yet" when we simply could not look is the same defect as every
+# other one this week: a check true about one thing, read as another.
+image_tag_published() {
+    local repo="$1" tag="$2"
+    command -v docker >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+    local out rc=0
+    out="$(docker manifest inspect "${repo}:${tag}" 2>&1)" || rc=$?
+    if [ "$rc" -eq 0 ]; then printf 'yes'; return 0; fi
+    # Absence has a recognisable shape; everything else is "could not look".
+    case "$out" in
+        *"manifest unknown"*|*"not found"*|*"NAME_UNKNOWN"*|*"MANIFEST_UNKNOWN"*|*"no such manifest"*)
+            printf 'no' ;;
+        *)  printf 'unknown' ;;
+    esac
+}
+
 # The version published upstream.
 #
 # ⚠️ raw.githubusercontent.com is CDN-CACHED. Measured on 2026-08-25: it served
@@ -460,6 +481,22 @@ remote_version() {
 UIS_VERSION_CACHE="${UIS_VERSION_CACHE:-$SCRIPT_DIR/.uis.version-check}"
 UIS_VERSION_CACHE_TTL="${UIS_VERSION_CACHE_TTL:-3600}"
 
+# The same source, with no cache in front of it.
+#
+# ⚠️ `pull` must not decide what it just got from an answer that may be an hour
+# old: the release it is chasing is usually minutes old, so the cached value is
+# exactly the one that would be wrong. Refreshes the cache too, so the notice
+# printed after a pull is not stale either.
+fresh_remote_version() {
+    local now remote
+    now="$(date +%s)"
+    remote="$(curl -fsSL --connect-timeout 2 --max-time 4 "$UIS_RAW_BASE/version.txt" 2>/dev/null | tr -d "[:space:]" || echo "")"
+    if [ -n "$remote" ]; then
+        printf '%s\n%s\n' "$now" "$remote" > "$UIS_VERSION_CACHE" 2>/dev/null || true
+    fi
+    echo "$remote"
+}
+
 # Echo the latest version, using a cached answer when it is fresh enough.
 # Never blocks for more than a couple of seconds, and never fails the command.
 cached_remote_version() {
@@ -475,15 +512,10 @@ cached_remote_version() {
         fi
     fi
 
-    local remote
-    remote="$(curl -fsSL --connect-timeout 2 --max-time 4 "$UIS_RAW_BASE/version.txt" 2>/dev/null | tr -d "[:space:]" || echo "")"
-
-    # Only cache a real answer. Caching an empty result would suppress the
-    # notice for an hour every time the user happened to be offline once.
-    if [ -n "$remote" ]; then
-        printf '%s\n%s\n' "$now" "$remote" > "$UIS_VERSION_CACHE" 2>/dev/null || true
-    fi
-    echo "$remote"
+    # One fetcher, so the two paths cannot drift. fresh_remote_version only
+    # caches a real answer: caching an empty result would suppress the notice
+    # for an hour every time the user happened to be offline once.
+    fresh_remote_version
 }
 
 # One line, only when there is something to say.
@@ -564,8 +596,47 @@ report_version_status() {
         log_info "Up to date."
         return 0
     else
-        log_info "Update available: $installed -> $remote   (run: ./uis pull)"
-        return 1
+        # 🔴 "Latest version: 1.6.50" is TRUE and is not what the operator needs
+        # to know. What they need is the newest version they can actually
+        # INSTALL — and `version.txt` on main is bumped at merge while the image
+        # publishes after the build, so between those two moments the advertised
+        # number is uninstallable. Measured on a real host by ops
+        # (`urb-agents#607`): main moved twice while the image moved zero times,
+        # and `pull` reported success each time. Their words, and the reason
+        # this is a defect rather than publish lag: *"the advertised number is
+        # not converging on the installable one."*
+        #
+        # ⚠️ This branch does the registry call and the passive notice does not,
+        # deliberately. `--check` and `pull` are the two places the operator has
+        # ASKED and is waiting; the notice fires on every command and must stay
+        # free. One truthful answer where it was requested beats a slower prompt
+        # everywhere.
+        local repo published
+        repo="${IMAGE%%:*}"
+        published="$(image_tag_published "$repo" "$remote")"
+        case "$published" in
+            no)
+                log_warn "$remote is released but NOT PUBLISHED yet."
+                echo "    ${repo}:${remote} does not exist in the registry, so './uis pull'" >&2
+                echo "    cannot give it to you — it would fetch whatever ':latest' points at" >&2
+                echo "    and report success. version.txt on main is bumped when a PR merges;" >&2
+                echo "    the image appears when the build finishes, and never if it fails." >&2
+                echo "    Installed $installed is not necessarily behind the newest IMAGE." >&2
+                echo "    Check the build: $UIS_IMAGE_SOURCE/actions" >&2
+                return 1
+                ;;
+            yes)
+                log_info "Update available: $installed -> $remote   (run: ./uis pull)"
+                return 1
+                ;;
+            *)
+                log_info "Update available: $installed -> $remote   (run: ./uis pull)"
+                log_warn "Could not reach the registry to confirm ${repo}:${remote} is published."
+                echo "    If the pull leaves you on $installed, that is why — and './uis pull'" >&2
+                echo "    will say so rather than reporting success." >&2
+                return 1
+                ;;
+        esac
     fi
 }
 
@@ -694,7 +765,66 @@ pull_container() {
         # (truncated, wrong file, bad syntax). That is a correct refusal, not a
         # reason to abort the rest of the command.
         update_launcher || true
-        log_info "Now running version: $(installed_version)"
+
+        # 🔴 A SUCCESSFUL PULL IS NOT THE SAME AS GETTING THE VERSION YOU WERE
+        # TOLD ABOUT, and until now this said "Image updated successfully" and
+        # printed the OLD version either way.
+        #
+        # `:latest` is a moving tag published by the container build. The update
+        # notice compares the installed version against `version.txt` on main —
+        # which main gains the moment a release commit merges, MINUTES BEFORE the
+        # image exists, and permanently if that build fails. In between:
+        #
+        #   "Update available: 1.6.49 -> 1.6.50   (run: ./uis pull)"
+        #   $ ./uis pull
+        #   Image updated successfully
+        #   Now running version: 1.6.49            <- and the notice returns
+        #
+        # Nothing was wrong with the pull. The version simply was not published.
+        # Terje asked for this after a build that never produced an image, and
+        # after I told another agent to wait for one that never arrived.
+        local after remote
+        after="$(installed_version)"
+        log_info "Now running version: ${after:-unknown}"
+
+        remote="$(fresh_remote_version)"
+        if [ -n "$remote" ] && [ -n "$after" ] && [ "$after" != "$remote" ]; then
+            local repo published
+            repo="${IMAGE%%:*}"
+            published="$(image_tag_published "$repo" "$remote")"
+            echo "" >&2
+            case "$published" in
+                no)
+                    log_warn "The image for $remote is NOT PUBLISHED YET."
+                    echo "    main says $remote; the newest image is $after, and ${repo}:${remote}" >&2
+                    echo "    does not exist in the registry. The container build is either still" >&2
+                    echo "    running or it failed — a release commit reaches main minutes before" >&2
+                    echo "    its image does, and never at all if the build breaks." >&2
+                    echo "" >&2
+                    echo "    Nothing is wrong with this machine. Check the build, then pull again:" >&2
+                    echo "      $UIS_IMAGE_SOURCE/actions" >&2
+                    ;;
+                yes)
+                    log_warn "$remote IS published, but ':latest' still points at $after."
+                    echo "    That is a tagging fault in the release, not a fault here. Take it" >&2
+                    echo "    directly, by version rather than by moving tag:" >&2
+                    echo "      UIS_IMAGE=${repo}:${remote} ./uis pull" >&2
+                    echo "    and please report it — ':latest' lagging its own release is the" >&2
+                    echo "    failure the build's own verify step exists to prevent." >&2
+                    ;;
+                *)
+                    log_warn "main says $remote and this machine is on $after."
+                    echo "    Could not reach the registry to find out whether ${repo}:${remote}" >&2
+                    echo "    has been published, so this is 'do not know', not 'not built'." >&2
+                    ;;
+            esac
+            echo "" >&2
+            # ⚠️ NON-ZERO ON PURPOSE. `pull` was asked for a version it did not
+            # get. Exiting 0 here is what made this invisible: a script, or a
+            # person, reads success and waits for a thing that already finished
+            # not happening.
+            return 3
+        fi
     else
         log_error "Failed to pull image"
         exit 1
@@ -800,7 +930,14 @@ case "${1:-help}" in
             report_version_status || vstatus=$?
             exit "$vstatus"
         fi
-        pull_container
+        # ⚠️ NOT BARE. pull_container returns 3 when the pull succeeded and the
+        # version it was chasing is not what arrived — a return that MEANS
+        # something, which under `set -e` would abort here without the exit
+        # status ever being deliberate. Same rule the file states three
+        # functions above, applied to the caller that needed it.
+        pull_rc=0
+        pull_container || pull_rc=$?
+        exit "$pull_rc"
         ;;
     version|--version|-v)
         # ⚠️ Reports BOTH halves. This used to fall through to the container's
@@ -916,6 +1053,8 @@ case "${1:-help}" in
         echo "  shell       Open a shell in the container"
         echo "  logs        Show container logs"
         echo "  pull        Pull latest container image and restart"
+        echo "                (exit 3: the pull worked but the newest published"
+        echo "                 image is older than the version main advertises)"
         echo "  build       Build the container image locally"
         echo "  test        Run container validation tests"
         ;;
