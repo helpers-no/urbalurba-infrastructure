@@ -168,6 +168,23 @@ Nextcloud:
 
 Uptime Kuma:
   uptime-kuma verify             Run E2E health checks on Uptime Kuma
+  monitors render                Render availability monitors for the deployed services
+  monitors apply                 Reconcile those monitors into Uptime Kuma
+  monitors check                 Report drift without changing anything
+                                 (all three take [--from CTX] [--to CTX])
+
+Dagster:
+  dagster verify                 Prove the daemon can fire schedules
+  dagster automation             Report whether schedules and sensors are switched ON
+                                 [--expect running|stopped] asserts instead of reporting
+
+PostgREST:
+  postgrest verify --app <name>  Health-check one application's PostgREST instance
+
+Browser automation:
+  browserless verify             Health-check the browserless service
+  browserless verify-session     Drive a real session end to end
+  neko verify                    Health-check the neko service
 
 Testing:
   test-all                       Run full integration test (deploy+undeploy all services)
@@ -178,6 +195,8 @@ Testing:
 Documentation:
   docs generate           Generate JSON files for website
   docs plans              Generate plan index pages for website
+  catalog generate        Generate the application catalogue
+                          [--output-dir DIR] [--dry-run]
 
 Information:
   version                 Show UIS version

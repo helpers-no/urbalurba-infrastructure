@@ -694,7 +694,28 @@ def main():
              "uptime-kuma-0", "--", "sqlite3", "/app/data/kuma.db",
              "select name from monitor;"], capture_output=True, text=True)
         if r.returncode != 0:
-            sys.exit("ERROR: could not read Uptime Kuma - is it deployed?")
+            # 🔴 SAY THAT NOTHING WAS COMPARED. The lines above already printed
+            # `monitors: N` - the INTENT, built from the --from context - and a
+            # reader takes that number as a result. ops ran this on a host where
+            # Uptime Kuma lives elsewhere, got the error AND the count, and read
+            # it as a confident answer about Kuma (urb-agents#648).
+            #
+            # `is it deployed?` was also one hypothesis presented as the
+            # question. The likelier cause is the wrong context, so name the one
+            # actually used rather than making the operator guess.
+            ctx = CTX_TO or "(current)"
+            print(f"\n  ERROR: could not read Uptime Kuma in context '{ctx}'.",
+                  file=sys.stderr)
+            print(f"  NOTHING WAS COMPARED. The {len(monitors)} monitors above "
+                  f"are what UIS INTENDS to monitor, discovered from "
+                  f"'{CTX_FROM or '(current)'}' - not what Uptime Kuma is "
+                  f"running.", file=sys.stderr)
+            print("  Either Uptime Kuma is not deployed there, or --to names "
+                  "the wrong cluster.", file=sys.stderr)
+            print("  Set MONITORS_FROM_CONTEXT / MONITORS_TO_CONTEXT in "
+                  ".uis.extend/cluster-config.sh, or pass --from/--to.",
+                  file=sys.stderr)
+            return 1
         live = {l.strip() for l in r.stdout.splitlines() if l.strip()}
         want = {m["name"] for m in monitors}
         missing, extra = sorted(want - live), sorted(live - want)

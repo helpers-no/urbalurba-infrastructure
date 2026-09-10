@@ -75,6 +75,13 @@ under 20 seconds, creating the `raw` and `marts` schemas and 47 tables.
       which is where a novice stops (atlas, `urb-agents#629`)
 - [ ] 1.4 ⚠️ `./uis dagster` appears **nowhere** in the 172-line help. `imac`
       found it by guessing. Whatever else this plan does, that line gets added
+- [ ] 1.4a 🔴 **Poll the RUN, not the launch call.** ops measured a queue delay
+      of **142.5 s** against a **105.1 s** runtime on `transform_checks` — the
+      wait before the work starts was longer than the work. **imac, atlas and
+      ops each called it hung while being early by under two minutes**
+      (`urb-agents#648`). A `--wait` that watches the blocking launch call, or
+      that gives up on a fixed short timeout, reproduces that verdict
+      automatically and with the platform's authority behind it
 - [ ] 1.4b 🔴 **`--wait` must report run state and elapsed time, NOT step
       counts.** atlas measured `transform_checks` looking hung — 45-second
       blocking launch, a minute at `NOT_STARTED`, succeeding in ~105 s — and
