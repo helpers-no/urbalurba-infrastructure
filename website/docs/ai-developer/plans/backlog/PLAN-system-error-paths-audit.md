@@ -12,7 +12,7 @@ exercised at least once, so a failure reports its cause instead of being
 swallowed by the mechanism meant to handle it.
 
 **Proposed by**: imac, `urb-agents#344`, after finding the third instance in one
-week. **See the table below for the recorded instances**, most recently one at 1.6.52. Its words: *"Each was invisible until something failed, and each made the
+week. **See the table below for the recorded instances**, most recently one at 1.6.53. Its words: *"Each was invisible until something failed, and each made the
 **next** failure harder to diagnose. Might be worth one deliberate pass over the
 error paths rather than three more of these arriving one at a time."*
 
@@ -48,6 +48,7 @@ is one nobody checks.* The sweep should settle it rather than carry it forward.
 | 1.6.50 | 🔴 The gate deciding whether a service is provided OUTSIDE the cluster returned "not external" — meaning *deploy the real thing in-cluster* — when `yq` was missing or the file did not parse | `is_external_service` answered *"did I find a host string?"*; the caller needed *"is this service external?"*. Four situations collapsed to one return code, two of which are the absence of an answer. On an installation whose database is shared, the deploy deletes the proxy and rolls out a StatefulSet, logging ordinary progress (ops, `urb-agents#600`) |
 | 1.6.51 | 🔴 `./uis pull` reported **"Image updated successfully"** after pulling a `:latest` that was two releases behind the version its own notice had just advertised | The notice compares the installed version against `version.txt` on `main`; `pull` pulls a moving tag. `main` gains a release minutes before the image exists and permanently if the build fails, and nothing compared what arrived against what was asked for. Measured live: `main` 1.6.50, `:latest` = 1.6.48, `:1.6.49` and `:1.6.50` both absent from the registry (Terje) |
 | 1.6.52 | 🔴 `pull`, `stop` and `restart` stopped the container **while a `template install` was running inside it**, with no warning — leaving a database with a partial schema or a code location Dagster never loaded, and no command that repairs either | Three verbs whose whole job is to stop the container, and none of them asked what the container was doing. Not an error path that failed: an error path nobody wrote. Reported by atlas from a production go-live where ops was asked to pull mid-install and held it only by reasoning it out (`urb-agents#629`) |
+| 1.6.53 | 🔴 `PodNotReady` fired on every **successfully completed** Job pod and could not clear before its 24 h TTL, so on a cluster with a nightly chain the alert group never emptied and re-notified every four hours, permanently | `kube_pod_status_ready{condition="false"} == 1` with no phase exclusion. A Completed pod is 0/1 and ready=false forever — it is not unready, it is finished. The rule's own description said *"too long for a **deployment**"* and the expression enforced nothing of the kind. 🔴 Six false alerts sat beside a **real** one that had been firing four days — a production database with no metrics since a reboot — invisible among alerts that never mean anything (ops, `urb-agents#633`) |
 
 Every row above, a different mechanism, one shape: **error handling that looks
 correct, defeated by the semantics of the construct it is written in, in a branch

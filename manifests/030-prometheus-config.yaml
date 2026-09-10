@@ -238,14 +238,67 @@ serverFiles:
               description: "More than 3 restarts in 30m. kubectl logs --previous."
 
           # 15m, not 5m: long enough that an ordinary rollout does not page.
+          #
+          # 🔴 TERMINAL PODS ARE EXCLUDED, AND THIS RULE WAS UNUSABLE WITHOUT IT.
+          #
+          # A Completed Job pod is 0/1 and reports ready=false FOREVER. It is not
+          # unready; it is finished. So every successful Job alerted at +15m and
+          # could only clear when the pod was deleted — and Dagster's
+          # K8sRunLauncher sets ttlSecondsAfterFinished=86400, so each successful
+          # run alerted for 23h45m.
+          #
+          # Measured on production (ops, urb-agents#633): six atlas jobs, all
+          # six SUCCEEDED, all six alerted. With a nightly chain, three new pods
+          # enter the window each night while the previous night's are still in
+          # it — so with group_by [alertname, namespace] and repeat_interval 4h
+          # the group CAN NEVER EMPTY and re-notifies every four hours, forever,
+          # to say that jobs which succeeded have failed.
+          #
+          # 🔴 The cost was not noise. Those six sat beside a REAL alert that had
+          # been firing for four days — the production database's exporter dead
+          # since a reboot, no metrics the whole time — and it was invisible
+          # among alerts that never mean anything. A rule that cannot stop
+          # firing does not add noise; it spends the credibility of the channel.
+          #
+          # ⚠️ `Failed` is excluded too, and that would LOSE coverage on its own,
+          # so KubeJobFailed below replaces it. A failed pod is equally terminal
+          # and equally unable to clear before its TTL — reporting it as
+          # "not-ready for 15m" is both wrong and unclearable. The Job's own
+          # failed condition says the true thing and says it once.
+          #
+          # This rule keeps every case it was written for: a pod that is running
+          # and not becoming ready still matches, because a running pod's phase
+          # is Running. Its own description says "too long for a DEPLOYMENT",
+          # and DeploymentReplicasUnavailable below covers that independently.
           - alert: PodNotReady
             expr: |
               kube_pod_status_ready{condition="false"} == 1
+                unless on(namespace, pod)
+              kube_pod_status_phase{phase=~"Succeeded|Failed"} == 1
             for: 15m
             labels: { severity: warning }
             annotations:
               summary: "{{ $labels.namespace }}/{{ $labels.pod }} has been not-ready for 15m"
-              description: "Too long for a deployment. kubectl describe pod."
+              description: "Running but never became ready. Completed and failed pods are excluded. kubectl describe pod."
+
+          # Replaces the coverage removed by excluding `Failed` above, and says
+          # the true thing: the Job gave up, rather than a pod being slow.
+          #
+          # `kube_job_failed{condition="true"}` is the Job's terminal condition —
+          # it means backoffLimit was exhausted — not `kube_job_status_failed`,
+          # which counts failed POD attempts and is above zero during a retry
+          # that then succeeds.
+          #
+          # ⚠️ This one legitimately persists until the Job object is deleted
+          # (Dagster: 24h). That is correct: the failure is real and stays real.
+          - alert: KubeJobFailed
+            expr: |
+              kube_job_failed{condition="true"} == 1
+            for: 1m
+            labels: { severity: warning }
+            annotations:
+              summary: "{{ $labels.namespace }}/{{ $labels.job_name }} failed"
+              description: "The Job exhausted its retries. kubectl describe job, then logs on its pod."
 
           - alert: DeploymentReplicasUnavailable
             expr: |
