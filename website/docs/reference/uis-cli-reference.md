@@ -369,6 +369,16 @@ operational:
   unscheduled: [parked-source]
 ```
 
+**Rendered in two places, deliberately.** `template info` prints the whole
+block before an install; the **install summary prints the short form after
+one** — the note and the `first_data` jobs, immediately below `Endpoints:`.
+
+⚠️ **Both, because a user who runs `install` without `info` would otherwise
+never see it** — and `template list` offers `info` and `install` as two equal
+options with nothing marking the first as a prerequisite. Even a reader who did
+run `info` met those job names several minutes and several hundred lines
+earlier; the end of the output is the part that gets read.
+
 🔴 **`automation` is the single most important line.** *Does installing this
 start anything?* An operator deciding whether to install needs that before the
 service list, and nothing else in the definition says it.
