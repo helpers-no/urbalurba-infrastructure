@@ -518,6 +518,25 @@ installing nothing.
 `{{ params.* }}` is substituted into the concatenated content, so a parameter may
 appear in any file.
 
+### Where your application is, after it installs
+
+The completion summary ends with the application's endpoints, taken from its
+`exports:`:
+
+```
+Endpoints:
+  api-url        http://api-atlas.localhost
+```
+
+🔴 **Do not guess this URL from `--url-prefix`.** The route matches on
+**hostname** — `HostRegexp('api-atlas\..+')` — so `http://api-atlas.localhost/`
+answers and `http://localhost/api-atlas/` returns a bare Traefik 404. The
+prefix is the subdomain, not a path.
+
+⚠️ Only what the definition declares in `exports:` appears here. An application
+that exports nothing prints no endpoints, and there is currently no other
+command that will tell you — `status`, `list` and `verify` all omit it.
+
 ### What a fresh install actually gives you
 
 🔴 **An application whose data arrives from a pipeline serves an empty API on
