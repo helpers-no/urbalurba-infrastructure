@@ -166,6 +166,35 @@ them, and a wrong label selector in `kubectl wait` breaks a deploy that works
 today. Filed here so the next person does not have to rediscover them — and so
 that leaving them is a decision on the record rather than an omission.
 
+## 🔴 A guard that checks a field is WELL-FORMED does not check that it is TRUE
+
+atlas's formulation, `urb-agents#538`, after their `operational.cadence` block
+advertised a weekly scrape that has not run since 2026-08-25:
+
+| where | the guard checked | the field promises |
+|---|---|---|
+| `first_data.jobs` (imac, `#507`) | every job **exists** | **coverage** — run these and you have the data |
+| `operational.cadence` (`#538`) | every cron is **defined** | Atlas **runs** on it |
+
+**Both guards were green while the artifact was wrong.** `SCRAPER_CRON` was
+still a constant; `scraper_polled()` had no consumer. The block was telling
+operators that Atlas scrapes a third-party site every Sunday — in a document
+whose own text argues for staying welcome at public-sector APIs.
+
+⚠️ **This is the general form of what my structural tests keep getting wrong.**
+The `.app_name` assertion checked that the string *appeared*; the property was
+that removal *resolves a tenant from the record*. The `kubectl wait` lint
+checks that a retry is *present*; the property is that the wait *tolerates a
+pod that does not exist yet*. Presence is cheap to assert and is not the claim.
+
+**The rule:** when writing a guard, state the promise in a sentence first, then
+ask whether the assertion could pass while the sentence is false. If it can,
+the guard is testing well-formedness and the promise is untested.
+
+atlas's fix is the right shape: a cron is now asserted **live** — an asset
+references the builder that wraps it, or it is a `ScheduleDefinition`'s own
+`cron_schedule` — and made to fail on purpose.
+
 ## A NEIGHBOURING class, worth naming separately rather than inflating this one
 
 **Reconstructing a value that was recorded.** `template remove` stored the
