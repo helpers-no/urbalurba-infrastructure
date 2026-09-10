@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-09-07 (thirteenth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-09-10 (fourteenth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -54,7 +54,59 @@ for the second. Retract the six; build none on speculation.
 
 ---
 
-## Current status — tor-agent, 2026-09-07
+## Current status — tor-agent, 2026-09-10
+
+🟢 **`uis template install atlas` works end to end on a machine that has never
+seen it.** Terje's assertion — *install, then materialise, with no human step
+anywhere* — was met on 2026-09-10 (`imac`, `urb-agents#495`): absence proved,
+`EXIT=0`, `raw/_migrations` `RUN_SUCCESS`, and every figure back to the
+pre-teardown baseline (47 raw tables, 60 marts, 13 views, 122 rows). Installed
+from the **published catalogue**, not a staged file.
+
+**23 versions, 1.6.24 → 1.6.46**, almost all of them defects found by `imac`
+grading UIS as a novice from a factory reset. The pattern worth recording: the
+platform stopped being the blocker at 1.6.35, and everything since has been the
+difference between *works* and *usable by someone who has never seen it*.
+
+🔴 **Three things are open and none of them are atlas.**
+
+| | |
+|---|---|
+| **[system-topology-coverage](INVESTIGATE-system-topology-coverage.md)** — outcome 2, exercise the proxy topology | **Tier 1, oldest live requirement.** ⚠️ This was invisible in my published status until `ops-dev` reconciled a dying ledger (`urb-agents#544`) and could not find it. The artefact was always here; the summary was thinner than the tracking behind it |
+| **Container-image scanning**, 46 images | unstarted, a platform decision. ⚠️ Requirement to keep: *"no findings" must render differently from "the scan did not run"* |
+| **[cli-load-and-report-on-application-data](PLAN-cli-load-and-report-on-application-data.md)** | `uis dagster materialize`, `uis template status`, and the `uis status` URL column. Filed from `imac`'s novice grading; nothing blocks it but my ordering |
+
+### What the last three days actually taught, beyond the fixes
+
+Two guards now make failure **audible**, and they have each caught something
+care had already missed:
+
+- the test framework **reconciles skips against starts** and fails a suite that
+  cannot account for its own tests — it caught a lint of mine that resolved a
+  path one directory short, found nothing, and reported `ALL TESTS PASSED`
+- **lints that fail on a shape rather than an instance** — the `kubectl wait`
+  one, the bashism one, the `set -e` one that was widened after it missed the
+  spelling it existed for
+
+`imac`'s framing, which is the reason to prefer them over care: *"you did not
+catch it by being careful, you caught it because you had built something that
+makes silence visible."*
+
+And three rules from other agents, each sharper than my own version:
+
+- **a guard that checks a field is well-formed does not check that it is true**
+  (`atlas`) — the general form of what my structural tests kept getting wrong
+- **a check that cannot pass is a different defect with the opposite sign from
+  one that cannot fail** (`imac`) — failing closed costs one confusing exit
+  code; failing open cost four gradings
+- **when a measurement answers a yes/no question, the finding is usually in the
+  mechanism, not the answer** — `exit 1 on no matching resources` answered "no
+  vacuous pass" and *also* said "fails before the resource exists", which broke
+  first installs for two versions
+
+---
+
+## Previous status — tor-agent, 2026-09-07
 
 **`state: one investigation filed, unstarted`.** `active/` is still empty.
 

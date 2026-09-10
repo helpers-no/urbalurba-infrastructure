@@ -343,9 +343,33 @@
       failed_when: false
       when: (_ok | default([]) | length) > 0
 
+    # 🔴 ASSERT THE CHECK RAN BEFORE TRUSTING ITS OUTPUT.
+    #
+    # `_pgcheck` carries `failed_when: false`, so a query that RAN AND FAILED
+    # leaves `stdout` empty. `default('MISSING:')` does not replace an empty
+    # string — only an undefined one — and even the boolean form would not
+    # help here, because the fallback itself parses to an empty list. So a
+    # failed check produced `_tenant_missing_pg: []`, and D5c asserted "no
+    # tenant is missing postgres" **on no evidence**.
+    #
+    # That is atlas's rule (urb-agents#538) in a test playbook: a guard that
+    # checks a value is well-formed does not check that it is true. Sibling of
+    # the litellm count that read "no answer" as "zero tables" (imac, #571)
+    # and of `_code_locations | default([])` fixed this morning.
+    #
+    # Skipped is legitimate — nothing to check. Failed is not.
+    - name: "D5a2. The tenant postgres check must have RUN, or its result means nothing"
+      ansible.builtin.assert:
+        that: (_pgcheck.rc | default(0)) == 0
+        fail_msg: >-
+          The per-tenant postgres check did not run (rc={{ _pgcheck.rc | default('?') }}).
+          Its output cannot be read as "no tenant is missing postgres" — it is
+          "no answer". stderr: {{ _pgcheck.stderr | default('<none>', true) }}
+      when: _pgcheck is defined and (_pgcheck.skipped | default(false)) == false
+
     - name: "D5b. Record which tenants cannot run"
       ansible.builtin.set_fact:
-        _tenant_missing_pg: "{{ (_pgcheck.stdout | default('MISSING:') | regex_replace('^.*MISSING:', '') | trim).split() }}"
+        _tenant_missing_pg: "{{ (_pgcheck.stdout | default('', true) | regex_replace('^.*MISSING:', '') | trim).split() }}"
       failed_when: false
 
     - name: "D5c. A tenant that cannot hydrate run storage is a FAILURE"
