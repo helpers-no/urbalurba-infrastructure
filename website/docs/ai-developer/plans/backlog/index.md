@@ -15,8 +15,11 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-09-10 |
 | [Plan: pin and verify the binaries the image installs](PLAN-system-pin-provisioned-binaries.md) | — | 2026-09-10 |
 | [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-10 |
+| [Plan: four dependency alerts on the docs site, and why bumping does not clear them](PLAN-docs-website-dependency-alerts.md) | The repository's open dependency alerts are either cleared or | 2026-09-10 |
+| [Plan: an unmarked proxy and no StatefulSet is the one revert that warns nothing](PLAN-cli-unmarked-proxy-silent-overlay.md) | `uis deploy <svc>` cannot roll out an in-cluster workload on top of a | 2026-09-10 |
 | [Plan: UIS assumes its Postgres Service is its own, and cannot tell if it is not](PLAN-cli-postgresql-target-tenancy.md) | UIS knows whether the Postgres server it is about to write to is a | 2026-09-10 |
 | [Plan: a command that loads the data, and a command that reports on it](PLAN-cli-load-and-report-on-application-data.md) | — | 2026-09-10 |
 | [Plan: "leaves the database alone" is not what a failed `init:` does](PLAN-cli-init-file-partial-apply.md) | When an `init:` fails part-way through on a database that already | 2026-09-10 |
