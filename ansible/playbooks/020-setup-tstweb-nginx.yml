@@ -41,7 +41,21 @@
           - "app=tst-nginx"
         kubeconfig: "{{ merged_kubeconf_file }}"
       register: nginx_pods
-      until: nginx_pods.resources | length > 0 and (nginx_pods.resources | map(attribute='status.phase') | list | unique == ['Running'])
+      # 🔴 READY, NOT phase. `status.phase == "Running"` is true the moment
+      # the container starts; a pod is only serving when its readiness probe
+      # passes. On PostgreSQL that gap was 11 seconds and cost a 223 ms race
+      # that failed one install in three (imac, urb-agents#506); fixed there in
+      # 1.6.37, and these are its siblings (#516).
+      #
+      # ⚠️ Deliberately still `k8s_info` and not `kubectl wait`: the registered
+      # result is used by later tasks, and swapping the module would mean
+      # duplicating the selector in a second place. Only the PREDICATE changes.
+      # The existing `length > 0` guard already rules out the vacuous pass.
+      until: >-
+        nginx_pods.resources | length > 0 and
+        (nginx_pods.resources | map(attribute='status.conditions') | flatten
+         | selectattr('type', 'eq', 'Ready') | selectattr('status', 'eq', 'True')
+         | list | length) == (nginx_pods.resources | length)
       retries: 10
       delay: 10
 
@@ -107,7 +121,21 @@
           - "name=nginx-ingress-microk8s"
         kubeconfig: "{{ merged_kubeconf_file }}"
       register: ingress_pods
-      until: ingress_pods.resources | length > 0 and (ingress_pods.resources | map(attribute='status.phase') | list | unique == ['Running'])
+      # 🔴 READY, NOT phase. `status.phase == "Running"` is true the moment
+      # the container starts; a pod is only serving when its readiness probe
+      # passes. On PostgreSQL that gap was 11 seconds and cost a 223 ms race
+      # that failed one install in three (imac, urb-agents#506); fixed there in
+      # 1.6.37, and these are its siblings (#516).
+      #
+      # ⚠️ Deliberately still `k8s_info` and not `kubectl wait`: the registered
+      # result is used by later tasks, and swapping the module would mean
+      # duplicating the selector in a second place. Only the PREDICATE changes.
+      # The existing `length > 0` guard already rules out the vacuous pass.
+      until: >-
+        ingress_pods.resources | length > 0 and
+        (ingress_pods.resources | map(attribute='status.conditions') | flatten
+         | selectattr('type', 'eq', 'Ready') | selectattr('status', 'eq', 'True')
+         | list | length) == (ingress_pods.resources | length)
       retries: 10
       delay: 10
 

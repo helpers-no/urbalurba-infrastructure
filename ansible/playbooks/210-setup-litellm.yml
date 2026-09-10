@@ -152,7 +152,23 @@
       register: litellm_pods
       retries: 20
       delay: 15
-      until: litellm_pods.resources | length > 0 and litellm_pods.resources[0].status.phase == "Running"
+      # 🔴 READY, NOT phase. `status.phase == "Running"` is true the moment
+      # the container starts; a pod is only serving when its readiness probe
+      # passes. On PostgreSQL that gap was 11 seconds and cost a 223 ms race
+      # that failed one install in three (imac, urb-agents#506); fixed there in
+      # 1.6.37, and these are its siblings (#516).
+      #
+      # ⚠️ Deliberately still `k8s_info` and not `kubectl wait`: the registered
+      # result is used by later tasks, and swapping the module would mean
+      # duplicating the selector in a second place. Only the PREDICATE changes.
+      # The existing `length > 0` guard already rules out the vacuous pass.
+      # Also widened from resources[0] to every pod, so a second replica
+      # cannot be un-ready while the task reports success.
+      until: >-
+        litellm_pods.resources | length > 0 and
+        (litellm_pods.resources | map(attribute='status.conditions') | flatten
+         | selectattr('type', 'eq', 'Ready') | selectattr('status', 'eq', 'True')
+         | list | length) == (litellm_pods.resources | length)
 
     - name: 8. Display LiteLLM pod readiness status
       ansible.builtin.debug:
