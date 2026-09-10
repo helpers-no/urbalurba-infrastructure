@@ -264,6 +264,7 @@ cmd_template_list() {
     done
     echo ""
     echo "Use 'uis template info <id>' for details"
+    echo "Use 'uis template install <id> --dry-run' to see exactly what it would do"
     echo "Use 'uis template install <id>' to install"
 }
 
@@ -342,6 +343,16 @@ cmd_template_info() {
         # tell an operator nothing.
         _template_info_operational "$template_id" "$template"
     fi
+
+    # ⚠️ The most useful thing about an application is a command nothing
+    # advertised. `--dry-run` pulls the definition and prints the numbered plan
+    # without installing anything — ops called it "the clearest description of
+    # atlas that exists anywhere" and found it only because it is in the
+    # install usage line (atlas, urb-agents#629). A capability nobody is told
+    # about is one nobody has.
+    echo ""
+    echo "See exactly what installing this would do, without doing it:"
+    echo "  uis template install $template_id --dry-run"
 }
 
 # The short form, for the END of an install — where attention actually is.
@@ -2262,11 +2273,15 @@ run_template() {
             echo "  list              List available UIS templates"
             echo "  info <id>         Show template details"
             echo "  install <id>      Install a template (deploy + configure services)"
+            echo "    --dry-run       Pull the definition and print the numbered plan."
+            echo "                    Installs NOTHING. The best way to see what an"
+            echo "                    application is before committing to it."
             echo "  remove <id>       Remove an installed application (data is kept unless --purge)"
             echo ""
             echo "Examples:"
             echo "  uis template list"
             echo "  uis template info postgresql-demo"
+            echo "  uis template install postgresql-demo --dry-run"
             echo "  uis template install postgresql-demo"
             return 0
             ;;

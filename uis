@@ -831,6 +831,57 @@ pull_container() {
     fi
 }
 
+# What is running inside the container right now, if anything is.
+#
+# 🔴 `pull`, `stop` and `restart` all STOP THE CONTAINER, and a long UIS command
+# runs INSIDE it. `uis template install` is minutes long — it pulls an OCI
+# definition, creates a database, applies migrations, writes a code location and
+# deploys Dagster twice. Stopping the container mid-way leaves the application
+# half-built: a database that exists with a partial schema, a code location
+# written to .uis.extend that Dagster has not picked up, or a Secret with no
+# consumer. Nothing warned, and there is no `uis` command that repairs it.
+#
+# Reported by atlas from a production install (`urb-agents#629`), where ops was
+# asked to pull mid-install and held it only because they reasoned it out
+# themselves.
+#
+# ⚠️ `docker top`, not `docker exec pgrep`. exec starts a process in the very
+# container we are asking about, and on a stopped or unhealthy container it
+# hangs or fails — so the check would be least reliable exactly when it matters.
+# `docker top` reads from the host and cannot itself be the thing it finds.
+container_busy_with() {
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$" || return 0
+    docker top "$CONTAINER_NAME" -eo args 2>/dev/null \
+        | grep -E 'uis-cli\.sh|ansible-playbook' \
+        | grep -v 'grep -E' || true
+}
+
+# Refuse an action that stops the container while work is running in it.
+# $1 is the verb, for the message. UIS_FORCE=1 overrides.
+refuse_if_busy() {
+    local verb="$1" busy
+    busy="$(container_busy_with)"
+    [ -z "$busy" ] && return 0
+
+    if [ -n "${UIS_FORCE:-}" ]; then
+        log_warn "UIS_FORCE is set — running '$verb' while the container is busy."
+        echo "$busy" | sed 's/^/      /' >&2
+        return 0
+    fi
+
+    log_error "Refusing to $verb: a UIS command is running inside the container."
+    echo "$busy" | sed 's/^/      /' >&2
+    echo "" >&2
+    echo "    Stopping the container now would interrupt it. An interrupted" >&2
+    echo "    'template install' leaves a half-built application — a database" >&2
+    echo "    with a partial schema, or a code location Dagster has not loaded" >&2
+    echo "    — and no UIS command repairs that." >&2
+    echo "" >&2
+    echo "    Wait for it to finish, then run this again." >&2
+    echo "    If you are certain it is safe:  UIS_FORCE=1 ./uis $verb" >&2
+    return 1
+}
+
 # Stop container
 stop_container() {
     if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
@@ -890,9 +941,11 @@ case "${1:-help}" in
         log_info "UIS container is ready"
         ;;
     stop)
+        refuse_if_busy stop || exit 1
         stop_container
         ;;
     restart)
+        refuse_if_busy restart || exit 1
         stop_container
         start_container
         log_info "UIS container restarted"
@@ -935,6 +988,11 @@ case "${1:-help}" in
         # something, which under `set -e` would abort here without the exit
         # status ever being deliberate. Same rule the file states three
         # functions above, applied to the caller that needed it.
+        # ⚠️ BEFORE the pull, not before the restart. The download is harmless;
+        # refusing early means the operator is told to wait while nothing has
+        # changed, rather than being left with a pulled image the container has
+        # not adopted and no statement about which one it is running.
+        refuse_if_busy pull || exit 1
         pull_rc=0
         pull_container || pull_rc=$?
         exit "$pull_rc"
