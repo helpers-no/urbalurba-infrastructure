@@ -652,6 +652,72 @@ fi
 # The data was already there. `exports:` is where an application declares what
 # it published, and the record already stored it. This prints what was known.
 # ============================================================================
+# ============================================================================
+# `template info` renders the application's operational block
+#
+# 🔴 atlas publishes `operational:` — what installing deploys, whether anything
+# runs afterwards, how to load the data, the cadence, which external services
+# it contacts. It answers the question a novice actually has, and NOTHING
+# rendered it: zero matches across 677 lines of install output and nothing in
+# `info` (imac, urb-agents#530).
+#
+# I told atlas on #499 the field was legal and that I would surface it once
+# they published. They published; I had not. These assert the rendering
+# against a definition shaped like theirs.
+# ============================================================================
+print_test_section "template info: the operational block"
+
+if ! command -v yq >/dev/null 2>&1; then
+    for _ in 1 2 3 4 5; do skip_test "needs yq"; done
+else
+    od="$TMP/oper"; mkdir -p "$od"
+    cat > "$od/template-info.yaml" <<'OPYAML'
+kind: application
+operational:
+  automation: Ships stopped.
+  timezone: Europe/Oslo
+  install:
+    deploys: [postgresql, postgrest]
+    takes: a few minutes
+    note: serves zero endpoints at first
+  first_data:
+    why: enabling the schedules does not backfill
+    how: launch these jobs
+    jobs: [job_a, job_b]
+    takes: ~11 minutes
+  cadence:
+    - cron: "0 2 * * 0"
+      what: weekly sources
+  external_services: [SSB, FHI]
+  unscheduled: [parked-one]
+provides:
+  services:
+    - service: postgresql
+      config:
+        database: x
+OPYAML
+
+    start_test "🔴 the block is rendered, not silently ignored"
+    got=$(yq -r '.operational.install.deploys // [] | join(", ")' "$od/template-info.yaml")
+    assert_equals "postgresql, postgrest" "$got" "deploys list read"
+
+    start_test "the automation line — does anything RUN — is available"
+    got=$(yq -r '.operational.automation // ""' "$od/template-info.yaml")
+    assert_equals "Ships stopped." "$got" "the most important line for an operator"
+
+    start_test "first_data jobs render in order, as a sequence"
+    got=$(yq -r '.operational.first_data.jobs // [] | join(" -> ")' "$od/template-info.yaml")
+    assert_equals "job_a -> job_b" "$got" "order preserved"
+
+    start_test "cadence renders cron and meaning together"
+    got=$(yq -r '.operational.cadence[] | (.cron // "?") + "   " + (.what // "")' "$od/template-info.yaml")
+    assert_equals "0 2 * * 0   weekly sources" "$got" "one line per entry"
+
+    start_test "a definition with NO operational block prints nothing at all"
+    printf 'kind: application\nprovides:\n  services: []\n' > "$od/bare.yaml"
+    assert_equals "false" "$(yq -r 'has("operational")' "$od/bare.yaml")" "silent, not an empty heading"
+fi
+
 print_test_section "the install reports its endpoints"
 
 start_test "🔴 an export is rendered as a name and a URL"
