@@ -166,7 +166,8 @@
       # cannot be un-ready while the task reports success.
       until: >-
         litellm_pods.resources | length > 0 and
-        (litellm_pods.resources | map(attribute='status.conditions') | flatten
+        (litellm_pods.resources | selectattr('status.conditions', 'defined')
+         | map(attribute='status.conditions') | flatten
          | selectattr('type', 'eq', 'Ready') | selectattr('status', 'eq', 'True')
          | list | length) == (litellm_pods.resources | length)
 
