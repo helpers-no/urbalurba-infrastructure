@@ -107,6 +107,73 @@ _pg_user_exists() {
     [[ "$result" == "1" ]]
 }
 
+# Ensure the role exists AND its password is the one the caller is about to
+# publish. Echoes "created" or "reset" on stdout; returns 1 with the psql text
+# on stderr if it cannot make both true.
+#
+# 🔴 WHY THIS EXISTS. The create path used to run CREATE USER unconditionally
+# and then swallow its failure whenever the role turned out to exist:
+#
+#     if [[ $create_user_rc -ne 0 ]] && ! _pg_user_exists ...; then ... fi
+#
+# That guard checks the role EXISTS. It does not check that its password is the
+# one about to be written into a Secret and three consumers' connection strings.
+# So `DROP DATABASE <app>` without `DROP ROLE <app>` — which is what happens
+# whenever an operator removes an application without --purge — produced:
+# CREATE USER fails, the error is discarded, CREATE DATABASE succeeds, and the
+# install reports `status: ok` while publishing a password THAT WAS NEVER SET ON
+# THE ROLE. The application installs cleanly and cannot authenticate.
+#
+# The correct branch already existed twice in this codebase: 360-setup-dagster
+# task 13 ("Keep the role password in step with the secret") and
+# configure-postgrest's `reconfigure-fresh-password` path. This is the third
+# handler catching up, not a new idea.
+#
+# ⚠️ Resetting a pre-existing role's password invalidates any OTHER consumer of
+# that role until its pods restart — the same hazard `--rotate` carries. It is
+# still the right trade here: the alternative is publishing a credential that is
+# guaranteed wrong for everyone, including the caller.
+_pg_ensure_role() {
+    local username="$1" password="$2" admin_pass="$3"
+    local out rc=0
+
+    if _pg_user_exists "$username" "$admin_pass"; then
+        out=$(_pg_exec "ALTER USER \"$username\" WITH PASSWORD '$password'" "$admin_pass" 2>&1) || rc=$?
+        if [[ $rc -ne 0 ]]; then
+            echo "Could not reset the password of the existing role '$username' (psql exit $rc)" >&2
+            [[ -n "$out" ]] && echo "  $out" >&2
+            return 1
+        fi
+        echo "reset"
+        return 0
+    fi
+
+    out=$(_pg_exec "CREATE USER \"$username\" WITH PASSWORD '$password'" "$admin_pass" 2>&1) || rc=$?
+    if [[ $rc -eq 0 ]]; then
+        echo "created"
+        return 0
+    fi
+
+    # CREATE failed. If the role is there now, another process created it
+    # between the check and the create — the race the old guard was written for.
+    # Take the same corrective branch rather than assuming the password matches.
+    if _pg_user_exists "$username" "$admin_pass"; then
+        local alter_out alter_rc=0
+        alter_out=$(_pg_exec "ALTER USER \"$username\" WITH PASSWORD '$password'" "$admin_pass" 2>&1) || alter_rc=$?
+        if [[ $alter_rc -ne 0 ]]; then
+            echo "Role '$username' appeared during creation and its password could not be set (psql exit $alter_rc)" >&2
+            [[ -n "$alter_out" ]] && echo "  $alter_out" >&2
+            return 1
+        fi
+        echo "reset"
+        return 0
+    fi
+
+    echo "Failed to create user '$username' (psql exit $rc)" >&2
+    [[ -n "$out" ]] && echo "  $out" >&2
+    return 1
+}
+
 # Ensure a Kubernetes namespace exists (idempotent)
 _pg_ensure_namespace() {
     local ns="$1"
@@ -380,23 +447,37 @@ EOF
     local app_password
     app_password=$(openssl rand -base64 24 | tr -d '/+=' | head -c 32)
 
-    echo "Creating user '$username'..." >&2
+    echo "Ensuring role '$username' exists with the password about to be published..." >&2
 
-    # Create user. Track whether WE made it: the rollback below must not drop a
-    # role that predates this command.
-    local create_user_result user_was_created=false
-    if ! _pg_user_exists "$username" "$admin_pass"; then
-        user_was_created=true
-    fi
-    local create_user_rc=0
-    create_user_result=$(_pg_exec "CREATE USER \"$username\" WITH PASSWORD '$app_password'" "$admin_pass" 2>&1) || create_user_rc=$?
-    if [[ $create_user_rc -ne 0 ]] && ! _pg_user_exists "$username" "$admin_pass"; then
+    # Track whether WE made it: the rollback below must not drop a role that
+    # predates this command.
+    local role_err role_outcome role_rc=0
+    role_err=$(mktemp)
+    role_outcome=$(_pg_ensure_role "$username" "$app_password" "$admin_pass" 2>"$role_err") || role_rc=$?
+    if [[ $role_rc -ne 0 ]]; then
+        local role_detail
+        role_detail=$(tr '\n' ' ' < "$role_err")
+        rm -f "$role_err"
         if [[ "$json_output" == true ]]; then
-            _configure_error "create_resources" "$service_id" "Failed to create user '$username': $create_user_result"
+            _configure_error "create_resources" "$service_id" "${role_detail:-Could not ensure role '$username'}"
         fi
-        log_error "Failed to create user '$username' (psql exit $create_user_rc)"
-        [[ -n "$create_user_result" ]] && echo "  $create_user_result" >&2
+        log_error "Could not ensure role '$username' with a usable password."
+        [[ -n "$role_detail" ]] && echo "  $role_detail" >&2
         return 1
+    fi
+    [[ -s "$role_err" ]] && cat "$role_err" >&2
+    rm -f "$role_err"
+
+    local user_was_created=false
+    if [[ "$role_outcome" == "created" ]]; then
+        user_was_created=true
+        echo "Created user '$username'." >&2
+    else
+        # ⚠️ Say it plainly. The role outliving its database is the NORMAL
+        # result of removing an application without --purge, so this branch is
+        # reached by ordinary use and not only by mishap.
+        log_warn "Role '$username' already existed — its password has been RESET to the one this install publishes."
+        echo "    Any other consumer of '$username' must restart to pick it up." >&2
     fi
 
     echo "Creating database '$database_name'..." >&2

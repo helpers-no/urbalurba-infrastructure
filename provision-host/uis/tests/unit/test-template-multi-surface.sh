@@ -261,11 +261,51 @@ start_test "🔴 no bare assign-then-\$? remains in the uis libs, in ANY spellin
 # Lines already carrying `||` or `&&` are the correct form and are skipped.
 # Widening it found a THIRD site imac could not reach — the ALTER USER in the
 # already-exists path, which needs a database that already exists.
+#
+# ⚠️ The CURRENT line is skipped when it carries `||` or `&&` too, not just the
+# previous one. Without that, this correct pair was reported (1.6.49):
+#
+#     role_err=$(mktemp)
+#     role_outcome=$(_pg_ensure_role …) || role_rc=$?
+#
+# The `$?` on line two belongs to line two's own guarded capture; it has nothing
+# to do with line one. Both original spellings are still caught — asserted
+# directly below, because a lint nobody has seen fire is a lint nobody knows
+# works.
+_setminus_e_hits() {
+    awk 'prev ~ /^[[:space:]]*(local +)?[a-zA-Z_]+=\$\(/ && prev !~ /(\|\||&&)/ \
+         && $0 ~ /\$\?/ && $0 !~ /(\|\||&&)/ {print FILENAME": "NR} {prev=$0}' "$1"
+}
+
 lib_dir="$UIS_LIB"
-found=$(for f in "$lib_dir"/*.sh; do
-    awk 'prev ~ /^[[:space:]]*(local +)?[a-zA-Z_]+=\$\(/ && prev !~ /(\|\||&&)/ && $0 ~ /\$\?/ {print FILENAME": "NR} {prev=$0}' "$f"
-done)
+found=$(for f in "$lib_dir"/*.sh; do _setminus_e_hits "$f"; done)
 assert_empty "$found" "libs must capture with || rc=\$? under set -e"
+
+# 🔴 POSITIVE CONTROLS. This lint has already once passed while the defect it
+# was written for sat in the tree, so it does not get to be trusted on an empty
+# result alone. Each fixture below is a known-bad spelling and must be FLAGGED.
+_ctl=$(mktemp -d)
+printf 'x=$(cmd)\nrc=$?\n'                > "$_ctl/two-line.sh"
+printf 'x=$(cmd)\nif [[ $? -ne 0 ]]; then\n' > "$_ctl/in-a-test.sh"
+printf 'local y=$(cmd)\nrc=$?\n'          > "$_ctl/local-decl.sh"
+printf 'x=$(cmd) || rc=$?\necho "$rc"\n'  > "$_ctl/correct.sh"
+printf 'a=$(mktemp)\nb=$(cmd) || rc=$?\n' > "$_ctl/correct-pair.sh"
+
+start_test "positive control: the two-line spelling IS flagged"
+[[ -n "$(_setminus_e_hits "$_ctl/two-line.sh")" ]] && pass_test || fail_test "lint blind to x=\$(cmd) then rc=\$?"
+
+start_test "positive control: \$? inside a test IS flagged (the spelling it once missed)"
+[[ -n "$(_setminus_e_hits "$_ctl/in-a-test.sh")" ]] && pass_test || fail_test "lint blind to if [[ \$? ]]"
+
+start_test "positive control: a local declaration IS flagged"
+[[ -n "$(_setminus_e_hits "$_ctl/local-decl.sh")" ]] && pass_test || fail_test "lint blind to local x=\$(cmd)"
+
+start_test "negative control: the correct idiom is NOT flagged"
+[[ -z "$(_setminus_e_hits "$_ctl/correct.sh")" ]] && pass_test || fail_test "false positive on || rc=\$?"
+
+start_test "negative control: a bare capture followed by a guarded one is NOT flagged"
+[[ -z "$(_setminus_e_hits "$_ctl/correct-pair.sh")" ]] && pass_test || fail_test "false positive on the 1.6.49 pair"
+rm -rf "$_ctl"
 
 # ============================================================================
 # PLAN-templates-002 phase 1 — the allowlist and the pin

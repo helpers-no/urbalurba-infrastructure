@@ -222,8 +222,25 @@ grep -q 'user_was_created' "$PG_HANDLER" && pass_test \
     || fail_test "the orphan role imac had to drop by hand is still left behind"
 
 start_test "the rollback does not drop a role that predates the command"
-grep -q 'if ! _pg_user_exists "$username" "$admin_pass"; then' "$PG_HANDLER" && pass_test \
+# ⚠️ Was a grep for one literal source line, which broke the moment the logic
+# moved into _pg_ensure_role in 1.6.49 while the behaviour was unchanged. A
+# test that fails on a refactor and would pass on a behavioural regression is
+# testing the wrong thing. Now: the flag that gates the rollback is set ONLY on
+# the branch where this run created the role.
+grep -q 'role_outcome" == "created"' "$PG_HANDLER" \
+    && [[ "$(grep -c 'user_was_created=true' "$PG_HANDLER")" -eq 1 ]] \
+    && pass_test \
     || fail_test "rollback must only drop a role this run created"
+
+start_test "a role that already exists has its password RESET, not left stale"
+# 🔴 The defect this replaces the old grep with. CREATE USER failed, the error
+# was discarded because the guard checked only that the role EXISTED, and the
+# install published a password that had never been set on it — status: ok, and
+# the application could not authenticate (ops, urb-agents#595). Behaviour is
+# exercised in tests/unit/test-configure-postgresql-role.sh; this asserts the
+# create path actually routes through it.
+grep -q '_pg_ensure_role "$username" "$app_password" "$admin_pass"' "$PG_HANDLER" \
+    && pass_test || fail_test "the create path must ensure the password, not just the role"
 
 # ============================================================================
 # Re-install must not rotate a credential nobody asked to rotate
