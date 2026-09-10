@@ -15,13 +15,13 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-10 |
 | [Plan: install an application from the catalogue, in one command](PLAN-templates-002-application-catalogue.md) | `./uis template install <application>` installs an application on any UIS | 2026-09-09 |
 | [Plan: pin and verify the binaries the image installs](PLAN-system-pin-provisioned-binaries.md) | Every binary `uis-provision-host` installs is pinned to an exact version | 2026-09-09 |
 | [Monitor the components that are not in the cluster](PLAN-system-observability-004-external-targets.md) | The parts of a production install that live outside Kubernetes — the | 2026-09-09 |
 | [Ship a dashboard with the service](PLAN-system-observability-003-service-dashboards.md) | `uis deploy <service>` on a cluster with Grafana yields a dashboard for | 2026-09-09 |
 | [Baseline alert rules, and somewhere for them to go](PLAN-system-observability-002-alert-baseline.md) | `uis stack install observability` produces a platform that **tells you | 2026-09-09 |
 | [Ship container logs to Loki](PLAN-system-observability-001-log-collection.md) | Logs from every pod are searchable in Grafana, automatically, so that | 2026-09-09 |
-| [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-09 |
 | [Ship the monitor pipeline as part of the service](PLAN-service-uptime-kuma-005-ship-the-pipeline.md) | `uis deploy uptime-kuma` gives a watchdog that is **already monitoring | 2026-09-09 |
 | [Make the watchdog able to wake someone — and watch itself](PLAN-service-uptime-kuma-003-alerting.md) | An alert reaches a human away from home, and the watchdog's own death | 2026-09-09 |
 | [Define what the watchdog watches](PLAN-service-uptime-kuma-002-monitors.md) | — | 2026-09-09 |
