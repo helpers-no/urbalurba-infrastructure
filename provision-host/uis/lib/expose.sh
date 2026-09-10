@@ -194,11 +194,19 @@ unexpose_service() {
 expose_status() {
     mkdir -p "$EXPOSE_PID_DIR"
 
+    # 🔴 The loop used to end `done | sort`, which runs it in a SUBSHELL — so
+    # `found=1` never reached this scope and `(none)` printed after a list of
+    # running services (imac, urb-agents#511):
+    #
+    #     Exposed services:
+    #       postgresql → port 35432 (PID 1597, running)
+    #       (none)
+    #
+    # Collected into a variable and sorted here instead, so the count and the
+    # lines come from the same place.
     local found=0
     local service_id
-
-    echo "Exposed services:"
-    echo ""
+    local lines=""
 
     for service_id in "${!EXPOSE_CONFIG[@]}"; do
         local pid_file="$EXPOSE_PID_DIR/$service_id.pid"
@@ -208,18 +216,22 @@ expose_status() {
             if kill -0 "$pid" 2>/dev/null; then
                 local expose_port
                 expose_port=$(_get_expose_port "$service_id")
-                echo "  $service_id → port $expose_port (PID $pid, running)"
+                lines+="  $service_id → port $expose_port (PID $pid, running)"$'\n'
                 found=1
             else
                 rm -f "$pid_file"
-                echo "  $service_id → port-forward died (cleaned up)"
+                lines+="  $service_id → port-forward died (cleaned up)"$'\n'
                 found=1
             fi
         fi
-    done | sort
+    done
 
+    echo "Exposed services:"
+    echo ""
     if [[ "$found" -eq 0 ]]; then
         echo "  (none)"
+    else
+        printf '%s' "$lines" | sort
     fi
 
     echo ""

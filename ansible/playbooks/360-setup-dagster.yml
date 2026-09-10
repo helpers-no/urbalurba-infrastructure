@@ -144,7 +144,20 @@
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: role_check
       changed_when: false
-      ignore_errors: true
+      # 🔴 `failed_when: false`, not `ignore_errors: true`.
+      #
+      # Absence is the normal answer here on a first install — the whole point
+      # of the check — but `ignore_errors` marks the task FAILED and then
+      # continues, so a healthy install printed a red censored `fatal:` line.
+      # With `no_log: true` a novice cannot tell it from a real failure, and a
+      # REAL one (PostgreSQL unreachable, wrong credential) prints a
+      # byte-identical line (imac, urb-agents#511, from a factory reset).
+      #
+      # `failed_when: false` says the same thing without claiming a failure
+      # that did not happen. `no_log` stays: the command carries the password.
+      # What the operator needs is not the query but whether the role was
+      # there, and task below reports that from `rc` without secrets.
+      failed_when: false
       no_log: true
 
     - name: "12. Create the dagster role if missing"
@@ -181,7 +194,20 @@
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: db_check
       changed_when: false
-      ignore_errors: true
+      # 🔴 `failed_when: false`, not `ignore_errors: true`.
+      #
+      # Absence is the normal answer here on a first install — the whole point
+      # of the check — but `ignore_errors` marks the task FAILED and then
+      # continues, so a healthy install printed a red censored `fatal:` line.
+      # With `no_log: true` a novice cannot tell it from a real failure, and a
+      # REAL one (PostgreSQL unreachable, wrong credential) prints a
+      # byte-identical line (imac, urb-agents#511, from a factory reset).
+      #
+      # `failed_when: false` says the same thing without claiming a failure
+      # that did not happen. `no_log` stays: the command carries the password.
+      # What the operator needs is not the query but whether the database was
+      # there, and task below reports that from `rc` without secrets.
+      failed_when: false
       no_log: true
 
     - name: "15. Create the dagster database if missing"
