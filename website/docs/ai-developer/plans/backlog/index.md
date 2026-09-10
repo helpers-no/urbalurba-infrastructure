@@ -19,6 +19,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-10 |
 | [Plan: UIS assumes its Postgres Service is its own, and cannot tell if it is not](PLAN-cli-postgresql-target-tenancy.md) | UIS knows whether the Postgres server it is about to write to is a | 2026-09-10 |
 | [Plan: a command that loads the data, and a command that reports on it](PLAN-cli-load-and-report-on-application-data.md) | — | 2026-09-10 |
+| [Plan: "leaves the database alone" is not what a failed `init:` does](PLAN-cli-init-file-partial-apply.md) | When an `init:` fails part-way through on a database that already | 2026-09-10 |
 | [Plan: `configure postgresql --purge`, or an honest refusal](PLAN-cli-configure-postgresql-purge.md) | A per-app database, its owning role, and the Secret written by | 2026-09-10 |
 | [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-10 |
 | [Plan: install an application from the catalogue, in one command](PLAN-templates-002-application-catalogue.md) | `./uis template install <application>` installs an application on any UIS | 2026-09-09 |
