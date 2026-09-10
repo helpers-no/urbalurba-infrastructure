@@ -68,7 +68,7 @@ grading UIS as a novice from a factory reset. The pattern worth recording: the
 platform stopped being the blocker at 1.6.35, and everything since has been the
 difference between *works* and *usable by someone who has never seen it*.
 
-🔴 **Eight things are open and none of them are atlas.**
+🔴 **Nine things are open and none of them are atlas.**
 
 | | |
 |---|---|
@@ -80,6 +80,7 @@ difference between *works* and *usable by someone who has never seen it*.
 | **[system-public-repo-internal-detail](PLAN-system-public-repo-internal-detail.md)** | **NEW 2026-09-10.** This repo is public and the shipping surface named a lab address, container id and bridge. Scrubbed and linted in 1.6.50; what remains is 🔴 **Terje's call** — whether `hosts/<name>/` and the historical plan records belong in a public repository at all |
 | **[cli-unmarked-proxy-silent-overlay](PLAN-cli-unmarked-proxy-silent-overlay.md)** | **NEW 2026-09-10.** A pre-marker proxy with no StatefulSet is the one revert path that warns nothing: the in-cluster workload deploys beside a live relay and both back the Service. Found tracing #600's blast radius; the gate above it is fixed, this branch is not |
 | **[docs-website-dependency-alerts](PLAN-docs-website-dependency-alerts.md)** | **NEW 2026-09-10.** Four open alerts on the docs site, 2 high. ⚠️ **Upgrading Docusaurus does not clear them** — `image-size` has no patched version and 3.10.2 still requires it, so `npm audit`'s sixteen proposed fixes are noise. `qs` is cheap and real; `image-size` is upstream's |
+| **[system-ci-self-hosted-runner-readiness](PLAN-system-ci-self-hosted-runner-readiness.md)** | **NEW 2026-09-10.** Terje asked for a self-hosted runner because Actions credits are exhausted. ⚠️ **Measured: this repo is PUBLIC and was building containers an hour after the private repo went dark** — public repos are not billed, so the emergency is confined to the private ones. Three properties would have to be fixed before any migration, one of them a CI job that pushes to `main` |
 
 ### What the last three days actually taught, beyond the fixes
 
