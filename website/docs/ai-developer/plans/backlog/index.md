@@ -16,6 +16,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | Document | Goal | Updated |
 |----------|------|---------|
 | [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-10 |
+| [Plan: a command that loads the data, and a command that reports on it](PLAN-cli-load-and-report-on-application-data.md) | — | 2026-09-10 |
 | [Plan: install an application from the catalogue, in one command](PLAN-templates-002-application-catalogue.md) | `./uis template install <application>` installs an application on any UIS | 2026-09-09 |
 | [Plan: pin and verify the binaries the image installs](PLAN-system-pin-provisioned-binaries.md) | Every binary `uis-provision-host` installs is pinned to an exact version | 2026-09-09 |
 | [Monitor the components that are not in the cluster](PLAN-system-observability-004-external-targets.md) | The parts of a production install that live outside Kubernetes — the | 2026-09-09 |
