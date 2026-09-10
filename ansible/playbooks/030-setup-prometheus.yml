@@ -72,13 +72,22 @@
       when: obs_secret.resources | default([]) | length > 0
       no_log: true
 
-    - name: "4.3 Warn when alerting has no receiver"
+    # ⚠️ WAS GATED ON THE TOKEN ALONE, so the one broken combination was silent:
+    # a token present and the chat id absent produced no warning at all, and
+    # 4.6 below then rendered a config Alertmanager refuses to load. That is
+    # exactly the state ops was in — a 30-day-old token and no chat id
+    # (urb-agents#660).
+    - name: "4.3 Warn when alerting has no receiver, naming which half is missing"
       ansible.builtin.debug:
         msg:
-          - "⚠️  No Telegram credentials - alert rules will deploy but NOTHING WILL BE DELIVERED."
-          - "Set ALERTMANAGER_TELEGRAM_BOT_TOKEN and ALERTMANAGER_TELEGRAM_CHAT_ID,"
-          - "then: uis secrets generate && uis secrets apply && uis deploy prometheus"
-      when: (_tg_token | default('')) | length == 0
+          - "⚠️  Telegram alerting is not fully configured - alert rules will"
+          - "    deploy but NOTHING WILL BE DELIVERED."
+          - "    bot token: {{ 'set' if (_tg_token | default('')) | length > 0 else 'MISSING (ALERTMANAGER_TELEGRAM_BOT_TOKEN)' }}"
+          - "    chat id:   {{ 'set' if (_tg_chat  | default('')) | length > 0 else 'MISSING (ALERTMANAGER_TELEGRAM_CHAT_ID)' }}"
+          - "    then: uis secrets generate && uis secrets apply && uis deploy prometheus"
+      when: >
+        (_tg_token | default('')) | length == 0 or
+        (_tg_chat  | default('')) | length == 0
 
     - name: "4.4 Create the Alertmanager token Secret"
       # A Secret, not the values file: `alertmanager.config` is rendered into a
@@ -107,14 +116,66 @@
       when: (_tg_chat | default('')) | length > 0
       changed_when: true
 
-    - name: "4.6 Disable the receiver when unconfigured"
-      # Leaving the literal placeholder in would make Alertmanager fail to load
-      # its config, which takes ALL alerting down rather than just delivery.
+    # 🔴 THE OLD FALLBACK DID THE THING IT WAS WRITTEN TO PREVENT.
+    #
+    # It substituted `chat_id: 0` and the comment said the alternative "would
+    # make Alertmanager fail to load its config, which takes ALL alerting down
+    # rather than just delivery." Alertmanager treats 0 as absent and refuses
+    # the config identically:
+    #
+    #     error loading configuration file: missing chat_id or chat_id_file
+    #     on telegram_config
+    #
+    # So the mitigation took all alerting down, on every installation without a
+    # chat id, for as long as that rule has shipped. Measured on production by
+    # ops (urb-agents#660): CrashLoopBackOff, 4 restarts, eight minutes of no
+    # alerting — from a routine redeploy that reported success.
+    #
+    # A receiver with a NAME and NO CONFIGS is valid Alertmanager config and
+    # discards notifications, which is what "disable the receiver" was supposed
+    # to mean. yq rather than sed, because deleting a block is not a line edit.
+    - name: "4.6a Refuse when a bot token is configured and the chat id is not"
+      # Not the same as "telegram was never set up". Somebody created a bot and
+      # the delivery target is missing, so silently discarding every alert is
+      # the wrong default — that is how an outage goes unnoticed for four days.
+      ansible.builtin.fail:
+        msg: >-
+          ALERTMANAGER_TELEGRAM_CHAT_ID is empty but a bot token IS configured.
+          Refusing to deploy an Alertmanager that would deliver nothing.
+          Set it, then: uis secrets generate && uis secrets apply
+          To deploy anyway with delivery disabled, pass:
+          -e alertmanager_allow_no_receiver=true
+      when:
+        - (_tg_chat  | default('')) | length == 0
+        - (_tg_token | default('')) | length > 0
+        - not (alertmanager_allow_no_receiver | default(false) | bool)
+
+    - name: "4.6b Disable the receiver so the config LOADS when unconfigured"
       ansible.builtin.command: >
-        sed -i 's/chat_id: TELEGRAM_CHAT_ID_PLACEHOLDER/chat_id: 0/'
+        yq -i
+        'del(.alertmanager.config.receivers[] | select(.name == "telegram") | .telegram_configs)'
         {{ prometheus_config_file }}
       when: (_tg_chat | default('')) | length == 0
       changed_when: true
+
+    - name: "4.6c Prove the placeholder is gone — a leftover is a crashloop"
+      ansible.builtin.command: >
+        grep -c TELEGRAM_CHAT_ID_PLACEHOLDER {{ prometheus_config_file }}
+      register: _placeholder_left
+      changed_when: false
+      failed_when: false
+
+    - name: "4.6d Refuse to install a values file that still carries the placeholder"
+      # ⚠️ grep exits 1 with a count of 0 when it matches nothing, so rc is NOT
+      # the signal here — the count is. Reading rc would treat "no placeholder"
+      # as a failure and "grep could not run" as success.
+      ansible.builtin.fail:
+        msg: >-
+          {{ prometheus_config_file }} still contains
+          TELEGRAM_CHAT_ID_PLACEHOLDER. Alertmanager will refuse this config
+          and all alerting will be down. Neither 4.5 nor 4.6b replaced it,
+          which means the values file's shape changed.
+      when: (_placeholder_left.stdout | default('0') | trim | int) > 0
 
     # ---- scrape targets ------------------------------------------------------
     # Generated rather than written into the values file, so installation
@@ -200,6 +261,98 @@
         prometheus_pods.resources | length > 0 and
         prometheus_pods.resources[0].status.phase == "Running" and
         prometheus_pods.resources[0].status.containerStatuses[0].ready == true
+
+    # ⚠️ TASK 6 WAITS FOR ONE POD AND THE PLAY DECLARED THE STACK DEPLOYED.
+    #
+    # 🔴 `ok=21 changed=8 failed=0` and "✓ Prometheus deployed successfully"
+    # while `prometheus-alertmanager-0` sat in CrashLoopBackOff with 4 restarts,
+    # because task 6 selects `component=server` and nothing else was looked at
+    # (ops, urb-agents#660, on production). Alerting was down eight minutes and
+    # the only reason anyone noticed is that ops went looking for something else.
+    #
+    # 🔴 And Alertmanager is the worst possible pod for this to miss: it is the
+    # component whose failure suppresses every other signal. The one workload in
+    # the stack whose death is silent by construction is the one the deploy did
+    # not check.
+    #
+    # ops's standard, from my own words back to me: "count by pod name, not by
+    # total." The deploy counted tasks.
+    - name: "6b. Wait for EVERY pod the release owns to be Ready, not only the server"
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get pods -n {{ namespace }} --context {{ _target }} \
+          -l app.kubernetes.io/instance=prometheus -o json \
+        | jq -r '
+            [ .items[] ] as $all
+            | [ $all[]
+                | select( ([.status.containerStatuses[]? | select(.ready == true)] | length)
+                          != (.spec.containers | length) )
+                | .metadata.name ] as $unready
+            | "\($all | length) \($unready | join(","))"'
+      args: { executable: /bin/bash }
+      register: _stack_ready
+      retries: 20
+      delay: 15
+      # 🔴 THREE CONDITIONS, AND ALL THREE ARE LOAD-BEARING.
+      #
+      #   rc == 0        — a failed kubectl prints nothing, and "nothing" would
+      #                    otherwise read as "no unready pods". That is exactly
+      #                    the defect fixed in 1.6.47: a query that could not run
+      #                    reported as a count of zero.
+      #   total > 0      — if the label selector is wrong this finds NO pods, and
+      #                    an empty unready list would pass vacuously. A check
+      #                    that cannot see the workload must fail, not succeed.
+      #   unready empty  — the actual question.
+      until: >
+        _stack_ready.rc == 0 and
+        (_stack_ready.stdout | trim | split(' ') | first | int) > 0 and
+        ((_stack_ready.stdout | trim | split(' ') | length) < 2 or
+         (_stack_ready.stdout | trim | split(' '))[1] | length == 0)
+      changed_when: false
+      failed_when: false
+
+    - name: "6c. Report what did not settle, distinguishing 'not ready' from 'could not look'"
+      when: >
+        _stack_ready.rc != 0 or
+        (_stack_ready.stdout | trim | split(' ') | first | int) == 0 or
+        ((_stack_ready.stdout | trim | split(' ') | length) >= 2 and
+         ((_stack_ready.stdout | trim | split(' '))[1] | length) > 0)
+      block:
+        - name: "6c1. Collect the evidence before failing"
+          ansible.builtin.shell: |
+            set +e
+            names="$(printf '%s' '{{ (_stack_ready.stdout | default("") | trim | split(" "))[1] | default("") }}' | tr ',' ' ')"
+            for p in $names; do
+              echo "--- $p ---"
+              kubectl get pod "$p" -n {{ namespace }} --context {{ _target }} \
+                -o jsonpath='{range .status.containerStatuses[*]}{.name}: ready={.ready} restarts={.restartCount} {.state}{"\n"}{end}' 2>&1
+              kubectl logs "$p" -n {{ namespace }} --context {{ _target }} --tail=5 --all-containers 2>&1 | tail -5
+            done
+          args: { executable: /bin/bash }
+          register: _stack_evidence
+          changed_when: false
+          failed_when: false
+
+        - name: "6c2. Fail — a deploy that reports success is what people act on"
+          ansible.builtin.fail:
+            msg: >-
+              {% if _stack_ready.rc != 0 %}
+              COULD NOT CHECK pod readiness (kubectl exit {{ _stack_ready.rc }}).
+              This is not "the pods are fine" — it is no answer at all.
+              {{ _stack_ready.stderr | default('') | trim }}
+              {% elif (_stack_ready.stdout | trim | split(' ') | first | int) == 0 %}
+              COULD NOT CHECK pod readiness: the selector
+              app.kubernetes.io/instance=prometheus matched NO pods in
+              {{ namespace }}. Either the release is not installed under that
+              name or the chart's labels changed. Refusing to report success
+              on a check that saw nothing.
+              {% else %}
+              These pods never became Ready:
+              {{ (_stack_ready.stdout | trim | split(' '))[1] }}
+              {{ _stack_evidence.stdout | default('(no evidence collected)') }}
+              ⚠️ Alertmanager failing here means NO alert reaches anyone, and
+              nothing else in the platform will tell you.
+              {% endif %}
 
     - name: 7. Test Prometheus server endpoint from within cluster
       ansible.builtin.command: >
