@@ -63,18 +63,19 @@ anywhere* — was met on 2026-09-10 (`imac`, `urb-agents#495`): absence proved,
 pre-teardown baseline (47 raw tables, 60 marts, 13 views, 122 rows). Installed
 from the **published catalogue**, not a staged file.
 
-**23 versions, 1.6.24 → 1.6.46**, almost all of them defects found by `imac`
+**24 versions, 1.6.24 → 1.6.47**, almost all of them defects found by `imac`
 grading UIS as a novice from a factory reset. The pattern worth recording: the
 platform stopped being the blocker at 1.6.35, and everything since has been the
 difference between *works* and *usable by someone who has never seen it*.
 
-🔴 **Three things are open and none of them are atlas.**
+🔴 **Four things are open and none of them are atlas.**
 
 | | |
 |---|---|
 | **[system-topology-coverage](INVESTIGATE-system-topology-coverage.md)** — outcome 2, exercise the proxy topology | **Tier 1, oldest live requirement.** ⚠️ This was invisible in my published status until `ops-dev` reconciled a dying ledger (`urb-agents#544`) and could not find it. The artefact was always here; the summary was thinner than the tracking behind it |
 | **Container-image scanning**, 46 images | unstarted, a platform decision. ⚠️ Requirement to keep: *"no findings" must render differently from "the scan did not run"* |
 | **[cli-load-and-report-on-application-data](PLAN-cli-load-and-report-on-application-data.md)** | `uis dagster materialize`, `uis template status`, and the `uis status` URL column. Filed from `imac`'s novice grading; nothing blocks it but my ordering |
+| **[cli-postgresql-target-tenancy](PLAN-cli-postgresql-target-tenancy.md)** | **NEW 2026-09-10.** UIS hardcodes its Postgres host and connects as superuser, so it cannot tell a database it owns from a shared server it is a guest on. Harmless today because nothing drops a database — which means **[configure-postgresql-purge](PLAN-cli-configure-postgresql-purge.md) is the plan that arms it.** Filed before that work rather than during it, on purpose |
 
 ### What the last three days actually taught, beyond the fixes
 

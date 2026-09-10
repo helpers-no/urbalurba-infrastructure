@@ -37,6 +37,14 @@ So today nothing in UIS can remove:
 another namespace and belongs to the postgresql handler's work, not PostgREST's.
 So it falls between two handlers, which is exactly how it went unnoticed.
 
+🔴 **Blocked on a question outside this plan.** Building the drop gives UIS its
+first superuser path that destroys a database chosen by name, on a server it has
+never established that it owns — see
+[PLAN-cli-postgresql-target-tenancy](./PLAN-cli-postgresql-target-tenancy.md).
+Answer that plan's questions 1 and 2 **before** task 1.2 here. This plan closing
+is what arms that one, and the moment nobody will be looking at it is while
+doing the purge work.
+
 ## Why this is a plan and not a patch
 
 Dropping a database is the most destructive operation in the product, and it
