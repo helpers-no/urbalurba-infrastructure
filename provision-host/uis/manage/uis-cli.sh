@@ -2517,7 +2517,7 @@ cmd_postgrest_verify() {
     done
 
     if [[ -z "$app_name" ]]; then
-        log_error "Service 'postgrest' is multi-instance \u2014 --app <name> is required"
+        log_error "Service 'postgrest' is multi-instance — --app <name> is required"
         log_info "Example: uis verify postgrest --app atlas"
         log_info "Instances: kubectl get deploy -n postgrest"
         return "$EXIT_GENERAL_ERROR"

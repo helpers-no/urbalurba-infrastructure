@@ -876,8 +876,37 @@ case "${1:-help}" in
         log_info "All tests passed!"
         ;;
     help|--help|-h)
-        start_container
-        docker exec $DOCKER_IT "$CONTAINER_NAME" /mnt/urbalurbadisk/provision-host/uis/manage/uis-cli.sh help
+        # 🔴 HELP MUST NOT TOUCH THE CLUSTER.
+        #
+        # This called start_container, which on a clean machine pulls the
+        # image, creates .uis.extend/ and .uis.secrets/, and then fifteen
+        # namespaces with secrets — before printing a word. **A user typing
+        # `--help` to find out what a tool does has not consented to it writing
+        # to their cluster** (imac, urb-agents#511, grading from a factory
+        # reset).
+        #
+        # `uis init` exists and is where that belongs. The autodetection was
+        # correct; this is placement, not behaviour.
+        #
+        # So: the container's fuller help only when it is ALREADY running.
+        # Otherwise the launcher's own help, plus the one line that says how to
+        # get the rest. Nothing is created either way.
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
+            docker exec $DOCKER_IT "$CONTAINER_NAME" /mnt/urbalurbadisk/provision-host/uis/manage/uis-cli.sh help
+        else
+            show_usage
+            echo ""
+            echo "Applications:"
+            echo "  template list              Show installable applications"
+            echo "  template info <id>         What an application installs"
+            echo "  template install <id>      Install one"
+            echo ""
+            echo "⚠️  The container is not running, so this is the launcher's own help."
+            echo "    For the full command list — services, secrets, networks, Dagster —"
+            echo "    run:  ./uis init     (first time: sets up the cluster)"
+            echo "     or:  ./uis start    (already set up: just starts the container)"
+            echo "    then: ./uis help"
+        fi
         echo ""
         echo "Container management:"
         echo "  start       Start the UIS container"
