@@ -17,7 +17,9 @@ Investigations and plans waiting for implementation, sorted by last updated date
 |----------|------|---------|
 | [Plan: pin and verify the binaries the image installs](PLAN-system-pin-provisioned-binaries.md) | — | 2026-09-10 |
 | [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-10 |
+| [Plan: UIS assumes its Postgres Service is its own, and cannot tell if it is not](PLAN-cli-postgresql-target-tenancy.md) | UIS knows whether the Postgres server it is about to write to is a | 2026-09-10 |
 | [Plan: a command that loads the data, and a command that reports on it](PLAN-cli-load-and-report-on-application-data.md) | — | 2026-09-10 |
+| [Plan: `configure postgresql --purge`, or an honest refusal](PLAN-cli-configure-postgresql-purge.md) | A per-app database, its owning role, and the Secret written by | 2026-09-10 |
 | [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-10 |
 | [Plan: install an application from the catalogue, in one command](PLAN-templates-002-application-catalogue.md) | `./uis template install <application>` installs an application on any UIS | 2026-09-09 |
 | [Monitor the components that are not in the cluster](PLAN-system-observability-004-external-targets.md) | The parts of a production install that live outside Kubernetes — the | 2026-09-09 |
@@ -29,7 +31,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Define what the watchdog watches](PLAN-service-uptime-kuma-002-monitors.md) | — | 2026-09-09 |
 | [Deploy Uptime Kuma as an external watchdog](PLAN-service-uptime-kuma-001-deploy.md) | — | 2026-09-09 |
 | [Plan: The Grafana deploy gate reports the stack, not the race](PLAN-service-grafana-deploy-gate-fix.md) | Make `uis deploy grafana` succeed deterministically on a healthy stack, | 2026-09-09 |
-| [Plan: `configure postgresql --purge`, or an honest refusal](PLAN-cli-configure-postgresql-purge.md) | A per-app database, its owning role, and the Secret written by | 2026-09-09 |
 | [Plan: reject a valid `config:` key on the wrong service, at parse time](PLAN-templates-config-keys-per-service.md) | A template declaring a supported `config:` key on a service that does | 2026-09-08 |
 | [---](PLAN-ci-third-party-download-fails-the-whole-image-build.md) | — | 2026-09-08 |
 | [Investigate: install an application that spans several services, from one declaration](INVESTIGATE-templates-multi-surface-application.md) | Let one declaration install an application that needs *several* platform | 2026-09-08 |
