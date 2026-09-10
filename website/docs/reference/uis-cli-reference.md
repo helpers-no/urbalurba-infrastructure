@@ -341,6 +341,50 @@ service's extend file" mechanism.** Two other files would qualify
 (`prometheus-targets.yaml`, `monitors.yaml`) and the generic form was declined:
 one consumer does not tell you the shape of three.
 
+### `operational:` — what installing this will actually do
+
+An optional top-level block in the **artifact**, rendered by
+`uis template info`. UIS reads nothing from it and validates nothing in it:
+the application owns the content, the platform only displays it.
+
+It answers the questions an operator has *before* installing, and which
+`provides:` cannot:
+
+```yaml
+operational:
+  automation: "Ships stopped. No data is fetched until an operator enables the schedules."
+  timezone: Europe/Oslo
+  install:
+    deploys: [postgresql, postgrest, dagster]
+    takes: a few minutes
+    note: "the API is live and serves zero endpoints until the first pipeline run"
+  first_data:
+    why: "enabling the schedules does not backfill"
+    how: "launch these jobs, in this order"
+    jobs: [annual_sources_refresh, klass_refresh, transform_and_publish]
+    takes: "~11 minutes"
+  cadence:
+    - { cron: "0 2 * * 0", what: "~37 annual public-sector sources" }
+  external_services: [SSB, FHI]
+  unscheduled: [parked-source]
+```
+
+🔴 **`automation` is the single most important line.** *Does installing this
+start anything?* An operator deciding whether to install needs that before the
+service list, and nothing else in the definition says it.
+
+⚠️ **`first_data` exists because enabling schedules does not backfill.** A
+cron is a *next fire*, not a catch-up, so a Thursday install can sit empty
+until Sunday. An application whose data arrives on a schedule should say how to
+load it now.
+
+⚠️ **It lives in the artifact, not the catalogue entry**, so it is
+version-locked to the code it describes — the same reasoning that keeps
+`params:` and `provides:` out of the registry. `info` therefore pulls the
+definition at its digest to render this; the pull is cached, so repeated calls
+cost nothing, and a fetch failure degrades to the registry half rather than
+failing the command.
+
 ### `requires:` and `exports:` — one application reading another
 
 An application may export values a dependant needs, and declare what it needs:

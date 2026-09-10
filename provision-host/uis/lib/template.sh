@@ -320,7 +320,94 @@ cmd_template_info() {
         local vis
         vis="$(_json_field "$template" '.visibility')"
         echo "Visible:  ${vis:-public}"
+
+        # 🔴 RENDER THE APPLICATION'S OWN OPERATIONAL BLOCK.
+        #
+        # atlas publishes `operational:` in its artifact — what installing
+        # deploys, whether anything runs afterwards, how to load the data, the
+        # schedule, which external services it will contact. It answers the
+        # question a novice actually has, and **nothing rendered it**: zero
+        # matches across 677 lines of install output and nothing in `info`
+        # (imac, urb-agents#530).
+        #
+        # I told atlas on #499 that this field was legal and that I would
+        # surface it once they published. They published; I had not.
+        #
+        # ⚠️ It lives in the ARTIFACT, not the registry, so this pulls the
+        # definition — which is the right home for it (version-locked to the
+        # code it describes) and the reason `info` now does a digest-pinned
+        # fetch. `_resolve_definition` caches by digest, so a repeated `info`
+        # costs nothing. A failure here must NOT fail `info`: the registry
+        # half above is still useful, and a fetch problem is not a reason to
+        # tell an operator nothing.
+        _template_info_operational "$template_id" "$template"
     fi
+}
+
+# Print the `operational:` block from an application's definition, if it has
+# one. Silent when it does not — most applications will not, and an empty
+# heading is worse than no heading.
+_template_info_operational() {
+    local template_id="$1" template="$2"
+    command -v yq >/dev/null 2>&1 || return 0
+    _oras_available >/dev/null 2>&1 || return 0
+
+    local artifact tag digest vis dir
+    artifact="$(_template_source_field "$template" artifact)"
+    tag="$(_template_source_field "$template" tag)"
+    digest="$(_template_source_field "$template" digest)"
+    vis="$(_json_field "$template" '.visibility')"; vis="${vis:-public}"
+    [[ -n "$artifact" && -n "$digest" ]] || return 0
+
+    dir=$(_resolve_definition "$template_id" "$artifact" "$tag" "$digest" "$vis" 2>/dev/null) || {
+        echo ""
+        echo "  (operational detail needs the definition artifact; it could not be fetched)"
+        return 0
+    }
+    local info="$dir/template-info.yaml"
+    [[ -f "$info" ]] || return 0
+    [[ "$(yq -r 'has("operational")' "$info" 2>/dev/null)" == "true" ]] || return 0
+
+    local v
+    print_subsection "What installing this does" 2>/dev/null || { echo ""; echo "What installing this does"; }
+
+    v=$(yq -r '.operational.install.deploys // [] | join(", ")' "$info" 2>/dev/null)
+    [[ -n "$v" ]] && echo "  deploys      $v"
+    v=$(yq -r '.operational.install.takes // ""' "$info" 2>/dev/null)
+    [[ -n "$v" ]] && echo "  takes        $v"
+
+    # The single most important line for an operator: does anything RUN?
+    v=$(yq -r '.operational.automation // ""' "$info" 2>/dev/null)
+    [[ -n "$v" ]] && { echo ""; echo "  automation   $v"; }
+
+    v=$(yq -r '.operational.install.note // ""' "$info" 2>/dev/null)
+    [[ -n "$v" ]] && { echo ""; echo "  note         $v"; }
+
+    # ⚠️ The gap that costs a novice days: enabling the schedules does not
+    # backfill, so a fresh install stays empty until the next cron fire.
+    if [[ "$(yq -r '.operational | has("first_data")' "$info" 2>/dev/null)" == "true" ]]; then
+        echo ""
+        echo "Getting data in (the schedules do NOT backfill):"
+        v=$(yq -r '.operational.first_data.why // ""' "$info" 2>/dev/null)
+        [[ -n "$v" ]] && echo "  why          $v"
+        v=$(yq -r '.operational.first_data.how // ""' "$info" 2>/dev/null)
+        [[ -n "$v" ]] && echo "  how          $v"
+        v=$(yq -r '.operational.first_data.jobs // [] | join(" -> ")' "$info" 2>/dev/null)
+        [[ -n "$v" ]] && echo "  jobs         $v"
+        v=$(yq -r '.operational.first_data.takes // ""' "$info" 2>/dev/null)
+        [[ -n "$v" ]] && echo "  takes        $v"
+    fi
+
+    if [[ "$(yq -r '.operational | has("cadence")' "$info" 2>/dev/null)" == "true" ]]; then
+        echo ""
+        echo "Once the schedules are enabled ($(yq -r '.operational.timezone // "UTC"' "$info" 2>/dev/null)):"
+        yq -r '.operational.cadence[] | "  " + (.cron // "?") + "   " + (.what // "")' "$info" 2>/dev/null
+    fi
+
+    v=$(yq -r '.operational.external_services // [] | join(", ")' "$info" 2>/dev/null)
+    [[ -n "$v" ]] && { echo ""; echo "  contacts     $v"; }
+    v=$(yq -r '.operational.unscheduled // [] | join(", ")' "$info" 2>/dev/null)
+    [[ -n "$v" ]] && echo "  never runs   $v (no schedule)"
 }
 
 # Sparse-checkout a template folder from the TMP repo
