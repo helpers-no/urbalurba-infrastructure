@@ -15,6 +15,8 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Plan: what UIS's workflows would need from a self-hosted runner, and why they should not move yet](PLAN-system-ci-self-hosted-runner-readiness.md) | If UIS's CI ever moves to self-hosted runners, the three properties | 2026-09-11 |
+| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-11 |
 | [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-09-10 |
 | [Plan: pin and verify the binaries the image installs](PLAN-system-pin-provisioned-binaries.md) | — | 2026-09-10 |
 | [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-10 |
@@ -24,7 +26,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Plan: a command that loads the data, and a command that reports on it](PLAN-cli-load-and-report-on-application-data.md) | — | 2026-09-10 |
 | [Plan: "leaves the database alone" is not what a failed `init:` does](PLAN-cli-init-file-partial-apply.md) | When an `init:` fails part-way through on a database that already | 2026-09-10 |
 | [Plan: `configure postgresql --purge`, or an honest refusal](PLAN-cli-configure-postgresql-purge.md) | A per-app database, its owning role, and the Secret written by | 2026-09-10 |
-| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-10 |
 | [Plan: install an application from the catalogue, in one command](PLAN-templates-002-application-catalogue.md) | `./uis template install <application>` installs an application on any UIS | 2026-09-09 |
 | [Monitor the components that are not in the cluster](PLAN-system-observability-004-external-targets.md) | The parts of a production install that live outside Kubernetes — the | 2026-09-09 |
 | [Ship a dashboard with the service](PLAN-system-observability-003-service-dashboards.md) | `uis deploy <service>` on a cluster with Grafana yields a dashboard for | 2026-09-09 |
