@@ -459,6 +459,38 @@ missing, the error names **the secret, not the URL**.
 application on an older provision host fails with `oras: not found` on a machine
 whose `./uis version` may look current — run `./uis pull`.
 
+### `./uis pull` — and the version it may not be able to give you
+
+`pull` fetches `ghcr.io/helpers-no/uis-provision-host:latest`, a **moving tag
+published by the container build**. The update notice compares the installed
+version against `version.txt` on `main` — which `main` gains the moment a
+release commit merges, **minutes before the image exists**, and permanently if
+that build fails.
+
+So `pull` can succeed and leave you where you were:
+
+```
+Update available: 1.6.49 -> 1.6.50   (run: ./uis pull)
+$ ./uis pull
+Image updated successfully
+Now running version: 1.6.49
+```
+
+🔴 **Since 1.6.51 it says so, and exits 3.** After pulling, `pull` reads back
+what actually arrived and compares it with `main`. When they differ it
+distinguishes three cases, because they need different actions:
+
+| what it found | what it tells you |
+|---|---|
+| `<repo>:<version>` **is not in the registry** | the build is still running or it failed — nothing is wrong with your machine, and it names the Actions page |
+| `<repo>:<version>` **is** in the registry but `:latest` is older | a tagging fault in the release; take it by version: `UIS_IMAGE=<repo>:<version> ./uis pull` |
+| the registry **could not be reached** | *"do not know"*, stated as such — never reported as "not built yet" |
+
+⚠️ **Exit 3 means the pull worked and did not deliver the advertised version.**
+A script that treats any non-zero as failure will now notice; one that only
+checks for zero was previously told success. Exit 0 still means you are on the
+version `main` advertises.
+
 ### The registry entry — the seam with the catalogue
 
 The `source` block above lives in the **catalogue**, not in the artifact. The
