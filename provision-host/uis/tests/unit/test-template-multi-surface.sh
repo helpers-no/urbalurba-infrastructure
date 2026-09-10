@@ -713,6 +713,27 @@ OPYAML
     got=$(yq -r '.operational.cadence[] | (.cron // "?") + "   " + (.what // "")' "$od/template-info.yaml")
     assert_equals "0 2 * * 0   weekly sources" "$got" "one line per entry"
 
+    start_test "🔴 the INSTALL summary renders the short form too, not just info"
+    out=$(_install_summary_operational "$od/template-info.yaml")
+    echo "$out" | grep -q 'job_a -> job_b' && pass_test \
+        || fail_test "the job order is not in the install summary: $out"
+
+    start_test "the install summary carries the takes estimate"
+    echo "$out" | grep -q '~11 minutes' && pass_test || fail_test "no estimate: $out"
+
+    start_test "and the note that an empty API is expected"
+    echo "$out" | grep -q 'serves zero endpoints at first' && pass_test || fail_test "no note: $out"
+
+    start_test "a definition with no operational block adds nothing to the summary"
+    printf 'kind: application\nprovides:\n  services: []\n' > "$od/bare2.yaml"
+    assert_equals "" "$(_install_summary_operational "$od/bare2.yaml")" "silent"
+
+    start_test "both call sites read the SAME field, so they cannot drift apart"
+    # info renders the full block; the summary renders a subset. They must at
+    # least agree on where first_data.jobs lives.
+    n=$(grep -c 'operational.first_data.jobs' "$UIS_LIB/template.sh")
+    [[ "$n" -ge 2 ]] && pass_test || fail_test "expected both renderers to read it; found $n"
+
     start_test "a definition with NO operational block prints nothing at all"
     printf 'kind: application\nprovides:\n  services: []\n' > "$od/bare.yaml"
     assert_equals "false" "$(yq -r 'has("operational")' "$od/bare.yaml")" "silent, not an empty heading"

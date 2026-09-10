@@ -344,6 +344,41 @@ cmd_template_info() {
     fi
 }
 
+# The short form, for the END of an install — where attention actually is.
+#
+# 🔴 `template info` renders the full block, and a user who runs `install`
+# without `info` never sees any of it. `uis template list` invites exactly
+# that: it prints "use info for details" and "use install to install" as two
+# EQUAL options, with nothing marking info as a prerequisite. And even a user
+# who did read `info` met these four job names nine minutes and 677 lines
+# earlier (imac, urb-agents#537).
+#
+# ⚠️ The `Endpoints:` block added in 1.6.38 worked as a fix for exactly this
+# reason — the end of the output is the part that gets read. This is the same
+# move for the same reason.
+#
+# Takes the info file directly: the install already pulled the artifact, so
+# unlike `template info` this needs no fetch.
+_install_summary_operational() {
+    local info="$1"
+    [[ -f "$info" ]] || return 0
+    command -v yq >/dev/null 2>&1 || return 0
+    [[ "$(yq -r 'has("operational")' "$info" 2>/dev/null)" == "true" ]] || return 0
+
+    local note jobs takes
+    note=$(yq -r '.operational.install.note // ""' "$info" 2>/dev/null)
+    jobs=$(yq -r '.operational.first_data.jobs // [] | join(" -> ")' "$info" 2>/dev/null)
+    takes=$(yq -r '.operational.first_data.takes // ""' "$info" 2>/dev/null)
+
+    [[ -z "$note" && -z "$jobs" ]] && return 0
+    echo ""
+    [[ -n "$note" ]] && echo "$note"
+    if [[ -n "$jobs" ]]; then
+        echo "To load data${takes:+ ($takes)}, run these in Dagster, in order:"
+        echo "  $jobs"
+    fi
+}
+
 # Print the `operational:` block from an application's definition, if it has
 # one. Silent when it does not — most applications will not, and an empty
 # heading is worse than no heading.
@@ -2182,6 +2217,11 @@ cmd_template_install() {
             printf '  %-14s %s\n' "$_ek" "$_ev"
         done
     fi
+
+    # ⚠️ Immediately after Endpoints, deliberately. An install that says where
+    # the API is and not that it is empty on purpose invites the reader to
+    # conclude the install failed.
+    _install_summary_operational "$info_file"
 
     # Print README if available
     local readme_file
