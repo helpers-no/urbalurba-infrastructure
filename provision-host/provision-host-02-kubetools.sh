@@ -211,8 +211,13 @@ install_kubectl() {
 # Install k9s
 install_k9s() {
     if command -v k9s &> /dev/null; then
-        K9S_VERSION=$(k9s version 2>&1 | grep "Version:" | tr -d '\r')
-        add_status "k9s" "Status" "Already installed (${K9S_VERSION})"
+        # ⚠️ NOT K9S_VERSION — that is the pinned constant this function
+        # downloads. Reusing the name for "what is installed" meant one
+        # identifier held two meanings in one function, and the reporting
+        # assignment below would have clobbered the pin for anything later.
+        local k9s_installed_version
+        k9s_installed_version=$(k9s version 2>&1 | grep "Version:" | tr -d '\r')
+        add_status "k9s" "Status" "Already installed (${k9s_installed_version})"
         return 0
     fi
 
@@ -228,18 +233,48 @@ install_k9s() {
         return 1
     fi
 
-    LATEST_VERSION=$(curl -s https://api.github.com/repos/derailed/k9s/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
-    if [ -z "$LATEST_VERSION" ]; then
-        add_error "k9s" "Failed to retrieve latest version"
-        return 1
+    # 🔴 PINNED, and it is not only about supply chain — it is why the build
+    # was red.
+    #
+    # This used to ask api.github.com for the latest release. That call is
+    # UNAUTHENTICATED and rate-limited to 60/hour per IP, and both architecture
+    # builds run concurrently from the same GitHub Actions runner. On 1.6.41
+    # amd64 got an answer and arm64 did not: LATEST_VERSION came back empty,
+    # the function returned 1, and the whole image build failed — on a commit
+    # that touched two Ansible playbooks and nothing else.
+    #
+    # ⚠️ So an unpinned binary did not merely risk drift; it made the build a
+    # coin flip against someone else's rate limit. PLAN-system-pin-provisioned-
+    # binaries predicted the drift and not this, and this is the sharper
+    # argument.
+    #
+    # To bump: change K9S_VERSION, then take both sums from
+    #   https://github.com/derailed/k9s/releases/download/<ver>/checksums.sha256
+    # Never self-compute them — a sum you calculate from the bytes you received
+    # attests to nothing.
+    local expected_sum
+    if [ "$ARCH_NAME" = "amd64" ]; then
+        expected_sum="$K9S_SHA256_amd64"
+    else
+        expected_sum="$K9S_SHA256_arm64"
     fi
 
     TEMP_DIR=$(mktemp -d)
-    curl -L "https://github.com/derailed/k9s/releases/download/${LATEST_VERSION}/k9s_Linux_${ARCH_NAME}.tar.gz" -o "${TEMP_DIR}/k9s.tar.gz" || {
-        add_error "k9s" "Failed to download k9s"
+    curl -fsSL --retry 3 --retry-delay 2 \
+        "https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Linux_${ARCH_NAME}.tar.gz" \
+        -o "${TEMP_DIR}/k9s.tar.gz" || {
+        add_error "k9s" "Failed to download k9s ${K9S_VERSION} for ${ARCH_NAME}"
         rm -rf "${TEMP_DIR}"
         return 1
     }
+
+    local actual_sum
+    actual_sum=$(sha256sum "${TEMP_DIR}/k9s.tar.gz" | cut -d' ' -f1)
+    if [ "$actual_sum" != "$expected_sum" ]; then
+        add_error "k9s" "Checksum mismatch for ${ARCH_NAME}: expected ${expected_sum}, got ${actual_sum}"
+        rm -rf "${TEMP_DIR}"
+        return 1
+    fi
 
     tar -xzf "${TEMP_DIR}/k9s.tar.gz" -C "${TEMP_DIR}" || {
         add_error "k9s" "Failed to extract k9s"
@@ -260,8 +295,9 @@ install_k9s() {
 
     rm -rf "${TEMP_DIR}"
 
-    K9S_VERSION=$(k9s version 2>&1 | grep "Version:" | tr -d '\r')
-    if [ -z "$K9S_VERSION" ]; then
+    local k9s_installed_version
+    k9s_installed_version=$(k9s version 2>&1 | grep "Version:" | tr -d '\r')
+    if [ -z "$k9s_installed_version" ]; then
         add_error "k9s" "Failed to verify k9s installation"
         return 1
     fi
@@ -297,6 +333,10 @@ install_k9s() {
 # To bump: change ORAS_VERSION, then take both sums from
 #   https://github.com/oras-project/oras/releases/download/v<ver>/oras_<ver>_checksums.txt
 # Bringing kubectl/helm/k9s up to this standard is PLAN-system-pin-provisioned-binaries.
+K9S_VERSION="v0.51.0"
+K9S_SHA256_amd64="c3752ad51a5a4015a113819c4eeb6e55a4d0e4b8e652494797532f6fc8161dd7"
+K9S_SHA256_arm64="3ee05c82e5f9198928a4e86133608ba6a2c10a2244d6a7789e820f78319d640c"
+
 ORAS_VERSION="1.3.4"
 ORAS_SHA256_amd64="f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454"
 ORAS_SHA256_arm64="15702c6e3a4a56a8bd8ac5c17efdbcab56d9bada661ccbcf017f5b10c1d89399"

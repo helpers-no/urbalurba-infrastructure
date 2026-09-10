@@ -1,5 +1,30 @@
 # Plan: pin and verify the binaries the image installs
 
+## 🔴 The argument changed on 2026-09-10: an unpinned binary made the build red
+
+This plan was written about **drift** — an unpinned tool silently becoming a
+different tool. That is real, and it is the weaker half.
+
+`install_k9s` asked `api.github.com` for the latest release. That call is
+**unauthenticated and rate-limited to 60/hour per IP**, and both architecture
+builds run concurrently from the same GitHub Actions runner. On 1.6.41 amd64
+got an answer and arm64 did not: `LATEST_VERSION` came back empty, the function
+returned 1, and **the whole image build failed on a commit that touched two
+Ansible playbooks and nothing else.**
+
+⚠️ So the cost of not pinning is not only "you might get a different binary".
+It is **a build that fails against somebody else's rate limit, on a change
+unrelated to the binary** — and it blocked a tester who had been told to wait
+for that image. Pinned in 1.6.42 with upstream checksums, no API call.
+
+⚠️ **Sibling, recorded not fixed:** `provision-host-03-net.sh:89` makes the
+same unauthenticated call for `cloudflared`. It is **not** run during the
+container build — the build runs 00, 01, 02 and 04 — so it cannot turn the
+build red. It can still fail a user's network setup against a rate limit.
+Deliberately left while the build was down rather than expanding a red-build
+fix; it is the next thing this plan should take.
+
+
 > **IMPLEMENTATION RULES:** Before implementing this plan, read and follow:
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
