@@ -266,9 +266,9 @@ configure_service() {
             rotated=true
         fi
 
-        local alter_result
-        alter_result=$(_pg_exec "ALTER USER \"$username\" WITH PASSWORD '$app_password'" "$admin_pass" 2>&1)
-        if [[ $? -ne 0 ]]; then
+        local alter_result alter_rc=0
+        alter_result=$(_pg_exec "ALTER USER \"$username\" WITH PASSWORD '$app_password'" "$admin_pass" 2>&1) || alter_rc=$?
+        if [[ $alter_rc -ne 0 ]]; then
             if [[ "$json_output" == true ]]; then
                 _configure_error "create_resources" "$service_id" "Failed to reset password for user '$username': $alter_result"
             fi
@@ -376,12 +376,14 @@ EOF
     if ! _pg_user_exists "$username" "$admin_pass"; then
         user_was_created=true
     fi
-    create_user_result=$(_pg_exec "CREATE USER \"$username\" WITH PASSWORD '$app_password'" "$admin_pass" 2>&1)
-    if [[ $? -ne 0 ]] && ! _pg_user_exists "$username" "$admin_pass"; then
+    local create_user_rc=0
+    create_user_result=$(_pg_exec "CREATE USER \"$username\" WITH PASSWORD '$app_password'" "$admin_pass" 2>&1) || create_user_rc=$?
+    if [[ $create_user_rc -ne 0 ]] && ! _pg_user_exists "$username" "$admin_pass"; then
         if [[ "$json_output" == true ]]; then
             _configure_error "create_resources" "$service_id" "Failed to create user '$username': $create_user_result"
         fi
-        log_error "Failed to create user '$username'"
+        log_error "Failed to create user '$username' (psql exit $create_user_rc)"
+        [[ -n "$create_user_result" ]] && echo "  $create_user_result" >&2
         return 1
     fi
 
@@ -397,8 +399,9 @@ EOF
     # urb-agents#481, following an instruction of mine that named exactly that
     # parameter). All-lowercase unquoted and quoted identifiers are the same
     # object, so nothing existing changes.
-    create_db_result=$(_pg_exec "CREATE DATABASE \"$database_name\" OWNER \"$username\"" "$admin_pass" 2>&1)
-    if [[ $? -ne 0 ]]; then
+    local create_db_rc=0
+    create_db_result=$(_pg_exec "CREATE DATABASE \"$database_name\" OWNER \"$username\"" "$admin_pass" 2>&1) || create_db_rc=$?
+    if [[ $create_db_rc -ne 0 ]]; then
         # Roll back the role we just created. Leaving it behind made the next
         # attempt a two-step manual cleanup for the tester rather than a re-run.
         if [[ "$user_was_created" == true ]]; then
@@ -408,7 +411,12 @@ EOF
         if [[ "$json_output" == true ]]; then
             _configure_error "create_resources" "$service_id" "Failed to create database '$database_name': $create_db_result"
         fi
-        log_error "Failed to create database '$database_name'"
+        log_error "Failed to create database '$database_name' (psql exit $create_db_rc)"
+        # ⚠️ SHOW THE PSQL TEXT. The user's entire diagnostic used to be
+        # "Configure produced no output for postgresql (exit code: 2)" — and
+        # psql exit 2 is "connection to the server went bad", which is the
+        # whole answer and was thrown away (imac, urb-agents#506).
+        [[ -n "$create_db_result" ]] && echo "  $create_db_result" >&2
         return 1
     fi
 

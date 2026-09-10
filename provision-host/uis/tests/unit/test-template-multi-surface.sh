@@ -235,10 +235,35 @@ start_test "|| rc=\$? reaches the handler and preserves the output (the fix)"
 out=$(bash -c 'set -e; f(){ local r rc=0; r=$(bash -c "echo J; exit 1") || rc=$?; echo "HANDLER:$r:$rc"; }; f' 2>/dev/null || true)
 assert_equals "HANDLER:J:1" "$out" "handler reached, stdout and status both kept"
 
-start_test "no bare assign-then-\$? remains in the uis libs"
+start_test "🔴 no bare assign-then-\$? remains in the uis libs, in ANY spelling"
+# ⚠️ THIS LINT EXISTED AND MISSED THE DEFECT IT WAS WRITTEN FOR.
+#
+# It matched only the two-line spelling:
+#     x=$(cmd)
+#     rc=$?              <- a bare assignment, alone on the next line
+#
+# `configure postgresql` used the other one:
+#     create_db_result=$(_pg_exec "CREATE DATABASE …")
+#     if [[ $? -ne 0 ]]; then          <- $? inside a test, not an assignment
+#
+# So under `set -e` the shell died at the assignment and everything below was
+# dead code: the `$?` check, the JSON error the installer reads, the log line,
+# and the rollback that drops the role it had just created. One cause, three
+# symptoms — no error text, empty stdout, orphaned role — and a retry that
+# then failed EARLIER because the orphan tripped `CREATE USER` (imac,
+# urb-agents#506, from a cluster that had never run UIS).
+#
+# 🔴 The guard was written in the same breath as the guarded thing, and only
+# the spelling I happened to use was exercised. That is the class this lint
+# exists to catch, in the lint.
+#
+# Now: any `$?` on the line after an unguarded command-substitution assignment.
+# Lines already carrying `||` or `&&` are the correct form and are skipped.
+# Widening it found a THIRD site imac could not reach — the ALTER USER in the
+# already-exists path, which needs a database that already exists.
 lib_dir="$UIS_LIB"
 found=$(for f in "$lib_dir"/*.sh; do
-    awk 'prev ~ /^[[:space:]]*(local +)?[a-z_]+=\$\(/ && $0 ~ /^[[:space:]]*(local +)?[a-z_]+=\$\?[[:space:]]*$/ {print FILENAME": "NR} {prev=$0}' "$f"
+    awk 'prev ~ /^[[:space:]]*(local +)?[a-zA-Z_]+=\$\(/ && prev !~ /(\|\||&&)/ && $0 ~ /\$\?/ {print FILENAME": "NR} {prev=$0}' "$f"
 done)
 assert_empty "$found" "libs must capture with || rc=\$? under set -e"
 
