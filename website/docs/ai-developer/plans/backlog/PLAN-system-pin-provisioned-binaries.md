@@ -17,12 +17,54 @@ It is **a build that fails against somebody else's rate limit, on a change
 unrelated to the binary** — and it blocked a tester who had been told to wait
 for that image. Pinned in 1.6.42 with upstream checksums, no API call.
 
+## 🔴 And a third failure mode, worse than both — imac, 2026-09-10
+
+An unpinned network dependency can **silently substitute a different artifact
+and report success**. imac hit this on their own machine within the hour, on a
+different tool, while I was fixing the k9s one:
+
+```
+10:20:41.259Z  updateCache: error: Error: net::ERR_CONNECTION_RESET
+10:21:12.924Z  Ensuring images available for K3s 1.25.16
+```
+
+`rdctl start --kubernetes.version 1.36.3` was **accepted**, settings showed
+`1.36.3`, the version-list fetch failed one second later, and Rancher Desktop
+fell back to its bundled default and built a **1.25.16** cluster — eleven minor
+versions behind what was asked for. **`rdctl start` exited 0.**
+
+The three modes, which is the useful form of this plan's argument:
+
+| | k9s (ours) | `updateCache` (imac's) |
+|---|---|---|
+| trigger | unauthenticated API, rate-limited | version-list fetch, connection reset |
+| result | **build red** | **wrong version, exit 0** |
+| who notices | immediately, CI | **nobody**, unless something asserts |
+
+🔴 **The fix differs for the silent case.** Pinning helps, but what makes the
+failure *visible* is an assertion downstream that compares what you got against
+what you asked for. imac only caught it because of a phase-5 check comparing
+the running node version to the requested one — which exists because of an
+earlier disk-size-poisoning bug on the same script where rejected flags also
+produced `exit 0`.
+
+**So this plan gains a second half:** pin the fetch, *and* assert the result.
+Every place UIS installs a versioned tool should end by checking the installed
+version equals the pinned one — `install_oras` and now `install_k9s` both
+report a version, but neither compares it to the constant it was told to
+install.
+
 ⚠️ **Sibling, recorded not fixed:** `provision-host-03-net.sh:89` makes the
 same unauthenticated call for `cloudflared`. It is **not** run during the
 container build — the build runs 00, 01, 02 and 04 — so it cannot turn the
-build red. It can still fail a user's network setup against a rate limit.
-Deliberately left while the build was down rather than expanding a red-build
-fix; it is the next thing this plan should take.
+build red. Deliberately left while the build was down rather than expanding a
+red-build fix; it is the next thing this plan should take.
+
+⚠️ **By the table above it is the SILENT kind, not the loud one.** A rate-limited
+`cloudflared` lookup gives a user a broken network setup and no red build —
+which makes it more dangerous than the k9s case, not less, and means the fix
+needs the assertion as well as the pin. imac has offered to exercise it with a
+factory reset plus `uis network up cloudflare` when we get to it.
 
 
 > **IMPLEMENTATION RULES:** Before implementing this plan, read and follow:
