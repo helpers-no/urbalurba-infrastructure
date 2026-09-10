@@ -486,6 +486,13 @@ distinguishes three cases, because they need different actions:
 | `<repo>:<version>` **is** in the registry but `:latest` is older | a tagging fault in the release; take it by version: `UIS_IMAGE=<repo>:<version> ./uis pull` |
 | the registry **could not be reached** | *"do not know"*, stated as such — never reported as "not built yet" |
 
+🔴 **`pull`, `stop` and `restart` refuse while a UIS command is running inside
+the container** (1.6.52). All three stop it, and `template install` is minutes
+long — interrupting it leaves a half-built application: a database with a
+partial schema, or a code location written to `.uis.extend` that Dagster never
+loaded. No UIS command repairs that. The refusal names the process it found and
+says how long to wait; `UIS_FORCE=1 ./uis pull` overrides it.
+
 ⚠️ **Exit 3 means the pull worked and did not deliver the advertised version.**
 A script that treats any non-zero as failure will now notice; one that only
 checks for zero was previously told success. Exit 0 still means you are on the

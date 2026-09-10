@@ -58,9 +58,30 @@ under 20 seconds, creating the `raw` and `marts` schemas and 47 tables.
 - [ ] 1.3 `./uis dagster automation --start` / `--stop`. It currently reports
       `0 RUNNING, 4 STOPPED` and **cannot change it** — its only flag is
       `--expect`, an assertion
+
+      ⚠️ **The two mutations return different types and guessing costs a
+      round.** `startSchedule` returns `ScheduleStateResult`; `startSensor`
+      returns `Sensor`. Guessing `SensorStateResult` gives a bare HTTP 400 with
+      nothing in it (atlas, `urb-agents#629`, from a production go-live). That
+      asymmetry is the reason this verb is worth more than the two-line
+      workaround it replaces
+- [ ] 1.3b 🔴 `./uis dagster run <job> [--wait]` — **not the same as 1.1.**
+      `materialize` is asset-shaped; atlas's installer ends by naming **four
+      jobs in order**, and there is no verb that runs a named job at all. The
+      documented path today is a hand-written `launchPipelineExecution`
+      mutation plus polling `runOrError`, which ops did on a production install
+      and only managed because `imac` had written the shape down in
+      `uis-tester`. ⚠️ **Without this verb the install guide teaches GraphQL**,
+      which is where a novice stops (atlas, `urb-agents#629`)
 - [ ] 1.4 ⚠️ `./uis dagster` appears **nowhere** in the 172-line help. `imac`
       found it by guessing. Whatever else this plan does, that line gets added
 - [ ] 1.5 The install summary should say which of the two a user probably wants
+- [x] 1.6 ✅ **Done in 1.6.52** — `--dry-run` is advertised in `template list`,
+      in `template info` and in the subcommand help. It pulls the definition
+      and prints the numbered plan without installing anything; ops called it
+      *"the clearest description of atlas that exists anywhere"* and found it
+      only by reading the install usage line. A capability nobody is told about
+      is one nobody has
 
 ## Phase 2 — `uis template status <id>`
 

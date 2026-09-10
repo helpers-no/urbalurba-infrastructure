@@ -12,7 +12,7 @@ exercised at least once, so a failure reports its cause instead of being
 swallowed by the mechanism meant to handle it.
 
 **Proposed by**: imac, `urb-agents#344`, after finding the third instance in one
-week. **See the table below for the recorded instances**, most recently one at 1.6.51. Its words: *"Each was invisible until something failed, and each made the
+week. **See the table below for the recorded instances**, most recently one at 1.6.52. Its words: *"Each was invisible until something failed, and each made the
 **next** failure harder to diagnose. Might be worth one deliberate pass over the
 error paths rather than three more of these arriving one at a time."*
 
@@ -47,6 +47,7 @@ is one nobody checks.* The sweep should settle it rather than carry it forward.
 | 1.6.49 | 🔴 A database dropped without its role made the next install publish a password **it never set** — `status: ok`, and the application cannot authenticate | `CREATE USER` fails, and the guard is `rc != 0 && ! _pg_user_exists` — it checks the role **exists**, not that its password is the one about to be written into a Secret and three connection strings. The correct branch already existed in `360-setup-dagster` task 13 and in `configure postgrest`'s state matrix; this was the third handler, catching up |
 | 1.6.50 | 🔴 The gate deciding whether a service is provided OUTSIDE the cluster returned "not external" — meaning *deploy the real thing in-cluster* — when `yq` was missing or the file did not parse | `is_external_service` answered *"did I find a host string?"*; the caller needed *"is this service external?"*. Four situations collapsed to one return code, two of which are the absence of an answer. On an installation whose database is shared, the deploy deletes the proxy and rolls out a StatefulSet, logging ordinary progress (ops, `urb-agents#600`) |
 | 1.6.51 | 🔴 `./uis pull` reported **"Image updated successfully"** after pulling a `:latest` that was two releases behind the version its own notice had just advertised | The notice compares the installed version against `version.txt` on `main`; `pull` pulls a moving tag. `main` gains a release minutes before the image exists and permanently if the build fails, and nothing compared what arrived against what was asked for. Measured live: `main` 1.6.50, `:latest` = 1.6.48, `:1.6.49` and `:1.6.50` both absent from the registry (Terje) |
+| 1.6.52 | 🔴 `pull`, `stop` and `restart` stopped the container **while a `template install` was running inside it**, with no warning — leaving a database with a partial schema or a code location Dagster never loaded, and no command that repairs either | Three verbs whose whole job is to stop the container, and none of them asked what the container was doing. Not an error path that failed: an error path nobody wrote. Reported by atlas from a production go-live where ops was asked to pull mid-install and held it only by reasoning it out (`urb-agents#629`) |
 
 Every row above, a different mechanism, one shape: **error handling that looks
 correct, defeated by the semantics of the construct it is written in, in a branch
