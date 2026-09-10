@@ -93,12 +93,46 @@
     # ⚠️ Do NOT verify this by re-running until it passes. It passed two times in
     # three before the fix. The check is that the wait now returns on the Ready
     # condition; the timing margin is a consequence, not the assertion.
+    # 🔴 `until:` IS NOT OPTIONAL HERE, AND ITS ABSENCE BROKE FIRST INSTALLS.
+    #
+    # 1.6.37 replaced a phase poll with this wait and dropped the retry with
+    # it. `kubectl wait` does NOT wait for a resource to be created: with
+    # nothing matching the selector it errors immediately, and `--timeout`
+    # bounds how long to wait for a CONDITION ON EXISTING PODS, not for pods to
+    # exist. Helm creates the StatefulSet and the pod object appears moments
+    # later, so on a clean cluster this failed in 176 ms (imac,
+    # urb-agents#525):
+    #
+    #   pod postgresql-0 created  10:34:28Z
+    #   kubectl wait started      10:34:28.396
+    #   kubectl wait failed       10:34:28.572   "no matching resources found"
+    #
+    # ⚠️ So the readiness fix closed one race and opened another of the same
+    # class — asserting against a resource at the wrong moment — and moved the
+    # window from "Running but not Ready" to "not yet created". The old code
+    # could not do this: its `until:` made "not created yet" just a failed
+    # poll. Intermittent, and silent to anyone not watching, exactly like the
+    # bug it replaced.
+    #
+    # ⚠️ And the behaviour that causes it was measured on #516 and read as
+    # good news: `exit 1 on no matching resources` answers "does it pass
+    # vacuously?" with no — and also says "it fails hard before the resource
+    # exists", which in a deploy sequence is the normal first fraction of a
+    # second. Both halves were in the same output.
+    #
+    # Timeouts: the retry covers CREATION (seconds), the per-attempt timeout
+    # covers READINESS (~9 s for Bitnami). Bounded at 10 x (90 + 5) ≈ 16 min if
+    # PostgreSQL never becomes ready, rather than the 105 min that 20 retries
+    # of a 300 s wait would give.
     - name: 8. Wait for PostgreSQL pod to be READY (not merely Running)
       command: >-
         kubectl wait --for=condition=Ready pod
         -l app.kubernetes.io/name=postgresql
-        -n default --timeout=300s
+        -n default --timeout=90s
       register: pod_ready
+      until: pod_ready.rc == 0
+      retries: 10
+      delay: 5
       changed_when: false
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"

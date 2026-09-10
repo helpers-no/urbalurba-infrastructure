@@ -126,12 +126,26 @@
           register: whoami_deployment_wait
           changed_when: false
 
+        # 🔴 Same creation race as 040-database-postgresql (urb-agents#525).
+        #
+        # Step 2.1 above is SAFE and deliberately left alone: `kubectl apply`
+        # creates the Deployment OBJECT synchronously, so waiting on
+        # `deployment/whoami` cannot miss it. This task waits on PODS, which
+        # the Deployment controller creates asynchronously — so `kubectl wait`
+        # can run with nothing matching the selector and fail immediately with
+        # "no matching resources found", in milliseconds, regardless of
+        # --timeout.
+        #
+        # The retry covers creation; the timeout covers readiness.
         - name: "Step 2.2: Wait for whoami pods to be ready"
           ansible.builtin.shell: |
             kubectl wait --for=condition=ready pod -l app=whoami -n default --timeout={{ test_timeout }}s
           environment:
             KUBECONFIG: "{{ merged_kubeconf_file }}"
           register: whoami_pod_wait
+          until: whoami_pod_wait.rc == 0
+          retries: 10
+          delay: 5
           changed_when: false
 
         - name: "Step 2.3: Display readiness result"
