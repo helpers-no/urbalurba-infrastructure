@@ -51,9 +51,26 @@
       # result is used by later tasks, and swapping the module would mean
       # duplicating the selector in a second place. Only the PREDICATE changes.
       # The existing `length > 0` guard already rules out the vacuous pass.
+      #
+      # 🔴 `selectattr('status.conditions', 'defined')` IS LOAD-BEARING.
+      # `status.phase` is always present on a pod; `status.conditions` is NOT —
+      # a pod between creation and its first condition has `status: {phase:
+      # Pending}` and nothing else. Mapping a missing attribute makes Ansible
+      # FAIL THE TASK with an undefined-variable error rather than retry, which
+      # is the worst possible shape inside an `until:` loop: the loop exists to
+      # tolerate the not-yet-ready window, and without this filter one state
+      # inside that window is fatal instead of retryable.
+      #
+      # Found by imac (urb-agents#516) reading the diff before verifying, and
+      # exercised through ansible-playbook in the shipped image. My own check
+      # had "verified the predicate logic" against test data I wrote myself —
+      # every case of which had a conditions key. The missing-key case was the
+      # one that mattered and the one I could not see, because I authored the
+      # fixture and the predicate together.
       until: >-
         nginx_pods.resources | length > 0 and
-        (nginx_pods.resources | map(attribute='status.conditions') | flatten
+        (nginx_pods.resources | selectattr('status.conditions', 'defined')
+         | map(attribute='status.conditions') | flatten
          | selectattr('type', 'eq', 'Ready') | selectattr('status', 'eq', 'True')
          | list | length) == (nginx_pods.resources | length)
       retries: 10
@@ -133,7 +150,8 @@
       # The existing `length > 0` guard already rules out the vacuous pass.
       until: >-
         ingress_pods.resources | length > 0 and
-        (ingress_pods.resources | map(attribute='status.conditions') | flatten
+        (ingress_pods.resources | selectattr('status.conditions', 'defined')
+         | map(attribute='status.conditions') | flatten
          | selectattr('type', 'eq', 'Ready') | selectattr('status', 'eq', 'True')
          | list | length) == (ingress_pods.resources | length)
       retries: 10
