@@ -295,11 +295,23 @@
         PGPW: "{{ litellm_ai_secret.resources[0].data.LITELLM_POSTGRESQL__PASSWORD | b64decode }}"
       register: litellm_table_count
       changed_when: false
+      # 🔴 RETRY A FAILED QUERY. `failed_when: false` kept this task green when
+      # psql failed, and the empty stdout then read downstream as "0 tables" —
+      # indistinguishable from a real empty schema. imac saw exactly that: the
+      # migration job was mid-`P1000: Authentication failed` when the count
+      # ran, and the same credential worked seconds later (urb-agents#571).
+      #
+      # `failed_when: false` stays so a persistent failure reaches 20g with a
+      # message rather than an abort — but a TRANSIENT one now retries instead
+      # of being silently converted into a number.
+      until: litellm_table_count.rc == 0
+      retries: 10
+      delay: 6
       failed_when: false
 
     - name: 20c. Display schema state
       ansible.builtin.debug:
-        msg: "LiteLLM schema tables found: {{ litellm_table_count.stdout | default('0') | trim }}"
+        msg: "LiteLLM schema tables found: {{ litellm_table_count.stdout | default('0', true) | trim }}"
 
     - name: 20d. Repair schema when migrations did not apply
       ansible.builtin.shell: |
@@ -311,7 +323,7 @@
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: litellm_schema_repair
-      when: (litellm_table_count.stdout | default('0') | trim | int) < 50
+      when: (litellm_table_count.stdout | default('0', true) | trim | int) < 50
 
     - name: 20e. Re-count tables after repair
       ansible.builtin.shell: |
@@ -324,6 +336,18 @@
         PGPW: "{{ litellm_ai_secret.resources[0].data.LITELLM_POSTGRESQL__PASSWORD | b64decode }}"
       register: litellm_table_count_after
       changed_when: false
+      # 🔴 RETRY A FAILED QUERY. `failed_when: false` kept this task green when
+      # psql failed, and the empty stdout then read downstream as "0 tables" —
+      # indistinguishable from a real empty schema. imac saw exactly that: the
+      # migration job was mid-`P1000: Authentication failed` when the count
+      # ran, and the same credential worked seconds later (urb-agents#571).
+      #
+      # `failed_when: false` stays so a persistent failure reaches 20g with a
+      # message rather than an abort — but a TRANSIENT one now retries instead
+      # of being silently converted into a number.
+      until: litellm_table_count_after.rc == 0
+      retries: 10
+      delay: 6
       failed_when: false
       when: litellm_schema_repair.changed | default(false)
 
@@ -380,16 +404,49 @@
       changed_when: false
       when: litellm_schema_repair.changed | default(false)
 
+    # 🔴 `default()` REPLACES UNDEFINED, NOT EMPTY.
+    #
+    # This rendered as `Tables found: .` — nothing between the colon and the
+    # period — on an install with 86 tables, a running pod and a credential
+    # that authenticates. The count query had returned an empty string; the
+    # first `default()` passed it through untouched, the second never fired,
+    # `| int` made it 0, and `0 < 50` failed a working install
+    # (imac, urb-agents#571, measured in the shipped 1.6.46 image):
+    #
+    #   ""  | default('0')        -> ""   int=0
+    #   ""  | default('0', true)  -> "0"  int=0
+    #
+    # ⚠️ Same shape as `_code_locations | default([])` fixed this morning in
+    # 360-setup-dagster.yml, where a bare `code_locations:` parsed as null and
+    # flowed through. I fixed that instance and did not sweep for the class —
+    # `default()` without the boolean is wrong on anything that can be empty,
+    # and `.stdout` always can be.
+    #
+    # And the deeper half: the check could not distinguish "the query returned
+    # nothing" from "there are zero tables". Those need different responses,
+    # so the message now says which.
     - name: 20g. FAIL if the database schema is still missing
       ansible.builtin.fail:
         msg: >-
-          LiteLLM database schema was not created. Tables found:
-          {{ (litellm_table_count_after.stdout | default(litellm_table_count.stdout) | default('0')) | trim }}.
+          {% set _after = litellm_table_count_after.stdout | default('', true) | trim %}
+          {% set _first = litellm_table_count.stdout | default('', true) | trim %}
+          {% set _count = _after if _after else _first %}
+          {% if not _count %}
+          Could NOT COUNT the LiteLLM schema — the count query returned nothing
+          after {{ 10 }} attempts, so this is not "zero tables", it is "no
+          answer". Check whether postgresql is reachable and whether the
+          litellm role can authenticate:
+          kubectl exec -n default deploy/postgresql -c postgresql --
+          psql -h postgresql.default.svc.cluster.local -U litellm -d litellm -c '\dt'
+          {% else %}
+          LiteLLM database schema was not created. Tables found: {{ _count }}.
           The proxy will appear to work (models come from the ConfigMap) but
           virtual keys and spend tracking will fail silently.
           Check: kubectl logs -n {{ ai_namespace }} -l app.kubernetes.io/name=litellm | grep P1000
+          {% endif %}
       when: >-
-        ((litellm_table_count_after.stdout | default(litellm_table_count.stdout) | default('0')) | trim | int) < 50
+        ((litellm_table_count_after.stdout | default(litellm_table_count.stdout, true) | default('0', true))
+         | trim | int) < 50
 
     - name: 21. Display final status
       ansible.builtin.debug:
