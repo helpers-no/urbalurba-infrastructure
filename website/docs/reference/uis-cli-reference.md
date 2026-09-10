@@ -619,7 +619,7 @@ worth knowing what it does:
 | the database and its role | **kept**, never recreated |
 | the password | **preserved.** It is read back from the Secret UIS wrote. `--rotate` mints a new one; nothing else does |
 | `init:` | **re-applied**, and the result reports `init_applied` |
-| a failing `init:` | refuses and leaves the database alone — **no rollback**, because that data predates the command |
+| a failing `init:` | refuses and **does not drop the database** — that data predates the command. ⚠️ It is not left untouched: statements before the failure are already committed, so the schema can be left part-applied. See [PLAN-cli-init-file-partial-apply](../ai-developer/plans/backlog/PLAN-cli-init-file-partial-apply.md) |
 
 🔴 **`--rotate` will break a running workload** until its pods restart and
 re-read the Secret. Environment-variable consumers — a Dagster code location,

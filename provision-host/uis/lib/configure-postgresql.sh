@@ -321,9 +321,21 @@ configure_service() {
                 echo "$re_init_result" >&2
                 # ⚠️ NO ROLLBACK HERE, deliberately. The create path drops the
                 # database it just made; this database predates the command and
-                # may hold data nothing can reconstruct. Refuse loudly and leave
-                # it alone — dropping someone else's data to tidy up a failed
+                # may hold data nothing can reconstruct. Refuse loudly and do
+                # NOT drop it — dropping someone else's data to tidy up a failed
                 # re-run is not a trade this command gets to make.
+                #
+                # 🔴 But "not dropped" is not "untouched", and this comment used
+                # to say `leave it alone`. _pg_apply_init_file runs psql with
+                # ON_ERROR_STOP and NO --single-transaction, so every statement
+                # before the failing one is already COMMITTED: a multi-statement
+                # init that fails part-way leaves a schema that is neither the
+                # old one nor the new one. `database_preserved: true` below is
+                # true about the DATABASE and reads as a claim about the SCHEMA.
+                # Whether to add --single-transaction is a real trade (CREATE
+                # INDEX CONCURRENTLY and friends cannot run in one) and is
+                # PLAN-cli-init-file-partial-apply. Until it is decided, the
+                # honest statement is the one in this comment.
                 if [[ "$json_output" == true ]]; then
                     local re_escaped
                     re_escaped=$(echo "$re_init_result" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read().strip())[1:-1])' 2>/dev/null || echo "$re_init_result" | tr '\n' ' ' | sed 's/"/\\"/g; s/\\/\\\\/g')
