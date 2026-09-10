@@ -12,11 +12,17 @@ exercised at least once, so a failure reports its cause instead of being
 swallowed by the mechanism meant to handle it.
 
 **Proposed by**: imac, `urb-agents#344`, after finding the third instance in one
-week. **Fifteen instances as of 1.6.37** (see the table). Its words: *"Each was invisible until something failed, and each made the
+week. **See the table below for the recorded instances**, most recently one at 1.6.47. Its words: *"Each was invisible until something failed, and each made the
 **next** failure harder to diagnose. Might be worth one deliberate pass over the
 error paths rather than three more of these arriving one at a time."*
 
 ---
+
+⚠️ **The count in this document does not reconcile.** The prose has said *fifteen*
+since 1.6.37 and the table lists fifteen rows including the 1.6.47 addition — so one
+of the two was already wrong before this row, and nobody has established which. That
+is this document's own last table row, applied to itself: *an unreconcilable number
+is one nobody checks.* The sweep should settle it rather than carry it forward.
 
 ## The three, and what they have in common
 
@@ -37,8 +43,9 @@ error paths rather than three more of these arriving one at a time."*
 | 1.6.28 | The registry cache was **one file for any URL**, so switching `REGISTRY_URL_PRIMARY` served the previous registry for up to an hour | A cache keyed by nothing, in the documented testing path |
 | 1.6.27 | 🔴 `configure postgresql --init-file -` **discarded the SQL** on a database that already existed, exit 0 | Init is applied at line 273; the already-exists branch returns at 231/234. The whole application-catalogue install-time guarantee, undelivered and unreported |
 | 1.6.24 | 28 of 68 template tests reported **neither pass nor fail**, and the suite still printed `ALL TESTS PASSED` | `assert_equals "$a" "$b" "msg"` returned 0 and moved no counter. Failures were reported, so the verdict held — but the count could not be reconciled, and an unreconcilable number is one nobody checks |
+| 1.6.47 | 🔴 A failing `init:` on an existing database is documented and commented as leaving it **alone**; statements before the failure are already committed, so the schema can be left part-applied | `psql --set ON_ERROR_STOP=on` with **no `--single-transaction`**. The comment explaining why there is no rollback is correct about the decision and wrong about the description — see [PLAN-cli-init-file-partial-apply](./PLAN-cli-init-file-partial-apply.md) |
 
-Fifteen instances, fifteen different mechanisms, one shape: **error handling that looks
+Every row above, a different mechanism, one shape: **error handling that looks
 correct, defeated by the semantics of the construct it is written in, in a branch
 nothing executes until something else is already wrong.**
 
