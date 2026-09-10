@@ -2064,6 +2064,38 @@ cmd_template_install() {
     print_section "Template Installation Complete"
     echo "$results"
 
+    # 🔴 SAY WHERE IT IS. A successful install used to end without the URL
+    # anywhere a user could find it: not in this summary, not in `uis status`,
+    # not in `uis list`, and not even in `uis verify postgrest --app <id>`,
+    # which makes the request and prints PASS without the address it used. The
+    # URL existed once, at line 475 of a 701-line log, inside an Ansible debug
+    # envelope — scroll past it and it is unrecoverable from the product
+    # (imac, urb-agents#506, grading Atlas as a novice would).
+    #
+    # ⚠️ And it is not guessable. The route matches on HOSTNAME
+    # (`HostRegexp('api-atlas\..+')`) while the only string a user has seen is
+    # `--url-prefix api-atlas`, which suggests http://localhost/api-atlas/ —
+    # a bare Traefik 404. Measured: http://api-atlas.localhost/ is 200.
+    #
+    # The definition already declares this, and the record already stores it:
+    # `exports:` is where an application says what it published. Nothing new is
+    # computed here — it is printed because it was already known.
+    # ⚠️ A plain loop over a captured list, not `while read < <(…)`.
+    # The process-substitution form yielded nothing here while the same
+    # `_json_field` call returned the key correctly one line above it —
+    # measured, not assumed. Not worth diagnosing bash for a six-line
+    # summary block when a `for` over a captured string is clearer anyway.
+    local _keys _ek _ev
+    _keys="$(_json_field "$exports_json" 'keys | .[]')"
+    if [[ -n "$_keys" ]]; then
+        echo ""
+        echo "Endpoints:"
+        for _ek in $_keys; do
+            _ev="$(_json_field "$exports_json" ".\"$_ek\"")"
+            printf '  %-14s %s\n' "$_ek" "$_ev"
+        done
+    fi
+
     # Print README if available
     local readme_file
     readme_file=$(_yaml_field "$info_file" ".readme")

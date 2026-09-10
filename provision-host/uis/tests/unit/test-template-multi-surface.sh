@@ -635,6 +635,48 @@ fi
 # declaration and the auto-wiring each supply the name, so a test that looked
 # only at the final entry would pass with either one broken.
 # ============================================================================
+# ============================================================================
+# A successful install must say where the thing it installed is
+#
+# 🔴 It did not. Not in the completion summary, not in `uis status`, not in
+# `uis list`, and not in `uis verify postgrest --app <id>` — which makes the
+# HTTP request, prints PASS, and never shows the address it used. The URL
+# appeared once, at line 475 of a 701-line log, inside an Ansible debug
+# envelope (imac, urb-agents#506, grading Atlas as a novice would).
+#
+# ⚠️ And it is not guessable: the route matches on HOSTNAME
+# (`HostRegexp('api-atlas\..+')`) while the string the user has seen is
+# `--url-prefix api-atlas`, suggesting http://localhost/api-atlas/ — a bare
+# Traefik 404. Measured by imac: the hostname form is 200.
+#
+# The data was already there. `exports:` is where an application declares what
+# it published, and the record already stored it. This prints what was known.
+# ============================================================================
+print_test_section "the install reports its endpoints"
+
+start_test "🔴 an export is rendered as a name and a URL"
+out=$(exports_json='{"api-url":"http://api-atlas.localhost"}'
+      _keys="$(_json_field "$exports_json" 'keys | .[]')"
+      for _ek in $_keys; do
+          printf '  %-14s %s\n' "$_ek" "$(_json_field "$exports_json" ".\"$_ek\"")"
+      done)
+echo "$out" | grep -q 'api-url .*http://api-atlas.localhost' && pass_test \
+    || fail_test "got: $out"
+
+start_test "several exports are all rendered"
+out=$(exports_json='{"api-url":"http://a.localhost","admin-url":"http://b.localhost"}'
+      _keys="$(_json_field "$exports_json" 'keys | .[]')"
+      for _ek in $_keys; do printf '%s\n' "$_ek"; done | sort | paste -sd, -)
+assert_equals "admin-url,api-url" "$out" "both keys"
+
+start_test "an application with no exports prints no Endpoints block"
+_keys="$(_json_field '{}' 'keys | .[]')"
+assert_equals "" "$_keys" "nothing to print"
+
+start_test "the completion block reads exports rather than recomputing them"
+_inst=$(sed -n '/^cmd_template_install()/,/^}/p' "$UIS_LIB/template.sh" | grep -v '^[[:space:]]*#')
+grep -q 'echo "Endpoints:"' <<< "$_inst" && pass_test || fail_test "no Endpoints block in the summary"
+
 print_test_section "env_secrets: scalar, list, and the Secret UIS created"
 
 if ! command -v yq >/dev/null 2>&1; then
