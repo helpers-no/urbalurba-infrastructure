@@ -12,7 +12,7 @@ exercised at least once, so a failure reports its cause instead of being
 swallowed by the mechanism meant to handle it.
 
 **Proposed by**: imac, `urb-agents#344`, after finding the third instance in one
-week. **See the table below for the recorded instances**, most recently one at 1.6.49. Its words: *"Each was invisible until something failed, and each made the
+week. **See the table below for the recorded instances**, most recently one at 1.6.50. Its words: *"Each was invisible until something failed, and each made the
 **next** failure harder to diagnose. Might be worth one deliberate pass over the
 error paths rather than three more of these arriving one at a time."*
 
@@ -45,6 +45,7 @@ is one nobody checks.* The sweep should settle it rather than carry it forward.
 | 1.6.24 | 28 of 68 template tests reported **neither pass nor fail**, and the suite still printed `ALL TESTS PASSED` | `assert_equals "$a" "$b" "msg"` returned 0 and moved no counter. Failures were reported, so the verdict held — but the count could not be reconciled, and an unreconcilable number is one nobody checks |
 | 1.6.47 | 🔴 A failing `init:` on an existing database is documented and commented as leaving it **alone**; statements before the failure are already committed, so the schema can be left part-applied | `psql --set ON_ERROR_STOP=on` with **no `--single-transaction`**. The comment explaining why there is no rollback is correct about the decision and wrong about the description — see [PLAN-cli-init-file-partial-apply](./PLAN-cli-init-file-partial-apply.md) |
 | 1.6.49 | 🔴 A database dropped without its role made the next install publish a password **it never set** — `status: ok`, and the application cannot authenticate | `CREATE USER` fails, and the guard is `rc != 0 && ! _pg_user_exists` — it checks the role **exists**, not that its password is the one about to be written into a Secret and three connection strings. The correct branch already existed in `360-setup-dagster` task 13 and in `configure postgrest`'s state matrix; this was the third handler, catching up |
+| 1.6.50 | 🔴 The gate deciding whether a service is provided OUTSIDE the cluster returned "not external" — meaning *deploy the real thing in-cluster* — when `yq` was missing or the file did not parse | `is_external_service` answered *"did I find a host string?"*; the caller needed *"is this service external?"*. Four situations collapsed to one return code, two of which are the absence of an answer. On an installation whose database is shared, the deploy deletes the proxy and rolls out a StatefulSet, logging ordinary progress (ops, `urb-agents#600`) |
 
 Every row above, a different mechanism, one shape: **error handling that looks
 correct, defeated by the semantics of the construct it is written in, in a branch

@@ -68,7 +68,7 @@ grading UIS as a novice from a factory reset. The pattern worth recording: the
 platform stopped being the blocker at 1.6.35, and everything since has been the
 difference between *works* and *usable by someone who has never seen it*.
 
-🔴 **Five things are open and none of them are atlas.**
+🔴 **Seven things are open and none of them are atlas.**
 
 | | |
 |---|---|
@@ -77,6 +77,8 @@ difference between *works* and *usable by someone who has never seen it*.
 | **[cli-load-and-report-on-application-data](PLAN-cli-load-and-report-on-application-data.md)** | `uis dagster materialize`, `uis template status`, and the `uis status` URL column. Filed from `imac`'s novice grading; nothing blocks it but my ordering |
 | **[cli-postgresql-target-tenancy](PLAN-cli-postgresql-target-tenancy.md)** | **NEW 2026-09-10.** UIS hardcodes its Postgres host and connects as superuser, so it cannot tell a database it owns from a shared server it is a guest on. Harmless today because nothing drops a database — which means **[configure-postgresql-purge](PLAN-cli-configure-postgresql-purge.md) is the plan that arms it.** Filed before that work rather than during it, on purpose |
 | **[cli-init-file-partial-apply](PLAN-cli-init-file-partial-apply.md)** | **NEW 2026-09-10.** A failing `init:` on an existing database is documented and commented as leaving it *alone*; `psql` runs without `--single-transaction`, so everything before the failure is committed. The wording is corrected in 1.6.48; whether to make the sentence true with one flag is a real trade (`CREATE INDEX CONCURRENTLY` cannot run in a transaction) and is the plan |
+| **[system-public-repo-internal-detail](PLAN-system-public-repo-internal-detail.md)** | **NEW 2026-09-10.** This repo is public and the shipping surface named a lab address, container id and bridge. Scrubbed and linted in 1.6.50; what remains is 🔴 **Terje's call** — whether `hosts/<name>/` and the historical plan records belong in a public repository at all |
+| **[cli-unmarked-proxy-silent-overlay](PLAN-cli-unmarked-proxy-silent-overlay.md)** | **NEW 2026-09-10.** A pre-marker proxy with no StatefulSet is the one revert path that warns nothing: the in-cluster workload deploys beside a live relay and both back the Service. Found tracing #600's blast radius; the gate above it is fixed, this branch is not |
 
 ### What the last three days actually taught, beyond the fixes
 

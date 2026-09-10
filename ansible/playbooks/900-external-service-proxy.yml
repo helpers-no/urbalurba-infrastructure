@@ -16,7 +16,7 @@
 #     -e "target_host=rancher-desktop" \
 #     -e "_service_id=postgresql" \
 #     -e "_proxy_template=040-postgresql-external-proxy.yml.j2" \
-#     -e "_external_host=10.10.0.105" -e "_external_port=5432"
+#     -e "_external_host=192.0.2.10" -e "_external_port=5432"
 
 - name: Deploy external-service proxy
   hosts: localhost

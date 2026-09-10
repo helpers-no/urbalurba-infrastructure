@@ -27,12 +27,13 @@
 # nobody can justify is one nobody maintains, and when it breaks at 3am the first
 # question is why anything was pointed there in the first place.
 #
-# Example — the reference installation's PostgreSQL, which runs in a container on
-# the hypervisor rather than in the cluster:
+# Example — an installation whose PostgreSQL runs in a container on the
+# hypervisor rather than in the cluster (address from RFC 5737, for
+# documentation; use your own):
 #
 #   postgresql:
-#     host: 10.10.0.105
+#     host: 192.0.2.10
 #     port: 5432
-#     why: "production database on Odin CT 105, reached over the vmbr1 backplane"
+#     why: "shared database on the hypervisor, reached over the host-only bridge"
 #
 # To go back to running it in-cluster, delete the entry and redeploy.
