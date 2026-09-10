@@ -345,9 +345,29 @@
       changed_when: false
       when: litellm_schema_repair.changed | default(false)
 
+    # 🔴 `$RANDOM` IS A BASH BUILTIN AND THIS RUNS UNDER dash.
+    #
+    # `ansible.builtin.shell` defaults to /bin/sh, which in uis-provision-host
+    # is /usr/bin/dash. There `$RANDOM` expands to NOTHING, so the pod name
+    # became `apiready-` and kubectl refused it as an invalid RFC 1123
+    # subdomain — every attempt, twenty times, then the play failed:
+    #
+    #   The Pod "apiready-" is invalid: metadata.name: Invalid value
+    #
+    # ⚠️ So `uis deploy litellm` exited 3 while the service was healthy and
+    # serving (`litellm-6f4cf9774-r7qb8  1/1  Running`). This task exists to
+    # stop a deploy reporting success while the API is dead; what it actually
+    # did was make a working deploy report failure. 100% reproducible, not a
+    # race (imac, urb-agents#548).
+    #
+    # ⚠️ Fixed with Ansible's own `random` filter rather than by setting
+    # `executable: /bin/bash`. Both work; this one removes the SHELL
+    # DEPENDENCY instead of satisfying it, so the task cannot regress if the
+    # base image's /bin/sh changes again — which is the likeliest way this
+    # became broken in the first place.
     - name: 20f3. Wait for the API to actually answer
       ansible.builtin.shell: |
-        kubectl run apiready-$RANDOM -n {{ ai_namespace }} --rm -i --restart=Never \
+        kubectl run apiready-{{ 999999 | random }} -n {{ ai_namespace }} --rm -i --restart=Never \
           --image=curlimages/curl:latest --quiet -- \
           curl -s -o /dev/null -w '%{http_code}' -m 10 \
           http://litellm.{{ ai_namespace }}.svc.cluster.local:4000/v1/models </dev/null
