@@ -177,6 +177,9 @@ Dagster:
   dagster verify                 Prove the daemon can fire schedules
   dagster automation             Report whether schedules and sensors are switched ON
                                  [--expect running|stopped] asserts instead of reporting
+  dagster run <job>              Launch one job now, rather than waiting for its cron
+                                 [--wait] polls the RUN to completion and reports
+                                 its status and elapsed time
 
 PostgREST:
   postgrest verify --app <name>  Health-check one application's PostgREST instance
@@ -2504,6 +2507,47 @@ cmd_dagster_verify() {
 # four green checks while everything was STOPPED and nothing had run for eleven
 # days. This is the other half of the question, and it is a separate verb because
 # STOPPED is a legitimate state - a deliberate test fixture is exactly that.
+# uis dagster run <job> [--wait] [--timeout N]
+#
+# The verb atlas's installer needed and nobody had: it ends by naming four jobs
+# to run in order, and the documented path was a hand-written GraphQL mutation
+# plus polling (atlas, urb-agents#629).
+#
+# 🔴 It polls the RUN, not the launch call, and reports STATUS AND ELAPSED rather
+# than step counts. Both are other agents' findings, and both say do not trust
+# the obvious signal: ops measured a 142.5 s queue delay in front of a 105.1 s
+# job — three agents called it hung while being early by two minutes — and
+# atlas's 647 checks live inside ONE op, so any step count reads "1 of 1".
+cmd_dagster_run() {
+    local job="" do_wait=false timeout=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --wait)    do_wait=true; shift ;;
+            --timeout) timeout="${2:-}"; shift 2 ;;
+            -*)        log_error "Unknown option: $1"
+                       echo "Usage: uis dagster run <job> [--wait] [--timeout SECONDS]" >&2
+                       return "$EXIT_GENERAL_ERROR" ;;
+            *)         if [[ -z "$job" ]]; then job="$1"; else
+                           log_error "Unexpected argument: $1 (job already given as '$job')"
+                           return "$EXIT_GENERAL_ERROR"
+                       fi
+                       shift ;;
+        esac
+    done
+
+    if [[ -z "$job" ]]; then
+        log_error "Usage: uis dagster run <job> [--wait] [--timeout SECONDS]"
+        echo "  A job name is required. 'uis dagster verify' lists what is loaded." >&2
+        return "$EXIT_GENERAL_ERROR"
+    fi
+
+    print_section "Running Dagster job: $job"
+    local args=(-e "job=$job")
+    [[ "$do_wait" == true ]] && args+=(-e "wait=true")
+    [[ -n "$timeout" ]] && args+=(-e "timeout=$timeout")
+    run_verify_playbook "362-dagster-run.yml" "${args[@]}"
+}
+
 cmd_dagster_automation() {
     local expect=""
     while [[ $# -gt 0 ]]; do
@@ -3051,8 +3095,11 @@ main() {
                 automation)
                     cmd_dagster_automation "$@"
                     ;;
+                run)
+                    cmd_dagster_run "$@"
+                    ;;
                 *)
-                    echo "  Use: ./uis dagster verify | automation [--expect running|stopped]" >&2
+                    echo "  Use: ./uis dagster verify | automation [--expect running|stopped] | run <job> [--wait]" >&2
                     ;;
             esac
             ;;

@@ -56,11 +56,19 @@ for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml"))):
             while j < len(lines) and (lines[j].strip() == "" or
                                       len(lines[j]) - len(lines[j].lstrip()) > ind):
                 j += 1
-            block = "\n".join(lines[start:j])
+            # ⚠️ COMMENT LINES STRIPPED. Without this the lint flags a comment
+            # that NAMES the bashism it is warning about — which it did three
+            # times in one day, on `chat_id: 0`, on the helm-repo lint's own
+            # fixture, and here on a comment explaining why $RANDOM was avoided.
+            # A check that cannot tell what the code DOES from what the code SAYS
+            # ABOUT ITSELF is the defect it exists to catch, one level up.
+            block = "\n".join(l for l in lines[start:j]
+                               if not l.lstrip().startswith("#"))
             k = j
             while k < len(lines) and not re.match(r'\s*- name:', lines[k]):
                 k += 1
-            if "/bin/bash" not in block and "/bin/bash" not in "\n".join(lines[j:k]):
+            tail = "\n".join(l for l in lines[j:k] if not l.lstrip().startswith("#"))
+            if "/bin/bash" not in block and "/bin/bash" not in tail:
                 for pat, label in BASHISMS:
                     if re.search(pat, block):
                         out.append(f"{os.path.basename(f)}:{start+1} {label}")
