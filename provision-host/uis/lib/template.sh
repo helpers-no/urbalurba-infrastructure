@@ -144,7 +144,22 @@ _template_pin_is_immutable() {
     return 0
 }
 
-# Check if registry cache is fresh
+# Age of the cache file in seconds, or FAILURE if that cannot be established.
+#
+# ⚠️ This used to be `$(stat -c %Y "$cache" 2>/dev/null || echo 0)` inline, which
+# turns a failed stat into the epoch — an age of ~29 million minutes, reported as
+# a number rather than as an error. A value we could not measure must not come
+# back looking like a value we did measure (imac, #719).
+_registry_cache_age_sec() {
+    local cache="$1" mtime
+    mtime=$(stat -c %Y "$cache" 2>/dev/null) || return 1
+    [[ "$mtime" =~ ^[0-9]+$ ]] || return 1
+    echo $(( $(date +%s) - mtime ))
+}
+
+# Check if registry cache is fresh.
+# Sets REGISTRY_CACHE_AGE_SEC on success so the caller does not stat a second
+# time and reach a different answer than the one this decision was made on.
 _registry_cache_fresh() {
     _registry_is_cacheable || return 1
     local cache
@@ -153,7 +168,8 @@ _registry_cache_fresh() {
         return 1
     fi
     local age
-    age=$(($(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0)))
+    age=$(_registry_cache_age_sec "$cache") || return 1
+    REGISTRY_CACHE_AGE_SEC="$age"
     [[ "$age" -lt "$REGISTRY_CACHE_TTL" ]]
 }
 
@@ -162,8 +178,21 @@ _registry_cache_fresh() {
 # "Not found in registry" and "published an hour ago and you have a cached copy"
 # are the same sentence to a reader, and the remediation we printed made it
 # worse: `uis template list` reads the SAME cache, so it confirms the absence.
+# ⚠️ Takes the id as an ARGUMENT. It used to read `$template_id` out of the
+# caller's scope, which works in bash only for as long as every caller happens
+# to name its local the same thing — and the line it appears in is the
+# remediation someone is about to type.
+#
+# 🔴 SILENT UNDER A MINUTE, on purpose. A copy fetched seconds ago cannot be the
+# hour-old-cache failure this hint exists for, and warning there is worse than
+# saying nothing: it fires immediately after `--refresh`, so it cries wolf about
+# the one read we know is current. "A warning that cries wolf on fresh data is
+# one people learn to skip" — imac, #719 — and being skipped is the single
+# outcome this fix cannot afford.
 _registry_staleness_hint() {
+    local template_id="${1:-<id>}"
     [[ "${REGISTRY_FROM_CACHE:-false}" == true ]] || return 0
+    [[ "${REGISTRY_CACHE_AGE_SEC:-0}" -ge 60 ]] || return 0
     echo "" >&2
     echo "⚠️  The registry was read from a ${REGISTRY_CACHE_AGE_MIN}-minute-old cache, not the network." >&2
     echo "    If this application was published recently it will not be in that copy," >&2
@@ -190,12 +219,36 @@ _registry_staleness_hint() {
 #
 # Sets REGISTRY_FROM_CACHE and REGISTRY_CACHE_AGE_MIN so the not-found path can
 # name the cache at the moment the wrong conclusion would otherwise be drawn.
+# 🔴 ONE REGISTRY READ PER COMMAND. `cmd_template_list` calls this and then
+# `_list_uis_templates` calls it again; `info` does the same through
+# `_get_template`. That printed the "Registry:" line twice on every invocation
+# and, on a COLD cache, performed two network fetches for one command — found by
+# imac reading the output rather than by anyone reading this function (#719).
+#
+# The outer call in each command is the load-bearing one: the inner readers run
+# inside `$(...)`, so variables they set die with the subshell and the not-found
+# hint would have nothing to report. Memoising here keeps both callers correct
+# and makes the second call free.
+#
+# A FAILED fetch is memoised too. One command must not hammer the network once
+# per reader, and "could not fetch" is an answer, not a reason to try again.
 _fetch_registry() {
+    if [[ "${_REGISTRY_FETCHED:-false}" == true ]]; then
+        return "${_REGISTRY_FETCH_RC:-0}"
+    fi
+    _fetch_registry_uncached
+    _REGISTRY_FETCH_RC=$?
+    _REGISTRY_FETCHED=true
+    return "$_REGISTRY_FETCH_RC"
+}
+
+_fetch_registry_uncached() {
     # Every reader goes through this, so resolving the path here means no
     # caller has to know the cache is URL-keyed.
     REGISTRY_CACHE="$(_registry_cache_path)"
     REGISTRY_FROM_CACHE=false
     REGISTRY_CACHE_AGE_MIN=0
+    REGISTRY_CACHE_AGE_SEC=0
 
     # `--refresh` on any reader lands here. Deleting beats an in-memory bypass:
     # the next command in the same session gets the fresh copy too, which is what
@@ -205,12 +258,16 @@ _fetch_registry() {
         echo "Registry: cache discarded (--refresh)" >&2
     fi
 
+    # _registry_cache_fresh has already measured the age; re-statting here would
+    # be a second measurement reported as if it were the one we decided on.
     if _registry_cache_fresh; then
-        local _age
-        _age=$(($(date +%s) - $(stat -c %Y "$REGISTRY_CACHE" 2>/dev/null || echo 0)))
         REGISTRY_FROM_CACHE=true
-        REGISTRY_CACHE_AGE_MIN=$(( _age / 60 ))
-        echo "Registry: cached, read ${REGISTRY_CACHE_AGE_MIN} min ago (--refresh to re-read)" >&2
+        REGISTRY_CACHE_AGE_MIN=$(( REGISTRY_CACHE_AGE_SEC / 60 ))
+        if [[ "$REGISTRY_CACHE_AGE_SEC" -lt 60 ]]; then
+            echo "Registry: cached, read ${REGISTRY_CACHE_AGE_SEC}s ago — fresh" >&2
+        else
+            echo "Registry: cached, read ${REGISTRY_CACHE_AGE_MIN} min ago (--refresh to re-read)" >&2
+        fi
         return 0
     fi
 
@@ -332,7 +389,7 @@ cmd_template_info() {
     if [[ -z "$template" || "$template" == "null" ]]; then
         log_error "Template '$template_id' not found in registry"
         echo "Run 'uis template list' to see available templates" >&2
-        _registry_staleness_hint
+        _registry_staleness_hint "$template_id"
         return 1
     fi
 
@@ -1790,7 +1847,7 @@ cmd_template_install() {
     if [[ -z "$template" || "$template" == "null" ]]; then
         log_error "Template '$template_id' not found in registry"
         echo "Run 'uis template list' to see available templates" >&2
-        _registry_staleness_hint
+        _registry_staleness_hint "$template_id"
         return 1
     fi
 

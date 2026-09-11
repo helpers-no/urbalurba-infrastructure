@@ -175,6 +175,31 @@
           - "Launched {{ _job }}  run {{ _run_id }}"
           - "{{ 'Waiting for it to finish...' if _wait else 'Not waiting. Follow it with: uis dagster run ' ~ _job ~ ' --wait' }}"
 
+    # 🔴 --timeout IS SECONDS OF WALL CLOCK, and it did not used to be.
+    #
+    # `retries: timeout / 10` with `delay: 10` counts ITERATIONS and assumes each
+    # one costs the delay. Each iteration also launches a probe pod, waits for it
+    # to reach a terminal phase, reads its logs and deletes it — so the true cost
+    # is `delay + probe`, and imac measured the result: `--timeout N` waited
+    # about 2.6 x N on the acceptance host (#719).
+    #
+    # ⚠️ The error is not a slow probe, it is a budget expressed in the wrong
+    # unit. A person passing `--timeout 600` is saying "give up after ten
+    # minutes", not "poll sixty times, however long that takes" — and the number
+    # that number drifts by depends on the host, so it is worst exactly where the
+    # host is slowest and the operator is least able to predict it.
+    #
+    # So the deadline is computed here in absolute epoch seconds and enforced
+    # INSIDE the poll. The retry count stays only as a backstop and is set well
+    # above what the deadline can consume.
+    - name: "9b. Fix the deadline in wall-clock time, before the first poll"
+      ansible.builtin.set_fact:
+        _poll_started: "{{ _now | int }}"
+        _poll_deadline: "{{ (_now | int) + (_timeout | int) }}"
+      vars:
+        _now: "{{ lookup('pipe', 'date +%s') }}"
+      when: _wait
+
     # ─── wait ────────────────────────────────────────────────────────────────
     #
     # 🔴 POLLS THE RUN. Not the launch call, not a step count. The two things a
@@ -183,6 +208,14 @@
     - name: "10. Wait for the run to reach a terminal state"
       ansible.builtin.shell: |
         set -e
+        # The deadline is absolute, so a slow probe eats into the budget instead
+        # of extending it. Checked BEFORE the probe: once the budget is gone the
+        # answer is "did not finish in time", and spending another probe to
+        # re-establish that only makes the overshoot larger.
+        if [ "$(date +%s)" -ge {{ _poll_deadline }} ]; then
+          echo '{"uis":"deadline-exceeded"}'
+          exit 0
+        fi
         # ⚠️ NOT $RANDOM. `ansible.builtin.shell` defaults to /bin/sh, which is
         # dash here, where $RANDOM expands to NOTHING — every poll would reuse
         # one pod name and collide on the second retry. That is the 1.6.46 defect
@@ -209,10 +242,15 @@
       failed_when: false
       # ⚠️ QUEUED and NOT_STARTED are NOT failures and NOT hangs. They are the
       # 142 seconds that made three agents call a healthy job stuck.
+      # `deadline-exceeded` ends the loop but is NOT a terminal run state: task
+      # 12 still fails, because giving up on waiting is not the job succeeding.
       until: >
-        _poll.rc == 0 and
-        _poll.stdout is search('SUCCESS|FAILURE|CANCELED')
-      retries: "{{ (_timeout | int / 10) | int }}"
+        _poll.stdout is search('uis":"deadline-exceeded') or
+        (_poll.rc == 0 and
+         _poll.stdout is search('SUCCESS|FAILURE|CANCELED'))
+      # A backstop, not the budget. The deadline above is what actually stops
+      # this; this only bounds the loop if the clock check never fires.
+      retries: "{{ ((_timeout | int / 5) | int) + 2 }}"
       delay: 10
       when: _wait
 
@@ -224,12 +262,17 @@
           {%- set s = (_poll.stdout | from_json).data.runOrError.startTime | default(0) -%}
           {%- set e = (_poll.stdout | from_json).data.runOrError.endTime | default(0) -%}
           {%- if s and e %} in {{ ((e - s) | round(1)) }}s{% endif %}
-      when: _wait and _poll.rc == 0 and (_poll.stdout | length) > 0
+      when:
+        - _wait
+        - _poll.rc == 0
+        - (_poll.stdout | length) > 0
+        - not (_poll.stdout is search('uis":"deadline-exceeded'))
 
     - name: "12. A wait that never reached a terminal state is not a success"
       ansible.builtin.fail:
         msg: >-
-          {{ _job }} run {{ _run_id }} did not finish within {{ _timeout }}s.
+          {{ _job }} run {{ _run_id }} did not finish within {{ _timeout }}s
+          (waited {{ (lookup('pipe', 'date +%s') | int) - (_poll_started | int) }}s).
           ⚠️ It may still be running — this is a timeout on WAITING, not a
           failed job. Check: uis dagster verify, or the run in the Dagster UI.
           {{ 'Last poll returned nothing (rc=' ~ _poll.rc ~ '), so this may be "could not ask" rather than "not finished".' if _poll.rc != 0 else '' }}
