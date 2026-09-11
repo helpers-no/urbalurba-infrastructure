@@ -49,10 +49,15 @@ fail() { echo -e "  Testing: $1... \033[0;31mFAIL\033[0m"; [ -n "${2:-}" ] && ec
 #       the env form would be invisible in the command a person later re-reads.
 #   REGISTRY_FROM_CACHE                          — an OUTPUT of _fetch_registry,
 #       read by the staleness hint. Settable only to lie to yourself.
+#   REGISTRY_CACHE_AGE_SEC                       — also an OUTPUT: the measured
+#       age, set by _registry_cache_fresh and read by the hint to decide whether
+#       a copy is old enough to warn about. Forwarding it would let the host
+#       assert a cache age UIS did not measure, which is the exact failure the
+#       age exists to prevent.
 #       ⚠️ REGISTRY_CACHE_AGE_MIN is deliberately NOT listed: it is never read in
 #       the `${VAR:-}` form the candidate scan looks for, so exempting it would
 #       be a stale exemption — and the second assertion below catches that.
-EXEMPT="UIS_BASE UIS_BASE_PATH TEMPLATE_CACHE_DIR UIS_BANNER_PRINTED REGISTRY_CACHE REGISTRY_REFRESH REGISTRY_FROM_CACHE"
+EXEMPT="UIS_BASE UIS_BASE_PATH TEMPLATE_CACHE_DIR UIS_BANNER_PRINTED REGISTRY_CACHE REGISTRY_REFRESH REGISTRY_FROM_CACHE REGISTRY_CACHE_AGE_SEC"
 
 echo "=== Forwarded environment overrides ==="
 
