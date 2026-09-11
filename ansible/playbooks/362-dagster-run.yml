@@ -1,0 +1,247 @@
+---
+# 362-dagster-run.yml
+# Launch one Dagster job by name and, optionally, wait for it to finish.
+#
+# The verb that was missing. atlas's installer ends by telling the user to run
+# four named jobs in order, and until now the documented path was a hand-written
+# `launchPipelineExecution` mutation plus polling `runOrError` — which ops did on
+# a production install, and only managed because imac had written the shape down
+# (atlas, urb-agents#629).
+#
+# 🔴 TWO FINDINGS FROM OTHER AGENTS ARE BUILT INTO THIS, and both say the same
+# thing in different words: DO NOT BELIEVE THE OBVIOUS SIGNAL.
+#
+#   1. POLL THE RUN, NOT THE LAUNCH CALL.
+#      ops measured a queue delay of 142.5 s against a 105.1 s runtime — the wait
+#      before the work started was LONGER than the work. imac, atlas and ops each
+#      called that job hung while being early by under two minutes. A --wait that
+#      watches the blocking launch call, or gives up on a short fixed timeout,
+#      reproduces those three wrong verdicts automatically and with the
+#      platform's authority behind it (urb-agents#648).
+#
+#   2. REPORT RUN STATE AND ELAPSED TIME, NEVER STEP COUNTS.
+#      atlas's `transform_checks` runs 647 checks inside ONE op, so
+#      `pipelineOrError` and `executionPlanOrError` answer "1 op, 1 step"
+#      instantly and cannot see the weight. Three people read that as a stalled
+#      job. Any progress display built on step counts is a fourth reader of the
+#      same misleading number (urb-agents#629).
+#
+# Usage:
+#   ansible-playbook 362-dagster-run.yml -e "job=raw_migrations"
+#   ansible-playbook 362-dagster-run.yml -e "job=transform_and_publish wait=true"
+
+- name: Launch one Dagster job
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    dagster_ns: "dagster"
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    _job: "{{ job | default('') }}"
+    _wait: "{{ (wait | default(false)) | bool }}"
+    # 🔴 Generous ON PURPOSE. A 142 s queue delay in front of a 105 s job means a
+    # 5-minute ceiling would have failed a healthy run. This bounds "something is
+    # actually wrong", not "this is taking a while".
+    _timeout: "{{ (timeout | default(3600)) | int }}"
+    probe: "dagrun-probe-{{ 999999 | random }}"
+
+  tasks:
+    - name: "0. A job name is required"
+      ansible.builtin.assert:
+        that: _job | length > 0
+        fail_msg: >-
+          No job named. Usage: uis dagster run <job> [--wait].
+          `uis dagster run` with no argument cannot guess, and guessing is worse
+          than refusing on a command that starts work.
+
+    # ─── which location and repository holds this job ────────────────────────
+    #
+    # Asked rather than assumed: the repository name inside a code location is
+    # usually `__repository__` but a tenant may define several, and a wrong
+    # selector fails with a GraphQL error that reads like the job not existing.
+    - name: "1. Ask Dagster which location holds the job"
+      # Same probe shape as 361-dagster-automation.yml, and for the same reason:
+      # NOT `kubectl run --rm -i`, which can return rc=0 with empty stdout when
+      # the container outlives the attach — reading a healthy service as failing.
+      ansible.builtin.shell: |
+        set -e
+        kubectl run {{ probe }}-q --image=curlimages/curl --restart=Never \
+          -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- curl -s -m 20 -X POST \
+          -H 'Content-Type: application/json' \
+          -d '{"query":"{ repositoriesOrError { ... on RepositoryConnection { nodes { name location { name } pipelines { name } } } } }"}' \
+          http://dagster-dagster-webserver:80/graphql >/dev/null
+        for i in $(seq 1 30); do
+          phase=$(kubectl get pod {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          { [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ]; } && break
+          sleep 2
+        done
+        kubectl logs {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
+      register: _repos
+      changed_when: false
+      failed_when: false
+      retries: 5
+      delay: 6
+      until: _repos.stdout is search('repositoriesOrError') or _repos.stdout is search('nodes')
+
+    - name: "2. The question must have been asked before any answer is believed"
+      # rc == 0 is not enough: an empty body would let every `select` below
+      # return nothing and read as "the job does not exist".
+      ansible.builtin.assert:
+        that:
+          - _repos.rc == 0
+          - _repos.stdout | length > 0
+          - _repos.stdout is search('nodes')
+        fail_msg: >-
+          Could not ask Dagster which jobs exist (rc={{ _repos.rc }}). This is
+          NOT "the job is missing" — it is no answer at all. Check that the
+          webserver is up: kubectl get pods -n {{ dagster_ns }}
+
+    - name: "3. List every job Dagster knows about"
+      ansible.builtin.set_fact:
+        _all_jobs: >-
+          {{ (_repos.stdout | from_json).data.repositoriesOrError.nodes
+             | map(attribute='pipelines') | flatten
+             | map(attribute='name') | list }}
+
+    - name: "4. Refuse a job that is not defined, and say what IS"
+      ansible.builtin.assert:
+        that: _job in _all_jobs
+        fail_msg: >-
+          No job named '{{ _job }}'. Defined jobs: {{ _all_jobs | join(', ') }}
+      # ⚠️ Lists the alternatives rather than only refusing. A novice who
+      # mistypes a job name from an install summary needs the list, not a "no".
+
+    - name: "5. Pick the repository whose pipeline list contains the job"
+      ansible.builtin.set_fact:
+        _sel_repo: "{{ item.name }}"
+        _sel_loc: "{{ item.location.name }}"
+      loop: "{{ (_repos.stdout | from_json).data.repositoriesOrError.nodes }}"
+      loop_control: { label: "{{ item.location.name }}/{{ item.name }}" }
+      when: _job in (item.pipelines | default([]) | map(attribute='name') | list)
+
+    - name: "5b. A selector must have been resolved"
+      ansible.builtin.assert:
+        that:
+          - _sel_repo is defined
+          - _sel_loc is defined
+        fail_msg: >-
+          '{{ _job }}' is in the job list but no location claims it. That is a
+          contradiction rather than a user error — report it.
+
+    # ─── launch ──────────────────────────────────────────────────────────────
+    - name: "6. Launch the run"
+      ansible.builtin.shell: |
+        set -e
+        kubectl run {{ probe }}-l --image=curlimages/curl --restart=Never \
+          -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- curl -s -m 60 -X POST \
+          -H 'Content-Type: application/json' \
+          -d '{"query":"mutation($e:ExecutionParams!){ launchPipelineExecution(executionParams:$e){ __typename ... on LaunchRunSuccess { run { runId status } } ... on PythonError { message } ... on InvalidSubsetError { message } } }","variables":{"e":{"selector":{"repositoryLocationName":"{{ _sel_loc }}","repositoryName":"{{ _sel_repo }}","jobName":"{{ _job }}"},"mode":"default"}}}' \
+          http://dagster-dagster-webserver:80/graphql >/dev/null
+        for i in $(seq 1 60); do
+          phase=$(kubectl get pod {{ probe }}-l -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          { [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ]; } && break
+          sleep 2
+        done
+        kubectl logs {{ probe }}-l -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod {{ probe }}-l -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
+      register: _launch
+      changed_when: true
+      failed_when: false
+
+    - name: "7. The launch must have produced a run id"
+      ansible.builtin.assert:
+        that:
+          - _launch.rc == 0
+          - _launch.stdout is search('LaunchRunSuccess')
+        fail_msg: >-
+          Launch did not return a run id (rc={{ _launch.rc }}).
+          {{ _launch.stdout | default('(no body)') }}
+
+    - name: "8. Keep the run id"
+      ansible.builtin.set_fact:
+        _run_id: "{{ (_launch.stdout | from_json).data.launchPipelineExecution.run.runId }}"
+
+    - name: "9. Launched"
+      ansible.builtin.debug:
+        msg:
+          - "Launched {{ _job }}  run {{ _run_id }}"
+          - "{{ 'Waiting for it to finish...' if _wait else 'Not waiting. Follow it with: uis dagster run ' ~ _job ~ ' --wait' }}"
+
+    # ─── wait ────────────────────────────────────────────────────────────────
+    #
+    # 🔴 POLLS THE RUN. Not the launch call, not a step count. The two things a
+    # human needs are the run's own status and how long it has been in it, and
+    # both come from `runOrError`.
+    - name: "10. Wait for the run to reach a terminal state"
+      ansible.builtin.shell: |
+        set -e
+        # ⚠️ NOT $RANDOM. `ansible.builtin.shell` defaults to /bin/sh, which is
+        # dash here, where $RANDOM expands to NOTHING — every poll would reuse
+        # one pod name and collide on the second retry. That is the 1.6.46 defect
+        # exactly, and the lint for it caught this line before it shipped.
+        # `date +%s` is POSIX and unique at a 10-second poll interval.
+        p="{{ probe }}-p$(date +%s)"
+        kubectl run "$p" --image=curlimages/curl --restart=Never \
+          -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- curl -s -m 20 -X POST \
+          -H 'Content-Type: application/json' \
+          -d '{"query":"{ runOrError(runId:\"{{ _run_id }}\"){ __typename ... on Run { status startTime endTime } } }"}' \
+          http://dagster-dagster-webserver:80/graphql >/dev/null
+        for i in $(seq 1 30); do
+          phase=$(kubectl get pod "$p" -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          { [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ]; } && break
+          sleep 2
+        done
+        kubectl logs "$p" -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod "$p" -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
+      register: _poll
+      changed_when: false
+      failed_when: false
+      # ⚠️ QUEUED and NOT_STARTED are NOT failures and NOT hangs. They are the
+      # 142 seconds that made three agents call a healthy job stuck.
+      until: >
+        _poll.rc == 0 and
+        _poll.stdout is search('SUCCESS|FAILURE|CANCELED')
+      retries: "{{ (_timeout | int / 10) | int }}"
+      delay: 10
+      when: _wait
+
+    - name: "11. Report the outcome — status and elapsed, never step counts"
+      ansible.builtin.debug:
+        msg: >-
+          {{ _job }} run {{ _run_id }} ->
+          {{ (_poll.stdout | from_json).data.runOrError.status | default('UNKNOWN') }}
+          {%- set s = (_poll.stdout | from_json).data.runOrError.startTime | default(0) -%}
+          {%- set e = (_poll.stdout | from_json).data.runOrError.endTime | default(0) -%}
+          {%- if s and e %} in {{ ((e - s) | round(1)) }}s{% endif %}
+      when: _wait and _poll.rc == 0 and (_poll.stdout | length) > 0
+
+    - name: "12. A wait that never reached a terminal state is not a success"
+      ansible.builtin.fail:
+        msg: >-
+          {{ _job }} run {{ _run_id }} did not finish within {{ _timeout }}s.
+          ⚠️ It may still be running — this is a timeout on WAITING, not a
+          failed job. Check: uis dagster verify, or the run in the Dagster UI.
+          {{ 'Last poll returned nothing (rc=' ~ _poll.rc ~ '), so this may be "could not ask" rather than "not finished".' if _poll.rc != 0 else '' }}
+      when:
+        - _wait
+        - not (_poll.stdout | default('') is search('SUCCESS|FAILURE|CANCELED'))
+
+    - name: "13. A failed run must fail the command"
+      ansible.builtin.fail:
+        msg: >-
+          {{ _job }} run {{ _run_id }} ended FAILURE. The run's own logs are the
+          next place to look, not this command's output.
+      when:
+        - _wait
+        - _poll.stdout | default('') is search('FAILURE')
