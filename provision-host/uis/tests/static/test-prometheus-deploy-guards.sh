@@ -47,11 +47,16 @@ start_test "the disable path removes telegram_configs instead"
 grep -q 'del(.alertmanager.config.receivers\[\] | select(.name == "telegram") | .telegram_configs)' "$PB" \
     && pass_test || fail_test "a receiver with a name and no configs is the valid way to discard notifications"
 
-start_test "a token with no chat id is REFUSED, not silently degraded"
-# Somebody created a bot and the delivery target is missing. Discarding every
-# alert by default is how an outage goes unnoticed for days.
-grep -q 'ALERTMANAGER_TELEGRAM_CHAT_ID is empty but a bot token IS configured' "$PB" \
-    && pass_test || fail_test "token-set/chat-id-unset must fail the play"
+start_test "a half-configured receiver is REFUSED, not silently degraded"
+# Somebody set up one half and the other is missing. Discarding every alert by
+# default is how an outage goes unnoticed for days.
+#
+# ⚠️ Was pinned to the exact refusal sentence and broke the moment 1.6.56 made
+# the message symmetric — the same brittle-string defect as the old
+# test-configure-namespace grep. Assert that the task EXISTS and refuses, not
+# how it words it.
+awk '/4.6a Refuse/,/4.6b Disable/' "$PB" | grep -q 'ansible.builtin.fail' \
+    && pass_test || fail_test "a half-configured receiver must fail the play"
 
 start_test "and that refusal names an override rather than being a dead end"
 grep -q 'alertmanager_allow_no_receiver' "$PB" \
@@ -100,6 +105,39 @@ grep -q 'COULD NOT CHECK pod readiness' "$PB" \
 start_test "the failure names the pods and shows evidence"
 grep -q 'never became Ready' "$PB" && grep -q '_stack_evidence' "$PB" \
     && pass_test || fail_test "a failure an operator cannot act on costs another round"
+
+# ============================================================================
+print_test_section "🔴 a required secret that nothing creates hangs the pod forever"
+# ============================================================================
+
+start_test "the telegram secret mount is optional"
+# A required secret volume whose secret is absent leaves the pod in
+# ContainerCreating FOREVER — not CrashLoopBackOff, not Error, the quietest
+# failure state there is. 20 hours wedged on a fresh cluster, FailedMount x608,
+# and nothing reported it (ops, urb-agents#693).
+if command -v yq >/dev/null 2>&1; then
+    _opt="$(yq -r '.alertmanager.extraSecretMounts[] | select(.secretName == "alertmanager-telegram") | .optional' "$VALUES" 2>/dev/null)"
+    [[ "$_opt" == "true" ]] && pass_test || fail_test "optional is '$_opt' — nothing in the install creates that secret, so a fresh deploy hangs"
+else
+    skip_test "yq not installed"
+fi
+
+start_test "🔴 the refusal is SYMMETRIC — either credential alone is refused"
+# 1.6.55 guarded "token set, chat absent" and left the mirror unguarded: a chat
+# id with no token kept telegram_configs (including bot_token_file) while no
+# secret was created, hanging the pod the same way.
+_a="$(awk '/4.6a Refuse/,/4.6b Disable/' "$PB")"
+[[ "$_a" == *"_tg_chat"*"length == 0 and"* && "$_a" == *"_tg_token"*"length == 0 and"* ]] \
+    && pass_test || fail_test "the guard fires on only one direction; either credential alone is a half-configured receiver"
+
+start_test "the receiver is removed when EITHER credential is missing"
+_b="$(awk '/4.6b Disable/,/4.6c Prove/' "$PB")"
+[[ "$_b" == *"_tg_chat"* && "$_b" == *"_tg_token"* ]] \
+    && pass_test || fail_test "a token with no chat id still leaves bot_token_file referencing an absent mount"
+
+start_test "the refusal message names which half is missing"
+grep -q "half-configured" "$PB" && pass_test \
+    || fail_test "an operator told 'half-configured' without which half has to go and look"
 
 # ============================================================================
 print_test_section "positive controls"

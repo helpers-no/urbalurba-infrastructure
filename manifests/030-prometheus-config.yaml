@@ -75,6 +75,29 @@ alertmanager:
       mountPath: /etc/alertmanager/telegram
       secretName: alertmanager-telegram
       readOnly: true
+      # 🔴 OPTIONAL, OR ALERTMANAGER NEVER STARTS ON AN INSTALL WITHOUT TELEGRAM.
+      #
+      # A required secret volume whose secret does not exist leaves the pod in
+      # `ContainerCreating` FOREVER — not CrashLoopBackOff, not Error, the
+      # quietest failure state there is. Measured on a fresh cluster: 20 hours
+      # wedged, `FailedMount x608`, and the reason visible only in
+      # `kubectl describe` (ops, urb-agents#693).
+      #
+      # ⚠️ Nothing in the install creates `alertmanager-telegram` unless
+      # ALERTMANAGER_TELEGRAM_BOT_TOKEN is set, so "deploy prometheus on a
+      # fresh cluster" → "alertmanager never starts" was the DEFAULT
+      # experience, not a misconfiguration.
+      #
+      # With `optional: true` the pod starts, the mount is empty, and task 4.6b
+      # has already removed the `telegram_configs` block that would have
+      # referenced the missing token file. Alertmanager loads, evaluates
+      # routes, and notifies nothing — which is the correct behaviour for an
+      # installation that configured no receiver.
+      #
+      # ⚠️ The chart honours this via `{{- with .optional }}`, so only `true`
+      # has any effect; `optional: false` would be silently omitted. Verified
+      # against the alertmanager sub-chart template rather than assumed.
+      optional: true
 
   config:
     global:
