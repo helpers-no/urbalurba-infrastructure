@@ -157,13 +157,60 @@ _registry_cache_fresh() {
     [[ "$age" -lt "$REGISTRY_CACHE_TTL" ]]
 }
 
+# 🔴 Say "this may be a stale cache" AT THE MOMENT the wrong conclusion is drawn.
+#
+# "Not found in registry" and "published an hour ago and you have a cached copy"
+# are the same sentence to a reader, and the remediation we printed made it
+# worse: `uis template list` reads the SAME cache, so it confirms the absence.
+_registry_staleness_hint() {
+    [[ "${REGISTRY_FROM_CACHE:-false}" == true ]] || return 0
+    echo "" >&2
+    echo "⚠️  The registry was read from a ${REGISTRY_CACHE_AGE_MIN}-minute-old cache, not the network." >&2
+    echo "    If this application was published recently it will not be in that copy," >&2
+    echo "    and 'uis template list' reads the same file — so it will agree, wrongly." >&2
+    echo "    Re-read the registry:  uis template install $template_id --refresh" >&2
+}
+
 # Fetch registry from primary or fallback URL
+#
+# 🔴 A CACHED READ USED TO BE COMPLETELY SILENT, and that silence cost imac two
+# rounds and produced one confident wrong report.
+#
+# The registry is read from `main` with a one-hour TTL. A provision host that
+# fetched within the hour does not see a new pin — and the symptom is NOT "your
+# cache is stale", it is **"the application has not been published yet"**. So the
+# natural next move is to go and ask the publisher why they are slow, which is a
+# round trip to the wrong agent. On one occasion it made imac's own report quote
+# a template description dev-templates had already replaced (ops-dev, #716).
+#
+# ⚠️ The fix is NOT a shorter TTL. A cache on a file read at every install is
+# reasonable, and a narrower window would make the failure rarer and therefore
+# harder to recognise. **Say what we actually know instead**: whether this answer
+# came from the network or from a file, and how old the file is.
+#
+# Sets REGISTRY_FROM_CACHE and REGISTRY_CACHE_AGE_MIN so the not-found path can
+# name the cache at the moment the wrong conclusion would otherwise be drawn.
 _fetch_registry() {
     # Every reader goes through this, so resolving the path here means no
     # caller has to know the cache is URL-keyed.
     REGISTRY_CACHE="$(_registry_cache_path)"
+    REGISTRY_FROM_CACHE=false
+    REGISTRY_CACHE_AGE_MIN=0
+
+    # `--refresh` on any reader lands here. Deleting beats an in-memory bypass:
+    # the next command in the same session gets the fresh copy too, which is what
+    # someone re-running an install after a publish actually wants.
+    if [[ "${REGISTRY_REFRESH:-false}" == true && -f "$REGISTRY_CACHE" ]]; then
+        rm -f "$REGISTRY_CACHE"
+        echo "Registry: cache discarded (--refresh)" >&2
+    fi
 
     if _registry_cache_fresh; then
+        local _age
+        _age=$(($(date +%s) - $(stat -c %Y "$REGISTRY_CACHE" 2>/dev/null || echo 0)))
+        REGISTRY_FROM_CACHE=true
+        REGISTRY_CACHE_AGE_MIN=$(( _age / 60 ))
+        echo "Registry: cached, read ${REGISTRY_CACHE_AGE_MIN} min ago (--refresh to re-read)" >&2
         return 0
     fi
 
@@ -285,6 +332,7 @@ cmd_template_info() {
     if [[ -z "$template" || "$template" == "null" ]]; then
         log_error "Template '$template_id' not found in registry"
         echo "Run 'uis template list' to see available templates" >&2
+        _registry_staleness_hint
         return 1
     fi
 
@@ -1690,7 +1738,7 @@ cmd_template_install() {
     shift || true
 
     if [[ -z "$template_id" ]]; then
-        log_error "Usage: uis template install <id> [--dry-run] [--param key=value]..."
+        log_error "Usage: uis template install <id> [--dry-run] [--refresh] [--param key=value]..."
         return 1
     fi
 
@@ -1703,6 +1751,13 @@ cmd_template_install() {
         case "$1" in
             --dry-run)
                 dry_run=true
+                shift
+                ;;
+            --refresh)
+                # Re-read the registry rather than trusting the hourly cache.
+                # The novice case this exists for: an application published in
+                # the last hour reads as "not found" without it (#716).
+                REGISTRY_REFRESH=true
                 shift
                 ;;
             --param)
@@ -1718,7 +1773,7 @@ cmd_template_install() {
                 ;;
             -*)
                 log_error "Unknown option: $1"
-                echo "Usage: uis template install <id> [--dry-run] [--param key=value]..." >&2
+                echo "Usage: uis template install <id> [--dry-run] [--refresh] [--param key=value]..." >&2
                 return 1
                 ;;
             *)
@@ -1735,6 +1790,7 @@ cmd_template_install() {
     if [[ -z "$template" || "$template" == "null" ]]; then
         log_error "Template '$template_id' not found in registry"
         echo "Run 'uis template list' to see available templates" >&2
+        _registry_staleness_hint
         return 1
     fi
 
@@ -2250,10 +2306,21 @@ run_template() {
 
     case "$subcmd" in
         list)
+            [[ "${1:-}" == "--refresh" ]] && REGISTRY_REFRESH=true
             cmd_template_list
             ;;
         info)
-            cmd_template_info "$@"
+            # ⚠️ `--refresh` on every reader, not only install. `info` is what a
+            # person runs when `install` says "not found", so it is the second
+            # place the stale cache would confirm the wrong answer (#716).
+            local _iargs=()
+            for _a in "$@"; do
+                case "$_a" in
+                    --refresh) REGISTRY_REFRESH=true ;;
+                    *) _iargs+=("$_a") ;;
+                esac
+            done
+            cmd_template_info "${_iargs[@]}"
             ;;
         install)
             cmd_template_install "$@"
@@ -2271,6 +2338,9 @@ run_template() {
             echo ""
             echo "Commands:"
             echo "  list              List available UIS templates"
+            echo "    --refresh       Re-read the registry instead of the hourly cache."
+            echo "                    An application published in the last hour reads as"
+            echo "                    \"not found\" without it."
             echo "  info <id>         Show template details"
             echo "  install <id>      Install a template (deploy + configure services)"
             echo "    --dry-run       Pull the definition and print the numbered plan."
