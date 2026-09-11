@@ -140,14 +140,27 @@
       # the wrong default — that is how an outage goes unnoticed for four days.
       ansible.builtin.fail:
         msg: >-
-          ALERTMANAGER_TELEGRAM_CHAT_ID is empty but a bot token IS configured.
+          Telegram alerting is half-configured:
+          bot token {{ 'SET' if (_tg_token | default('')) | length > 0 else 'MISSING (ALERTMANAGER_TELEGRAM_BOT_TOKEN)' }},
+          chat id {{ 'SET' if (_tg_chat | default('')) | length > 0 else 'MISSING (ALERTMANAGER_TELEGRAM_CHAT_ID)' }}.
           Refusing to deploy an Alertmanager that would deliver nothing.
           Set it, then: uis secrets generate && uis secrets apply
           To deploy anyway with delivery disabled, pass:
           -e alertmanager_allow_no_receiver=true
+      # 🔴 SYMMETRIC. 1.6.55 guarded only "token set, chat id absent" and left
+      # its MIRROR unguarded: a chat id with no token kept `telegram_configs`
+      # in the config — including `bot_token_file` — while task 4.4 created no
+      # secret, so alertmanager hung on a missing mount exactly as in the
+      # neither-set case (ops, urb-agents#693).
+      #
+      # ⚠️ I guarded one asymmetric case and not the other one, which is the
+      # pattern this repository keeps finding. Either credential alone is a
+      # half-configured receiver and neither half works without the other.
       when:
-        - (_tg_chat  | default('')) | length == 0
-        - (_tg_token | default('')) | length > 0
+        - >-
+          ((_tg_chat  | default('')) | length == 0 and (_tg_token | default('')) | length > 0)
+          or
+          ((_tg_token | default('')) | length == 0 and (_tg_chat  | default('')) | length > 0)
         - not (alertmanager_allow_no_receiver | default(false) | bool)
 
     - name: "4.6b Disable the receiver so the config LOADS when unconfigured"
@@ -155,7 +168,12 @@
         yq -i
         'del(.alertmanager.config.receivers[] | select(.name == "telegram") | .telegram_configs)'
         {{ prometheus_config_file }}
-      when: (_tg_chat | default('')) | length == 0
+      # ⚠️ EITHER missing, not just the chat id. A token with no chat id cannot
+      # deliver and a chat id with no token cannot authenticate; in both cases
+      # the receiver must go or Alertmanager refuses the config.
+      when: >-
+        (_tg_chat | default('')) | length == 0
+        or (_tg_token | default('')) | length == 0
       changed_when: true
 
     - name: "4.6c Prove the placeholder is gone — a leftover is a crashloop"
