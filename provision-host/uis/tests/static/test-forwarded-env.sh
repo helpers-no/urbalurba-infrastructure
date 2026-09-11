@@ -38,7 +38,21 @@ fail() { echo -e "  Testing: $1... \033[0;31mFAIL\033[0m"; [ -n "${2:-}" ] && ec
 #                            forwarded — `REGISTRY_CACHE_TTL=0 ./uis template
 #                            list` is a real thing to want after editing a
 #                            registry.
-EXEMPT="UIS_BASE UIS_BASE_PATH TEMPLATE_CACHE_DIR UIS_BANNER_PRINTED REGISTRY_CACHE"
+# ⚠️ Every exemption needs a reason, and "it is not an operator knob" is the only
+# one accepted here. A variable a person might reasonably set on the host MUST be
+# forwarded, or it is silently ignored inside the container.
+#
+#   UIS_BASE, UIS_BASE_PATH, TEMPLATE_CACHE_DIR  — resolved in-container
+#   UIS_BANNER_PRINTED, REGISTRY_CACHE           — computed, not settable
+#   REGISTRY_REFRESH                             — set by `--refresh`; the FLAG is
+#       the interface. Forwarding it would give one behaviour two switches, and
+#       the env form would be invisible in the command a person later re-reads.
+#   REGISTRY_FROM_CACHE                          — an OUTPUT of _fetch_registry,
+#       read by the staleness hint. Settable only to lie to yourself.
+#       ⚠️ REGISTRY_CACHE_AGE_MIN is deliberately NOT listed: it is never read in
+#       the `${VAR:-}` form the candidate scan looks for, so exempting it would
+#       be a stale exemption — and the second assertion below catches that.
+EXEMPT="UIS_BASE UIS_BASE_PATH TEMPLATE_CACHE_DIR UIS_BANNER_PRINTED REGISTRY_CACHE REGISTRY_REFRESH REGISTRY_FROM_CACHE"
 
 echo "=== Forwarded environment overrides ==="
 
