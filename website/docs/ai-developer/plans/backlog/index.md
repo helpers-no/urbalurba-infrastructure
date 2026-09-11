@@ -15,8 +15,8 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-12 |
 | [Plan: a command that loads the data, and a command that reports on it](PLAN-cli-load-and-report-on-application-data.md) | — | 2026-09-12 |
-| [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-11 |
 | [Plan: what UIS's workflows would need from a self-hosted runner, and why they should not move yet](PLAN-system-ci-self-hosted-runner-readiness.md) | If UIS's CI ever moves to self-hosted runners, the three properties | 2026-09-11 |
 | [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-11 |
 | [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-09-10 |
