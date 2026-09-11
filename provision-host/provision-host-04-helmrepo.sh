@@ -48,12 +48,35 @@ install_helm_and_repos() {
         
         # NOTE: These repositories must be kept in sync with ansible/playbooks/05-install-helm-repos.yml
         # If you add or remove repositories here, make sure to update the Ansible playbook as well.
+        #
+        # 🔴 `--force-update`, OR A SECOND ADD BREAKS THE IMAGE BUILD.
+        #
+        # `helm repo add <name>` EXITS 1 when that name already exists:
+        #
+        #     Error: repository name (minio) already exists, please specify a different name
+        #     provision-host-04-helmrepo.sh: Failed (Exit code: 1)
+        #     ERROR: failed to build: ... exit code: 1
+        #
+        # That is the whole of the 1.6.55 container build failure — so 1.6.55 was
+        # released and never published, ops sat two versions behind it, and every
+        # fix merged after it was stranded on `main`. **Nothing reported the
+        # failed build**; it surfaced because `uis version` said "released but
+        # NOT PUBLISHED yet" and somebody read it.
+        #
+        # ⚠️ The NOTE above is the cause, not just a housekeeping reminder: the
+        # SAME repositories are added by 05-install-helm-repos.yml, so whenever
+        # both paths run in one image build the second one fails. A comment
+        # saying "must be kept in sync" is a comment describing a defect.
+        #
+        # `--force-update` is idempotent: it adds when absent and updates the URL
+        # when present, and never fails on an existing name. Correct on a fresh
+        # build and on a rebuild over a cached layer alike.
         echo "Adding Helm repositories directly"
-        helm repo add bitnami https://charts.bitnami.com/bitnami
-        helm repo add runix https://helm.runix.net
-        helm repo add graviteeio https://helm.gravitee.io
-        helm repo add minio https://charts.min.io/
-        helm repo add temporal https://go.temporal.io/helm-charts
+        helm repo add --force-update bitnami    https://charts.bitnami.com/bitnami
+        helm repo add --force-update runix      https://helm.runix.net
+        helm repo add --force-update graviteeio https://helm.gravitee.io
+        helm repo add --force-update minio      https://charts.min.io/
+        helm repo add --force-update temporal   https://go.temporal.io/helm-charts
         helm repo update
         
         echo "Helm $(helm version --short) installed successfully"

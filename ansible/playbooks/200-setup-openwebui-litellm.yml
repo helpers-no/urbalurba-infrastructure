@@ -93,7 +93,7 @@
       ignore_errors: true
 
     - name: 6. Add OpenWebUI Helm repository
-      ansible.builtin.command: helm repo add open-webui https://helm.openwebui.com/
+      ansible.builtin.command: helm repo add --force-update open-webui https://helm.openwebui.com/
       register: helm_repo_result
       changed_when: "'already exists' not in helm_repo_result.stderr"
       failed_when: false
