@@ -28,6 +28,9 @@
     dagster_ns: "dagster"
     postgres_ns: "default"
     merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    # Same path 360-setup-dagster.yml uses. Needed here so check E can compare
+    # what is RUNNING against what this installation DECLARED.
+    uis_extend_dir: "/mnt/urbalurbadisk/.uis.extend"
     probe: "dagster-verify-{{ 99999 | random }}"
 
   tasks:
@@ -429,6 +432,71 @@
       when:
         - (_ok | default([]) | length) > 0
         - (_running_digests.stdout | default('') | trim | length) > 0
+
+    # 🔴 E USED TO REPORT AND NOT COMPARE. imac's words: "the match is one I made
+    # by eye against ops-dev's message." A green E was being read as a verified
+    # pin while nothing had been checked (#745).
+    #
+    # The declaration lives in .uis.extend, which this playbook already reads for
+    # its own code-location list, so the comparison costs nothing.
+    # ⚠️ THIS PLAYBOOK DOES NOT OTHERWISE LOAD THE DECLARATIONS. The first
+    # version of E2b read `_code_locations`, which is set in 360-setup-dagster
+    # and is undefined here — so the comparison below would have looped over an
+    # empty dict and passed on every run. A guard that cannot fire, added in the
+    # commit that exists to stop a guard that could not fire.
+    - name: "E2a. Read what this installation declares"
+      ansible.builtin.slurp:
+        src: "{{ uis_extend_dir }}/dagster-code-locations.yaml"
+      register: _cl_raw_verify
+      failed_when: false
+      when: (_ok | default([]) | length) > 0
+
+    - name: "E2a2. Parse them"
+      ansible.builtin.set_fact:
+        # `default([], true)` for the same reason 360-setup-dagster gives: a
+        # hand-edited bare `code_locations:` parses as NULL, and `default([])`
+        # replaces only UNDEFINED.
+        _declared_locations: "{{ (_cl_raw_verify.content | b64decode | from_yaml).code_locations | default([], true) }}"
+      when: _cl_raw_verify.content is defined
+
+    - name: "E2b. Read the declared digests"
+      ansible.builtin.set_fact:
+        _declared_digests: >-
+          {{ dict(_declared_locations | default([])
+                  | selectattr('digest', 'defined')
+                  | map(attribute='name')
+                  | zip(_declared_locations | default([])
+                        | selectattr('digest', 'defined')
+                        | map(attribute='digest'))) }}
+      when: (_ok | default([]) | length) > 0
+
+    - name: "E2c. A running digest that does not match the declared one is a FAILURE"
+      ansible.builtin.fail:
+        msg: >-
+          🔴 Code location '{{ _loc }}' declares digest
+          {{ _declared_digests[_loc] }} but is RUNNING {{ _run }}.
+          The pod is not executing the code that was declared and verified.
+          This is not a warning: the digest is the whole point of declaring one.
+      vars:
+        _loc: "{{ item.split(' ')[0] }}"
+        _run: "{{ (item.split(' ')[1] | default('')).split('@')[1] | default('') }}"
+      when:
+        - (_ok | default([]) | length) > 0
+        - item.split(' ')[0] in (_declared_digests | default({}))
+        - "'@' in item"
+        - (item.split(' ')[1] | default('')).split('@')[1] | default('') != _declared_digests[item.split(' ')[0]]
+      loop: "{{ _running_digests.stdout_lines | default([]) }}"
+      loop_control: { label: "{{ item.split(' ')[0] }}" }
+
+    - name: "E2d. Say which locations were actually compared"
+      ansible.builtin.debug:
+        msg: >-
+          {{ (_declared_digests | default({}) | length) }} of
+          {{ (_ok | default([]) | length) }} code location(s) declare a digest and
+          were compared against what is running.
+          {{ '⚠️ The rest report their running digest but nothing was compared — a reported digest is not a verified one.'
+             if (_declared_digests | default({}) | length) < (_ok | default([]) | length) else '' }}
+      when: (_ok | default([]) | length) > 0
 
     - name: "E3. Say so when the running digest could not be read"
       ansible.builtin.debug:

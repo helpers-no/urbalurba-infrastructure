@@ -473,11 +473,23 @@
       # Printed whether or not a digest was declared: an operator who never
       # pinned anything can still copy this value into the declaration, and an
       # install record that carries it can be compared with a later one.
+      #
+      # 🔴 THIS LINE IS THE ONLY REASON ANYONE SAW THE 1.6.62 GAP. `template
+      # install` could not emit the field, so 22d1/22d4/22d5 all skipped and the
+      # install was silently green — every digest printed correct, nothing
+      # pinned (imac via ops-dev, #745).
+      #
+      # ⚠️ Its wording said "not declared — add `digest:` to pin it", which was
+      # false in that case and pointed the reader at the application when UIS
+      # had lost the value. This task reads the OVERLAY and cannot know what the
+      # definition said, so it now describes the entry in front of it and blames
+      # nobody. The lost-in-transit case is caught where it can be: the renderer
+      # reads its own write back (`_write_code_location`).
       ansible.builtin.debug:
         msg: >-
           {{ item.item.name }}: {{ item.item.image }}:{{ item.item.tag }}
           -> {{ (item.stdout | default('') | trim).split(' ')[1] | default('none') }}
-          {{ '(declared)' if (item.item.digest is defined and (item.item.digest | trim | length) > 0) else '(not declared — add `digest:` to pin it)' }}
+          {{ '(declared — pinned)' if (item.item.digest is defined and (item.item.digest | trim | length) > 0) else '(no digest in this entry — the tag is not pinned)' }}
       loop: "{{ _imgcheck.results | default([]) }}"
       loop_control: { label: "{{ item.item.name | default('?') }}" }
 

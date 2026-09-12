@@ -295,7 +295,22 @@ digests must still be installable. What is *not* optional is knowing the value:
 | command | answers |
 |---|---|
 | `./uis deploy dagster` | what the tag resolves to **now**, for every code location, declared or not |
-| `./uis verify dagster` (check E) | what each location is **actually running**, read from `imageID` |
+| `./uis verify dagster` (check E) | what each location is **actually running**, read from `imageID`, **compared against the declared digest** |
+
+An application publishes the digest in its own install definition, and
+`uis template install` writes it into the overlay:
+
+```yaml
+# template-info.yaml, inside the code-location block
+digest: sha256:86c5aed1...
+```
+
+:::warning A reported digest is not a verified one
+Check E **fails** when a running digest does not match the declared one, and
+says how many locations were actually compared. A location that declares no
+digest still has its running digest reported — but nothing was checked, and E
+says so rather than letting a green result read as a verified pin.
+:::
 
 :::note Why `imageID` and not `image`
 `image` is what was asked for — `repo:tag`, the same string already in the values
