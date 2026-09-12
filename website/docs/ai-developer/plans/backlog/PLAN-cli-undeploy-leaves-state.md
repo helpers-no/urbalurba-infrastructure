@@ -1,4 +1,4 @@
-# Plan: `uis undeploy` exits 0 and keeps the data, and there is no `template uninstall`
+# Plan: `uis undeploy` exits 0 and keeps the data
 
 > **IMPLEMENTATION RULES:** Before implementing this plan, read and follow:
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
@@ -28,12 +28,32 @@ the same output, so:
 - a redeploy silently adopts the old volume, including its schema and its
   migration state.
 
-**2. There is no `uis template uninstall`.**
+**2. ~~There is no `uis template uninstall`.~~ 🔴 CORRECTED — the verb exists.**
 
-`template install` composes a multi-step install — database, roles, PostgREST,
-Dagster code location, overlay entries. **Nothing reverses it.** Undoing an
-application install is currently a hand-assembled sequence that the person doing
-it has to derive from the install plan.
+`uis template remove <id> [--app <name>] [--purge] [--yes]` is fully implemented
+as `cmd_template_remove`, and `uninstall` is accepted as an alias.
+
+⚠️ **This half of the finding was wrong, and how it was reached matters more than
+the error.** imac read the **top-level** `./uis` help, which listed `list`,
+`info` and `install` under *Template Deployment* and not `remove` — with
+`stack remove` enumerated directly above, so the absence read as deliberate. In
+its own words: **"I checked the parent and reported on the child."** It then
+reported in writing, as the fleet's acceptance tester, that the operation could
+not be undone (ops-dev, `#733`).
+
+**The genuine defect was discoverability, and it is fixed**: `template remove` is
+now in the top-level help, and `test-help-lists-every-command.sh` enforces the
+rule that made the omission possible — *if the help enumerates any subcommand of
+a verb, it must enumerate all of them*. A partial list is worse than no list,
+because it reads as complete.
+
+🔵 **That lint existed and passed while the defect was present.** It verified
+that every **top-level** verb appears in the help, and `template` does appear —
+while its own opening line claimed something broader: *"a command absent from
+`uis help` does not exist, as far as anyone using UIS is concerned."* A
+subcommand is a command by that definition. **A check true about a narrow
+property, read as a broad one** — the same shape as the defects it was written
+to catch.
 
 ## 🔴 Why this matters beyond tidiness
 
@@ -55,8 +75,8 @@ alone closes the "testing an upgrade" trap.
 anything it cannot prove it created — the same discipline as the unmarked-proxy
 case, where *"a deploy must not delete a workload on a name match alone"*.
 
-**Then:** `uis template uninstall <app>`, derived from the same definition that
-drove the install, with a dry-run that lists every object before touching one.
+**Already present:** `uis template remove` covers the application-level undo,
+including `--purge` for data. This plan does **not** need to build it.
 
 ## Acceptance
 
