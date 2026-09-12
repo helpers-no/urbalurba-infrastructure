@@ -17,7 +17,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 |----------|------|---------|
 | [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-12 |
 | [Plan: the definition is pinned by digest, the code that runs is not](PLAN-dagster-code-location-digest.md) | `uis template install` must record, print, and — if the chart allows | 2026-09-12 |
-| [Plan: `uis undeploy` exits 0 and keeps the data, and there is no `template uninstall`](PLAN-cli-undeploy-leaves-state.md) | after an undeploy, an operator must know exactly what still exists — | 2026-09-12 |
+| [Plan: `uis undeploy` exits 0 and keeps the data](PLAN-cli-undeploy-leaves-state.md) | after an undeploy, an operator must know exactly what still exists — | 2026-09-12 |
 | [Plan: a command that loads the data, and a command that reports on it](PLAN-cli-load-and-report-on-application-data.md) | — | 2026-09-12 |
 | [Plan: the install verifies the IngressRoute was created, not that it routes](PLAN-cli-ingress-verifies-creation-not-routing.md) | an install must not report a working URL for a route that cannot serve | 2026-09-12 |
 | [Plan: `uis dagster run` launches duplicates silently](PLAN-cli-dagster-run-duplicate-guard.md) | launching a job that is already running must be a deliberate act, not | 2026-09-12 |
