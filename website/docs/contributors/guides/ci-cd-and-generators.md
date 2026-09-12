@@ -100,6 +100,11 @@ This is the container that users pull when they run `./uis start`.
 
 ## Before you tell anyone a version is ready
 
+**Releasing is the maintainer's job, not the pipeline's.** GitHub Actions runs
+the build; it does not own the outcome. A merge hands the work to a machine and
+hands none of the responsibility with it — if you announce a version, you are
+asserting that the image exists, and that assertion is yours to check.
+
 :::danger `version.txt` cannot answer "what did we ship"
 It is bumped when the PR **merges**, and reads identically whether the container
 build finished, is still running, or failed. It is the most natural thing to
