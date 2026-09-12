@@ -481,18 +481,60 @@ _install_summary_operational() {
     command -v yq >/dev/null 2>&1 || return 0
     [[ "$(yq -r 'has("operational")' "$info" 2>/dev/null)" == "true" ]] || return 0
 
-    local note jobs takes
+    local note jobs takes automation unscheduled
     note=$(yq -r '.operational.install.note // ""' "$info" 2>/dev/null)
     jobs=$(yq -r '.operational.first_data.jobs // [] | join(" -> ")' "$info" 2>/dev/null)
     takes=$(yq -r '.operational.first_data.takes // ""' "$info" 2>/dev/null)
+    automation=$(yq -r '.operational.automation // ""' "$info" 2>/dev/null)
+    unscheduled=$(yq -r '.operational.unscheduled // [] | join(", ")' "$info" 2>/dev/null)
 
-    [[ -z "$note" && -z "$jobs" ]] && return 0
+    [[ -z "$note" && -z "$jobs" && -z "$automation" ]] && return 0
     echo ""
     [[ -n "$note" ]] && echo "$note"
     if [[ -n "$jobs" ]]; then
         echo "To load data${takes:+ ($takes)}, run these in Dagster, in order:"
         echo "  $jobs"
     fi
+
+    # 🔴 THE JOB LIST ABOVE READS AS A FINISHED INSTALL, AND THAT IS THE DEFECT.
+    #
+    # It answers "why is my API empty" and hands over an ordered list. An
+    # operator runs them, watches the data land, and concludes the install is
+    # done. Nothing said those jobs are a ONE-TIME load, so a correct,
+    # digest-pinned, fully verified install can sit there while the data ages.
+    #
+    # It was not hypothetical: the acceptance host's own register had stopped
+    # tracking reality 12.8 hours earlier, with 3,075 unapplied changes, and was
+    # found only because Terje asked (imac, urb-agents#756).
+    #
+    # ⚠️ The application's `automation:` sentence already said this. It was
+    # rendered by `template info` and NOT by the installer — the same shape as
+    # the `digest:` field in #745: declared once, consumed on one surface,
+    # silently absent on the other.
+    if [[ -n "$automation" || -n "$jobs" ]]; then
+        echo ""
+        if [[ -n "$automation" ]]; then
+            echo "⚠️  $automation"
+        else
+            # 🔵 Said even when the definition declares nothing, because silence
+            # here is what this fix exists to remove. An application that never
+            # writes an `automation:` sentence must not buy back the old silence.
+            echo "⚠️  This application does not state whether its automation ships switched on."
+        fi
+        echo "    UIS can report that state but cannot change it — schedules AND"
+        echo "    sensors are switched on in the Dagster UI:"
+        echo "      ./uis dagster automation"
+        # ⚠️ Named separately because an asset driven by an automation condition
+        # has no schedule to switch on at all: someone told to "enable the
+        # schedules" would enable every schedule and still not be running it.
+        [[ -n "$unscheduled" ]] && echo "    No schedule at all: $unscheduled"
+    fi
+    # ⚠️ EXPLICIT. Without it the function exits with the status of the last
+    # `[[ ... ]] &&` test, so an application with no `unscheduled` list returned
+    # 1 from a summary printer that had succeeded. Under `set -e`, or any caller
+    # that checks, a successful install would have reported a failure — caught
+    # by running the function rather than reading it.
+    return 0
 }
 
 # Print the `operational:` block from an application's definition, if it has

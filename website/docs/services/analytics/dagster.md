@@ -258,6 +258,49 @@ rebuilds its image against the new line and confirms, **then** UIS bumps the
 pinned chart. Neither side moves alone.
 :::
 
+## Installing does not start anything
+
+`uis template install` deploys the code location and loads nothing. The jobs it
+lists at the end are a **one-time load**, and the install summary now says so —
+carrying the application's own `operational.automation` sentence, the assets
+that have no schedule at all, and how to check the real state:
+
+```
+./uis dagster automation
+```
+
+:::danger A green install can sit there while the data ages
+The install summary answers "why is my API empty" and hands over an ordered job
+list. An operator runs them, watches the data land, and reasonably concludes the
+install is finished.
+
+`./uis verify dagster` **passes in both states** — it proves the daemon *can*
+fire schedules, not that any schedule is switched **on**. So nothing in the
+install, and nothing in verify, distinguishes a running installation from a
+stopped one.
+
+An acceptance host was found holding a correct, verified, digest-pinned install
+whose register had stopped tracking reality **12.8 hours earlier**, with 3,075
+unapplied upstream changes. Every check was green.
+:::
+
+:::warning "Enable the schedules" is not always the right instruction
+An asset driven by an automation condition has **no schedule to switch on** — it
+runs from a sensor, and `default_automation_condition_sensor` ships stopped too.
+Someone told to enable the schedules would enable every schedule and still not
+be running it.
+
+That is why the installer prints the `unscheduled` list separately, and why it
+says *schedules **and** sensors*.
+:::
+
+:::note UIS reports this state; it does not change it
+`uis dagster automation` reads whether each schedule and sensor is RUNNING or
+STOPPED. Switching them on is done in the Dagster UI. The start/stop verbs are
+deliberately unimplemented: the GraphQL mutation signatures are version
+sensitive, and guessing them would produce a command that silently does nothing.
+:::
+
 ## Pinning the code image
 
 A code location declares `image:` and `tag:`. The `tag` must not be `latest` —
