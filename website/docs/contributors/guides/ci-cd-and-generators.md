@@ -98,6 +98,50 @@ This is the container that users pull when they run `./uis start`.
 
 ---
 
+## Before you tell anyone a version is ready
+
+:::danger `version.txt` cannot answer "what did we ship"
+It is bumped when the PR **merges**, and reads identically whether the container
+build finished, is still running, or failed. It is the most natural thing to
+check and it is the wrong one.
+:::
+
+A release commit reaches `main` **10–15 minutes before its image does** (median
+12, measured across ten consecutive successful builds) — and never at all if the
+build breaks. So a green merge is not a shipped version.
+
+Check the **digest**, not the tag, before handing work to anyone:
+
+```bash
+VERSION=$(cat version.txt)
+TOK=$(curl -s "https://ghcr.io/token?scope=repository:helpers-no/uis-provision-host:pull&service=ghcr.io" \
+  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+curl -sI -H "Authorization: Bearer $TOK" \
+  -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+  "https://ghcr.io/v2/helpers-no/uis-provision-host/manifests/$VERSION" \
+  | grep -i docker-content-digest
+```
+
+**Empty output means the image is not there yet — do not pass the ball.**
+
+:::note Why the digest and not the status code
+A status code says a tag *resolves*. A digest says *which image*. Both matter,
+and they fail differently: a 404 means the build has not finished, while a 200
+on `:latest` can mean the tag has moved to a different version since you looked.
+:::
+
+### Why this is a documented step
+
+It has cost two round trips. A tester measured `1.6.58` during its build window,
+found a 404, and filed it as a **release blocker** — correctly, because from the
+far end a 404 and a broken release are identical. Nobody was slow and nothing was
+broken. The same thing happened again with `1.6.63`, and was only absorbed
+because the tester recognised the shape from the previous night.
+
+If you hit the 404 anyway, `./uis --check` and `./uis pull` both now tell you how
+long a build takes and whether to wait or go looking — but the cheaper fix is not
+to hand over an unpublished version in the first place.
+
 ## Generator Scripts
 
 Four scripts in `provision-host/uis/manage/` generate documentation from service metadata:

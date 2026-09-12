@@ -121,6 +121,35 @@ _notify="$(sed -n '/^maybe_notify_update() {/,/^}/p' "$LAUNCHER")"
 echo "$_notify" | grep -q 'image_tag_published' \
     && fail_test "the every-command path must not call the registry" || pass_test
 
+# ── an accurate "not yet" that a reader cannot act on ─────────────────────────
+# 🔴 The not-published message was CORRECT and still cost two round trips.
+# imac measured 1.6.58 and 1.6.63 during their build windows, filed the first as
+# a blocker, and sat on a registry monitor for the second (#747). Both times the
+# message told it the image was absent and nothing told it whether absent meant
+# "ninety seconds away" or "the build failed".
+#
+# ⚠️ A truthful report that does not say what to do next is a report that gets
+# escalated. Measured from the last ten successful builds: min 9.7m, median
+# 12.2m, max 15.5m.
+_rvs_fn="$(sed -n '/^report_version_status() {/,/^}/p' "$LAUNCHER")"
+_pull_fn="$(sed -n '/^pull_container() {/,/^}/p' "$LAUNCHER")"
+
+start_test "🔴 --check says how long a build takes, so 'not published' is actionable"
+echo "$_rvs_fn" | grep -q 'takes 10-15 minutes' \
+    && pass_test || fail_test "the not-published branch gives no expected duration"
+
+start_test "🔴 pull says it too — that is the path someone is actively waiting on"
+echo "$_pull_fn" | grep -q 'takes 10-15 minutes' \
+    && pass_test || fail_test "the pull path gives no expected duration"
+
+start_test "the message tells the reader to WAIT, not just that something is absent"
+echo "$_rvs_fn" | grep -qi 'WAIT' \
+    && pass_test || fail_test "no instruction to wait; a bare absence reads as a fault"
+
+start_test "and distinguishes 'still building' from 'the build failed'"
+echo "$_rvs_fn" | grep -qi 'probably failed' \
+    && pass_test || fail_test "without the distinction the reader cannot choose between waiting and looking"
+
 start_test "the 'unknown' branch does not claim the image is missing"
 _branch="$(sed -n '/^pull_container() {/,/^}/p' "$LAUNCHER")"
 echo "$_branch" | grep -q 'Could not reach the registry' && pass_test \

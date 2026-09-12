@@ -622,7 +622,10 @@ report_version_status() {
                 echo "    and report success. version.txt on main is bumped when a PR merges;" >&2
                 echo "    the image appears when the build finishes, and never if it fails." >&2
                 echo "    Installed $installed is not necessarily behind the newest IMAGE." >&2
-                echo "    Check the build: $UIS_IMAGE_SOURCE/actions" >&2
+                echo "" >&2
+                echo "    ⏱  The container build takes 10-15 minutes (median 12)." >&2
+                echo "    If the release landed within that window this is normal — WAIT." >&2
+                echo "    If it has been longer, the build probably failed: $UIS_IMAGE_SOURCE/actions" >&2
                 return 1
                 ;;
             yes)
@@ -800,6 +803,10 @@ pull_container() {
                     echo "    does not exist in the registry. The container build is either still" >&2
                     echo "    running or it failed — a release commit reaches main minutes before" >&2
                     echo "    its image does, and never at all if the build breaks." >&2
+                    echo "" >&2
+                    echo "    ⏱  The container build takes 10-15 minutes (median 12)." >&2
+                    echo "    If the release landed within that window this is normal — WAIT and" >&2
+                    echo "    pull again. If it has been longer, the build probably failed." >&2
                     echo "" >&2
                     echo "    Nothing is wrong with this machine. Check the build, then pull again:" >&2
                     echo "      $UIS_IMAGE_SOURCE/actions" >&2
