@@ -345,22 +345,61 @@
       loop: "{{ _code_locations | default([]) }}"
       loop_control: { label: "{{ item.name | default('<unnamed>') }}" }
 
-    - name: "22d2. Pre-flight: can each declared image actually be pulled?"
+    - name: "22d1. A declared digest must be shaped like one"
+      # A typo'd digest would otherwise surface as "the tag has been re-pushed",
+      # which sends the reader to the registry to investigate their own typo.
+      ansible.builtin.assert:
+        that:
+          - item.digest is match('^sha256:[0-9a-f]{64}$')
+        fail_msg: >-
+          Code location '{{ item.name }}' declares digest '{{ item.digest }}',
+          which is not a sha256 digest. Expected sha256: followed by 64 hex
+          characters — the form `./uis deploy dagster` prints for this image.
+      when:
+        - item.digest is defined
+        - (item.digest | trim | length) > 0
+      loop: "{{ _code_locations | default([]) }}"
+      loop_control: { label: "{{ item.name | default('<unnamed>') }}" }
+
+    - name: "22d2. Pre-flight: can each declared image actually be pulled, and what does the tag resolve to?"
       # Without this a bad tag costs the full --timeout 900s before Helm gives
       # up (tester D4). A manifest HEAD against the registry answers in seconds.
       # Best-effort only: a private registry legitimately returns 401 here, so
       # this WARNS and never blocks — the deploy still fails later if the pull
       # really is impossible, just less cheaply.
+      #
+      # 🔴 THE DIGEST COMES FREE AND WE USED TO THROW IT AWAY. This request
+      # already resolves the tag; the registry answers with the digest in
+      # `Docker-Content-Digest` and we kept only the status code. That number is
+      # the one thing that says whether what was verified is what is running
+      # (imac via ops-dev, #740).
+      #
+      # ⚠️ `-I` is deliberately NOT used: some registries answer HEAD without the
+      # digest header. `-o /dev/null -D -` does a GET, discards the body and
+      # keeps the headers.
       ansible.builtin.shell: |
-        img="{{ item.image }}:{{ item.tag }}"
         repo="{{ item.image }}"; host="${repo%%/*}"; path="${repo#*/}"
-        case "$host" in *.*|localhost*) ;; *) host="registry-1.docker.io"; path="{{ item.image }}" ;; esac
-        tok=$(curl -sf "https://${host}/token?scope=repository:${path}:pull&service=${host}" 2>/dev/null \
+        authhost="$host"; svc="$host"
+        case "$host" in
+          *.*|localhost*) ;;
+          # ⚠️ PRE-EXISTING AND FOUND WHILE ADDING THE DIGEST: Docker Hub issues
+          # tokens from auth.docker.io, not from the registry host. Asking
+          # registry-1.docker.io for a token returned nothing, so every Docker
+          # Hub image failed this pre-flight with 401 and was reported as "normal
+          # for a private registry". The check was blind to the largest public
+          # registry there is.
+          *) host="registry-1.docker.io"; path="{{ item.image }}"
+             authhost="auth.docker.io"; svc="registry.docker.io" ;;
+        esac
+        tok=$(curl -sf "https://${authhost}/token?scope=repository:${path}:pull&service=${svc}" 2>/dev/null \
               | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-        code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${tok}" \
+        hdr=$(curl -s -o /dev/null -D - -w 'HTTPCODE=%{http_code}\n' -H "Authorization: Bearer ${tok}" \
                -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
                "https://${host}/v2/${path}/manifests/{{ item.tag }}" 2>/dev/null)
-        echo "$code"
+        code=$(printf '%s\n' "$hdr" | sed -n 's/^HTTPCODE=//p' | tail -1)
+        dig=$(printf '%s\n' "$hdr" | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p' | tail -1)
+        # One line, two fields, always both present so the parse cannot shift.
+        echo "${code:-000} ${dig:-none}"
       register: _imgcheck
       changed_when: false
       failed_when: false
@@ -375,7 +414,70 @@
           image the tag probably does not exist, and Helm will spend
           {{ installation_timeout }}s discovering that. Check the tag before
           waiting. (A 401 is normal for a private registry.)
-      when: item.stdout | default('') not in ['200', '']
+      when: (item.stdout | default('') | regex_replace('^([0-9]+).*$', '\\1')) not in ['200', '']
+      loop: "{{ _imgcheck.results | default([]) }}"
+      loop_control: { label: "{{ item.item.name | default('?') }}" }
+
+    # 🔴 THE DIGEST IS THE ONLY NUMBER THAT SAYS WHAT ACTUALLY RUNS.
+    #
+    # The install definition is pulled at a digest and checked against the pin
+    # the catalogue records. The CODE image is addressed by `image:` + `tag:`,
+    # and a re-push of that tag changes what executes while every digest UIS
+    # prints stays identical. imac had to resolve it by hand to find out what it
+    # had really run (ops-dev, #740).
+    #
+    # `digest:` is OPTIONAL. An application that cannot publish digests must
+    # still be installable — the point is that one which CAN is no longer unable
+    # to say so, and that the resolved value is reported either way.
+    - name: "22d4. Verify the declared digest, and report the resolved one"
+      ansible.builtin.assert:
+        that:
+          - _resolved == item.item.digest
+        fail_msg: >-
+          Code location '{{ item.item.name }}' declares digest
+          {{ item.item.digest }} but {{ item.item.image }}:{{ item.item.tag }}
+          currently resolves to {{ _resolved }}.
+          🔴 The tag has been re-pushed, or the declaration is wrong. Refusing to
+          deploy code that is not what was declared.
+        success_msg: >-
+          {{ item.item.name }}: {{ item.item.image }}:{{ item.item.tag }}
+          == {{ _resolved }} (declared digest matches)
+      vars:
+        _resolved: "{{ (item.stdout | default('') | trim).split(' ')[1] | default('none') }}"
+      # ⚠️ Only when BOTH are known. A 401 from a private registry means we could
+      # not look, and "could not look" must not be reported as "does not match" —
+      # the same distinction the external-services gate refuses to blur.
+      when:
+        - item.item.digest is defined
+        - (item.item.digest | trim | length) > 0
+        - (item.stdout | default('') | trim).split(' ')[1] | default('none') != 'none'
+      loop: "{{ _imgcheck.results | default([]) }}"
+      loop_control: { label: "{{ item.item.name | default('?') }}" }
+
+    - name: "22d5. Say so when a declared digest could NOT be checked"
+      ansible.builtin.debug:
+        msg: >-
+          ⚠️ {{ item.item.name }} declares a digest, but
+          {{ item.item.image }}:{{ item.item.tag }} could not be resolved
+          (registry returned {{ (item.stdout | default('') | trim).split(' ')[0] | default('?') }}).
+          NOTHING WAS COMPARED. The deploy continues; the declaration is
+          unverified, not verified.
+      when:
+        - item.item.digest is defined
+        - (item.item.digest | trim | length) > 0
+        - (item.stdout | default('') | trim).split(' ')[1] | default('none') == 'none'
+      loop: "{{ _imgcheck.results | default([]) }}"
+      loop_control: { label: "{{ item.item.name | default('?') }}" }
+
+    - name: "22d6. Report the resolved digest for every code location"
+      # Printed whether or not a digest was declared: an operator who never
+      # pinned anything can still copy this value into the declaration, and an
+      # install record that carries it can be compared with a later one.
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.name }}: {{ item.item.image }}:{{ item.item.tag }}
+          -> {{ (item.stdout | default('') | trim).split(' ')[1] | default('none') }}
+          {{ '(declared)' if (item.item.digest is defined and (item.item.digest | trim | length) > 0) else '(not declared — add `digest:` to pin it)' }}
       loop: "{{ _imgcheck.results | default([]) }}"
       loop_control: { label: "{{ item.item.name | default('?') }}" }
 

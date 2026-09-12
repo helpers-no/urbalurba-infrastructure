@@ -42,6 +42,7 @@ code_locations: []
 #   - name: atlas-data
 #     image: ghcr.io/terchris/atlas-data
 #     tag: v20260822-abc1234        # NEVER `latest` — see below
+#     digest: sha256:d7a371f7...    # optional, and the only real pin — see below
 #     module: atlas_data.definitions
 #     why: "Ingests 41 Norwegian public-data sources, then dbt builds marts.* and api_v1.*"
 #     env_secrets:
@@ -70,6 +71,27 @@ code_locations: []
 #                         image field to CHANGE to roll the pod, so `latest`
 #                         silently keeps serving old code after a "successful"
 #                         deploy
+#   digest      optional  the digest that tag is expected to resolve to. If set,
+#                         the deploy resolves the tag at the registry and REFUSES
+#                         if it has moved.
+#
+#    🔴 AN IMMUTABLE-LOOKING TAG IS NOT AN IMMUTABLE TAG. `v20260822-abc1234`
+#       satisfies the `latest` rule above completely and can still be re-pushed:
+#       nothing at a registry prevents it. The rule above is about Helm rolling
+#       the pod — a DEPLOYMENT-CORRECTNESS argument. It is not an integrity one,
+#       and it was the only one UIS had.
+#
+#       The install definition is pulled at a digest and checked against the pin
+#       the catalogue records. Until now the CODE image — the thing that actually
+#       executes — had no field to put a digest in, so an application could not
+#       pin it even if it wanted to (imac via ops-dev, urb-agents#740).
+#
+#    ⚠️ Optional on purpose. An application that cannot publish digests must
+#       still be installable. `./uis deploy dagster` PRINTS the resolved digest
+#       for every code location whether or not one is declared, so the value to
+#       paste in here is in the output of the deploy you just ran, and
+#       `./uis verify dagster` reports the digest each location is actually
+#       RUNNING (read from `imageID`, not from the tag we asked for).
 #   module      required  python module exposing `definitions`
 #   why         required  what this installation loses if it stops running.
 #                         Same rule as prometheus-targets.yaml — a tenant nobody

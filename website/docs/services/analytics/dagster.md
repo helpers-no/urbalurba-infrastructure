@@ -258,6 +258,57 @@ rebuilds its image against the new line and confirms, **then** UIS bumps the
 pinned chart. Neither side moves alone.
 :::
 
+## Pinning the code image
+
+A code location declares `image:` and `tag:`. The `tag` must not be `latest` —
+that rule is about Helm rolling the pod when the image string changes.
+
+:::danger An immutable-looking tag is not an immutable tag
+`v20260911-f4bf175` satisfies the `latest` rule completely and **can still be
+re-pushed**. Nothing at a registry prevents it.
+
+UIS pulls an application's **install definition** at a digest and checks it
+against the pin the catalogue records. Until 1.6.62 the **code image** — the
+thing that actually executes — had no digest field at all, so an application
+could not pin it even if it wanted to. A re-push changed what ran while every
+digest UIS printed stayed identical.
+:::
+
+Declare the digest to pin it:
+
+```yaml
+code_locations:
+  - name: atlas-data
+    image: ghcr.io/terchris/atlas-data
+    tag: v20260911-f4bf175
+    digest: sha256:d7a371f7...     # optional
+    module: atlas_data.definitions
+    why: "..."
+```
+
+`./uis deploy dagster` resolves the tag at the registry and **refuses** if it no
+longer resolves to the declared digest.
+
+**The field is optional on purpose** — an application that cannot publish
+digests must still be installable. What is *not* optional is knowing the value:
+
+| command | answers |
+|---|---|
+| `./uis deploy dagster` | what the tag resolves to **now**, for every code location, declared or not |
+| `./uis verify dagster` (check E) | what each location is **actually running**, read from `imageID` |
+
+:::note Why `imageID` and not `image`
+`image` is what was asked for — `repo:tag`, the same string already in the values
+file. `imageID` is what the kubelet actually pulled and started, digest and all.
+Reporting `image` would look like a verification and assert nothing.
+:::
+
+:::warning "Could not look" is not "does not match"
+A private registry answering 401 means the digest could not be resolved. The
+deploy says **NOTHING WAS COMPARED** and continues — the declaration is
+unverified, not verified. It never reports that as a mismatch.
+:::
+
 ## Run start timeout
 
 A run's **entire execution plan is constructed and persisted over gRPC before its
