@@ -87,6 +87,94 @@ done
 [[ -z "$_stale" ]] && pass_test || fail_test "exempt but not dispatched — remove from EXEMPT: $_stale"
 
 # ============================================================================
+print_test_section "a parent that enumerates subcommands must enumerate them all"
+# ============================================================================
+#
+# 🔴 THIS FILE PASSED WHILE THE DEFECT IT DESCRIBES WAS PRESENT.
+#
+# `uis template remove` has existed and worked for weeks. It was missing from
+# the top-level help while `list`, `info` and `install` were all there — and
+# `stack remove` was listed directly above it, so the absence read as
+# deliberate rather than as an omission.
+#
+# imac, acting as the fleet's acceptance tester, read the top-level help and
+# reported in writing that the operation could not be undone (ops-dev, #733).
+# In its own words: **"I checked the parent and reported on the child."**
+#
+# ⚠️ The check above could not catch that: it verifies that every TOP-LEVEL verb
+# appears in the help, and `template` does appear. The file's own opening line
+# claims something broader — "a command absent from `uis help` does not exist,
+# as far as anyone using UIS is concerned" — and a subcommand is a command by
+# that definition. **A check true about a narrow property, read as a broad one.**
+#
+# The rule enforced here: if the help enumerates ANY subcommand of a verb, it
+# must enumerate ALL of them. A partial list is worse than no list, because it
+# reads as complete. A verb the help does not break down at all is untouched by
+# this — `uis verify <service>` should not list every service.
+
+# Verbs the help breaks down, and the subcommands it shows for each.
+# Reads lines of the form "  <verb> <sub>" from the help body.
+_help_body="$(sed -n '/^cmd_help() {/,/^}/p' "$CLI")"
+
+_help_subs_for() {
+    grep -oE "^  $1 [a-z][a-z0-9-]*" <<< "$_help_body" | awk '{print $2}' | sort -u
+}
+
+_enumerated_verbs="$(grep -oE '^  [a-z][a-z0-9-]+ [a-z][a-z0-9-]+' <<< "$_help_body" \
+    | awk '{print $1}' | sort | uniq -c \
+    | awk '$1 >= 2 {print $2}')"
+
+start_test "the help can be parsed for verb/subcommand pairs"
+_ev_n=$(printf '%s\n' "$_enumerated_verbs" | grep -c .)
+[[ "$_ev_n" -ge 2 ]] && pass_test \
+    || fail_test "found $_ev_n verbs with enumerated subcommands; the parse is probably wrong"
+
+# Implemented subcommands come from the cmd_<verb>_<sub> convention, restricted
+# to verbs the help already breaks down. That restriction is what keeps
+# `cmd_alloy_verify` out of this — `alloy verify` is not the grammar, and the
+# help does not enumerate `alloy`.
+_impl_subs_for() {
+    grep -rhoE "^cmd_$1_[a-z0-9_]+\(\) \{" \
+        "$REPO_ROOT"/provision-host/uis/lib/*.sh \
+        "$REPO_ROOT"/provision-host/uis/manage/*.sh 2>/dev/null \
+        | sed -E "s/^cmd_$1_//; s/\(\) \{//" | sort -u
+}
+
+# Subcommands that exist as functions but are not user-facing verbs.
+SUB_EXEMPT=(
+    "browserless verify_session"   # a helper of `browserless verify`, not a verb
+)
+_sub_is_exempt() {
+    local pair="$1 $2" e
+    for e in "${SUB_EXEMPT[@]}"; do [[ "$pair" == "$e" ]] && return 0; done
+    return 1
+}
+
+start_test "🔴 no implemented subcommand is missing from a help block that lists its siblings"
+_sub_missing=""
+while IFS= read -r verb; do
+    [[ -z "$verb" ]] && continue
+    _shown="$(_help_subs_for "$verb")"
+    [[ -z "$_shown" ]] && continue
+    while IFS= read -r sub; do
+        [[ -z "$sub" ]] && continue
+        _sub_is_exempt "$verb" "$sub" && continue
+        grep -qx "$sub" <<< "$_shown" || _sub_missing+="$verb $sub; "
+    done <<< "$(_impl_subs_for "$verb")"
+done <<< "$_enumerated_verbs"
+[[ -z "$_sub_missing" ]] && pass_test \
+    || fail_test "implemented but absent from the help block that lists its siblings: $_sub_missing"
+
+start_test "every subcommand exemption is still a real function"
+_sub_stale=""
+for e in "${SUB_EXEMPT[@]}"; do
+    _v="${e%% *}"; _s="${e##* }"
+    grep -qx "$_s" <<< "$(_impl_subs_for "$_v")" || _sub_stale+="$e; "
+done
+[[ -z "$_sub_stale" ]] && pass_test \
+    || fail_test "exempt but no longer implemented — remove from SUB_EXEMPT: $_sub_stale"
+
+# ============================================================================
 print_test_section "positive control"
 # ============================================================================
 

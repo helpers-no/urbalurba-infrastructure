@@ -89,6 +89,7 @@ Template Deployment (from helpers-no/dev-templates):
   template list           List available UIS templates
   template info <id>      Show template details
   template install <id>   Install a UIS stack template (deploy + configure services)
+  template remove <id>    Remove an installed template (--purge also drops its data)
 
 Service Connections (interactive admin access):
   connect <service> [args]  Open an interactive client (psql, redis-cli, mysql, mongosh)
