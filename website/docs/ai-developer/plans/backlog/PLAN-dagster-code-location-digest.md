@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-**Status:** Backlog
+**Status:** Step 1 DONE in 1.6.62 — steps 2 and 3 remain
 
 **Goal**: `uis template install` must record, print, and — if the chart allows
 it — pin the digest of the **code image** it causes to run, not only the digest
@@ -62,8 +62,14 @@ symptom at all: no error, no changed output, no failed check.
 
 ## The shape of the fix
 
-**Step 1 — record and print the resolved code-image digest. Cheap, and does not
-depend on the chart.**
+**Step 1 — record and print the resolved code-image digest. 🟢 DONE in 1.6.62.**
+
+An optional `digest:` field, verified at deploy against the registry; the
+resolved digest printed for every code location declared or not; and
+`./uis verify dagster` check E reporting what each location is actually RUNNING,
+read from `imageID`. ⚠️ Went further than "record and print": a declared digest
+that no longer matches **refuses the deploy**, which is a real pin even though
+the pull still goes by tag.
 
 At install, resolve `image:tag` to its digest and report it alongside the
 definition's `Pin`. A re-push then becomes *detectable* — the digest in the

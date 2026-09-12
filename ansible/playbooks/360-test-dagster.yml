@@ -390,6 +390,58 @@
           {{ (_ok | default([]) | length) }} tenant(s) can hydrate run storage.
       when: (_ok | default([]) | length) > 0
 
+    # 🔴 E ANSWERS "WHAT IS ACTUALLY RUNNING", WHICH NOTHING DID.
+    #
+    # The install definition is verified by digest. The code image is addressed
+    # by a mutable tag, so a re-push changes what executes while every digest UIS
+    # prints stays identical. imac had to resolve it by hand to learn what it had
+    # really run (ops-dev, #740).
+    #
+    # ⚠️ This reads `imageID`, not `image`. `image` is what was ASKED FOR —
+    # `repo:tag`, the same string that was already in the values file. `imageID`
+    # is what the kubelet actually pulled and started, digest and all. Reporting
+    # `image` here would look like a verification and assert nothing.
+    - name: "E1. What digest is each code location actually running?"
+      ansible.builtin.shell: |
+        for t in {{ _ok | default([]) | join(' ') }}; do
+          ids=$(kubectl get pods -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} \
+            -l deployment=$t -o jsonpath='{range .items[*].status.containerStatuses[*]}{.imageID}{"\n"}{end}' 2>/dev/null \
+            | grep -v '^$' | sort -u)
+          if [ -z "$ids" ]; then
+            echo "$t UNKNOWN could-not-read"
+          else
+            # imageID is `docker-pullable://repo@sha256:...` or `repo@sha256:...`
+            for i in $ids; do
+              echo "$t $(printf '%s' "$i" | sed 's#^[a-z-]*://##')"
+            done
+          fi
+        done
+      register: _running_digests
+      changed_when: false
+      failed_when: false
+      when: (_ok | default([]) | length) > 0
+
+    - name: "E2. Report it"
+      ansible.builtin.debug:
+        msg: >-
+          {{ (_running_digests.stdout_lines | default([])) | join(' | ') }}
+      when:
+        - (_ok | default([]) | length) > 0
+        - (_running_digests.stdout | default('') | trim | length) > 0
+
+    - name: "E3. Say so when the running digest could not be read"
+      ansible.builtin.debug:
+        msg: >-
+          ⚠️ Could not read the running image digest for at least one code
+          location. NOTHING WAS COMPARED — this is "could not look", not
+          "nothing is running". The locations above still LOADED; only the
+          question of WHICH image they loaded is unanswered.
+      when:
+        - (_ok | default([]) | length) > 0
+        - (_running_digests.stdout | default('') is search('UNKNOWN could-not-read')) or
+          (_running_digests.stdout | default('') | trim | length) == 0
+
     - name: "SUMMARY"
       ansible.builtin.debug:
         msg:
@@ -398,6 +450,8 @@
           - "C. Daemon heartbeat fresh (schedules live): PASS"
           - ""
           - "D. Code locations LOADED (asked Dagster, not kubectl): {{ (_ok | default([]) | length) }}"
+          - "E. Running image digests (imageID, not the tag we asked for):"
+          - "{{ (_running_digests.stdout_lines | default(['(not read)'])) | join('; ') }}"
           - "{{ ((_ok | default([]) | length) == 0) | ternary('   None — expected on a fresh platform. UIS ships the orchestrator; tenants register themselves. See /docs/services/analytics/dagster.', '   ' ~ (_ok | default([]) | join(', '))) }}"
           - ""
           - "{{ ((_ok | default([]) | length) > 0) | ternary('   All can hydrate run storage (D5) — runs will execute.', '') }}"
