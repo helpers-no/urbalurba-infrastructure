@@ -797,7 +797,12 @@ TEMPLATE_CONFIG_KEYS="database init schemas url_prefix namespace secret_name_pre
 # into the conf file as code_location_<field>. That keeps the conf file flat —
 # D1's design — and is why the plan predicted this would drop in without
 # touching the executor's parsing.
-TEMPLATE_CODE_LOCATION_KEYS="name image tag module why env_secrets"
+# ⚠️ `digest` is here because a key absent from this list is not merely
+# unwritten — it is never READ from the definition. 1.6.62 added the field to
+# the schema, the deploy-time verification and the docs, and atlas declared it,
+# while this line silently dropped it one step before the renderer did
+# (imac via ops-dev, #745).
+TEMPLATE_CODE_LOCATION_KEYS="name image tag module why env_secrets digest"
 
 # Write one service's config to $plan_dir/<service_id>.conf as key=value lines.
 #
@@ -875,6 +880,16 @@ _write_service_conf() {
                 return 1
             fi
         done
+        # A malformed digest must be named here, where the message can point at
+        # the declaration, rather than surfacing from Ansible as a mismatch that
+        # sends the reader to the registry to investigate their own typo.
+        local ckd
+        ckd="$(_conf_get "$conf" code_location_digest)"
+        if [[ -n "$ckd" && ! "$ckd" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            log_error "Service '$svc': code_location digest '$ckd' is not a sha256 digest."
+            echo "  Expected sha256: followed by 64 hex characters." >&2
+            return 1
+        fi
         if [[ "$(_conf_get "$conf" code_location_tag)" == "latest" ]]; then
             log_error "Service '$svc': code_location tag 'latest' is refused."
             echo "  Helm rolls the code-location pod only when the image field CHANGES," >&2
@@ -1374,6 +1389,7 @@ _code_locations_file() {
 # in order to roll the pod at all.
 _write_code_location() {
     local cl_name="$1" cl_image="$2" cl_tag="$3" cl_module="$4" cl_why="$5" cl_env_secrets="${6:-}"
+    local cl_digest="${7:-}"
     local file
     file="$(_code_locations_file)"
 
@@ -1407,6 +1423,19 @@ _write_code_location() {
         return 1
     fi
 
+    # 🔴 Written as a SEPARATE expression, like env_secrets, so that an absent
+    # digest leaves the key out rather than writing an empty string. The
+    # deploy's `(digest | trim | length) > 0` guard would treat `digest: ""` as
+    # "declared but empty" and skip, which is the silent no-op this fixes.
+    if [[ -n "$cl_digest" ]]; then
+        local dig_expr='(.code_locations[] | select(.name == strenv(cl_name)) | .digest)
+            = strenv(cl_digest)'
+        if ! cl_name="$cl_name" cl_digest="$cl_digest" yq -i "$dig_expr" "$file"; then
+            log_error "Failed to write digest for '$cl_name'"
+            return 1
+        fi
+    fi
+
     if [[ -n "$cl_env_secrets" ]]; then
         local sec_expr='(.code_locations[] | select(.name == strenv(cl_name)) | .env_secrets)
             = (strenv(cl_env_secrets) | split(","))'
@@ -1416,8 +1445,30 @@ _write_code_location() {
         fi
     fi
 
+    # 🔴 PROVE THE WRITE. A value can be accepted by every layer above and still
+    # not be in the file: that is exactly how the digest was lost — declared by
+    # the application, enforced by the deploy, and dropped by the renderer in
+    # between, with each piece correct on its own. Reading it back is the only
+    # claim worth making.
+    if [[ -n "$cl_digest" ]]; then
+        local _back
+        _back=$(cl_name="$cl_name" yq -r '.code_locations[] | select(.name == strenv(cl_name)) | .digest // ""' "$file" 2>/dev/null)
+        if [[ "$_back" != "$cl_digest" ]]; then
+            log_error "Digest for '$cl_name' did not survive the write to $file."
+            echo "  declared: $cl_digest" >&2
+            echo "  in file:  ${_back:-<absent>}" >&2
+            echo "  Refusing: the deploy would report this location as unpinned." >&2
+            return 1
+        fi
+    fi
+
     echo "Code location '$cl_name' written to $file" >&2
     echo "  image: ${cl_image}:${cl_tag}" >&2
+    if [[ -n "$cl_digest" ]]; then
+        echo "  digest: ${cl_digest} (pinned — the deploy refuses if the tag has moved)" >&2
+    else
+        echo "  digest: not declared by this application — the tag is not pinned" >&2
+    fi
     return 0
 }
 
@@ -2131,13 +2182,14 @@ cmd_template_install() {
         # rendered from the extend file at deploy time, so an entry written after
         # a deploy is invisible until the next one.
         if [[ -n "$(_conf_get "$conf" code_location_name)" ]]; then
-            local cl_n cl_i cl_t cl_m cl_w cl_s
+            local cl_n cl_i cl_t cl_m cl_w cl_s cl_d
             cl_n=$(_substitute_params "$(_conf_get "$conf" code_location_name)" "$params_file")
             cl_i=$(_substitute_params "$(_conf_get "$conf" code_location_image)" "$params_file")
             cl_t=$(_substitute_params "$(_conf_get "$conf" code_location_tag)" "$params_file")
             cl_m=$(_substitute_params "$(_conf_get "$conf" code_location_module)" "$params_file")
             cl_w=$(_substitute_params "$(_conf_get "$conf" code_location_why)" "$params_file")
             cl_s=$(_substitute_params "$(_conf_get "$conf" code_location_env_secrets)" "$params_file")
+            cl_d=$(_substitute_params "$(_conf_get "$conf" code_location_digest)" "$params_file")
 
             # 🔴 Wire the Secret THIS INSTALL created, without being asked to.
             #
@@ -2158,7 +2210,7 @@ cmd_template_install() {
                 log_info "Wiring the Secret this install created into '$cl_n': $plan_secret"
             fi
 
-            _write_code_location "$cl_n" "$cl_i" "$cl_t" "$cl_m" "$cl_w" "$cl_s" || return 1
+            _write_code_location "$cl_n" "$cl_i" "$cl_t" "$cl_m" "$cl_w" "$cl_s" "$cl_d" || return 1
 
             log_info "Redeploying $svc so it picks up the code location..."
             if ! uis deploy "$svc" >&2; then

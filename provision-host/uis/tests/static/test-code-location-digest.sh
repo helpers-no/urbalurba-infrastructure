@@ -81,11 +81,25 @@ else
 fi
 
 # ── the digest is reported even when nothing was declared ──────────────────────
-if grep -q '22d6' <<<"$setup_code" && grep -q 'not declared' <<<"$setup_code"; then
+# ⚠️ Asserts the INTENT, not a phrase. The first version matched the literal
+# string "not declared", and failed the moment that message was corrected — the
+# old wording blamed the application for a value UIS had lost (#745).
+if grep -q '22d6' <<<"$setup_code" && grep -q 'the tag is not pinned' <<<"$setup_code"; then
     pass "the resolved digest is printed even with no declaration"
 else
     fail "the resolved digest is printed even with no declaration" \
          "an operator who never pinned has no value to copy in"
+fi
+
+# 🔴 And the message must not blame the application. 22d6 reads the OVERLAY and
+# cannot know what the definition said; "not declared — add `digest:` to pin it"
+# was printed on a run where atlas plainly declared one, and pointed the reader
+# at the wrong agent.
+if grep -qF 'not declared — add `digest:` to pin it' <<<"$setup_code"; then
+    fail "22d6 does not attribute a missing digest to the application" \
+         "this task cannot know whether the definition declared one"
+else
+    pass "22d6 does not attribute a missing digest to the application"
 fi
 
 # ── optional, not required ─────────────────────────────────────────────────────
@@ -122,6 +136,59 @@ if grep -q 'could-not-read' <<<"$verify_code" && grep -q 'NOTHING WAS COMPARED' 
 else
     fail "an unreadable running digest is 'could not look', not 'nothing running'" \
          "the E checks do not distinguish the two"
+fi
+
+# ── E must COMPARE, not merely report ─────────────────────────────────────────
+# 🔴 1.6.62's check E printed the running digest and asserted nothing against
+# it. imac: "the match is one I made by eye against ops-dev's message." A green
+# E was readable as a verified pin while nothing had been checked (#745).
+if grep -q 'E2c' <<<"$verify_code" && grep -q 'ansible.builtin.fail' <<<"$verify_code"; then
+    pass "🔴 a running digest that differs from the declared one FAILS"
+else
+    fail "🔴 a running digest that differs from the declared one FAILS"          "check E reports without comparing — a reported digest is not a verified one"
+fi
+
+# ⚠️ The comparison needs the declarations, and this playbook did not load them.
+# The first version read `_code_locations`, which is set in 360-setup-dagster and
+# is UNDEFINED here — so it would have looped over an empty dict and passed on
+# every run. A guard that cannot fire, in the commit written to fix a guard that
+# could not fire.
+if grep -q '_declared_locations' <<<"$verify_code"    && grep -q 'dagster-code-locations.yaml' <<<"$verify_code"; then
+    pass "the verify playbook loads the declarations it compares against"
+else
+    fail "the verify playbook loads the declarations it compares against"          "E compares against a variable this playbook never sets"
+fi
+
+if grep -qE '^    uis_extend_dir:' "$VERIFY"; then
+    pass "uis_extend_dir is defined in the playbook that now reads it"
+else
+    fail "uis_extend_dir is defined in the playbook that now reads it"          "the slurp would fail on an undefined variable"
+fi
+
+if grep -q 'default(\[\], true)' <<<"$verify_code"; then
+    pass "a bare code_locations: (null) is tolerated, as in the setup playbook"
+else
+    fail "a bare code_locations: (null) is tolerated"          "default([]) replaces only UNDEFINED; a hand-edited null flows through"
+fi
+
+if grep -q 'E2d' <<<"$verify_code" && grep -q 'nothing was compared' <<<"$verify_code"; then
+    pass "E says how many locations were actually compared"
+else
+    fail "E says how many locations were actually compared"          "without it, a run where nothing declares a digest looks the same as a verified one"
+fi
+
+# ── the renderer must be able to emit what the deploy enforces ────────────────
+LIB="$REPO_ROOT/provision-host/uis/lib/template.sh"
+if grep -q '^TEMPLATE_CODE_LOCATION_KEYS=.*digest' "$LIB"; then
+    pass "🔴 the definition's digest is read into the install plan"
+else
+    fail "🔴 the definition's digest is read into the install plan"          "a key absent from TEMPLATE_CODE_LOCATION_KEYS is never read at all"
+fi
+
+if grep -q 'did not survive the write' "$LIB"; then
+    pass "the renderer reads its own write back before claiming success"
+else
+    fail "the renderer reads its own write back before claiming success"          "a value accepted by every layer can still not be in the file"
 fi
 
 # ── the schema tells an application the field exists ───────────────────────────
