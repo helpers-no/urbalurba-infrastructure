@@ -292,6 +292,39 @@ instance for longer.
 Count the events in the run's plan before concluding the platform is slow.
 :::
 
+## What an install actually costs
+
+Measured on a real acceptance install, so these are observations rather than
+estimates. The host was **3 vCPU, Sandy Bridge era** — deliberately modest, and
+slower than a developer laptop.
+
+| step | time |
+|---|---|
+| `uis template install atlas` | **264 s** |
+| `annual_sources_refresh` | ~11 min |
+| `klass_refresh` | 67 s |
+| `seed_sources_refresh` | 50 s |
+| `brreg_bootstrap` (first load) | **492 s** |
+| `transform_and_publish` | ~19 min |
+| whole chain, disk used | ~6 GiB |
+
+:::warning A re-run can cost more than the first load
+`brreg_bootstrap` took **867 s against a populated table versus 419 s empty** —
+**2.1×** — because upserting 1.17M rows into an existing table is more work than
+filling an empty one.
+
+The intuition runs the other way: a re-run feels like it should be cheaper
+because "the data is already there". Size a maintenance window on the re-run
+number, not the first-load number.
+:::
+
+:::note These are one host's numbers
+The point of recording them is the **shape** — which steps dominate, and that a
+re-run is more expensive than a first load — not the absolute values. A timeout
+tuned on a fast developer machine has less headroom on the host that actually
+runs the install.
+:::
+
 ## Concurrency
 
 The platform caps simultaneous run pods at **4**, set in
