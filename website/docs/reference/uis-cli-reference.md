@@ -369,9 +369,53 @@ operational:
   unscheduled: [parked-source]
 ```
 
+#### Which surface each field reaches
+
+**Write each field for the reader who will actually see it.** `template info` is
+read *before* installing, by someone deciding. The install summary is read
+*after*, by someone who has just watched it finish and is deciding what to do
+next. They are not the same person and often not the same sentence.
+
+<!-- OPERATIONAL-SURFACE-TABLE: enforced by tests/static/test-operational-fields-reach-install.sh -->
+
+| field | `template info` | install summary |
+|---|---|---|
+| `automation` | yes | yes |
+| `unscheduled` | yes | yes |
+| `install.note` | yes | yes |
+| `first_data.jobs` | yes | yes |
+| `first_data.takes` | yes | yes |
+| `install.deploys` | yes | no |
+| `install.takes` | yes | no |
+| `first_data.why` | yes | no |
+| `first_data.how` | yes | no |
+| `cadence` | yes | no |
+| `external_services` | yes | no |
+| `timezone` | yes | no |
+
+:::danger A field marked "no" cannot be leaned on by one marked "yes"
+`first_data.why` — *"enabling the schedules does not backfill"* — is **info-only**.
+So a sentence in `automation`, which the installer does print, must not assume
+that warning was read. Say it again if the reader needs it at that moment.
+
+An application discovered this the hard way: its `automation` sentence was
+correct, and until 1.6.65 the installer did not render it at all. It had been
+written blind, for a surface it never reached.
+:::
+
+:::note This table is not documentation of intent — it is checked
+`test-operational-fields-reach-install.sh` parses this table and compares it
+against both renderers in `template.sh`. A field added to one and not the other,
+or a row here that stops matching the code, fails the suite.
+
+That is deliberate: an application author who reads this table is making
+editorial decisions on the strength of it, and a stale table would quietly make
+those decisions wrong.
+:::
+
 **Rendered in two places, deliberately.** `template info` prints the whole
-block before an install; the **install summary prints the short form after
-one** — the note and the `first_data` jobs, immediately below `Endpoints:`.
+block before an install; the install summary prints the short form after one,
+immediately below `Endpoints:`.
 
 ⚠️ **Both, because a user who runs `install` without `info` would otherwise
 never see it** — and `template list` offers `info` and `install` as two equal
@@ -382,6 +426,13 @@ earlier; the end of the output is the part that gets read.
 🔴 **`automation` is the single most important line.** *Does installing this
 start anything?* An operator deciding whether to install needs that before the
 service list, and nothing else in the definition says it.
+
+⚠️ **And it must be true on its own, including about sensors.** An asset driven
+by an automation condition has no schedule to switch on — it runs from a sensor,
+and `default_automation_condition_sensor` ships stopped too. *"Enables the
+schedules"* is the wrong instruction for such an asset: someone who enabled every
+schedule would still not be running it. Say **schedules and sensors**, and list
+the asset in `unscheduled`.
 
 ⚠️ **`first_data` exists because enabling schedules does not backfill.** A
 cron is a *next fire*, not a catch-up, so a Thursday install can sit empty

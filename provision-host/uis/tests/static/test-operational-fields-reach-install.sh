@@ -130,4 +130,89 @@ start_test "the summary printer returns success"
 printf '%s\n' "$_fn" | tail -3 | grep -q 'return 0' && pass_test \
     || fail_test "the function can exit non-zero on a successful summary"
 
+# ============================================================================
+print_test_section "the published surface table matches the code"
+# ============================================================================
+#
+# 🔴 atlas asked for exactly this, and the reason is the strongest argument for
+# a test I have been given:
+#
+#   "If that list is readable from the UIS side, a pointer to it in the docs
+#    would stop this recurring; if it moves, the sentence I just wrote quietly
+#    becomes wrong again." (#758)
+#
+# ⚠️ An application author reads that table and makes EDITORIAL decisions on the
+# strength of it — which warning to repeat, which to lean on a sibling field
+# for. A stale table does not mislead a reader about a detail; it makes their
+# writing wrong in a way neither side can see. That is how the `automation`
+# sentence came to be written blind in the first place.
+
+DOC="$(cd "$SCRIPT_DIR/../../../.." && pwd)/website/docs/reference/uis-cli-reference.md"
+
+start_test "the published surface table is where the test expects it"
+if [[ -f "$DOC" ]] && grep -q 'OPERATIONAL-SURFACE-TABLE' "$DOC"; then
+    pass_test
+else
+    fail_test "no OPERATIONAL-SURFACE-TABLE marker in $DOC — the docs and this test have parted company"
+    print_summary; exit $?
+fi
+
+# Rows look like:  | `first_data.jobs` | yes | yes |
+_doc_rows="$(sed -n '/OPERATIONAL-SURFACE-TABLE/,/^:::/p' "$DOC" \
+    | grep -E '^\| `[a-z_.]+` *\|' \
+    | awk -F'|' '{gsub(/[ `]/,"",$2); gsub(/ /,"",$4); print $2" "$4}')"
+
+_doc_install="$(awk '$2=="yes"{print $1}' <<< "$_doc_rows" | sort -u)"
+_doc_info="$(awk '{print $1}' <<< "$_doc_rows" | sort -u)"
+
+start_test "the table parses into rows"
+_rows=$(printf '%s\n' "$_doc_rows" | grep -c .)
+# ⚠️ A table that stopped parsing would make every comparison below pass on no
+# evidence — the vacuous pass this whole file exists to refuse.
+[[ "$_rows" -ge 10 ]] && pass_test || fail_test "parsed $_rows rows; the table format has changed"
+
+start_test "🔴 every field the docs promise at install IS rendered at install"
+_doc_lies=""
+while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    grep -qx "$f" <<< "$_install_fields" || _doc_lies+="$f "
+done <<< "$_doc_install"
+[[ -z "$_doc_lies" ]] && pass_test \
+    || fail_test "documented as reaching install, but the installer does not read it: $_doc_lies"
+
+start_test "🔴 every field the installer renders IS promised by the docs"
+# The other direction matters just as much: a field rendered but undocumented
+# leaves an author writing for a surface they do not know they reach.
+_undocumented=""
+while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    grep -qx "$f" <<< "$_doc_install" || _undocumented+="$f "
+done <<< "$_install_fields"
+[[ -z "$_undocumented" ]] && pass_test \
+    || fail_test "rendered at install but not in the table: $_undocumented"
+
+start_test "the table lists every field info actually reads"
+_doc_missing=""
+while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    grep -qx "$f" <<< "$_doc_info" || _doc_missing+="$f "
+done <<< "$_info_fields"
+[[ -z "$_doc_missing" ]] && pass_test \
+    || fail_test "read by info and absent from the table: $_doc_missing"
+
+start_test "the table does not name fields neither renderer reads"
+_doc_ghosts=""
+while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    grep -qx "$f" <<< "$_info_fields" || _doc_ghosts+="$f "
+done <<< "$_doc_info"
+[[ -z "$_doc_ghosts" ]] && pass_test \
+    || fail_test "documented but read by neither renderer: $_doc_ghosts"
+
+start_test "the docs warn that an info-only field cannot be leaned on"
+# The specific trap atlas hit: first_data.why ("enabling does not backfill") is
+# info-only, so an `automation` sentence must repeat it rather than assume it.
+grep -q 'cannot be leaned on' "$DOC" && pass_test \
+    || fail_test "nothing tells an author that a 'no' field may not have been read"
+
 print_summary
