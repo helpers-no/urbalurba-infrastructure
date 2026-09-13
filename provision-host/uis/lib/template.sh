@@ -601,7 +601,7 @@ _install_summary_operational() {
     # all. An operator reading the list above needs to know which of those they
     # are expected to launch themselves and never see fire on its own.
     [[ -n "$manual_only" ]] && \
-        echo "  Run once by hand, never on a schedule: $manual_only"
+        echo "  Run ONCE by hand — nothing will ever trigger it: $manual_only"
 
     # 🔴 THE JOB LIST ABOVE READS AS A FINISHED INSTALL, AND THAT IS THE DEFECT.
     #
@@ -634,7 +634,13 @@ _install_summary_operational() {
         # ⚠️ Named separately because an asset driven by an automation condition
         # has no schedule to switch on at all: someone told to "enable the
         # schedules" would enable every schedule and still not be running it.
-        [[ -n "$unscheduled" ]] && echo "    No schedule at all: $unscheduled"
+        # 🔴 DELIBERATELY NOT "no schedule". Both fields are schedule-negative,
+        # and the first wording made them near-synonyms while the meanings are
+        # opposite: `manual_only` is an INSTRUCTION (you must act, once) and
+        # `unscheduled` is a STATEMENT that nothing will happen and nothing is
+        # expected of you. "No schedule at all" read as "you will have to run it
+        # yourself" — which is the other field (atlas, #801).
+        [[ -n "$unscheduled" ]] && echo "    Never runs, and nothing to launch: $unscheduled"
     fi
 
     # 🔴 A POINTER, NOT THE TEXT — and the reasoning is the whole of the
@@ -738,7 +744,7 @@ _template_info_operational() {
     v=$(yq -r '.operational.external_services // [] | join(", ")' "$info" 2>/dev/null)
     [[ -n "$v" ]] && { echo ""; echo "  contacts     $v"; }
     v=$(yq -r '.operational.unscheduled // [] | join(", ")' "$info" 2>/dev/null)
-    [[ -n "$v" ]] && echo "  never runs   $v (no schedule)"
+    [[ -n "$v" ]] && echo "  never runs   $v — no schedule, and nothing for you to launch"
     # ⚠️ Printed next to `unscheduled` BECAUSE the two are easy to confuse, and
     # collapsing them loses the instruction an operator cannot skip:
     #   unscheduled  cannot run  (no private data, no credential)
@@ -747,7 +753,7 @@ _template_info_operational() {
     # one that existed (#791). `[x] | flatten` accepts a scalar and a list, the
     # shape lesson from the scalar env_secrets that vanished for four rounds.
     v=$(yq -r '[.operational.manual_only // ""] | flatten | join(", ")' "$info" 2>/dev/null)
-    [[ -n "$v" ]] && echo "  run by hand  $v (once — not on any schedule)"
+    [[ -n "$v" ]] && echo "  run once     $v — by hand; nothing else will ever trigger it"
 
     # 🔴 Rendered with a bare `yq -r`, deliberately, with NO type switch.
     #

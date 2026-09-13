@@ -363,11 +363,36 @@ reasoning was right while the mechanism disagreed with it.
 - **`unscheduled`** — *cannot* run. No private data, no credential, nothing to do.
 - **`manual_only`** — *must* run, once, by hand, and then never again.
 
+They render as different **kinds** of sentence, not as two lists with different
+adjectives:
+
+```
+  Run ONCE by hand — nothing will ever trigger it: brreg_bootstrap
+  Never runs, and nothing to launch: redcross-branches, frr
+```
+
+⚠️ The first wording was *"Run once by hand, never on a schedule"* against *"No
+schedule at all"*. Both are schedule-negative, so the reader had to spot the
+difference in the qualifiers — and *"no schedule at all"* reads as **"you will
+have to run it yourself"**, which is the other field's meaning exactly.
+
 Collapsing them loses the one instruction an operator cannot skip. An
 application needed the distinction and invented `manual_only` rather than
 overload the key that existed; it is now rendered on both surfaces, and at
 install it appears **next to the first-data job list**, which is the moment it
 means something.
+
+:::note Why it is not redundant with `first_data.how`
+It looks redundant, and on `uis template info` it is — that field explains in
+prose why the job is the odd one out. **`first_data.how` does not render at the
+end of an install.**
+
+An application deleted `manual_only` as a duplicate, then checked which surface
+each field reaches and put it back: the deletion left the operator *about to run
+the chain* seeing the job in an ordered list, absent from `unscheduled`, with
+nothing saying it is a one-time load. **The fact belongs where the person about
+to act is looking; the reason belongs where someone investigating is looking.**
+:::
 :::
 
 :::danger A key UIS does not know about has no designed layout
