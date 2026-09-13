@@ -493,7 +493,7 @@ cmd_template_info() {
 # compares the list against what the DEFINITION actually declares, at install, on
 # the real file. The list is what "UIS renders this" means; the definition is the
 # evidence of what someone wrote.
-TEMPLATE_OPERATIONAL_KEYS="automation timezone cadence external_services unscheduled manual_only troubleshooting install.note install.takes install.deploys first_data.why first_data.how first_data.jobs first_data.takes"
+TEMPLATE_OPERATIONAL_KEYS="automation timezone cadence external_services unscheduled manual_only troubleshooting install.note install.takes install.deploys install.first_load first_data.why first_data.how first_data.jobs first_data.takes"
 
 # Warn about operational content that reaches no surface at all.
 #
@@ -694,6 +694,18 @@ _template_info_operational() {
     [[ -n "$v" ]] && echo "  deploys      $v"
     v=$(yq -r '.operational.install.takes // ""' "$info" 2>/dev/null)
     [[ -n "$v" ]] && echo "  takes        $v"
+    # 🔴 Directly under `takes`, because it is the other half of that sentence.
+    # `takes` says the data load afterwards is the long part; `first_load` says
+    # how long is long, and how much disk. Same question — "what is this about to
+    # do to my cluster" — same reader, deciding before installing.
+    #
+    # ⚠️ atlas moved this key UNDER `install` believing that made it render, and
+    # it did not: the children of a known container are whitelisted
+    # individually, so `install.first_load` was as invisible as the top-level
+    # `first_load` it replaced (#791). Their reasoning was right and the
+    # mechanism did not agree with it; this makes the mechanism agree.
+    v=$(yq -r '.operational.install.first_load // ""' "$info" 2>/dev/null)
+    [[ -n "$v" ]] && echo "  first load   $v"
 
     # The single most important line for an operator: does anything RUN?
     v=$(yq -r '.operational.automation // ""' "$info" 2>/dev/null)
