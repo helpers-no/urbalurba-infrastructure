@@ -193,6 +193,21 @@ Since 1.6.73 `./uis --check` answers this itself: it no longer says *"Up to
 date."* about the image while the launcher is stale, and an unreachable check
 reads as **could not check**, never as stale.
 
+:::warning Check the command you are about to publish, on the version you are publishing
+`--check` was reachable only as `pull --check` until 1.6.74. The release notes
+for 1.6.73 told a tester to run `./uis --check` — written by the launcher's own
+maintainer — and it fell through to the catch-all, which **starts the container**
+and answers with a usage block headed by the version.
+
+The tester ran it on **both** sides of the upgrade and got identical output,
+differing only in the version string the same message had told them to distrust.
+**The instruction for using the freshness check reproduced the exact failure the
+freshness check exists to remove.**
+
+An announcement is a command someone will paste. Run it, on the version you are
+announcing, before you send it.
+:::
+
 
 ### Why this is a documented step
 
