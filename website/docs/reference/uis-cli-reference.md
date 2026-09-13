@@ -347,6 +347,21 @@ An optional top-level block in the **artifact**, rendered by
 `uis template info`. UIS reads nothing from it and validates nothing in it:
 the application owns the content, the platform only displays it.
 
+:::danger A key UIS does not know about displays nowhere
+UIS renders a **known set** of `operational.*` keys. A key outside that set is
+not an error and is not lost — it is simply never shown, on any surface, and
+nothing about the install looks wrong.
+
+Since 1.6.67 the install **names such keys**, because the person who needs to
+know is the application author: they wrote a sentence, published it, and are
+addressing a reader who will never see it. An application once moved an upgrade
+remedy *into* `operational.troubleshooting` precisely so operators would see it,
+and it went from a place they would not look to a place they could not.
+
+If you need a key that is not in the table below, ask — adding one is a few
+lines, and writing into an unrendered key is silent.
+:::
+
 It answers the questions an operator has *before* installing, and which
 `provides:` cannot:
 
@@ -385,6 +400,7 @@ next. They are not the same person and often not the same sentence.
 | `install.note` | yes | yes |
 | `first_data.jobs` | yes | yes |
 | `first_data.takes` | yes | yes |
+| `troubleshooting` | yes | yes (a pointer) |
 | `install.deploys` | yes | no |
 | `install.takes` | yes | no |
 | `first_data.why` | yes | no |
@@ -401,6 +417,18 @@ that warning was read. Say it again if the reader needs it at that moment.
 An application discovered this the hard way: its `automation` sentence was
 correct, and until 1.6.65 the installer did not render it at all. It had been
 written blind, for a surface it never reached.
+:::
+
+:::warning `troubleshooting` is the one field the install does not print in full
+Its reader is someone whose install has **already gone wrong** — at 02:00, with
+an error in front of them. Printing remedies at the end of a *successful* install
+would be noise, and noise here is expensive: it trains people to skip the block
+that also carries the `automation` warning.
+
+So the install prints a **pointer** — *"this application ships its own
+remedies: `./uis template info <id>`"* — because the end of a successful install
+is the one moment the operator is certainly reading, and nobody discovers a
+command at 02:00 that they have never seen. `info` holds the content.
 :::
 
 :::note This table is not documentation of intent — it is checked

@@ -160,7 +160,13 @@ fi
 # Rows look like:  | `first_data.jobs` | yes | yes |
 _doc_rows="$(sed -n '/OPERATIONAL-SURFACE-TABLE/,/^:::/p' "$DOC" \
     | grep -E '^\| `[a-z_.]+` *\|' \
-    | awk -F'|' '{gsub(/[ `]/,"",$2); gsub(/ /,"",$4); print $2" "$4}')"
+    | awk -F'|' '{gsub(/[ `]/,"",$2); gsub(/ /,"",$4);
+                  # ⚠️ A cell may QUALIFY its yes — `troubleshooting` is
+                  # "yes (a pointer)", because the install names the command
+                  # rather than printing the remedies. Match the prefix: an
+                  # exact match rejected a row that was telling the truth, and
+                  # this test caught that the moment the qualifier was added.
+                  print $2" "(index($4,"yes")==1 ? "yes" : $4)}')"
 
 _doc_install="$(awk '$2=="yes"{print $1}' <<< "$_doc_rows" | sort -u)"
 _doc_info="$(awk '{print $1}' <<< "$_doc_rows" | sort -u)"
@@ -214,5 +220,71 @@ start_test "the docs warn that an info-only field cannot be leaned on"
 # info-only, so an `automation` sentence must repeat it rather than assume it.
 grep -q 'cannot be leaned on' "$DOC" && pass_test \
     || fail_test "nothing tells an author that a 'no' field may not have been read"
+
+# ============================================================================
+print_test_section "a field read by NEITHER renderer"
+# ============================================================================
+#
+# 🔴 THE BLIND SPOT IN THIS FILE, NAMED BY ops-dev (#789):
+#
+#   "the test detects asymmetry between two renderers, and a field absent from
+#    both is symmetric. It passes, correctly, while the field reaches nobody."
+#
+# `operational.troubleshooting` was exactly that. atlas moved an upgrade remedy
+# INTO it so operators would see it, on instruction, and it went from a place
+# they would not look to a place they could not. ⚠️ The fourth instance of the
+# shape this file documents — and the first one the guard was in place for and
+# could not see.
+#
+# A comparison between two lists cannot find a thing on neither list. The check
+# has to run against what the DEFINITION declares.
+
+start_test "🔴 UIS declares which operational keys it renders"
+grep -q '^TEMPLATE_OPERATIONAL_KEYS=' "$LIB" && pass_test \
+    || fail_test "no declared key set — nothing can tell a rendered field from an ignored one"
+
+_declared_keys="$(grep -oP '(?<=^TEMPLATE_OPERATIONAL_KEYS=")[^"]*' "$LIB" | tr ' ' '\n' | sort -u)"
+
+start_test "the declared set covers every field either renderer reads"
+# ⚠️ The list is what "UIS renders this" MEANS, so a field a renderer reads and
+# the list omits would be reported to an author as unrendered while appearing on
+# screen — a warning that is wrong in the confusing direction.
+_uncovered=""
+while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    grep -qx "$f" <<< "$_declared_keys" || _uncovered+="$f "
+done <<< "$(printf '%s\n%s\n' "$_info_fields" "$_install_fields" | sort -u)"
+[[ -z "$_uncovered" ]] && pass_test \
+    || fail_test "rendered but missing from TEMPLATE_OPERATIONAL_KEYS: $_uncovered"
+
+start_test "the declared set claims nothing neither renderer reads"
+_overclaimed=""
+while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    grep -qx "$f" <<< "$(printf '%s\n%s\n' "$_info_fields" "$_install_fields" | sort -u)" \
+        || _overclaimed+="$f "
+done <<< "$_declared_keys"
+[[ -z "$_overclaimed" ]] && pass_test \
+    || fail_test "declared as rendered but read by neither renderer: $_overclaimed — this is the #789 defect itself"
+
+start_test "🔴 the install warns about content that reaches no surface"
+grep -q '_warn_unrendered_operational' "$LIB" && pass_test \
+    || fail_test "nothing tells an author their published sentence displays nowhere"
+
+start_test "the warning runs on a real install, not only when someone asks"
+# The author is not running `template info`; the operator is installing.
+grep -q '_warn_unrendered_operational "\$info_file"' "$LIB" && pass_test \
+    || fail_test "the check is defined but never called from the install path"
+
+start_test "the warning does not claim anything is broken"
+# ⚠️ Unrendered content is not a failure — nothing is lost and the install is
+# fine. Reporting it as an error would train people to ignore it.
+_warn_fn="$(sed -n '/^_warn_unrendered_operational() {/,/^}/p' "$LIB")"
+grep -q 'Nothing is broken' <<< "$_warn_fn" && pass_test \
+    || fail_test "an advisory must read as advice, or it gets escalated like a defect"
+
+start_test "troubleshooting is rendered somewhere"
+grep -qx "troubleshooting" <<< "$(printf '%s\n%s\n' "$_info_fields" "$_install_fields")" && pass_test \
+    || fail_test "the field the whole of #789 is about still reaches nobody"
 
 print_summary
