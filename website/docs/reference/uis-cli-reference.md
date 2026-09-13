@@ -347,6 +347,18 @@ An optional top-level block in the **artifact**, rendered by
 `uis template info`. UIS reads nothing from it and validates nothing in it:
 the application owns the content, the platform only displays it.
 
+:::tip Nest a fact beside the sentence it completes
+`install.takes` says the data load afterwards is the long part;
+`install.first_load` says *how long is long* — row counts, table counts, disk.
+Same question, same reader, so they render one under the other.
+
+⚠️ **Nesting a key under a known container does not make it render.** The children
+of `install` and `first_data` are listed individually in the table below; a new
+child is as invisible as a new top-level key until it appears there. An
+application moved a key under `install` believing that was enough, and their
+reasoning was right while the mechanism disagreed with it.
+:::
+
 :::tip `unscheduled` and `manual_only` are different claims
 - **`unscheduled`** — *cannot* run. No private data, no credential, nothing to do.
 - **`manual_only`** — *must* run, once, by hand, and then never again.
@@ -419,6 +431,7 @@ next. They are not the same person and often not the same sentence.
 | `manual_only` | yes | yes |
 | `install.deploys` | yes | no |
 | `install.takes` | yes | no |
+| `install.first_load` | yes | no |
 | `first_data.why` | yes | no |
 | `first_data.how` | yes | no |
 | `cadence` | yes | no |

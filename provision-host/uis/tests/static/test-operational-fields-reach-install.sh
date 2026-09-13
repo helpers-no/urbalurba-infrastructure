@@ -30,6 +30,11 @@ LIB="$(cd "$SCRIPT_DIR/../../lib" && pwd)/template.sh"
 #
 #   install.takes        — how long installing takes, printed AFTER it has
 #                          finished. Useful before, not after.
+#   install.first_load   — row and table counts for the first data load. The
+#                          question it answers is "what is this about to do to
+#                          my cluster", asked by someone DECIDING whether to
+#                          install. By the end of an install that decision is
+#                          made, and the same reader now wants the job list.
 #   install.deploys      — what it deploys; the installer has just shown the
 #                          plan it actually executed, which is stronger.
 #   first_data.why       — why the API is empty; `install.note` says this in the
@@ -45,6 +50,7 @@ LIB="$(cd "$SCRIPT_DIR/../../lib" && pwd)/template.sh"
 #   timezone             — reference; means nothing until a schedule runs.
 EXEMPT=(
     "install.takes"
+    "install.first_load"
     "install.deploys"
     "first_data.why"
     "first_data.how"
