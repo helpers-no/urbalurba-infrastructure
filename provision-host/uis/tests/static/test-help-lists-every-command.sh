@@ -143,6 +143,12 @@ _impl_subs_for() {
 # Subcommands that exist as functions but are not user-facing verbs.
 SUB_EXEMPT=(
     "browserless verify_session"   # a helper of `browserless verify`, not a verb
+    # ⚠️ `uis template check` with NO id runs the listing; `check_all` is the
+    # function that does it, not a verb anyone types. Named by the same
+    # convention the scan derives subcommands from, which is why it is caught —
+    # and this file's rule is that every exemption is named with a reason rather
+    # than skipped by a pattern.
+    "template check_all"
 )
 _sub_is_exempt() {
     local pair="$1 $2" e
