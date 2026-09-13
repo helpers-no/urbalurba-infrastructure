@@ -319,4 +319,63 @@ start_test "troubleshooting is rendered somewhere"
 grep -qx "troubleshooting" <<< "$(printf '%s\n%s\n' "$_info_fields" "$_install_fields")" && pass_test \
     || fail_test "the field the whole of #789 is about still reaches nobody"
 
+# ============================================================================
+print_test_section "manual_only and unscheduled must not read as the same claim"
+# ============================================================================
+#
+# 🔴 Both fields are schedule-negative, and the first wording made them
+# near-synonyms while the meanings are close to opposite:
+#
+#   manual_only   an INSTRUCTION — you must act, once, and nothing else will
+#   unscheduled   a STATEMENT — nothing will happen and nothing is expected
+#
+# "Run once by hand, never on a schedule" against "No schedule at all" left a
+# reader to spot the difference in the qualifiers. atlas asked for the contrast
+# to be visible before building against the key, and the request landed on code
+# that already shipped in 1.6.68 (#801).
+#
+# ⚠️ This matters because of what the two jobs ARE: `brreg_bootstrap` is a
+# 1.17M-record bulk load that is destructive to re-run, and `unscheduled` names
+# jobs that cannot run at all. Reading one as the other is expensive in both
+# directions.
+
+_lib_all="$(cat "$LIB")"
+
+start_test "🔴 the manual_only label is an instruction, not a schedule fact"
+if grep -qE 'Run ONCE by hand|Run once, by hand' <<< "$_lib_all"; then
+    pass_test
+else
+    fail_test "manual_only must tell the reader to act, not merely describe a gap in the schedule"
+fi
+
+start_test "🔴 the unscheduled label says nothing is expected of the reader"
+if grep -q 'nothing to launch' <<< "$_lib_all"; then
+    pass_test
+else
+    fail_test "'no schedule' reads as 'you will have to run it yourself' — which is the other field"
+fi
+
+start_test "the two labels do not share their distinguishing phrase"
+# If both reduce to "no schedule", the reader learns nothing from either.
+_mo="$(grep -oE 'Run ONCE by hand[^"]*' <<< "$_lib_all" | head -1)"
+_un="$(grep -oE 'Never runs, and nothing to launch[^"]*' <<< "$_lib_all" | head -1)"
+if [[ -n "$_mo" && -n "$_un" && "$_mo" != "$_un" ]] \
+   && ! grep -qi 'no schedule' <<< "$_mo$_un"; then
+    pass_test
+else
+    fail_test "manual_only='$_mo' unscheduled='$_un'"
+fi
+
+start_test "both render on the install surface, where the reader is about to act"
+# ⚠️ `first_data.how` — which carries the same reason in prose — is info-only.
+# atlas found that by reading the surfaces rather than counting keys: deleting
+# manual_only left the end-of-install reader with brreg_bootstrap in an ordered
+# list and nothing saying it is a one-time load.
+_inst="$(sed -n '/^_install_summary_operational() {/,/^}/p' "$LIB")"
+if grep -q 'manual_only' <<< "$_inst" && grep -q 'unscheduled' <<< "$_inst"; then
+    pass_test
+else
+    fail_test "the contrast only works if both appear where the operator is acting"
+fi
+
 print_summary
