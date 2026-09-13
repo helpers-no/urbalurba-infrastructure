@@ -12,6 +12,93 @@ CONTAINER_NAME="uis-provision-host"
 IMAGE="${UIS_IMAGE:-ghcr.io/helpers-no/uis-provision-host:latest}"
 KUBECONFIG_DIR="${UIS_KUBECONFIG_DIR:-$HOME/.kube}"
 
+# 🔴 CREATE-TIME OVERRIDES — set before the container exists, or not at all.
+#
+# `UIS_FORWARDED_ENV` above is the RUNTIME class: those reach a warm container on
+# every `docker exec`. These two cannot. They are decided when the container is
+# CREATED — one is the image it is made from, the other is a bind mount — and a
+# container that is already running was made with whatever was set then.
+#
+# ⚠️ `start_container` returns early when a container is up, BEFORE `check_image`,
+# so an override set against a warm host used to be dropped in silence.
+#
+# imac spent three runs verifying 1.6.67 with `UIS_IMAGE=…:1.6.67` against a
+# container that had been up nine hours on 1.6.65, and was one message from
+# reporting that a working fix did not work (ops-dev, urb-agents#796). It caught
+# it by diffing the output under both versions and getting BYTE-IDENTICAL text:
+# if the override had taken effect the two runs MUST differ, so identical output
+# was proof the override never applied, not proof the fix was absent.
+#
+# 🔴 The `uis` script already documented this exact shape for TEMPLATE_REPO,
+# fixed in 1.6.9, two comments above the line that repeated it for UIS_IMAGE.
+# Knowing the shape and writing it down did not prevent the next variable from
+# meeting it — so this is a declared CLASS with a check, not another comment.
+UIS_CREATE_TIME_ENV=(
+    UIS_IMAGE
+    UIS_KUBECONFIG_DIR
+)
+
+# What the RUNNING container was actually created with, for each of those.
+# Empty means "could not tell" — never reported as a mismatch.
+_warm_container_value_for() {
+    case "$1" in
+        UIS_IMAGE)
+            docker inspect -f '{{.Config.Image}}' "$CONTAINER_NAME" 2>/dev/null
+            ;;
+        UIS_KUBECONFIG_DIR)
+            # The host side of the ~/.kube bind mount. A resolved symlink is
+            # mounted as the config FILE, so accept either and compare directories.
+            docker inspect -f \
+              '{{range .Mounts}}{{if or (eq .Destination "/home/ansible/.kube") (eq .Destination "/home/ansible/.kube/config")}}{{.Source}}{{end}}{{end}}' \
+              "$CONTAINER_NAME" 2>/dev/null
+            ;;
+    esac
+}
+
+# Refuse when an EXPLICITLY SET create-time override disagrees with the running
+# container. Three deliberate narrowings:
+#
+#   unset            → silent. The user asked for nothing; a container created
+#                      from an explicit tag must not start nagging every command.
+#   set and agrees   → silent. The override is satisfied; there is nothing wrong.
+#   cannot determine → silent. "Could not look" is not "does not match" — the
+#                      same rule the external-services gate and the digest check
+#                      already follow.
+_refuse_ignored_create_time_override() {
+    local var want have mismatch=""
+    for var in "${UIS_CREATE_TIME_ENV[@]}"; do
+        # Explicitly set? An empty-but-set value is not an override.
+        [[ -n "${!var:-}" ]] || continue
+        want="${!var}"
+        have="$(_warm_container_value_for "$var")"
+        [[ -n "$have" ]] || continue
+        case "$var" in
+            UIS_KUBECONFIG_DIR)
+                # compare directories: the mount may be the file inside it
+                [[ "${have%/config}" == "${want%/}" ]] && continue
+                ;;
+            *)
+                [[ "$have" == "$want" ]] && continue
+                ;;
+        esac
+        mismatch+="      $var=$want   but the running container has: $have"$'\n'
+    done
+    [[ -n "$mismatch" ]] || return 0
+
+    log_error "A container is already running and cannot honour this override."
+    printf '%s' "$mismatch" >&2
+    echo "" >&2
+    echo "    This is decided when the container is CREATED, so a warm container" >&2
+    echo "    keeps what it was made with. Continuing would run the OLD one and" >&2
+    echo "    report success — which is how a working fix gets reported broken." >&2
+    echo "" >&2
+    echo "    Restart with the override in place:" >&2
+    echo "      ./uis stop && ${UIS_CREATE_TIME_ENV[0]}=... ./uis <command>" >&2
+    echo "" >&2
+    echo "    Or drop the override to use the container you already have." >&2
+    return 1
+}
+
 # ---------------------------------------------------------------------------
 # Environment forwarded into the container
 #
@@ -178,6 +265,9 @@ show_welcome() {
 # Start container if not running
 start_container() {
     if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        # ⚠️ BEFORE the early return. An override that cannot be honoured must
+        # stop the command, not be discovered afterwards in a diff.
+        _refuse_ignored_create_time_override || exit 1
         return 0
     fi
 
