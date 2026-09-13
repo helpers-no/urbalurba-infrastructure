@@ -659,6 +659,50 @@ show_version_info() {
 
 # Report where this machine stands. Used by `./uis version` and `./uis pull`.
 # Returns 0 if up to date, 1 if an update is available, 2 if it could not tell.
+# Is the host-side launcher the one `./uis pull` would install?
+#
+# 🔴 THE IMAGE AND THE LAUNCHER UPDATE SEPARATELY, AND ONLY ONE OF THEM HAS A
+# VERSION. `docker pull` gives you a new image and leaves the launcher alone, so
+# a host can run today's image through last week's launcher and every version
+# string it prints is correct.
+#
+# That is how 1.6.70 — a guard living ENTIRELY in this file — failed to reach the
+# people told to be on 1.6.70. They were given an image digest, which is the
+# right identity for an image and the wrong instruction for a launcher fix. imac
+# pulled the image, restarted, ran the guard's own test, got exit 0, and only
+# avoided reporting the fix broken because it grepped its launcher (ops-dev,
+# #821).
+#
+# ⚠️ NOT a version on the launcher. The one-version model is deliberate and the
+# comment above says why. This compares the FILE with the file `./uis pull`
+# would fetch — answering "would updating change anything?", which is the
+# actionable question and needs no second number to drift.
+#
+# Echoes: current | behind | unknown
+_launcher_freshness() {
+    local self remote_tmp
+    self="${UIS_LAUNCHER_PATH:-${BASH_SOURCE[0]}}"
+    [ -r "$self" ] || { echo "unknown"; return 0; }
+    command -v sha256sum >/dev/null 2>&1 || { echo "unknown"; return 0; }
+
+    remote_tmp="$(mktemp 2>/dev/null)" || { echo "unknown"; return 0; }
+    if ! curl -fsSL --max-time 15 "$UIS_RAW_BASE/uis" -o "$remote_tmp" 2>/dev/null; then
+        rm -f "$remote_tmp"; echo "unknown"; return 0
+    fi
+    # An empty or truncated fetch must read as "could not tell", never as
+    # "behind" — a spurious "your launcher is stale" is how a guard becomes noise.
+    if [ ! -s "$remote_tmp" ]; then
+        rm -f "$remote_tmp"; echo "unknown"; return 0
+    fi
+
+    local a b
+    a="$(sha256sum < "$self" 2>/dev/null | cut -d" " -f1)"
+    b="$(sha256sum < "$remote_tmp" 2>/dev/null | cut -d" " -f1)"
+    rm -f "$remote_tmp"
+    if [ -z "$a" ] || [ -z "$b" ]; then echo "unknown"; return 0; fi
+    [ "$a" = "$b" ] && echo "current" || echo "behind"
+}
+
 report_version_status() {
     local installed remote
     installed="$(installed_version)"
@@ -683,7 +727,26 @@ report_version_status() {
     if [ -z "$installed" ]; then
         return 1
     elif [ "$installed" = "$remote" ]; then
-        log_info "Up to date."
+        # 🔴 "Up to date" used to be said about the IMAGE alone, on a command
+        # whose whole purpose is to answer "am I current?". A host-side fix could
+        # be missing entirely and this line would still print.
+        case "$(_launcher_freshness)" in
+            behind)
+                log_warn "Image is up to date — but this launcher is NOT."
+                echo "    ./uis is a host-side file and does not arrive with the image." >&2
+                echo "    A fix that lives in the launcher (an override guard, a" >&2
+                echo "    refusal, a message) is missing on this machine right now." >&2
+                echo "    Update it:  ./uis pull" >&2
+                return 1
+                ;;
+            unknown)
+                log_info "Up to date (image)."
+                log_info "Launcher:          could not be checked — not the same as current."
+                ;;
+            *)
+                log_info "Up to date (image and launcher)."
+                ;;
+        esac
         return 0
     else
         # 🔴 "Latest version: 1.6.50" is TRUE and is not what the operator needs

@@ -137,8 +137,12 @@ on `:latest` can mean the tag has moved to a different version since you looked.
 
 ### When a comparison proves nothing
 
-Two configurations that **must** differ and don't have told you something about
-your instrument, not about the thing you measured.
+:::note This rule is the residue of a near-miss, not foresight
+It is written down because someone made the mistake and something caught it —
+not because anyone derived it in advance. Kept in that form at the tester's own
+request: *"I made this mistake and here is what caught it"* gets followed; the
+same sentence as a derived principle gets skimmed.
+:::
 
 A tester verified a UIS release with `UIS_IMAGE=…:1.6.67` three times against a
 container that had been up nine hours on 1.6.65, saw the new feature missing
@@ -151,6 +155,10 @@ What caught it was diffing the output under both versions and getting
 — that is the entire point of the fix being in the newer one. Identical output
 was proof the override never took effect, **not** proof the fix was absent.
 
+**The rule, once you have the story:** two configurations that *must* differ and
+don't have told you something about your **instrument**, not about the thing you
+measured.
+
 :::tip Suspect the instrument before the thing measured
 - identical output from two versions that differ → suspect the override
 - a status code where you needed a digest → suspect the tag
@@ -159,6 +167,32 @@ was proof the override never took effect, **not** proof the fix was absent.
 Since 1.6.70 the launcher refuses rather than ignoring: an override a warm
 container cannot honour stops the command and names the restart.
 :::
+
+### Announcing a release whose change is host-side
+
+`./uis` is a **host-side file**. It does not arrive with the image.
+
+:::danger A digest is the right identity for an image and the wrong instruction for a launcher fix
+1.6.70's guard lived entirely in the launcher and was announced by image digest.
+Everyone who acted on that got the new runtime and kept the old guard — and
+believed they were protected while getting exactly the behaviour the guard
+exists to stop. The tester pulled the image, restarted, ran the guard's own
+test, got exit 0, and only avoided reporting a working fix broken because it
+grepped its own launcher.
+:::
+
+So when the change is in `./uis`, announce in this order:
+
+1. **`./uis pull`** — the instruction that actually delivers it.
+2. **The A/B that proves it arrived**, e.g. for 1.6.70: run a disagreeing
+   `UIS_IMAGE` against a warm container; *if it exits 0, the launcher did not
+   update, whatever `docker images` says*.
+3. **The image digest**, last, as identity rather than instruction.
+
+Since 1.6.73 `./uis --check` answers this itself: it no longer says *"Up to
+date."* about the image while the launcher is stale, and an unreachable check
+reads as **could not check**, never as stale.
+
 
 ### Why this is a documented step
 
