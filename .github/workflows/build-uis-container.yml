@@ -85,6 +85,26 @@ jobs:
 
       - name: Build and push container image
         uses: docker/build-push-action@v7
+        # ⚠️ The `.dockerbuild` build record is uploaded as a GitHub artifact by
+        # the action itself — it is not in any `upload-artifact` step, which is
+        # why grepping the workflows for artifact uploads does not find it.
+        #
+        # Unset, it inherits the repository default of 90 days. At ~7.8 records
+        # a day that is ~694 artifacts in steady state. Small (170 KB each, so
+        # ~0.11 GB) and pointless: a build record for a release nobody is
+        # investigating is read by no one.
+        #
+        # 7 days, matching what urb-agents settled on. Documented at
+        # docker/build-push-action#environment-variables; "Defaults to
+        # repository/org retention settings if unset or 0".
+        #
+        # 🔵 NOT set as a repository-wide retention policy, deliberately: that
+        # setting is `artifact-and-log-retention` — one knob for BOTH — and
+        # shortening log retention to 7 days would throw away the run logs of a
+        # release while it is still the newest one. Artifacts here, logs left
+        # alone.
+        env:
+          DOCKER_BUILD_RECORD_RETENTION_DAYS: 7
         with:
           context: .
           file: ./Dockerfile.uis-provision-host
