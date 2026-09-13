@@ -1924,11 +1924,67 @@ cmd_template_check() {
     echo "  pod: $pod" >&2
     echo "" >&2
 
+    # 🔴 PRE-FLIGHT: IS THE COMMAND EVEN THERE?
+    #
+    # imac measured what happens without this, against the real artifact
+    # (ops-dev, #928): atlas's script is in its REPO and not its IMAGE, and psql
+    # is not in the image either. Executed as declared, the result was
+    #
+    #     psql: command not found
+    #     ...a header printed with BLANK VALUES, and exit 0
+    #
+    # ⚠️ A blank value reading as "nothing to report" when the truth is "I could
+    # not look" is the exact failure this command exists to end. Relaying that as
+    # success would put the hole in the platform half instead of the application
+    # half, which is atlas's own point turned on me: "exits 0" is not "the output
+    # reflects the input", and a criterion that accepts the former is satisfied
+    # by a stub.
+    #
+    # UIS cannot judge whether the NUMBERS are right — that is the application's
+    # to own. It can refuse to call an unrunnable command a pass.
+    local probe_rc=0
+    kubectl exec -n dagster "$pod" -- bash -lc "command -v ${run_cmd%% *} >/dev/null 2>&1 || test -x ${run_cmd%% *}" >/dev/null 2>&1 || probe_rc=$?
+    if [[ "$probe_rc" -ne 0 ]]; then
+        echo ""
+        log_warn "'$template_id' declares a check that is not runnable in its pod."
+        echo "    ${run_cmd%% *} is not present or not executable in $pod." >&2
+        echo "" >&2
+        echo "    COULD NOT BE ASKED — this is neither healthy nor unhealthy." >&2
+        echo "    The command must ship IN THE IMAGE, with whatever it needs to" >&2
+        echo "    run there. A script that lives in the application's repository" >&2
+        echo "    is not reachable from here, and one whose dependencies are" >&2
+        echo "    missing prints blanks and exits 0." >&2
+        return 2
+    fi
+
     # ⚠️ The application's own exit code is the verdict and is passed through.
     # UIS does not interpret the output — the same contract as `operational`:
     # the application owns the content, the platform only runs and relays it.
     shift || true
-    kubectl exec -n dagster "$pod" -- bash -lc "$run_cmd $*"
+    local rc=0
+    kubectl exec -n dagster "$pod" -- bash -lc "$run_cmd $*" || rc=$?
+
+    # 🔴 127 is "a command inside it was not found", which is the blank-values
+    # case one level down: the script ran, something it needed did not exist.
+    # That is state 4, not a failed check.
+    if [[ "$rc" -eq 127 ]]; then
+        echo "" >&2
+        log_warn "The check ran but something it needs was not found (exit 127)."
+        echo "    COULD NOT BE ASKED. Treat any values above as unread, not as zero." >&2
+        return 2
+    fi
+
+    echo "" >&2
+    if [[ "$rc" -eq 0 ]]; then
+        # 🔵 "reported", not "verified". UIS ran the application's command and
+        # relayed its answer; it did not check the answer. Saying more than that
+        # would be the platform making the claim the application is responsible
+        # for — and a stub would satisfy it.
+        echo "  $template_id reported success (exit 0). UIS relayed this; it did not verify it." >&2
+    else
+        echo "  $template_id reported a problem (exit $rc)." >&2
+    fi
+    return "$rc"
 }
 
 # Command: uis template remove <id> [--purge] [--yes]

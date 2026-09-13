@@ -382,6 +382,27 @@ would give the same name to the claim that was **true** during those 7.5 hours
 and the claim that was **false**.
 :::
 
+:::danger The command must ship IN THE IMAGE, with what it needs
+Measured against a real artifact before this shipped: the application's script
+lived in its **repository**, not its image, and `psql` was absent from the image
+too. Run as declared it printed a header of **blank values and exited 0**.
+
+A blank reading as *"nothing to report"* when the truth is *"I could not look"*
+is the failure this command exists to end — so UIS pre-flights that the command
+is present and executable, and treats exit **127** as *could not be asked* rather
+than as a failed check.
+:::
+
+:::note UIS relays the answer; it does not certify it
+On exit 0 the output says **"reported success. UIS relayed this; it did not
+verify it."**
+
+The application's own point, applied to the platform: *"exits 0" is not "the
+output reflects the input", and a criterion that accepts the former will be
+satisfied by a stub.* UIS cannot judge whether the numbers are right — that is
+the application's to own. It can refuse to claim it did.
+:::
+
 :::warning An application that declares nothing says so
 `uis template check` on an application with no `commands.check` reports that it
 **cannot tell you whether its output reflects its input**, and exits **2** —
@@ -390,6 +411,18 @@ is nothing here that can check"*. A missing pod exits 2 as well, saying
 **NOTHING WAS CHECKED**.
 
 Silence would make this a thing one application has and nobody else does.
+
+**Four states, and conflating any two is the defect:**
+
+| | |
+|---|---|
+| 1 | declared, healthy |
+| 2 | declared, unhealthy |
+| 3 | declared **nothing** |
+| 4 | **could not be asked** |
+
+*"3 of 4 healthy"* silently drops what it could not ask. A stopped application
+must still produce a line, in state 4, with a reason — not vanish from the list.
 :::
 
 ### `operational:` — what installing this will actually do

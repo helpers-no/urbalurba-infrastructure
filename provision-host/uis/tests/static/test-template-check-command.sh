@@ -108,6 +108,50 @@ grep -q 'template check <id>' "$CLI" && pass "listed in the top-level help" \
 grep -q 'check <id>' <<<"$_code" && pass "listed in the template subcommand help" \
     || fail "listed in the subcommand help" ""
 
+# ── the four states, and conflating any two is the defect ─────────────────────
+# imac's addition to my own design point (ops-dev, #928):
+#   1 declared, healthy      2 declared, unhealthy
+#   3 declared NOTHING       4 COULD NOT BE ASKED
+# ⚠️ "3 of 4 healthy" silently drops what could not be asked. State 4 must be its
+# own answer, not a rounding of 1 or 2.
+_body="$(sed -n '/^cmd_template_check() {/,/^}/p' "$LIB")"
+
+if grep -q 'COULD NOT BE ASKED' <<<"$_body"; then
+    pass "🔴 state 4 is named, not folded into pass or fail"
+else
+    fail "🔴 state 4 is named" "an application that could not be asked is neither healthy nor broken"
+fi
+
+# 🔴 Measured by imac against the real artifact: atlas's script is in its REPO
+# and not its IMAGE, and psql is absent from the image. Run as declared it
+# printed a header of BLANK VALUES and exited 0.
+if grep -q 'command -v' <<<"$_body" && grep -q 'test -x' <<<"$_body"; then
+    pass "🔴 the command is pre-flighted before it is trusted"
+else
+    fail "🔴 the command is pre-flighted"          "an absent script exits 127 and a missing dependency prints blanks and exits 0"
+fi
+
+if grep -q 'rc" -eq 127' <<<"$_body"; then
+    pass "127 is treated as could-not-be-asked, not as a failed check"
+else
+    fail "127 is treated as could-not-be-asked"          "'something it needed did not exist' is the blank-values case one level down"
+fi
+
+# 🔵 atlas's point, turned on the platform half: "exits 0" is not "the output
+# reflects the input", and a criterion that accepts the former is satisfied by a
+# stub. UIS cannot judge the numbers; it can refuse to claim it did.
+if grep -q 'relayed this; it did not verify it' <<<"$_body"; then
+    pass "🔴 exit 0 is reported as RELAYED, not as verified"
+else
+    fail "🔴 exit 0 is reported as relayed, not verified"          "claiming verification the platform did not perform is the hole moved, not closed"
+fi
+
+if grep -qE 'must ship IN THE IMAGE' <<<"$_body"; then
+    pass "the refusal says what the application must change"
+else
+    fail "the refusal says what the application must change" "a refusal without a remedy is an obstacle"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
