@@ -279,9 +279,35 @@ grep -q '_warn_unrendered_operational "\$info_file"' "$LIB" && pass_test \
 start_test "the warning does not claim anything is broken"
 # ⚠️ Unrendered content is not a failure — nothing is lost and the install is
 # fine. Reporting it as an error would train people to ignore it.
+#
+# ⚠️ Asserts the INTENT, not a phrase. The first version matched the literal
+# string "Nothing is broken" and failed the moment that message was improved —
+# the same trap as the doc-parity parser rejecting "yes (a pointer)". A test
+# that breaks when you improve the wording discourages improving the wording.
 _warn_fn="$(sed -n '/^_warn_unrendered_operational() {/,/^}/p' "$LIB")"
-grep -q 'Nothing is broken' <<< "$_warn_fn" && pass_test \
-    || fail_test "an advisory must read as advice, or it gets escalated like a defect"
+if grep -qiE 'IS shown|is not lost|nothing is broken' <<< "$_warn_fn" \
+   && ! grep -qiE 'error|failed|invalid|refus' <<< "$_warn_fn"; then
+    pass_test
+else
+    fail_test "an advisory must say the content still reaches a surface, and must not read as a defect"
+fi
+
+start_test "🔴 info shows a key with no designed layout rather than dropping it"
+# The 1.6.68 change: a whitelist decides LAYOUT, not existence. UIS reads nothing
+# from this block and validates nothing in it, so it has no business deciding
+# which of someone else's prose is displayable.
+grep -q '_template_info_operational_rest' "$LIB" && pass_test \
+    || fail_test "an unknown key is still invisible in info"
+
+start_test "the catch-all is actually called from the info renderer"
+sed -n '/^_template_info_operational() {/,/^}/p' "$LIB" | grep -q '_template_info_operational_rest' \
+    && pass_test || fail_test "defined but never called — the guard that cannot fire, again"
+
+start_test "both surfaces derive unknown keys from ONE enumeration"
+# Two copies of this logic would drift, and the drift would be silent in exactly
+# the way this whole series of defects has been.
+_n=$(grep -c '_operational_unknown_keys "\$info"' "$LIB")
+[[ "$_n" -ge 2 ]] && pass_test || fail_test "expected info and install to share the enumeration; found $_n call sites"
 
 start_test "troubleshooting is rendered somewhere"
 grep -qx "troubleshooting" <<< "$(printf '%s\n%s\n' "$_info_fields" "$_install_fields")" && pass_test \
