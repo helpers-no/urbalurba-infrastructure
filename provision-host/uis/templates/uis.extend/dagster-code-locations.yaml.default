@@ -71,6 +71,28 @@ code_locations: []
 #                         image field to CHANGE to roll the pod, so `latest`
 #                         silently keeps serving old code after a "successful"
 #                         deploy
+#   resources   optional  requests for the code-location pod. UIS sets a default
+#                         of cpu 100m / memory 384Mi; declare this only if your
+#                         image genuinely needs more.
+#
+#    🔴 WITHOUT A REQUEST A POD IS BestEffort: first evicted under node memory
+#       pressure, first OOM-killed. The code-location pod is LONG-LIVED, so its
+#       eviction takes your whole location offline — assets unqueryable, and the
+#       symptom reads as "Dagster is broken" rather than "a job died".
+#
+#       Measured on a real tenant: the code-location pod peaked at 300 MiB while
+#       reserving nothing, beside a platform daemon reserving 512 MiB and peaking
+#       at 309. The unprotected pod used within 9 MiB of the protected one.
+#
+#    ⚠️ UIS sets requests and NOT limits, on purpose. A request is a floor and
+#       getting it slightly low still protects you. A limit is a ceiling, and a
+#       memory limit set below a real peak turns a working pipeline into a
+#       reliable OOMKill. If you set limits here, you own that trade.
+#
+#       resources:
+#         requests:
+#           memory: 1Gi
+#
 #   digest      optional  the digest that tag is expected to resolve to. If set,
 #                         the deploy resolves the tag at the registry and REFUSES
 #                         if it has moved.

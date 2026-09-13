@@ -206,6 +206,73 @@ else
          "without it, the latest-rule reads as covering integrity"
 fi
 
+# ── the long-lived pod must not be BestEffort ─────────────────────────────────
+# 🔴 A code-location pod shipped with `requests {}` and `limits {}` — literally
+# empty, so BestEffort: first evicted, first OOM-killed. It is LONG-LIVED, so its
+# eviction takes the tenant's whole location offline and reads as "Dagster is
+# broken" rather than "a job died".
+#
+# Measured twice, four hours apart, different pods and builds: peak 300 Mi and
+# 295 Mi, against a daemon that reserves 512 Mi and peaks 309 Mi. ⚠️ The
+# unprotected pod peaks within 9 MiB of the protected one (ops-dev, #846).
+# ⚠️ COMMENTS STRIPPED. The block below explains the defect at length, and the
+# prose contains the very tokens the assertions look for — `requests:` appears in
+# a sentence about null handling, and satisfied the "requests are set" check with
+# the requests deleted. My own negative control caught it. Fifth time tonight a
+# check matched prose ABOUT the thing instead of the thing.
+_overlay="$(awk '/22e. Render the tenant values overlay/,/when: \(_code_locations/' "$SETUP" \
+            | grep -v '^\s*#')"
+
+if grep -q 'requests:' <<<"$_overlay"; then
+    pass "🔴 code-location pods get resource requests"
+else
+    fail "🔴 code-location pods get resource requests" \
+         "requests {} is BestEffort — first evicted, on the pod with the widest blast radius"
+fi
+
+# ⚠️ Requests move the pod to Burstable. A LIMIT is the setting that needs a hard
+# ceiling, and the number available is a sampled floor — metrics-server resamples
+# on the order of tens of seconds, so a short spike is invisible. A wrong memory
+# limit converts a working tenant into a reliable OOMKill.
+if grep -qE '^\s+limits:' <<<"$_overlay"; then
+    fail "no limits are set from a sampled number" \
+         "a ceiling from a floor measurement is an OOMKill waiting for a spike"
+else
+    pass "no limits are set from a sampled number"
+fi
+
+if grep -q "default('384Mi', true)" <<<"$_overlay"; then
+    pass "the memory default carries headroom above the measured peak"
+else
+    fail "the memory default carries headroom above the measured peak" \
+         "300 Mi measured; the default must exceed it, not match it"
+fi
+
+# 🔴 `default(x, true)`, not `default(x)`. An application writing `resources: {}`
+# or `requests:` (null) means "I did not choose", and plain default() replaces
+# only UNDEFINED.
+if grep -qE "default\(\{\}, true\)" <<<"$_overlay"; then
+    pass "an empty or null resources block falls back to the default"
+else
+    fail "an empty or null resources block falls back to the default" \
+         "plain default() replaces undefined, not empty — the _code_locations lesson"
+fi
+
+# ⚠️ Defaulted one level at a time, not as a chained attribute access whose
+# behaviour depends on what an undefined attribute returns.
+if grep -q '{% set _res = cl.resources' <<<"$_overlay" && grep -q '{% set _req = _res.requests' <<<"$_overlay"; then
+    pass "the defaults are applied one level at a time"
+else
+    fail "the defaults are applied one level at a time" \
+         "a chained default depends on Undefined semantics this repo cannot test"
+fi
+
+if grep -q '_req.cpu' <<<"$_overlay" && grep -q '_req.memory' <<<"$_overlay"; then
+    pass "an application can override either value"
+else
+    fail "an application can override either value" "a platform default must be overridable by a tenant that knows better"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
