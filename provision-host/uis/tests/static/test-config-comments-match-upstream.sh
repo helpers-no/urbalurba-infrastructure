@@ -57,6 +57,32 @@ else
          "without that, the next reader re-derives the same wrong recommendation"
 fi
 
+# ── enabling it is a measured decision, and the values must be readable here ──
+if grep -qE '^  enabled: true' <<< "$_block"; then
+    pass "retention is enabled"
+else
+    fail "retention is enabled" "measured at 5.4% of the DB and left off"
+fi
+
+# ⚠️ Written out rather than inherited. A reader must not have to fetch the
+# chart to learn what this deletes — which is the failure the comment records.
+# ⚠️ NOT an awk range ending on `^[a-zA-Z#]`: `retention:` matches that pattern
+# itself, so the range closed on its own start line and captured one line. It
+# reported the config as missing values the config plainly had — a test failing
+# against correct code, which is the third time tonight.
+_ret="$(sed -n '/^retention:/,/^$/p' "$CFG")"
+if grep -q 'skipped: 7' <<< "$_ret" && grep -q 'failure: -1' <<< "$_ret"; then
+    pass "🔴 what it purges is stated in this file, not inherited"
+else
+    fail "🔴 what it purges is stated in this file, not inherited"          "enabled: true with no visible sub-values hides what gets deleted"
+fi
+
+if grep -q 'autoMaterialize' <<< "$_ret"; then
+    pass "auto-materialize ticks are covered — the high-volume writer"
+else
+    fail "auto-materialize ticks are covered"          "a sensor-driven tenant's ticks are autoMaterialize, not sensor"
+fi
+
 # The concurrency cap comment makes a claim about a shared database; that one is
 # correct and load-bearing, so it should stay.
 if grep -q 'maxConcurrentRuns' "$CFG" && grep -qi 'shared\|hammer' "$CFG"; then

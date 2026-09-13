@@ -160,8 +160,39 @@ computeLogManager:
 # high-volume writer here — and skipped ticks are what the chart's own default
 # reaps after 7 days.
 #
-# Left disabled because turning it on deletes records, which is a deliberate
-# decision rather than a default. Run growth is a SEPARATE, unsolved item: no
-# chart setting covers it, and it must not ride on this one (ops-dev, #811).
+# 🟢 ENABLED on measured evidence, not on request — the rule this file already
+# applies to maxConcurrentRuns. imac measured a ~26h-old instance (ops-dev, #818):
+#
+#     event_logs   51.0 MB   60.0%   <- no chart mechanism touches this
+#     job_ticks     4.6 MB    5.4%   <- ALL that `retention` governs
+#     3,396 ticks against 79 runs — 43:1 by count, and 11x SMALLER by storage
+#
+# So ticks are the larger count and the smaller cost. This is tick hygiene
+# (~1.49 GB/yr), not a data-retention policy, and it was presented to the fleet
+# as such.
+#
+# ⚠️ The sub-values are written out rather than inherited. They ARE the chart's
+# defaults, and a reader should not have to fetch dagster 1.13.19 to learn what
+# this deletes — which is the failure the comment above records.
+#
+# Only SKIPPED ticks are purged, after 7 days. Failures are kept indefinitely,
+# because "why did my sensor not fire" is answered from failure ticks and a
+# 7-day window on skips does not touch them. atlas's high-volume writer is
+# `default_automation_condition_sensor`, whose ticks are the autoMaterialize
+# block below.
 retention:
-  enabled: false
+  enabled: true
+  schedule:
+    purgeAfterDays: -1
+  sensor:
+    purgeAfterDays:
+      failure: -1
+      skipped: 7
+      started: -1
+      success: -1
+  autoMaterialize:
+    purgeAfterDays:
+      failure: -1
+      skipped: 7
+      started: -1
+      success: -1
