@@ -347,19 +347,34 @@ An optional top-level block in the **artifact**, rendered by
 `uis template info`. UIS reads nothing from it and validates nothing in it:
 the application owns the content, the platform only displays it.
 
-:::danger A key UIS does not know about displays nowhere
-UIS renders a **known set** of `operational.*` keys. A key outside that set is
-not an error and is not lost — it is simply never shown, on any surface, and
-nothing about the install looks wrong.
+:::tip `unscheduled` and `manual_only` are different claims
+- **`unscheduled`** — *cannot* run. No private data, no credential, nothing to do.
+- **`manual_only`** — *must* run, once, by hand, and then never again.
 
-Since 1.6.67 the install **names such keys**, because the person who needs to
-know is the application author: they wrote a sentence, published it, and are
-addressing a reader who will never see it. An application once moved an upgrade
-remedy *into* `operational.troubleshooting` precisely so operators would see it,
-and it went from a place they would not look to a place they could not.
+Collapsing them loses the one instruction an operator cannot skip. An
+application needed the distinction and invented `manual_only` rather than
+overload the key that existed; it is now rendered on both surfaces, and at
+install it appears **next to the first-data job list**, which is the moment it
+means something.
+:::
 
-If you need a key that is not in the table below, ask — adding one is a few
-lines, and writing into an unrendered key is silent.
+:::danger A key UIS does not know about has no designed layout
+UIS renders a **known set** of `operational.*` keys with a designed layout. A key
+outside that set is not an error and is not lost:
+
+- **`uis template info` shows it anyway**, verbatim, under *"also declared"*. UIS
+  reads nothing from this block and validates nothing in it — a platform that
+  only displays content has no business deciding which of it is displayable.
+- **The install names it** rather than presenting it, because the install is read
+  once and its job is to be short enough to be read.
+
+⚠️ **Before 1.6.68 an unknown key was shown nowhere at all.** An application moved
+an upgrade remedy *into* `operational.troubleshooting` precisely so operators
+would see it, and it went from a place they would not look to a place they could
+not. A second application then had **two** invented keys silent at once and had
+asked about only one of them.
+
+If a key deserves a designed layout, ask — adding one is a few lines.
 :::
 
 It answers the questions an operator has *before* installing, and which
@@ -401,6 +416,7 @@ next. They are not the same person and often not the same sentence.
 | `first_data.jobs` | yes | yes |
 | `first_data.takes` | yes | yes |
 | `troubleshooting` | yes | yes (a pointer) |
+| `manual_only` | yes | yes |
 | `install.deploys` | yes | no |
 | `install.takes` | yes | no |
 | `first_data.why` | yes | no |

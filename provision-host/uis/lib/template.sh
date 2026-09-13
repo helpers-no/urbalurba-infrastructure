@@ -493,14 +493,16 @@ cmd_template_info() {
 # compares the list against what the DEFINITION actually declares, at install, on
 # the real file. The list is what "UIS renders this" means; the definition is the
 # evidence of what someone wrote.
-TEMPLATE_OPERATIONAL_KEYS="automation timezone cadence external_services unscheduled troubleshooting install.note install.takes install.deploys first_data.why first_data.how first_data.jobs first_data.takes"
+TEMPLATE_OPERATIONAL_KEYS="automation timezone cadence external_services unscheduled manual_only troubleshooting install.note install.takes install.deploys first_data.why first_data.how first_data.jobs first_data.takes"
 
 # Warn about operational content that reaches no surface at all.
 #
 # The reader who needs this is the APPLICATION AUTHOR: they wrote a sentence, it
 # is published, and nothing displays it. Nobody can tell from the outside — the
 # install is green and the text is simply absent.
-_warn_unrendered_operational() {
+# Every operational key the definition declares that UIS has no designed layout
+# for. Echoes them, one per line; silent when there are none.
+_operational_unknown_keys() {
     local info="$1"
     [[ -f "$info" ]] || return 0
     command -v yq >/dev/null 2>&1 || return 0
@@ -523,13 +525,51 @@ _warn_unrendered_operational() {
         [[ " $TEMPLATE_OPERATIONAL_KEYS " == *" $k "* ]] || unknown+="$k "
     done <<< "$declared"
 
-    if [[ -n "$unknown" ]]; then
-        echo "" >&2
-        echo "⚠️  This application declares operational content UIS does not display:" >&2
-        echo "      ${unknown% }" >&2
-        echo "    Nothing is broken and nothing was lost — but whoever wrote it is" >&2
-        echo "    addressing a reader who will never see it. Worth telling them." >&2
-    fi
+    [[ -n "$unknown" ]] && printf '%s\n' ${unknown% }
+    return 0
+}
+
+# 🔴 A WHITELIST WAS THE WRONG INSTRUMENT FOR `info`, and atlas's question is what
+# showed it (#791). They asked whether a key they had invented was in the
+# rendered set. It was not — and neither was a second one they had not thought
+# to ask about.
+#
+# UIS's own contract says it "reads nothing from `operational` and validates
+# nothing in it: the application owns the content, the platform only displays
+# it." ⚠️ A platform that only displays content has no business deciding which of
+# it is displayable. The known-key list should govern LAYOUT and the install
+# surface — not whether someone's words exist anywhere.
+#
+# So `info` shows everything. Known keys keep their designed layout; the rest
+# appear here verbatim. No operational content can be invisible on every surface
+# again by construction, rather than by me remembering to add a key.
+_template_info_operational_rest() {
+    local info="$1" unknown k
+    unknown="$(_operational_unknown_keys "$info")"
+    [[ -n "$unknown" ]] || return 0
+    echo ""
+    echo "  also declared (no designed layout — shown as written):"
+    while IFS= read -r k; do
+        [[ -z "$k" ]] && continue
+        echo "    $k:"
+        yq -r ".operational.$k" "$info" 2>/dev/null | sed 's/^/      /'
+    done <<< "$unknown"
+    return 0
+}
+
+# The install cannot show everything — it is read once, by someone who has just
+# finished, and its job is to be short enough to be read. So it NAMES what is
+# only in `info`, rather than silently deciding for the author.
+_warn_unrendered_operational() {
+    local info="$1" unknown
+    unknown="$(_operational_unknown_keys "$info")"
+    [[ -n "$unknown" ]] || return 0
+    echo "" >&2
+    echo "⚠️  This application declares operational content with no designed layout:" >&2
+    echo "      $(printf '%s\n' $unknown | paste -sd' ' -)" >&2
+    echo "    It IS shown, verbatim, by 'uis template info' — but nothing here" >&2
+    echo "    presents it, and whoever wrote it may have expected otherwise." >&2
+    echo "    Ask for a layout if it deserves one." >&2
     return 0
 }
 
@@ -539,8 +579,9 @@ _install_summary_operational() {
     command -v yq >/dev/null 2>&1 || return 0
     [[ "$(yq -r 'has("operational")' "$info" 2>/dev/null)" == "true" ]] || return 0
 
-    local note jobs takes automation unscheduled troubleshooting
+    local note jobs takes automation unscheduled troubleshooting manual_only
     note=$(yq -r '.operational.install.note // ""' "$info" 2>/dev/null)
+    manual_only=$(yq -r '[.operational.manual_only // ""] | flatten | join(", ")' "$info" 2>/dev/null)
     troubleshooting=$(yq -r '.operational.troubleshooting // ""' "$info" 2>/dev/null)
     jobs=$(yq -r '.operational.first_data.jobs // [] | join(" -> ")' "$info" 2>/dev/null)
     takes=$(yq -r '.operational.first_data.takes // ""' "$info" 2>/dev/null)
@@ -554,6 +595,13 @@ _install_summary_operational() {
         echo "To load data${takes:+ ($takes)}, run these in Dagster, in order:"
         echo "  $jobs"
     fi
+    # 🔴 Next to the job list, because this is the moment it means something.
+    # `manual_only` is the claim that a job must run ONCE, by hand, and then
+    # never again — not the same as `unscheduled`, which means it cannot run at
+    # all. An operator reading the list above needs to know which of those they
+    # are expected to launch themselves and never see fire on its own.
+    [[ -n "$manual_only" ]] && \
+        echo "  Run once by hand, never on a schedule: $manual_only"
 
     # 🔴 THE JOB LIST ABOVE READS AS A FINISHED INSTALL, AND THAT IS THE DEFECT.
     #
@@ -679,6 +727,15 @@ _template_info_operational() {
     [[ -n "$v" ]] && { echo ""; echo "  contacts     $v"; }
     v=$(yq -r '.operational.unscheduled // [] | join(", ")' "$info" 2>/dev/null)
     [[ -n "$v" ]] && echo "  never runs   $v (no schedule)"
+    # ⚠️ Printed next to `unscheduled` BECAUSE the two are easy to confuse, and
+    # collapsing them loses the instruction an operator cannot skip:
+    #   unscheduled  cannot run  (no private data, no credential)
+    #   manual_only  MUST run, once, by hand — and then never again
+    # atlas needed the distinction and invented the key rather than overload the
+    # one that existed (#791). `[x] | flatten` accepts a scalar and a list, the
+    # shape lesson from the scalar env_secrets that vanished for four rounds.
+    v=$(yq -r '[.operational.manual_only // ""] | flatten | join(", ")' "$info" 2>/dev/null)
+    [[ -n "$v" ]] && echo "  run by hand  $v (once — not on any schedule)"
 
     # 🔴 Rendered with a bare `yq -r`, deliberately, with NO type switch.
     #
@@ -694,6 +751,10 @@ _template_info_operational() {
         echo "  when it goes wrong:"
         printf '%s\n' "$v" | sed 's/^/    /'
     fi
+
+    # Last, and unconditional: anything this application declared that UIS has
+    # no layout for. Shown rather than dropped.
+    _template_info_operational_rest "$info"
 }
 
 # Sparse-checkout a template folder from the TMP repo
