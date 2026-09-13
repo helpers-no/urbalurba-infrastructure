@@ -496,6 +496,51 @@
     - name: "22e. Render the tenant values overlay"
       # A second -f rather than editing the base values: the platform manifest
       # stays generic and this file is regenerated from the declaration each run.
+      #
+      # 🔴 REQUESTS, AND DELIBERATELY NO LIMITS.
+      #
+      # A code-location pod had `requests {}` and `limits {}` — literally empty,
+      # not merely low — which makes it **BestEffort**: first evicted under node
+      # memory pressure, first OOM-killed. It is also LONG-LIVED, so its eviction
+      # takes the tenant's entire location offline and reads as "Dagster is
+      # broken" rather than "a job died". The ephemeral run pods share the
+      # problem and have the smaller blast radius.
+      #
+      # imac measured it twice, four hours apart, on different pods and builds:
+      #
+      #     code-location   idle 237 Mi   peak 300 Mi / 295 Mi   reserves NOTHING
+      #     dagster daemon                peak 309 Mi            reserves 512 Mi
+      #
+      # ⚠️ The unprotected pod peaks within 9 MiB of the protected one. This is a
+      # misallocation more than a shortage: the reservation exists, it is just on
+      # the pod that does not need it (ops-dev, #846).
+      #
+      # 384Mi is the measured peak plus ~28% for spikes the sampler could miss —
+      # `kubectl top` reads metrics-server, which resamples on the order of tens
+      # of seconds, so the number is a reliable FLOOR and a probable peak, not a
+      # guaranteed ceiling.
+      #
+      # 🔵 A floor is all a requests-only change needs. Getting it slightly low
+      # still moves the pod from BestEffort to Burstable, which is the point; a
+      # LIMIT is the setting that would need a hard ceiling, and a wrong memory
+      # limit converts a working tenant into a reliable OOMKill. I am adding a
+      # floor, not a ceiling, and will not add a ceiling from a sampled number.
+      #
+      # An application may override either value; the default applies when it
+      # does not.
+      #
+      # ⚠️ THE DEFAULTS ARE APPLIED ONE LEVEL AT A TIME, not as
+      # `cl.resources.requests.cpu | default(...)`. That chained form depends on
+      # what an undefined attribute returns when you access an attribute OF it,
+      # and this repository has no Ansible to settle it with. Each `set` defaults
+      # to a real dict first, so every later access is on a dict under either
+      # interpretation.
+      #
+      # `default(x, true)` — the boolean second argument — because an application
+      # writing `resources: {}` or `requests:` (null) means "I did not choose",
+      # and plain `default()` replaces only UNDEFINED, not empty. That is the
+      # same rule that made `_code_locations | default([], true)` necessary
+      # eleven lines of consequence ago.
       ansible.builtin.copy:
         dest: "/tmp/dagster-code-locations.generated.yaml"
         mode: "0644"
@@ -513,6 +558,12 @@
                   - "--module-name"
                   - "{{ cl.module }}"
                 port: 4000
+          {% set _res = cl.resources | default({}, true) %}
+          {% set _req = _res.requests | default({}, true) %}
+                resources:
+                  requests:
+                    cpu: "{{ _req.cpu | default('100m', true) }}"
+                    memory: "{{ _req.memory | default('384Mi', true) }}"
           {% if cl.env_secrets is defined and cl.env_secrets | length > 0 %}
                 envSecrets:
           {% for s in cl.env_secrets %}
