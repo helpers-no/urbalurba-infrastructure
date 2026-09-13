@@ -207,6 +207,70 @@ start_test "and it names the command that fixes it"
 grep -q './uis pull' <<< "$_rvs" && pass_test \
     || fail_test "a warning without the remedy is an obstacle"
 
+# ── the query must be typeable, and must not change the machine ───────────────
+# 🔴 `--check` was reachable only as `pull --check`. I announced 1.6.73 telling
+# imac to run `./uis --check`, having written the launcher myself. It fell to the
+# catch-all, which STARTS THE CONTAINER and hands the word to the in-container
+# CLI — so a read-only query had a side effect, and answered with a usage block
+# headed by the version.
+#
+# ⚠️ imac ran it on both sides of the upgrade and got identical output differing
+# only in the version string I had told it to distrust. The instruction for using
+# the freshness check reproduced the failure the check exists to remove (#830).
+start_test "🔴 --check is a top-level command"
+grep -qE '^\s+--check\|check\)' "$LAUNCHER" && pass_test \
+    || fail_test "./uis --check falls through to the container catch-all"
+
+start_test "it answers without starting the container"
+_chk="$(sed -n '/^    --check|check)/,/^        ;;/p' "$LAUNCHER")"
+if grep -q 'report_version_status' <<< "$_chk" && ! grep -q 'start_container' <<< "$_chk"; then
+    pass_test
+else
+    fail_test "a read-only query must not have a side effect"
+fi
+
+start_test "pull --check still works — the same code path"
+grep -q '"--check"' "$LAUNCHER" && pass_test \
+    || fail_test "the documented spelling must not break"
+
+# ── the host-side half must report its own outcome ────────────────────────────
+# 🔴 update_launcher announced itself ONLY when it replaced the file, so silence
+# meant "already current", "not writable", "refused a bad download" or "you
+# missed it" — four states sharing one output, on the half of a release that
+# `docker pull` does not deliver. imac saw no line at all on 1.6.73, a release
+# that was nothing BUT the host-side half, and had to inspect the backup file.
+start_test "🔴 pull reports what happened to the launcher, every time"
+_pull="$(sed -n '/^pull_container() {/,/^}/p' "$LAUNCHER")"
+# ⚠️ Asserts the REPORTING, not the variable. The first version matched
+# `LAUNCHER_UPDATE_RESULT` anywhere in pull_container — and the initialisation
+# alone satisfied it, so deleting the whole reporting block still passed. My own
+# negative control caught that. Fourth time tonight a mention stood in for a
+# behaviour.
+if grep -q 'case "\$LAUNCHER_UPDATE_RESULT" in' <<< "$_pull"; then
+    pass_test
+else
+    fail_test "the outcome is recorded and never reported — silence still covers four states"
+fi
+
+start_test "every outcome has its own line"
+_missing=""
+for _o in current unwritable; do
+    grep -q "$_o)" <<< "$_pull" || _missing+="$_o "
+done
+grep -q '\*)' <<< "$_pull" || _missing+="fallback "
+[[ -z "$_missing" ]] && pass_test || fail_test "unreported outcomes: $_missing"
+
+start_test "a launcher that could NOT be updated is a warning, not a note"
+# ⚠️ The image is new and the file is not — that is the state this whole class
+# of defect lives in, and it must not read like a status line.
+grep -qE 'log_warn "Launcher: (NOT updated|could not be updated)' <<< "$_pull" && pass_test \
+    || fail_test "the failure states must be louder than the success ones"
+
+start_test "update_launcher records each outcome it can reach"
+_ul="$(sed -n '/^update_launcher() {/,/^}/p' "$LAUNCHER")"
+_n=$(grep -c 'LAUNCHER_UPDATE_RESULT=' <<< "$_ul")
+[[ "$_n" -ge 3 ]] && pass_test || fail_test "only $_n outcomes recorded; silence returns for the rest"
+
 start_test "the 'unknown' branch does not claim the image is missing"
 _branch="$(sed -n '/^pull_container() {/,/^}/p' "$LAUNCHER")"
 echo "$_branch" | grep -q 'Could not reach the registry' && pass_test \

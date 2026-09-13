@@ -824,7 +824,7 @@ update_launcher() {
         target="$_ldir/$(basename "$target")"
     fi
 
-    [ -w "$target" ] || { log_info "Launcher not writable, skipping self-update: $target"; return 0; }
+    [ -w "$target" ] || { LAUNCHER_UPDATE_RESULT=unwritable; log_info "Launcher not writable, skipping self-update: $target"; return 0; }
 
     # ⚠️ The temp file MUST live beside the target, not in /tmp.
     #
@@ -872,6 +872,7 @@ update_launcher() {
     fi
 
     if cmp -s "$tmp" "$target"; then
+        LAUNCHER_UPDATE_RESULT=current
         rm -f "$tmp"; return 0
     fi
 
@@ -882,6 +883,7 @@ update_launcher() {
     # inode, so the running shell keeps its descriptor on the old file and
     # finishes cleanly; editing in place would corrupt it mid-read.
     if mv "$tmp" "$target" && chmod +x "$target"; then
+        LAUNCHER_UPDATE_RESULT=updated
         log_info "Launcher updated. Previous version saved at:"
         log_info "    $backup"
         log_info "    Restore with: cp \"$backup\" \"$target\""
@@ -920,7 +922,27 @@ pull_container() {
         # Same hazard: update_launcher returns 1 when it REFUSES a download
         # (truncated, wrong file, bad syntax). That is a correct refusal, not a
         # reason to abort the rest of the command.
+        LAUNCHER_UPDATE_RESULT=unknown
         update_launcher || true
+
+        # 🔴 SAY WHAT HAPPENED TO THE HOST-SIDE HALF, EVERY TIME.
+        #
+        # `update_launcher` announced itself only when it replaced the file.
+        # Silence therefore meant "already current", "not writable", "refused a
+        # bad download" or "the message scrolled past" — four states sharing one
+        # output, on the half of a release that `docker pull` does not deliver.
+        #
+        # imac pulled 1.6.73 — a release whose entire content is host-side — saw
+        # no "Launcher updated." line, and had to inspect the backup file to
+        # learn whether it had the fix (#830). ⚠️ The one visible signal that the
+        # host-side half landed was absent on exactly the release that was
+        # nothing but the host-side half.
+        case "$LAUNCHER_UPDATE_RESULT" in
+            updated)    : ;;  # already said so, at length, with the backup path
+            current)    log_info "Launcher: already current (nothing to update)." ;;
+            unwritable) log_warn "Launcher: NOT updated — the file is not writable." ;;
+            *)          log_warn "Launcher: could not be updated. The image is new; this file is not." ;;
+        esac
 
         # 🔴 A SUCCESSFUL PULL IS NOT THE SAME AS GETTING THE VERSION YOU WERE
         # TOLD ABOUT, and until now this said "Image updated successfully" and
@@ -1134,6 +1156,27 @@ case "${1:-help}" in
         ;;
     logs)
         docker logs "$CONTAINER_NAME" ${2:---tail 50}
+        ;;
+    --check|check)
+        # 🔴 TOP-LEVEL, because that is what people type — including me.
+        #
+        # `--check` was reachable only as `pull --check`. I announced 1.6.73 by
+        # telling imac to run `./uis --check`, having written the release myself
+        # (#830). It fell through to the catch-all below, which START S THE
+        # CONTAINER and hands the word to the in-container CLI, which answers
+        # "Unknown command: --check" over a usage block headed by the version.
+        #
+        # ⚠️ Two defects in one line. A read-only query had a side effect; and
+        # the reply was IDENTICAL on both sides of the upgrade except for the
+        # version string I had explicitly told the reader to distrust. imac ran
+        # it before and after and could not tell the states apart — which is the
+        # property `_launcher_freshness` exists to eliminate, reproduced in the
+        # instruction for using it.
+        #
+        # `pull --check` still works; it is the same code path.
+        vstatus=0
+        report_version_status || vstatus=$?
+        exit "$vstatus"
         ;;
     pull)
         # --check: report drift without installing anything. DCT has this and it
