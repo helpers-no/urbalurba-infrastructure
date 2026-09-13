@@ -45,8 +45,111 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/uis-provision-host
 
 jobs:
-  build-and-push:
+  # 🔴 ONE JOB PER ARCHITECTURE, EACH ON ITS OWN NATIVE RUNNER.
+  #
+  # This used to be a single job building linux/amd64,linux/arm64 together on an
+  # x86 runner, which means QEMU emulating arm64. Measured: 733 s of a 749 s run
+  # was that one step, with GHA layer caching already enabled — so the cache was
+  # not the lever and neither was the runner's speed. The emulation was.
+  #
+  # ⚠️ A self-hosted runner would NOT have fixed this. The lab runner is x86, so
+  # it would emulate arm64 exactly the same way (Terje asked; this is the answer).
+  #
+  # Each leg now builds natively and in parallel, and pushes BY DIGEST with no
+  # tag. Nothing is tagged until both legs have succeeded and `merge` assembles
+  # the manifest list — so a half-built multi-arch image can never be published
+  # under :latest, which the previous single-job form could not guarantee either.
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            # Native arm64, free for public repositories. If this label is ever
+            # unavailable the job fails to start — loudly — rather than silently
+            # falling back to emulation.
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # ⚠️ No setup-qemu-action. Its presence was the whole cost; each runner
+      # now builds its own architecture, so there is nothing to emulate.
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (labels only — tags are applied at merge)
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        # 7-day retention on the `.dockerbuild` record, as in the single-job
+        # form. It is per-step, so it has to be on BOTH legs — a value set once
+        # in a matrix is not inherited by the other leg.
+        env:
+          DOCKER_BUILD_RECORD_RETENTION_DAYS: 7
+        with:
+          context: .
+          file: ./Dockerfile.uis-provision-host
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          # ⚠️ Scoped per platform. A shared GHA cache scope would have the two
+          # legs overwriting each other's cache every run, which costs more than
+          # it saves and is invisible — the build still succeeds, just slowly.
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      - name: Export digest
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          # An empty digest here would upload an empty directory and the merge
+          # would assemble a manifest from nothing.
+          if [ -z "$digest" ]; then
+            echo "::error::build produced no digest for ${{ matrix.platform }}"
+            exit 1
+          fi
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          # ⚠️ 1 day. This is a hand-off between two jobs of one run, dead the
+          # moment `merge` finishes. tests/static/test-workflow-artifact-retention.sh
+          # fails if an upload-artifact step appears without a retention, and it
+          # caught this one while it was being written.
+          retention-days: 1
+        env:
+          PLATFORM_PAIR: ${{ matrix.platform == 'linux/amd64' && 'linux-amd64' || 'linux-arm64' }}
+
+  # 🔴 THE ONLY JOB THAT TAGS ANYTHING.
+  merge:
     runs-on: ubuntu-latest
+    needs: [build]
     permissions:
       contents: write
       packages: write
@@ -59,8 +162,12 @@ jobs:
         id: version
         run: echo "VERSION=$(cat version.txt | tr -d '[:space:]')" >> $GITHUB_OUTPUT
 
-      - name: Set up QEMU (for multi-arch builds)
-        uses: docker/setup-qemu-action@v4
+      - name: Download digests
+        uses: actions/download-artifact@v5
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -83,43 +190,49 @@ jobs:
             type=sha,prefix=
             type=ref,event=branch
 
-      - name: Build and push container image
-        uses: docker/build-push-action@v7
-        # ⚠️ The `.dockerbuild` build record is uploaded as a GitHub artifact by
-        # the action itself — it is not in any `upload-artifact` step, which is
-        # why grepping the workflows for artifact uploads does not find it.
-        #
-        # Unset, it inherits the repository default of 90 days. At ~7.8 records
-        # a day that is ~694 artifacts in steady state. Small (170 KB each, so
-        # ~0.11 GB) and pointless: a build record for a release nobody is
-        # investigating is read by no one.
-        #
-        # 7 days, matching what urb-agents settled on. Documented at
-        # docker/build-push-action#environment-variables; "Defaults to
-        # repository/org retention settings if unset or 0".
-        #
-        # 🔵 NOT set as a repository-wide retention policy, deliberately: that
-        # setting is `artifact-and-log-retention` — one knob for BOTH — and
-        # shortening log retention to 7 days would throw away the run logs of a
-        # release while it is still the newest one. Artifacts here, logs left
-        # alone.
-        env:
-          DOCKER_BUILD_RECORD_RETENTION_DAYS: 7
-        with:
-          context: .
-          file: ./Dockerfile.uis-provision-host
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create and push the manifest list
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          # ⚠️ Assert BOTH legs arrived. `imagetools create` with one digest
+          # succeeds and publishes a single-arch image under a multi-arch tag —
+          # which would look like a successful build and break every arm64 host.
+          count=$(ls -1 | wc -l)
+          echo "digests collected: $count"
+          ls -1
+          if [ "$count" -ne 2 ]; then
+            echo "::error::expected 2 per-architecture digests, found $count."
+            echo "::error::Publishing now would tag a partial image as multi-arch."
+            exit 1
+          fi
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+      - name: Verify the manifest carries both architectures
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${IMAGE_NAME}"
+          SHA_TAG="${GITHUB_SHA::7}"
+          # 🔵 New in the split form, because the split made it possible to
+          # publish a one-architecture image: read the platforms back off the
+          # published index rather than trusting that two legs ran.
+          arches=$(docker buildx imagetools inspect "${IMAGE}:${SHA_TAG}" --format '{{json .Manifest}}' \
+                   | jq -r '[.manifests[]?|select(.platform.architecture!="unknown")|.platform.architecture] | sort | unique | join(",")')
+          echo "architectures published: ${arches}"
+          if [ "$arches" != "amd64,arm64" ]; then
+            echo "::error::published index carries '${arches}', expected 'amd64,arm64'."
+            exit 1
+          fi
 
       # ⚠️ THE BUILD GOING GREEN DOES NOT MEAN :latest IS THIS COMMIT.
       # Nothing else in this pipeline compares what shipped against what was
       # built, which is how a wrong image survived undetected for two days. The
       # sha tag is unambiguous - it can only have been pushed by this run - so
       # :latest must resolve to the same digest.
+      #
+      # 🔵 Moved here from the build job unchanged: it can only run after the
+      # tags exist, and in the split form nothing is tagged until this job.
       - name: Verify :latest is the image this run just built
         if: github.ref == 'refs/heads/main'
         run: |
@@ -159,4 +272,4 @@ jobs:
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms:** linux/amd64 (native), linux/arm64 (native)" >> $GITHUB_STEP_SUMMARY

@@ -50,12 +50,25 @@ fi
 
 # ⚠️ Every producer must be accounted for. A new one that uploads artifacts
 # without a retention is the same defect arriving by a different route.
-_producers="$(grep -rhoE 'uses:[[:space:]]*(actions/upload-artifact|docker/build-push-action)[^[:space:]]*' "$WF" | sort -u)"
-if grep -q 'upload-artifact' <<<"$_producers"; then
-    fail "every artifact producer is covered" \
-         "an actions/upload-artifact step appeared; give it retention-days or exempt it here"
+#
+# 🔵 This assertion used to REJECT any `actions/upload-artifact` at all, which
+# was honest while none existed and became wrong the moment one did: the arm64
+# split hands digests between jobs that way. It fired on the legitimate producer
+# — correctly, as a "someone must look at this" — and the looking is this
+# rewrite. It now checks the property (does each upload declare a retention?)
+# rather than the proxy (does any upload exist?).
+_uploads=$(grep -c 'uses:[[:space:]]*actions/upload-artifact' "$WF"/*.yml 2>/dev/null | awk -F: '{n+=$2} END {print n+0}')
+# Each upload-artifact step must carry retention-days within its own `with:`
+# block. Counted rather than matched positionally: a step is ~10 lines and the
+# key may be anywhere in it.
+_retentions=$(grep -c '^[[:space:]]*retention-days:' "$WF"/*.yml 2>/dev/null | awk -F: '{n+=$2} END {print n+0}')
+if [[ "$_uploads" -eq 0 ]]; then
+    pass "every artifact producer declares a retention (no upload-artifact steps)"
+elif [[ "$_retentions" -ge "$_uploads" ]]; then
+    pass "every artifact producer declares a retention ($_uploads upload(s), $_retentions retention(s))"
 else
-    pass "every artifact producer is covered"
+    fail "every artifact producer declares a retention" \
+         "$_uploads upload-artifact step(s) but only $_retentions retention-days — one uploads into the 90-day default"
 fi
 
 # 🔵 Not a retention policy at the repository level, deliberately: that setting
