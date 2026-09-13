@@ -135,6 +135,31 @@ and they fail differently: a 404 means the build has not finished, while a 200
 on `:latest` can mean the tag has moved to a different version since you looked.
 :::
 
+### When a comparison proves nothing
+
+Two configurations that **must** differ and don't have told you something about
+your instrument, not about the thing you measured.
+
+A tester verified a UIS release with `UIS_IMAGE=…:1.6.67` three times against a
+container that had been up nine hours on 1.6.65, saw the new feature missing
+every time, and was one message from reporting the fix broken. `./uis` returns
+early when a container is already running — **before** it looks at the image — so
+the override was dropped in silence.
+
+What caught it was diffing the output under both versions and getting
+**byte-identical text**. If the override had applied, the two runs *must* differ
+— that is the entire point of the fix being in the newer one. Identical output
+was proof the override never took effect, **not** proof the fix was absent.
+
+:::tip Suspect the instrument before the thing measured
+- identical output from two versions that differ → suspect the override
+- a status code where you needed a digest → suspect the tag
+- a check that passed without running → suspect the guard
+
+Since 1.6.70 the launcher refuses rather than ignoring: an override a warm
+container cannot honour stops the command and names the restart.
+:::
+
 ### Why this is a documented step
 
 It has cost two round trips. A tester measured `1.6.58` during its build window,

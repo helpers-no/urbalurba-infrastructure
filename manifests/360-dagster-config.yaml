@@ -145,7 +145,23 @@ telemetry:
 computeLogManager:
   type: NoOpComputeLogManager
 
-# Run-history retention is left at the chart default (disabled = keep). Enabling
-# it is a data-loss switch and belongs to a deliberate decision, not a default.
+# 🔴 THIS IS TICK RETENTION, NOT RUN-HISTORY RETENTION. The label matters:
+# this comment used to say "run-history retention", and I then reasoned from my
+# own label instead of the chart and told ops-dev that enabling this would reap
+# 35,040 run records a year. It would not remove a single one.
+#
+# The chart's own header (dagster 1.13.19, helm/dagster/values.yaml:1444):
+#     "Sets a data retention policy for data types such as schedule /
+#      sensor ticks."
+# and there is NO run-purge anywhere in that chart.
+#
+# ⚠️ Ticks are not proportional to runs. A sensor ticks on its own interval
+# whether or not it launches anything, so a mostly-skipping sensor is the
+# high-volume writer here — and skipped ticks are what the chart's own default
+# reaps after 7 days.
+#
+# Left disabled because turning it on deletes records, which is a deliberate
+# decision rather than a default. Run growth is a SEPARATE, unsolved item: no
+# chart setting covers it, and it must not ride on this one (ops-dev, #811).
 retention:
   enabled: false
