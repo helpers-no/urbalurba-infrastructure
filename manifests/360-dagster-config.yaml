@@ -145,6 +145,14 @@ telemetry:
 computeLogManager:
   type: NoOpComputeLogManager
 
+# ⚠️ THIS APPLIES ON ANY `uis deploy dagster`, not only a deliberate one. It
+# reached its first real cluster as a SIDE EFFECT of installing an application on
+# 1.6.73 — four hours before the operator ran the retention deploy, which then
+# exited 0 and did nothing because it was already applied (ops-dev, #844).
+# A values file ships with a UIS version: every UIS release is a potential
+# platform-config change, and the release notes are the only place that can say
+# which ones are.
+#
 # 🔴 THIS IS TICK RETENTION, NOT RUN-HISTORY RETENTION. The label matters:
 # this comment used to say "run-history retention", and I then reasoned from my
 # own label instead of the chart and told ops-dev that enabling this would reap

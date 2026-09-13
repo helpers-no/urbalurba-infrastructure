@@ -208,7 +208,40 @@ An announcement is a command someone will paste. Run it, on the version you are
 announcing, before you send it.
 :::
 
-#### Constructing a stale launcher, to test the check that finds one
+#### A values file ships with a UIS version
+
+`manifests/` is **product**. A change there reaches a cluster the next time the
+playbook that consumes it runs — and that is **not** limited to someone who
+intended the change.
+
+:::danger Any `uis deploy dagster` applies the platform config it shipped with
+`retention.enabled` was enabled in 1.6.72. It reached a real cluster as a **side
+effect of installing an application** on 1.6.73 — four hours before the operator
+ran the deliberate retention deploy, which then exited 0 and did nothing,
+because it was already applied.
+
+Saying *"it takes effect on the next deliberate retention deploy"* was narrower
+than the truth, and the truth is: **someone upgrading UIS for an unrelated reason
+gets the platform-config change silently, and their daemon rolls.**
+:::
+
+That is not dangerous by itself — it is how a platform ships policy. But it means
+**every UIS release is a potential platform-config change**, and the release notes
+are the only place that can say *which* ones are.
+
+So when a release touches `manifests/`, say so, and say what applying it does:
+
+- **what changes** in the running cluster, not just in the file;
+- **whether a pod rolls** — a `checksum/` annotation on a deployment means yes;
+- **what survives the roll**, if anything reasonable might not.
+
+For 1.6.72 that reads: *enables tick retention; rolls the Dagster daemon;
+schedules and sensors survive because instigator state is in Postgres, not in the
+pod.* The last clause was a prediction when it was written and was
+[confirmed on a real cluster](https://github.com/terchris/urb-agents/issues/844)
+— including, by accident, against a simultaneous code-location change.
+
+### Constructing a stale launcher, to test the check that finds one
 
 The behind-path is awkward to test on a real host, and a tester named why:
 **the pull that would create a stale launcher is the same pull that fixes it.**
