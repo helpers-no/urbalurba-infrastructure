@@ -341,6 +341,57 @@ service's extend file" mechanism.** Two other files would qualify
 (`prometheus-targets.yaml`, `monitors.yaml`) and the generic form was declined:
 one consumer does not tell you the shape of three.
 
+### `commands:` — letting an operator ask whether your output is still true
+
+An optional top-level block in the **artifact**. UIS runs what it declares and
+interprets nothing:
+
+```yaml
+commands:
+  check:
+    description: "Does the output reflect the input?"
+    run: /opt/atlas/atlas-status.sh
+    in: code-location
+```
+
+Surfaced as `uis template check <id>`, which execs `run` in the code location's
+pod and passes the application's own exit code straight through.
+
+:::danger Every other check in this platform asks whether a component is healthy
+An application served a **deleted company over its public API for 7.5 hours**
+while every operator-visible signal was green:
+
+```
+feed job SUCCESS every 30 min · exit_code 0 · backlog 0
+watermark advancing · GET /entity 200 · 5 instigators RUNNING
+
+meanwhile  the transform had failed 16 consecutive times
+           119 changes unapplied — 22 of them deletions
+           the register 8.4 hours stale
+```
+
+It was found because a human asked a question. **`uis verify dagster` would have
+passed throughout** — it proves the daemon can fire schedules, not that the data
+is right.
+:::
+
+:::note Why `check` and not `status`
+`status` already means *is it up* in four places, and `verify` means *does this
+component work* in about six. This command asks neither. Giving it either word
+would give the same name to the claim that was **true** during those 7.5 hours
+and the claim that was **false**.
+:::
+
+:::warning An application that declares nothing says so
+`uis template check` on an application with no `commands.check` reports that it
+**cannot tell you whether its output reflects its input**, and exits **2** —
+distinct from 1, so a script can tell *"checked, and it is wrong"* from *"there
+is nothing here that can check"*. A missing pod exits 2 as well, saying
+**NOTHING WAS CHECKED**.
+
+Silence would make this a thing one application has and nobody else does.
+:::
+
 ### `operational:` — what installing this will actually do
 
 An optional top-level block in the **artifact**, rendered by

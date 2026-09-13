@@ -1795,6 +1795,142 @@ _build_effective_params() {
     yq -r '.params // {} | to_entries | .[] | "\(.key)=\(.value)"' "$info_file" 2>/dev/null
 }
 
+# Command: uis template check <id>
+#
+# 🔴 WHY `check` AND NOT `status`, recorded here because Terje handed the
+# grammar to me rather than arbitrating it, which makes "deliberate" my job to
+# discharge rather than his.
+#
+# The CLI already spends both obvious words on component liveness:
+#
+#     status   4 places   `uis status`, `platform status`, `network status`,
+#                         `secrets status` — is the thing up?
+#     verify   6 places   `postgresql verify`, `alloy verify`, `argocd verify` …
+#                         — does the platform's own component work?
+#
+# ⚠️ This command asks neither. It asks the APPLICATION whether its published
+# output still reflects its input — and the incident that produced it is exactly
+# a case where every liveness signal was green and the data was wrong:
+#
+#     atlas served a DELETED company over its public API for 7.5 hours
+#     feed SUCCESS · exit_code 0 · backlog 0 · watermark advancing · API 200
+#     5 instigators RUNNING
+#     meanwhile the transform had failed 16 consecutive times, 119 changes were
+#     unapplied — 22 of them deletions — and the register was 8.4 hours stale
+#
+# 🔵 So naming this `status` would give the same word to the claim that was TRUE
+# and the claim that was FALSE during those 7.5 hours. The conflation is the
+# defect, not a naming inconvenience.
+#
+# Rejected alternatives, so the next person finds the reasoning and not just the
+# outcome:
+#
+#   `template status <id>`  a third meaning of a word already meaning liveness
+#   `template verify <id>`  platform-side vocabulary; this is application-side
+#   `app <id> check`        a new top-level noun for one command, and it puts the
+#                           subject before the verb, breaking `template <verb> <id>`
+#
+# ⚠️ `--check` exists as a FLAG on `pull` ("is there an update"). Different
+# surface, different grammatical role, and no collision — but worth knowing.
+cmd_template_check() {
+    local template_id="${1:-}"
+    if [[ -z "$template_id" ]]; then
+        log_error "Usage: uis template check <id>"
+        echo "  Asks the application whether its output still reflects its input." >&2
+        return 1
+    fi
+
+    _fetch_registry || return 1
+    local template
+    template=$(_get_template "$template_id")
+    if [[ -z "$template" || "$template" == "null" ]]; then
+        log_error "Template '$template_id' not found in registry"
+        _registry_staleness_hint "$template_id"
+        return 1
+    fi
+
+    command -v yq >/dev/null 2>&1 || { log_error "yq is required and is not installed."; return 1; }
+
+    local artifact tag digest vis dir info
+    artifact="$(_template_source_field "$template" artifact)"
+    tag="$(_template_source_field "$template" tag)"
+    digest="$(_template_source_field "$template" digest)"
+    vis="$(_json_field "$template" '.visibility')"; vis="${vis:-public}"
+    if [[ -z "$artifact" || -z "$digest" ]]; then
+        log_error "'$template_id' has no pinned definition artifact — cannot read its declarations."
+        return 1
+    fi
+    dir=$(_resolve_definition "$template_id" "$artifact" "$tag" "$digest" "$vis") || return 1
+    info="$dir/template-info.yaml"
+    [[ -f "$info" ]] || { log_error "definition has no template-info.yaml"; return 1; }
+
+    # 🔴 AN APPLICATION THAT DECLARES NOTHING MUST SAY SO.
+    #
+    # ops-dev held me to this and was right: if the absence is silent, the
+    # command becomes something atlas has and nobody else does, and the next
+    # tenant serving stale data behind green signals gets found the way this one
+    # was — by a human asking after 7.5 hours.
+    #
+    # ⚠️ Exit 2, distinct from 1. An operator and a script must be able to tell
+    # "checked, and it is wrong" from "there is nothing here that can check".
+    # Same rule as the external-services gate and the digest comparison: could
+    # not look is not the same as looked and found bad.
+    local run_cmd where desc
+    run_cmd=$(yq -r '.commands.check.run // ""' "$info" 2>/dev/null)
+    if [[ -z "$run_cmd" || "$run_cmd" == "null" ]]; then
+        echo ""
+        log_warn "'$template_id' declares no check command."
+        echo "    This application cannot tell you whether its output reflects" >&2
+        echo "    its input. Its pods may be healthy and its data still wrong —" >&2
+        echo "    that is the state this command exists to reveal, and for this" >&2
+        echo "    application nothing can reveal it." >&2
+        echo "" >&2
+        echo "    An application declares one in template-info.yaml:" >&2
+        echo "      commands:" >&2
+        echo "        check:" >&2
+        echo "          description: \"Does the output reflect the input?\"" >&2
+        echo "          run: /path/to/script" >&2
+        echo "          in: code-location" >&2
+        return 2
+    fi
+
+    where=$(yq -r '.commands.check.in // "code-location"' "$info" 2>/dev/null)
+    if [[ "$where" != "code-location" ]]; then
+        log_error "'$template_id' declares check.in='$where', which UIS cannot run."
+        echo "  Supported: code-location. Refusing rather than guessing where to run it." >&2
+        return 1
+    fi
+
+    local cl_name
+    cl_name=$(yq -r '[.provides.services[]?.config.code_location.name] | map(select(. != null)) | .[0] // ""' "$info" 2>/dev/null)
+    if [[ -z "$cl_name" || "$cl_name" == "null" ]]; then
+        log_error "'$template_id' declares a check in its code location but no code_location.name."
+        return 1
+    fi
+
+    desc=$(yq -r '.commands.check.description // ""' "$info" 2>/dev/null)
+    local pod
+    pod=$(kubectl get pods -n dagster -l "deployment=$cl_name" \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [[ -z "$pod" ]]; then
+        log_error "No running pod for code location '$cl_name' in namespace dagster."
+        echo "    The application is not deployed, or its location is not up." >&2
+        echo "    NOTHING WAS CHECKED — this is not a clean result." >&2
+        return 2
+    fi
+
+    print_section "Check: $template_id"
+    [[ -n "$desc" && "$desc" != "null" ]] && { echo "$desc"; echo ""; }
+    echo "  pod: $pod" >&2
+    echo "" >&2
+
+    # ⚠️ The application's own exit code is the verdict and is passed through.
+    # UIS does not interpret the output — the same contract as `operational`:
+    # the application owns the content, the platform only runs and relays it.
+    shift || true
+    kubectl exec -n dagster "$pod" -- bash -lc "$run_cmd $*"
+}
+
 # Command: uis template remove <id> [--purge] [--yes]
 #
 # The inverse of install, and deliberately NOT symmetrical about data.
@@ -2651,6 +2787,9 @@ run_template() {
         install)
             cmd_template_install "$@"
             ;;
+        check)
+            cmd_template_check "$@"
+            ;;
         remove|uninstall)
             # ⚠️ NO `shift` here. run_template already shifted the subcommand off,
             # and the second shift ate an argument — which broke every documented
@@ -2663,6 +2802,8 @@ run_template() {
             echo "Usage: uis template <command> [args]"
             echo ""
             echo "Commands:"
+            echo "  check <id>        Ask the application whether its output reflects its input"
+            echo "                    (not liveness — `status` and `verify` are the words for that)"
             echo "  list              List available UIS templates"
             echo "    --refresh       Re-read the registry instead of the hourly cache."
             echo "                    An application published in the last hour reads as"
