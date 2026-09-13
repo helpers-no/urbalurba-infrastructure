@@ -208,6 +208,37 @@ An announcement is a command someone will paste. Run it, on the version you are
 announcing, before you send it.
 :::
 
+#### Constructing a stale launcher, to test the check that finds one
+
+The behind-path is awkward to test on a real host, and a tester named why:
+**the pull that would create a stale launcher is the same pull that fixes it.**
+
+`UIS_LAUNCHER_PATH` is the way in — `update_launcher` already honours it for the
+same reason. Make a copy that is genuinely old: a real launcher with one dispatch
+label renamed, so it still parses and still passes the *"does this look like the
+launcher"* checks, and differs from what `pull` would fetch.
+
+```bash
+FIX=$(mktemp -d); cp ./uis "$FIX/uis"
+sed -i 's/^    --check|check)/    --check-OLD|check-OLD)/' "$FIX/uis"
+
+UIS_LAUNCHER_PATH="$FIX/uis" ./uis --check      # must NOT say "Up to date"
+UIS_LAUNCHER_PATH="$FIX/uis" ./uis pull         # must report what it did
+```
+
+To exercise the **offline** path, point the fetch somewhere unreachable — it must
+read as *could not check*, never as stale:
+
+```bash
+UIS_RAW_BASE="https://unreachable.invalid" ./uis --check
+```
+
+:::note Why this is in the guide rather than only in the tests
+The unit suite constructs the same fixture, so the behind-path is covered in CI.
+This recipe exists because *stub-tested* and *host-tested* are different claims,
+and the person who can make the second one is not the person who wrote the stub.
+:::
+
 
 ### Why this is a documented step
 

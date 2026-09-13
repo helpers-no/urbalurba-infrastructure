@@ -271,6 +271,53 @@ _ul="$(sed -n '/^update_launcher() {/,/^}/p' "$LAUNCHER")"
 _n=$(grep -c 'LAUNCHER_UPDATE_RESULT=' <<< "$_ul")
 [[ "$_n" -ge 3 ]] && pass_test || fail_test "only $_n outcomes recorded; silence returns for the rest"
 
+# ── the stale-launcher state, constructed rather than described ───────────────
+# 🔴 imac named the gap exactly: "the pull that would create a stale launcher is
+# the same pull that fixes it", so the behind-path was stub-tested and could not
+# be host-tested. `UIS_LAUNCHER_PATH` is the way in — it is already honoured by
+# update_launcher for the same reason.
+#
+# This builds a launcher that is genuinely OLD: a real copy with one dispatch
+# case renamed, so it still parses, still passes the "does it look like the
+# launcher" checks, and differs from what `pull` would fetch.
+start_test "🔴 a stale launcher can be constructed and is reported behind"
+_fix="$(mktemp -d)"
+cp "$LAUNCHER" "$_fix/uis"
+# Rename a case label: old enough to differ, valid enough to be a launcher.
+sed -i 's/^    --check|check)/    --check-OLD|check-OLD)/' "$_fix/uis" 2>/dev/null
+if ! cmp -s "$_fix/uis" "$LAUNCHER"; then
+    _out=$( log_info(){ :; }
+            eval "$(sed -n '/^_launcher_freshness() {/,/^}/p' "$LAUNCHER")"
+            UIS_RAW_BASE="file://$(cd "$(dirname "$LAUNCHER")" && pwd)"             UIS_LAUNCHER_PATH="$_fix/uis" _launcher_freshness )
+    [[ "$_out" == "behind" ]] && pass_test || fail_test "a genuinely stale launcher reported: $_out"
+else
+    skip_test "could not construct a differing launcher copy"
+fi
+
+start_test "🔴 --check REFUSES to say 'up to date' with that stale launcher"
+# ⚠️ The helper returning "behind" is not the same claim as the command saying
+# so. This exercises report_version_status itself, which is where the misleading
+# sentence lived.
+_out=$( log_info(){ echo "$*"; }; log_warn(){ echo "$*"; }
+        installed_version(){ echo 9.9.9; }; remote_version(){ echo 9.9.9; }
+        eval "$(sed -n '/^_launcher_freshness() {/,/^}/p' "$LAUNCHER")"
+        eval "$(sed -n '/^report_version_status() {/,/^}/p' "$LAUNCHER")"
+        UIS_RAW_BASE="file://$(cd "$(dirname "$LAUNCHER")" && pwd)"         UIS_LAUNCHER_PATH="$_fix/uis" report_version_status 2>&1 )
+if grep -q 'but this launcher is NOT' <<< "$_out" && ! grep -qx 'Up to date.' <<< "$_out"; then
+    pass_test
+else
+    fail_test "got: $_out"
+fi
+
+start_test "and the same path says both are current when they are"
+_out=$( log_info(){ echo "$*"; }; log_warn(){ echo "$*"; }
+        installed_version(){ echo 9.9.9; }; remote_version(){ echo 9.9.9; }
+        eval "$(sed -n '/^_launcher_freshness() {/,/^}/p' "$LAUNCHER")"
+        eval "$(sed -n '/^report_version_status() {/,/^}/p' "$LAUNCHER")"
+        UIS_RAW_BASE="file://$(cd "$(dirname "$LAUNCHER")" && pwd)"         UIS_LAUNCHER_PATH="$LAUNCHER" report_version_status 2>&1 )
+grep -q 'image and launcher' <<< "$_out" && pass_test || fail_test "got: $_out"
+rm -rf "$_fix"
+
 start_test "the 'unknown' branch does not claim the image is missing"
 _branch="$(sed -n '/^pull_container() {/,/^}/p' "$LAUNCHER")"
 echo "$_branch" | grep -q 'Could not reach the registry' && pass_test \
