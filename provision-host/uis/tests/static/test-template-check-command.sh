@@ -152,6 +152,75 @@ else
     fail "the refusal says what the application must change" "a refusal without a remedy is an obstacle"
 fi
 
+# ── the LISTING: F1, F3, G1 ───────────────────────────────────────────────────
+# 🔴 `uis template check <id>` requires someone to already suspect that
+# application. Nobody suspected atlas — that is why it ran 7.5 hours behind five
+# green signals (ops-dev, #935).
+# ⚠️ Comment-stripped. Every assertion below searches for a token that the
+# comments ALSO contain, because the comments explain the forbidden thing by
+# quoting it. The "no x-of-y summary" check failed against correct code on its
+# first run for exactly that. It is the seventh time today a scan matched prose
+# about the thing instead of the thing, and I am now stripping by default rather
+# than after a failure.
+_all="$(sed -n '/^cmd_template_check_all() {/,/^}/p' "$LIB" | grep -v '^[[:space:]]*#')"
+
+grep -q '^cmd_template_check_all()' "$LIB" && pass "🔴 a listing form exists"     || fail "🔴 a listing form exists" "the per-application form cannot find what nobody suspects"
+
+if grep -q 'cmd_template_check_all; return' <<<"$(sed -n '/^cmd_template_check() {/,/^}/p' "$LIB")"; then
+    pass "no id runs the listing"
+else
+    fail "no id runs the listing" "the discoverable form must be the bare command"
+fi
+
+# F1 — an application that declares no status is NAMED, not omitted.
+grep -q 'declares no check' <<<"$_all" && pass "F1: an application declaring nothing is named"     || fail "F1: an application declaring nothing is named" "omitting it is how the gap stays invisible"
+
+# F3 — every state named with its count, never "3 of 4 healthy".
+if grep -q 'declare no check ·' <<<"$_all" && grep -q 'could not be asked' <<<"$_all"; then
+    pass "F3: every state is named with its count"
+else
+    fail "F3: every state is named with its count"          "'3 of 4 healthy' silently drops what could not be asked"
+fi
+# ⚠️ Matches a COMPUTED x-of-y too. The first version required literal digits
+# (`[0-9]+ of [0-9]+`), so injecting `$n_h of 4 healthy` — the realistic
+# regression — sailed past it. The negative control caught that the assertion
+# was weaker than the thing it guards.
+if grep -qE '(\$\{?[A-Za-z_]+\}?|[0-9]+) of ' <<<"$_all"; then
+    fail "F3: no x-of-y summary" "that arithmetic is the thing F3 forbids"
+else
+    pass "F3: no x-of-y summary"
+fi
+
+# G1 — a stopped application still produces a line, with a reason.
+_state_all="$(sed -n '/^_check_state() {/,/^}/p' "$LIB")"
+_state="$(grep -v '^[[:space:]]*#' <<<"$_state_all")"
+if grep -q "no running pod for code location" <<<"$_state"; then
+    pass "G1: a stopped application yields a reason, not a vanishing"
+else
+    fail "G1: a stopped application yields a reason" "it must not drop out of the list nor abort the run"
+fi
+
+# 🔴 atlas's warning: "a bug wearing a connectivity failure's clothes". An
+# aggregate that maps ANY exception to state 4 turns a defect in UIS into the
+# honest outcome and it is never looked at.
+if grep -q 'uis-error' <<<"$_state" && grep -q 'UIS FAILED TO EVAL' <<<"$_all"; then
+    pass "🔴 a UIS evaluation failure is its own state, not state 4"
+else
+    fail "🔴 a UIS evaluation failure is its own state"          "a defect here must not present as 'could not be asked'"
+fi
+if grep -q 'cannot hide inside' <<<"$_all"; then
+    pass "and the output says why it is reported separately"
+else
+    fail "and the output says why" ""
+fi
+
+# ⚠️ no-check and could-not-ask are different fixes by different people.
+if grep -q 'NOT could-not-ask' <<<"$_state_all"; then
+    pass "an authoring gap is not folded into a runtime failure"
+else
+    fail "an authoring gap is not folded into a runtime failure"          "they need different fixes from different people"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]

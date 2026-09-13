@@ -1795,6 +1795,135 @@ _build_effective_params() {
     yq -r '.params // {} | to_entries | .[] | "\(.key)=\(.value)"' "$info_file" 2>/dev/null
 }
 
+# Evaluate ONE application's check, quietly. Sets CHECK_STATE and CHECK_DETAIL.
+#
+# 🔴 STATES ARE REACHED BY IDENTIFIED CONDITIONS ONLY. atlas found its own
+# `worst()` letting a TypeError surface as "cannot answer" — "a bug wearing a
+# connectivity failure's clothes" (ops-dev, #935). An aggregate that maps any
+# exception to state 4 inherits that exactly: a defect in UIS would present as
+# the honest outcome and never be looked at.
+#
+# So there is a FIFTH state that is not a state of the application at all:
+# `uis-error`. If this function cannot reach one of the four for a reason it
+# recognises, it says UIS failed rather than blaming the tenant.
+#
+#   healthy | unhealthy | no-check | could-not-ask | uis-error
+CHECK_STATE=""
+CHECK_DETAIL=""
+_check_state() {
+    local app_id="$1"
+    CHECK_STATE="uis-error"; CHECK_DETAIL="evaluation did not complete"
+
+    local template info dir artifact tag digest vis
+    template=$(_get_template "$app_id" 2>/dev/null)
+    if [[ -z "$template" || "$template" == "null" ]]; then
+        CHECK_STATE="could-not-ask"; CHECK_DETAIL="not in the registry (cached read?)"; return 0
+    fi
+    artifact="$(_template_source_field "$template" artifact)"
+    tag="$(_template_source_field "$template" tag)"
+    digest="$(_template_source_field "$template" digest)"
+    vis="$(_json_field "$template" '.visibility')"; vis="${vis:-public}"
+    if [[ -z "$artifact" || -z "$digest" ]]; then
+        CHECK_STATE="could-not-ask"; CHECK_DETAIL="no pinned definition artifact"; return 0
+    fi
+    dir=$(_resolve_definition "$app_id" "$artifact" "$tag" "$digest" "$vis" 2>/dev/null) || {
+        CHECK_STATE="could-not-ask"; CHECK_DETAIL="definition could not be fetched"; return 0
+    }
+    info="$dir/template-info.yaml"
+    [[ -f "$info" ]] || { CHECK_STATE="could-not-ask"; CHECK_DETAIL="definition has no template-info.yaml"; return 0; }
+
+    local run_cmd where cl_name pod
+    run_cmd=$(yq -r '.commands.check.run // ""' "$info" 2>/dev/null)
+    if [[ -z "$run_cmd" || "$run_cmd" == "null" ]]; then
+        # 🔵 NOT could-not-ask. Nothing failed — the application never offered to
+        # answer. Folding them together would hide an authoring gap inside a
+        # runtime one, and they need different fixes from different people.
+        CHECK_STATE="no-check"; CHECK_DETAIL="declares no check command"; return 0
+    fi
+    where=$(yq -r '.commands.check.in // "code-location"' "$info" 2>/dev/null)
+    if [[ "$where" != "code-location" ]]; then
+        CHECK_STATE="could-not-ask"; CHECK_DETAIL="declares check.in='$where', which UIS cannot run"; return 0
+    fi
+    cl_name=$(yq -r '[.provides.services[]?.config.code_location.name] | map(select(. != null)) | .[0] // ""' "$info" 2>/dev/null)
+    if [[ -z "$cl_name" || "$cl_name" == "null" ]]; then
+        CHECK_STATE="could-not-ask"; CHECK_DETAIL="no code_location.name to run it in"; return 0
+    fi
+    pod=$(kubectl get pods -n dagster -l "deployment=$cl_name" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [[ -z "$pod" ]]; then
+        # ⚠️ G1: a stopped application still produces a LINE, with a reason. It
+        # must not vanish from the list and must not abort the run.
+        CHECK_STATE="could-not-ask"; CHECK_DETAIL="no running pod for code location '$cl_name'"; return 0
+    fi
+    if ! kubectl exec -n dagster "$pod" -- bash -lc "command -v ${run_cmd%% *} >/dev/null 2>&1 || test -x ${run_cmd%% *}" >/dev/null 2>&1; then
+        CHECK_STATE="could-not-ask"; CHECK_DETAIL="${run_cmd%% *} is not in the image"; return 0
+    fi
+
+    local rc=0
+    kubectl exec -n dagster "$pod" -- bash -lc "$run_cmd" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+        0)   CHECK_STATE="healthy";       CHECK_DETAIL="reported success (relayed, not verified)" ;;
+        127) CHECK_STATE="could-not-ask"; CHECK_DETAIL="the check ran but something it needs was missing (127)" ;;
+        *)   CHECK_STATE="unhealthy";     CHECK_DETAIL="reported a problem (exit $rc)" ;;
+    esac
+    return 0
+}
+
+# Command: uis template check   (no id) — every installed application
+#
+# 🔴 THE PER-APPLICATION FORM REQUIRES SOMEONE TO ALREADY SUSPECT THE
+# APPLICATION. Nobody suspected atlas. That is why it served a deleted company
+# for 7.5 hours behind five green signals (ops-dev, #935).
+cmd_template_check_all() {
+    local file; file="$(_applications_file)"
+    if [[ ! -f "$file" ]]; then
+        log_info "No applications installed."
+        return 0
+    fi
+    command -v yq >/dev/null 2>&1 || { log_error "yq is required."; return 1; }
+    _fetch_registry || true
+
+    local ids; ids=$(yq -r '.applications[]?.id // ""' "$file" 2>/dev/null | grep -v '^$' | sort -u)
+    if [[ -z "$ids" ]]; then
+        log_info "No applications installed."
+        return 0
+    fi
+
+    print_section "Application checks"
+    local n_h=0 n_u=0 n_n=0 n_c=0 n_e=0 id
+    while IFS= read -r id; do
+        [[ -z "$id" ]] && continue
+        _check_state "$id"
+        case "$CHECK_STATE" in
+            healthy)       printf '  %-22s %-22s %s
+' "$id" "healthy"            "$CHECK_DETAIL"; n_h=$((n_h+1)) ;;
+            unhealthy)     printf '  %-22s %-22s %s
+' "$id" "UNHEALTHY"          "$CHECK_DETAIL"; n_u=$((n_u+1)) ;;
+            no-check)      printf '  %-22s %-22s %s
+' "$id" "declares no check"  "$CHECK_DETAIL"; n_n=$((n_n+1)) ;;
+            could-not-ask) printf '  %-22s %-22s %s
+' "$id" "COULD NOT BE ASKED" "$CHECK_DETAIL"; n_c=$((n_c+1)) ;;
+            *)             printf '  %-22s %-22s %s
+' "$id" "UIS FAILED TO EVAL" "$CHECK_DETAIL"; n_e=$((n_e+1)) ;;
+        esac
+    done <<< "$ids"
+
+    echo ""
+    # 🔴 F3: EVERY STATE IS NAMED WITH ITS COUNT. Never "3 of 4 healthy" — that
+    # arithmetic silently drops what could not be asked, which is the state the
+    # 7.5 hours lived in.
+    echo "  $n_h healthy · $n_u unhealthy · $n_n declare no check · $n_c could not be asked$([[ $n_e -gt 0 ]] && echo " · $n_e UIS ERRORS")"
+    if [[ "$n_e" -gt 0 ]]; then
+        echo "" >&2
+        log_error "$n_e application(s) could not be evaluated by UIS itself."
+        echo "    That is a defect here, not a state of the application. It is" >&2
+        echo "    reported separately so it cannot hide inside 'could not be asked'." >&2
+        return 1
+    fi
+    [[ "$n_u" -gt 0 ]] && return 1
+    [[ "$n_c" -gt 0 || "$n_n" -gt 0 ]] && return 2
+    return 0
+}
+
 # Command: uis template check <id>
 #
 # 🔴 WHY `check` AND NOT `status`, recorded here because Terje handed the
@@ -1834,11 +1963,9 @@ _build_effective_params() {
 # surface, different grammatical role, and no collision — but worth knowing.
 cmd_template_check() {
     local template_id="${1:-}"
-    if [[ -z "$template_id" ]]; then
-        log_error "Usage: uis template check <id>"
-        echo "  Asks the application whether its output still reflects its input." >&2
-        return 1
-    fi
+    # No id: every installed application. The listing is the form that does not
+    # require someone to already suspect the right one.
+    [[ -z "$template_id" ]] && { cmd_template_check_all; return $?; }
 
     _fetch_registry || return 1
     local template
