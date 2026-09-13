@@ -145,7 +145,54 @@ telemetry:
 computeLogManager:
   type: NoOpComputeLogManager
 
-# Run-history retention is left at the chart default (disabled = keep). Enabling
-# it is a data-loss switch and belongs to a deliberate decision, not a default.
+# 🔴 THIS IS TICK RETENTION, NOT RUN-HISTORY RETENTION. The label matters:
+# this comment used to say "run-history retention", and I then reasoned from my
+# own label instead of the chart and told ops-dev that enabling this would reap
+# 35,040 run records a year. It would not remove a single one.
+#
+# The chart's own header (dagster 1.13.19, helm/dagster/values.yaml:1444):
+#     "Sets a data retention policy for data types such as schedule /
+#      sensor ticks."
+# and there is NO run-purge anywhere in that chart.
+#
+# ⚠️ Ticks are not proportional to runs. A sensor ticks on its own interval
+# whether or not it launches anything, so a mostly-skipping sensor is the
+# high-volume writer here — and skipped ticks are what the chart's own default
+# reaps after 7 days.
+#
+# 🟢 ENABLED on measured evidence, not on request — the rule this file already
+# applies to maxConcurrentRuns. imac measured a ~26h-old instance (ops-dev, #818):
+#
+#     event_logs   51.0 MB   60.0%   <- no chart mechanism touches this
+#     job_ticks     4.6 MB    5.4%   <- ALL that `retention` governs
+#     3,396 ticks against 79 runs — 43:1 by count, and 11x SMALLER by storage
+#
+# So ticks are the larger count and the smaller cost. This is tick hygiene
+# (~1.49 GB/yr), not a data-retention policy, and it was presented to the fleet
+# as such.
+#
+# ⚠️ The sub-values are written out rather than inherited. They ARE the chart's
+# defaults, and a reader should not have to fetch dagster 1.13.19 to learn what
+# this deletes — which is the failure the comment above records.
+#
+# Only SKIPPED ticks are purged, after 7 days. Failures are kept indefinitely,
+# because "why did my sensor not fire" is answered from failure ticks and a
+# 7-day window on skips does not touch them. atlas's high-volume writer is
+# `default_automation_condition_sensor`, whose ticks are the autoMaterialize
+# block below.
 retention:
-  enabled: false
+  enabled: true
+  schedule:
+    purgeAfterDays: -1
+  sensor:
+    purgeAfterDays:
+      failure: -1
+      skipped: 7
+      started: -1
+      success: -1
+  autoMaterialize:
+    purgeAfterDays:
+      failure: -1
+      skipped: 7
+      started: -1
+      success: -1
