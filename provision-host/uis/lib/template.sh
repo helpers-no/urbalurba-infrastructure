@@ -475,14 +475,73 @@ cmd_template_info() {
 #
 # Takes the info file directly: the install already pulled the artifact, so
 # unlike `template info` this needs no fetch.
-_install_summary_operational() {
+# Every `operational.*` key UIS renders on ANY surface. Dotted where the field
+# is nested one level.
+#
+# 🔴 THIS LIST EXISTS BECAUSE THE GUARD COULD NOT SEE THE FOURTH INSTANCE.
+#
+# `test-operational-fields-reach-install.sh` compares the two renderers and
+# requires a field read by one to be read by the other or named exempt. It
+# cannot see a field read by NEITHER: absent from both is symmetric, so the
+# comparison passes while the content reaches nobody. `operational.troubleshooting`
+# was exactly that — atlas moved an upgrade remedy INTO it on instruction, and it
+# went from a place the operator would not look to a place the operator could not
+# look (ops-dev, #789).
+#
+# ⚠️ A static list has the opposite failure: it cannot know about a key invented
+# next month. So this is not the guard — `_warn_unrendered_operational` below
+# compares the list against what the DEFINITION actually declares, at install, on
+# the real file. The list is what "UIS renders this" means; the definition is the
+# evidence of what someone wrote.
+TEMPLATE_OPERATIONAL_KEYS="automation timezone cadence external_services unscheduled troubleshooting install.note install.takes install.deploys first_data.why first_data.how first_data.jobs first_data.takes"
+
+# Warn about operational content that reaches no surface at all.
+#
+# The reader who needs this is the APPLICATION AUTHOR: they wrote a sentence, it
+# is published, and nothing displays it. Nobody can tell from the outside — the
+# install is green and the text is simply absent.
+_warn_unrendered_operational() {
     local info="$1"
     [[ -f "$info" ]] || return 0
     command -v yq >/dev/null 2>&1 || return 0
     [[ "$(yq -r 'has("operational")' "$info" 2>/dev/null)" == "true" ]] || return 0
 
-    local note jobs takes automation unscheduled
+    local declared unknown="" k
+    # Top-level keys, plus one level inside the two container keys. A NEW
+    # container invented later shows up at the top level and is still reported.
+    declared=$(yq -r '.operational | keys | .[]' "$info" 2>/dev/null)
+    local sub
+    for sub in install first_data; do
+        [[ "$(yq -r ".operational.$sub | type" "$info" 2>/dev/null)" == "!!map" ]] || continue
+        declared+=$'\n'"$(yq -r ".operational.$sub | keys | .[] | \"$sub.\" + ." "$info" 2>/dev/null)"
+        # the container itself is accounted for by its children
+        declared=$(printf '%s\n' "$declared" | grep -vx "$sub")
+    done
+
+    while IFS= read -r k; do
+        [[ -z "$k" ]] && continue
+        [[ " $TEMPLATE_OPERATIONAL_KEYS " == *" $k "* ]] || unknown+="$k "
+    done <<< "$declared"
+
+    if [[ -n "$unknown" ]]; then
+        echo "" >&2
+        echo "⚠️  This application declares operational content UIS does not display:" >&2
+        echo "      ${unknown% }" >&2
+        echo "    Nothing is broken and nothing was lost — but whoever wrote it is" >&2
+        echo "    addressing a reader who will never see it. Worth telling them." >&2
+    fi
+    return 0
+}
+
+_install_summary_operational() {
+    local info="$1" _tid="${2:-}"
+    [[ -f "$info" ]] || return 0
+    command -v yq >/dev/null 2>&1 || return 0
+    [[ "$(yq -r 'has("operational")' "$info" 2>/dev/null)" == "true" ]] || return 0
+
+    local note jobs takes automation unscheduled troubleshooting
     note=$(yq -r '.operational.install.note // ""' "$info" 2>/dev/null)
+    troubleshooting=$(yq -r '.operational.troubleshooting // ""' "$info" 2>/dev/null)
     jobs=$(yq -r '.operational.first_data.jobs // [] | join(" -> ")' "$info" 2>/dev/null)
     takes=$(yq -r '.operational.first_data.takes // ""' "$info" 2>/dev/null)
     automation=$(yq -r '.operational.automation // ""' "$info" 2>/dev/null)
@@ -528,6 +587,25 @@ _install_summary_operational() {
         # has no schedule to switch on at all: someone told to "enable the
         # schedules" would enable every schedule and still not be running it.
         [[ -n "$unscheduled" ]] && echo "    No schedule at all: $unscheduled"
+    fi
+
+    # 🔴 A POINTER, NOT THE TEXT — and the reasoning is the whole of the
+    # question ops-dev asked (#789).
+    #
+    # `troubleshooting` is the one operational field whose reader is someone
+    # whose install has ALREADY gone wrong. Printing remedies at the end of a
+    # SUCCESSFUL install is noise, and noise here is expensive: it trains people
+    # to skip the block that also carries the automation warning, which is the
+    # thing 1.6.65 existed to make them read.
+    #
+    # ⚠️ But the end of a successful install is the one moment the operator is
+    # certainly reading, and at 02:00 with a dbt schema error they will not
+    # discover a command they have never seen. So the install teaches that the
+    # place exists; `info` holds what is in it.
+    if [[ -n "$troubleshooting" && "$troubleshooting" != "null" ]]; then
+        echo ""
+        echo "If something goes wrong later, this application ships its own remedies:"
+        echo "  ./uis template info ${_tid:-<id>}"
     fi
     # ⚠️ EXPLICIT. Without it the function exits with the status of the last
     # `[[ ... ]] &&` test, so an application with no `unscheduled` list returned
@@ -601,6 +679,21 @@ _template_info_operational() {
     [[ -n "$v" ]] && { echo ""; echo "  contacts     $v"; }
     v=$(yq -r '.operational.unscheduled // [] | join(", ")' "$info" 2>/dev/null)
     [[ -n "$v" ]] && echo "  never runs   $v (no schedule)"
+
+    # 🔴 Rendered with a bare `yq -r`, deliberately, with NO type switch.
+    #
+    # No application had ever used this field, so its shape is whatever the first
+    # one chooses: a scalar, a list of strings, or a list of {symptom, remedy}.
+    # All three print readably this way, and none can be silently discarded —
+    # which is exactly what a `join(",")` did to a scalar `env_secrets` until a
+    # clean-slate install exposed it (#491). mikefarah yq has no `if`, and a type
+    # switch in bash would be a second place for the forms to disagree.
+    v=$(yq -r '.operational.troubleshooting // ""' "$info" 2>/dev/null)
+    if [[ -n "$v" && "$v" != "null" ]]; then
+        echo ""
+        echo "  when it goes wrong:"
+        printf '%s\n' "$v" | sed 's/^/    /'
+    fi
 }
 
 # Sparse-checkout a template folder from the TMP repo
@@ -2439,7 +2532,10 @@ cmd_template_install() {
     # ⚠️ Immediately after Endpoints, deliberately. An install that says where
     # the API is and not that it is empty on purpose invites the reader to
     # conclude the install failed.
-    _install_summary_operational "$info_file"
+    _install_summary_operational "$info_file" "$template_id"
+    # Content that reaches no surface at all — the case the two-renderer
+    # comparison is blind to by construction.
+    _warn_unrendered_operational "$info_file"
 
     # Print README if available
     local readme_file
