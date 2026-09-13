@@ -150,6 +150,63 @@ start_test "and distinguishes 'still building' from 'the build failed'"
 echo "$_rvs_fn" | grep -qi 'probably failed' \
     && pass_test || fail_test "without the distinction the reader cannot choose between waiting and looking"
 
+# ── "am I current?" must be about BOTH artefacts ──────────────────────────────
+# 🔴 `--check` compared the IMAGE version and printed "Up to date." while the
+# host-side launcher could be arbitrarily stale — on the command whose entire
+# purpose is to answer that question.
+#
+# 1.6.70's guard lives ENTIRELY in the launcher. It was announced by image
+# digest, so imac pulled the image, restarted, ran the guard's own test, got
+# exit 0, and nearly reported a working fix broken for the second time
+# (ops-dev, #821). ⚠️ A digest is the right identity for an image and the wrong
+# instruction for a launcher fix.
+#
+# 🔵 NOT a version on the launcher: the one-version model is deliberate and the
+# file says why. This compares the FILE with the one `./uis pull` would fetch,
+# which answers "would updating change anything?" and adds no second number.
+start_test "🔴 the launcher's own freshness can be established"
+grep -q '^_launcher_freshness() {' "$LAUNCHER" && pass_test \
+    || fail_test "nothing can tell a stale launcher from a current one"
+
+_fresh_fn="$(sed -n '/^_launcher_freshness() {/,/^}/p' "$LAUNCHER")"
+
+start_test "it compares against what ./uis pull would install, not a version"
+grep -q 'UIS_RAW_BASE/uis' <<< "$_fresh_fn" && pass_test \
+    || fail_test "a second version number would drift; compare the file"
+
+start_test "🔴 could-not-check is never reported as stale"
+# ⚠️ A spurious "your launcher is old" is how a guard becomes noise. An
+# unreachable raw host, an empty body and a missing sha256sum must all be
+# 'unknown'.
+# ⚠️ Asserts BEHAVIOUR, not a count. The first version counted `echo "unknown"`
+# occurrences and required >= 4 — so flipping one of them to "behind" still
+# passed, and the negative control caught that. "behind" may be reached from
+# exactly ONE place: the hash comparison at the end.
+_b=$(grep -c 'echo "behind"' <<< "$_fresh_fn")
+[[ "$_b" -eq 1 ]] && grep -q '\[ "\$a" = "\$b" \]' <<< "$_fresh_fn" && pass_test \
+    || fail_test "'behind' is reachable from $_b places; only the hash comparison may conclude it"
+
+start_test "an empty fetch is treated as could-not-check"
+grep -q '\[ ! -s "\$remote_tmp" \]' <<< "$_fresh_fn" && pass_test \
+    || fail_test "a truncated download would hash to 'different' and report stale"
+
+start_test "🔴 --check no longer says 'Up to date' about the image alone"
+_rvs="$(sed -n '/^report_version_status() {/,/^}/p' "$LAUNCHER")"
+if grep -q '_launcher_freshness' <<< "$_rvs" \
+   && ! grep -qE 'log_info "Up to date\."' <<< "$_rvs"; then
+    pass_test
+else
+    fail_test "the bare 'Up to date.' is back, and it is true of only one of two artefacts"
+fi
+
+start_test "a stale launcher is reported as an exception, not a footnote"
+grep -q 'but this launcher is NOT' <<< "$_rvs" && pass_test \
+    || fail_test "the whole failure is that it reads as fine"
+
+start_test "and it names the command that fixes it"
+grep -q './uis pull' <<< "$_rvs" && pass_test \
+    || fail_test "a warning without the remedy is an obstacle"
+
 start_test "the 'unknown' branch does not claim the image is missing"
 _branch="$(sed -n '/^pull_container() {/,/^}/p' "$LAUNCHER")"
 echo "$_branch" | grep -q 'Could not reach the registry' && pass_test \
