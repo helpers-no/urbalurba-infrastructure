@@ -1810,12 +1810,24 @@ _build_effective_params() {
 #   healthy | unhealthy | no-check | could-not-ask | uis-error
 CHECK_STATE=""
 CHECK_DETAIL=""
+# ⚠️ `uis-cli.sh` runs under `set -e`, and EVERY assignment here is
+# `x=$(cmd)` — a bare simple command, so a non-zero status kills the process
+# instead of reaching the branch below it. `2>/dev/null` hides the message and
+# not the status.
+#
+# 🔴 That is exactly what imac found on a real cluster: `kubectl -o jsonpath`
+# returns 1 on an EMPTY match, so `uis template check atlas` on a healthy pod
+# printed a digest and died with EXIT=1 — no section, no line, no reason, and
+# the "NOTHING WAS CHECKED" text never reached. G1's own FAIL clause, verbatim,
+# produced by my own known hazard (ops-dev, #937).
+#
+# Every capture is now `|| true`-guarded and the status read deliberately.
 _check_state() {
-    local app_id="$1"
-    CHECK_STATE="uis-error"; CHECK_DETAIL="evaluation did not complete"
+    local app_id="$1" cl_csv="${2:-}" verbose="${3:-0}"
+    CHECK_STATE=""; CHECK_DETAIL=""
 
     local template info dir artifact tag digest vis
-    template=$(_get_template "$app_id" 2>/dev/null)
+    template=$(_get_template "$app_id" 2>/dev/null) || true
     if [[ -z "$template" || "$template" == "null" ]]; then
         CHECK_STATE="could-not-ask"; CHECK_DETAIL="not in the registry (cached read?)"; return 0
     fi
@@ -1826,29 +1838,46 @@ _check_state() {
     if [[ -z "$artifact" || -z "$digest" ]]; then
         CHECK_STATE="could-not-ask"; CHECK_DETAIL="no pinned definition artifact"; return 0
     fi
-    dir=$(_resolve_definition "$app_id" "$artifact" "$tag" "$digest" "$vis" 2>/dev/null) || {
+    dir=$(_resolve_definition "$app_id" "$artifact" "$tag" "$digest" "$vis" 2>/dev/null) || dir=""
+    if [[ -z "$dir" ]]; then
         CHECK_STATE="could-not-ask"; CHECK_DETAIL="definition could not be fetched"; return 0
-    }
+    fi
     info="$dir/template-info.yaml"
     [[ -f "$info" ]] || { CHECK_STATE="could-not-ask"; CHECK_DETAIL="definition has no template-info.yaml"; return 0; }
 
     local run_cmd where cl_name pod
-    run_cmd=$(yq -r '.commands.check.run // ""' "$info" 2>/dev/null)
+    run_cmd=$(yq -r '.commands.check.run // ""' "$info" 2>/dev/null) || true
     if [[ -z "$run_cmd" || "$run_cmd" == "null" ]]; then
         # 🔵 NOT could-not-ask. Nothing failed — the application never offered to
         # answer. Folding them together would hide an authoring gap inside a
         # runtime one, and they need different fixes from different people.
         CHECK_STATE="no-check"; CHECK_DETAIL="declares no check command"; return 0
     fi
-    where=$(yq -r '.commands.check.in // "code-location"' "$info" 2>/dev/null)
+    where=$(yq -r '.commands.check.in // "code-location"' "$info" 2>/dev/null) || where="code-location"
     if [[ "$where" != "code-location" ]]; then
+        # Refusing rather than guessing where to run it: a tenant's script in
+        # the wrong context is worse than not running it.
         CHECK_STATE="could-not-ask"; CHECK_DETAIL="declares check.in='$where', which UIS cannot run"; return 0
     fi
-    cl_name=$(yq -r '[.provides.services[]?.config.code_location.name] | map(select(. != null)) | .[0] // ""' "$info" 2>/dev/null)
-    if [[ -z "$cl_name" || "$cl_name" == "null" ]]; then
-        CHECK_STATE="could-not-ask"; CHECK_DETAIL="no code_location.name to run it in"; return 0
+    # 🔴 THE RENDERED NAME, FROM THE INSTALL RECORD — not the definition.
+    #
+    # A definition declares `code_location.name: {{ params.app_name }}-data`.
+    # Reading it raw gave a selector containing literal braces, which matched
+    # nothing, and with errexit fixed that becomes a PERMANENT false
+    # "COULD NOT BE ASKED" for a perfectly healthy application — the failure
+    # changing costume rather than going away (imac, #937).
+    #
+    # `.uis.extend/applications.yaml` holds what was actually installed, keyed on
+    # app_name and rendered at install time. That is the installed truth, and it
+    # is also how two tenants of one template stay distinguishable.
+    cl_name="${cl_csv%%,*}"
+    if [[ -z "$cl_name" ]]; then
+        CHECK_STATE="could-not-ask"; CHECK_DETAIL="install record names no code location"; return 0
     fi
-    pod=$(kubectl get pods -n dagster -l "deployment=$cl_name" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [[ "$cl_name" == *"{{"* ]]; then
+        CHECK_STATE="could-not-ask"; CHECK_DETAIL="code location '$cl_name' is unrendered — install record is wrong"; return 0
+    fi
+    pod=$(kubectl get pods -n dagster -l "deployment=$cl_name" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || pod=""
     if [[ -z "$pod" ]]; then
         # ⚠️ G1: a stopped application still produces a LINE, with a reason. It
         # must not vanish from the list and must not abort the run.
@@ -1859,7 +1888,17 @@ _check_state() {
     fi
 
     local rc=0
-    kubectl exec -n dagster "$pod" -- bash -lc "$run_cmd" >/dev/null 2>&1 || rc=$?
+    # ⚠️ ONE path for both forms. The single and the listing used to resolve
+    # separately, and imac's general warning applies: a collision produces one
+    # defect per branch, and the branches fail differently, so the loud one
+    # masks the quiet one. They now differ only in whether the output is shown.
+    if [[ "$verbose" == "1" ]]; then
+        kubectl exec -n dagster "$pod" -- bash -lc "$run_cmd" || rc=$?
+    else
+        kubectl exec -n dagster "$pod" -- bash -lc "$run_cmd" >/dev/null 2>&1 || rc=$?
+    fi
+    # ⚠️ The application's exit code is the verdict and is relayed, not judged.
+    # UIS interprets nothing — the same contract as `operational`.
     case "$rc" in
         0)   CHECK_STATE="healthy";       CHECK_DETAIL="reported success (relayed, not verified)" ;;
         127) CHECK_STATE="could-not-ask"; CHECK_DETAIL="the check ran but something it needs was missing (127)" ;;
@@ -1882,7 +1921,15 @@ cmd_template_check_all() {
     command -v yq >/dev/null 2>&1 || { log_error "yq is required."; return 1; }
     _fetch_registry || true
 
-    local ids; ids=$(yq -r '.applications[]?.id // ""' "$file" 2>/dev/null | grep -v '^$' | sort -u)
+    # ⚠️ One line per RECORD, not per id: two tenants of one template are two
+    # applications with different app_names and different code locations.
+    local ids
+    # ⚠️ `@tsv`, not string concatenation with "\t". mikefarah yq emits a
+    # LITERAL backslash-t from `+ "\t" +`, so `IFS=$'\t' read` split nothing and
+    # every row arrived as one field — the id became `atlas\tatlas\tatlas-data`
+    # and the selector was garbage. Found by running it, not by reading it.
+    ids=$(yq -r '.applications[]? | [(.id // ""), (.app_name // ""), ((.code_locations // []) | join(","))] | @tsv' "$file" 2>/dev/null) || true
+    ids=$(printf '%s\n' "$ids" | grep -v '^[[:space:]]*$') || true
     if [[ -z "$ids" ]]; then
         log_info "No applications installed."
         return 0
@@ -1890,20 +1937,37 @@ cmd_template_check_all() {
 
     print_section "Application checks"
     local n_h=0 n_u=0 n_n=0 n_c=0 n_e=0 id
-    while IFS= read -r id; do
+    local app_name cl_csv
+    while IFS=$'\t' read -r id app_name cl_csv; do
         [[ -z "$id" ]] && continue
-        _check_state "$id"
+        # 🔴 THE FIFTH STATE HAS TO BE REACHABLE OR IT IS DECORATION.
+        #
+        # It used to be only the INITIAL value of CHECK_STATE, overwritten by
+        # all eleven terminal paths — and the one way it survived was the
+        # function not finishing, which under errexit killed the process instead
+        # of returning. "A green that could not have gone red" (imac, #937).
+        #
+        # Now it is reached two ways that can actually happen: the evaluator
+        # returning non-zero, or finishing without setting a state.
+        CHECK_STATE=""; CHECK_DETAIL=""
+        local _rc=0
+        _check_state "$id" "$cl_csv" || _rc=$?
+        if [[ "$_rc" -ne 0 ]]; then
+            CHECK_STATE="uis-error"; CHECK_DETAIL="evaluator exited $_rc"
+        elif [[ -z "$CHECK_STATE" ]]; then
+            CHECK_STATE="uis-error"; CHECK_DETAIL="evaluator set no state"
+        fi
         case "$CHECK_STATE" in
             healthy)       printf '  %-22s %-22s %s
-' "$id" "healthy"            "$CHECK_DETAIL"; n_h=$((n_h+1)) ;;
+' "${app_name:-$id}" "healthy"            "$CHECK_DETAIL"; n_h=$((n_h+1)) ;;
             unhealthy)     printf '  %-22s %-22s %s
-' "$id" "UNHEALTHY"          "$CHECK_DETAIL"; n_u=$((n_u+1)) ;;
+' "${app_name:-$id}" "UNHEALTHY"          "$CHECK_DETAIL"; n_u=$((n_u+1)) ;;
             no-check)      printf '  %-22s %-22s %s
-' "$id" "declares no check"  "$CHECK_DETAIL"; n_n=$((n_n+1)) ;;
+' "${app_name:-$id}" "declares no check"  "$CHECK_DETAIL"; n_n=$((n_n+1)) ;;
             could-not-ask) printf '  %-22s %-22s %s
-' "$id" "COULD NOT BE ASKED" "$CHECK_DETAIL"; n_c=$((n_c+1)) ;;
+' "${app_name:-$id}" "COULD NOT BE ASKED" "$CHECK_DETAIL"; n_c=$((n_c+1)) ;;
             *)             printf '  %-22s %-22s %s
-' "$id" "UIS FAILED TO EVAL" "$CHECK_DETAIL"; n_e=$((n_e+1)) ;;
+' "${app_name:-$id}" "UIS FAILED TO EVAL" "$CHECK_DETAIL"; n_e=$((n_e+1)) ;;
         esac
     done <<< "$ids"
 
@@ -1963,155 +2027,66 @@ cmd_template_check_all() {
 # surface, different grammatical role, and no collision — but worth knowing.
 cmd_template_check() {
     local template_id="${1:-}"
-    # No id: every installed application. The listing is the form that does not
-    # require someone to already suspect the right one.
     [[ -z "$template_id" ]] && { cmd_template_check_all; return $?; }
 
-    _fetch_registry || return 1
-    local template
-    template=$(_get_template "$template_id")
-    if [[ -z "$template" || "$template" == "null" ]]; then
-        log_error "Template '$template_id' not found in registry"
-        _registry_staleness_hint "$template_id"
-        return 1
-    fi
+    command -v yq >/dev/null 2>&1 || { log_error "yq is required."; return 1; }
+    _fetch_registry || true
 
-    command -v yq >/dev/null 2>&1 || { log_error "yq is required and is not installed."; return 1; }
-
-    local artifact tag digest vis dir info
-    artifact="$(_template_source_field "$template" artifact)"
-    tag="$(_template_source_field "$template" tag)"
-    digest="$(_template_source_field "$template" digest)"
-    vis="$(_json_field "$template" '.visibility')"; vis="${vis:-public}"
-    if [[ -z "$artifact" || -z "$digest" ]]; then
-        log_error "'$template_id' has no pinned definition artifact — cannot read its declarations."
-        return 1
-    fi
-    dir=$(_resolve_definition "$template_id" "$artifact" "$tag" "$digest" "$vis") || return 1
-    info="$dir/template-info.yaml"
-    [[ -f "$info" ]] || { log_error "definition has no template-info.yaml"; return 1; }
-
-    # 🔴 AN APPLICATION THAT DECLARES NOTHING MUST SAY SO.
-    #
-    # ops-dev held me to this and was right: if the absence is silent, the
-    # command becomes something atlas has and nobody else does, and the next
-    # tenant serving stale data behind green signals gets found the way this one
-    # was — by a human asking after 7.5 hours.
-    #
-    # ⚠️ Exit 2, distinct from 1. An operator and a script must be able to tell
-    # "checked, and it is wrong" from "there is nothing here that can check".
-    # Same rule as the external-services gate and the digest comparison: could
-    # not look is not the same as looked and found bad.
-    local run_cmd where desc
-    run_cmd=$(yq -r '.commands.check.run // ""' "$info" 2>/dev/null)
-    if [[ -z "$run_cmd" || "$run_cmd" == "null" ]]; then
-        echo ""
-        log_warn "'$template_id' declares no check command."
-        echo "    This application cannot tell you whether its output reflects" >&2
-        echo "    its input. Its pods may be healthy and its data still wrong —" >&2
-        echo "    that is the state this command exists to reveal, and for this" >&2
-        echo "    application nothing can reveal it." >&2
-        echo "" >&2
-        echo "    An application declares one in template-info.yaml:" >&2
-        echo "      commands:" >&2
-        echo "        check:" >&2
-        echo "          description: \"Does the output reflect the input?\"" >&2
-        echo "          run: /path/to/script" >&2
-        echo "          in: code-location" >&2
+    # 🔴 Resolve through the INSTALL RECORD, like the listing. Reading the
+    # definition's `code_location.name` raw gave `{{ params.app_name }}-data`,
+    # which matches no pod — a permanent false COULD NOT BE ASKED for a healthy
+    # application (imac, #937).
+    local file cl_csv
+    file="$(_applications_file)"
+    if [[ ! -f "$file" ]]; then
+        log_error "'$template_id' is not installed (no application record)."
         return 2
     fi
-
-    where=$(yq -r '.commands.check.in // "code-location"' "$info" 2>/dev/null)
-    if [[ "$where" != "code-location" ]]; then
-        log_error "'$template_id' declares check.in='$where', which UIS cannot run."
-        echo "  Supported: code-location. Refusing rather than guessing where to run it." >&2
-        return 1
-    fi
-
-    local cl_name
-    cl_name=$(yq -r '[.provides.services[]?.config.code_location.name] | map(select(. != null)) | .[0] // ""' "$info" 2>/dev/null)
-    if [[ -z "$cl_name" || "$cl_name" == "null" ]]; then
-        log_error "'$template_id' declares a check in its code location but no code_location.name."
-        return 1
-    fi
-
-    desc=$(yq -r '.commands.check.description // ""' "$info" 2>/dev/null)
-    local pod
-    pod=$(kubectl get pods -n dagster -l "deployment=$cl_name" \
-            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    if [[ -z "$pod" ]]; then
-        log_error "No running pod for code location '$cl_name' in namespace dagster."
-        echo "    The application is not deployed, or its location is not up." >&2
-        echo "    NOTHING WAS CHECKED — this is not a clean result." >&2
+    cl_csv=$(app_id="$template_id" yq -r '[.applications[]? | select(.id == strenv(app_id)) | (.code_locations // []) | join(",")] | .[0] // ""' "$file" 2>/dev/null) || cl_csv=""
+    if [[ -z "$cl_csv" ]]; then
+        log_error "'$template_id' has no install record with a code location."
+        echo "    NOTHING WAS CHECKED — it may not be installed here." >&2
         return 2
     fi
 
     print_section "Check: $template_id"
-    [[ -n "$desc" && "$desc" != "null" ]] && { echo "$desc"; echo ""; }
-    echo "  pod: $pod" >&2
-    echo "" >&2
-
-    # 🔴 PRE-FLIGHT: IS THE COMMAND EVEN THERE?
-    #
-    # imac measured what happens without this, against the real artifact
-    # (ops-dev, #928): atlas's script is in its REPO and not its IMAGE, and psql
-    # is not in the image either. Executed as declared, the result was
-    #
-    #     psql: command not found
-    #     ...a header printed with BLANK VALUES, and exit 0
-    #
-    # ⚠️ A blank value reading as "nothing to report" when the truth is "I could
-    # not look" is the exact failure this command exists to end. Relaying that as
-    # success would put the hole in the platform half instead of the application
-    # half, which is atlas's own point turned on me: "exits 0" is not "the output
-    # reflects the input", and a criterion that accepts the former is satisfied
-    # by a stub.
-    #
-    # UIS cannot judge whether the NUMBERS are right — that is the application's
-    # to own. It can refuse to call an unrunnable command a pass.
-    local probe_rc=0
-    kubectl exec -n dagster "$pod" -- bash -lc "command -v ${run_cmd%% *} >/dev/null 2>&1 || test -x ${run_cmd%% *}" >/dev/null 2>&1 || probe_rc=$?
-    if [[ "$probe_rc" -ne 0 ]]; then
-        echo ""
-        log_warn "'$template_id' declares a check that is not runnable in its pod."
-        echo "    ${run_cmd%% *} is not present or not executable in $pod." >&2
-        echo "" >&2
-        echo "    COULD NOT BE ASKED — this is neither healthy nor unhealthy." >&2
-        echo "    The command must ship IN THE IMAGE, with whatever it needs to" >&2
-        echo "    run there. A script that lives in the application's repository" >&2
-        echo "    is not reachable from here, and one whose dependencies are" >&2
-        echo "    missing prints blanks and exits 0." >&2
-        return 2
-    fi
-
-    # ⚠️ The application's own exit code is the verdict and is passed through.
-    # UIS does not interpret the output — the same contract as `operational`:
-    # the application owns the content, the platform only runs and relays it.
-    shift || true
-    local rc=0
-    kubectl exec -n dagster "$pod" -- bash -lc "$run_cmd $*" || rc=$?
-
-    # 🔴 127 is "a command inside it was not found", which is the blank-values
-    # case one level down: the script ran, something it needed did not exist.
-    # That is state 4, not a failed check.
-    if [[ "$rc" -eq 127 ]]; then
-        echo "" >&2
-        log_warn "The check ran but something it needs was not found (exit 127)."
-        echo "    COULD NOT BE ASKED. Treat any values above as unread, not as zero." >&2
-        return 2
+    CHECK_STATE=""; CHECK_DETAIL=""
+    local _rc=0
+    _check_state "$template_id" "$cl_csv" 1 || _rc=$?
+    if [[ "$_rc" -ne 0 ]]; then
+        CHECK_STATE="uis-error"; CHECK_DETAIL="evaluator exited $_rc"
+    elif [[ -z "$CHECK_STATE" ]]; then
+        CHECK_STATE="uis-error"; CHECK_DETAIL="evaluator set no state"
     fi
 
     echo "" >&2
-    if [[ "$rc" -eq 0 ]]; then
-        # 🔵 "reported", not "verified". UIS ran the application's command and
-        # relayed its answer; it did not check the answer. Saying more than that
-        # would be the platform making the claim the application is responsible
-        # for — and a stub would satisfy it.
-        echo "  $template_id reported success (exit 0). UIS relayed this; it did not verify it." >&2
-    else
-        echo "  $template_id reported a problem (exit $rc)." >&2
-    fi
-    return "$rc"
+    case "$CHECK_STATE" in
+        healthy)
+            echo "  $template_id reported success. UIS relayed this; it did not verify it." >&2
+            return 0 ;;
+        unhealthy)
+            log_warn "$template_id $CHECK_DETAIL"
+            return 1 ;;
+        no-check)
+            log_warn "'$template_id' declares no check command."
+            echo "    This application cannot tell you whether its output reflects" >&2
+            echo "    its input. Its pods may be healthy and its data still wrong." >&2
+            echo "" >&2
+            echo "    An application declares one in template-info.yaml:" >&2
+            echo "      commands:" >&2
+            echo "        check:" >&2
+            echo "          run: /path/to/script   # must ship IN THE IMAGE" >&2
+            echo "          in: code-location" >&2
+            return 2 ;;
+        could-not-ask)
+            log_warn "COULD NOT BE ASKED — $CHECK_DETAIL"
+            echo "    This is neither healthy nor unhealthy. NOTHING WAS CHECKED." >&2
+            return 2 ;;
+        *)
+            log_error "UIS failed to evaluate '$template_id': $CHECK_DETAIL"
+            echo "    That is a defect here, not a state of the application." >&2
+            return 1 ;;
+    esac
 }
 
 # Command: uis template remove <id> [--purge] [--yes]

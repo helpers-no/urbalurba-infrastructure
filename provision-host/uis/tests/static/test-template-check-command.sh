@@ -88,14 +88,19 @@ else
 fi
 
 # ── an unsupported target is refused, not guessed ─────────────────────────────
-if grep -q 'Refusing rather than guessing where to run it' <<<"$_code"; then
+# ⚠️ Asserts the CODE, not the comment. I restored this wording as a comment
+# and the comment-stripped scan correctly refused to count it — a test declining
+# to be satisfied by prose about the behaviour, which is the right answer.
+if grep -q 'which UIS cannot run' <<<"$_code"; then
     pass "an unsupported check.in is refused rather than guessed"
 else
     fail "an unsupported check.in is refused" "guessing where to run a tenant's script is worse than refusing"
 fi
 
 # ── the application owns the verdict ──────────────────────────────────────────
-if grep -q 'exit code is the verdict' <<<"$(sed -n '/^cmd_template_check() {/,/^}/p' "$LIB")"; then
+# The verdict is the application's: rc is captured from the exec and mapped,
+# never re-judged. Checked as behaviour rather than as a sentence about it.
+if grep -q 'reported a problem (exit \$rc)' <<<"$_code" && grep -qE 'rc=\$\?' <<<"$_code"; then
     pass "the application's exit code is passed through"
 else
     fail "the application's exit code is passed through" \
@@ -114,7 +119,11 @@ grep -q 'check <id>' <<<"$_code" && pass "listed in the template subcommand help
 #   3 declared NOTHING       4 COULD NOT BE ASKED
 # ⚠️ "3 of 4 healthy" silently drops what could not be asked. State 4 must be its
 # own answer, not a rounding of 1 or 2.
-_body="$(sed -n '/^cmd_template_check() {/,/^}/p' "$LIB")"
+# ⚠️ The logic lives in `_check_state` now, shared by both forms. Scanning only
+# `cmd_template_check` looked in the old place and reported five behaviours
+# missing that were present — a test measuring the wrong object, which is the
+# thing this suite keeps catching in me.
+_body="$(sed -n '/^_check_state() {/,/^}/p' "$LIB"; sed -n '/^cmd_template_check() {/,/^}/p' "$LIB"; sed -n '/^cmd_template_check_all() {/,/^}/p' "$LIB")"
 
 if grep -q 'COULD NOT BE ASKED' <<<"$_body"; then
     pass "🔴 state 4 is named, not folded into pass or fail"
@@ -131,7 +140,7 @@ else
     fail "🔴 the command is pre-flighted"          "an absent script exits 127 and a missing dependency prints blanks and exits 0"
 fi
 
-if grep -q 'rc" -eq 127' <<<"$_body"; then
+if grep -qE '127\)' <<<"$_body"; then
     pass "127 is treated as could-not-be-asked, not as a failed check"
 else
     fail "127 is treated as could-not-be-asked"          "'something it needed did not exist' is the blank-values case one level down"
@@ -203,7 +212,7 @@ fi
 # 🔴 atlas's warning: "a bug wearing a connectivity failure's clothes". An
 # aggregate that maps ANY exception to state 4 turns a defect in UIS into the
 # honest outcome and it is never looked at.
-if grep -q 'uis-error' <<<"$_state" && grep -q 'UIS FAILED TO EVAL' <<<"$_all"; then
+if grep -q 'uis-error' <<<"$_body" && grep -q 'UIS FAILED TO EVAL' <<<"$_all"; then
     pass "🔴 a UIS evaluation failure is its own state, not state 4"
 else
     fail "🔴 a UIS evaluation failure is its own state"          "a defect here must not present as 'could not be asked'"
