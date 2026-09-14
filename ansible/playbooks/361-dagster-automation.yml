@@ -196,9 +196,13 @@
     # default_status=RUNNING. A flag named `stop` that quietly reverted to
     # RUNNING would be the worst kind of surprise, so reset is left as its own
     # future verb rather than folded into this one.
+    # ⚠️ PAST TENSE IS A LOOKUP, NOT A SUFFIX. `_action ~ "ed"` printed
+    # "5 stoped" — one 'p', in the line an operator reads as THE OUTCOME
+    # (imac via ops-dev, urb-agents#1009). English is not a string operation.
     - name: "A1. Which instigators are not already in the requested state"
       ansible.builtin.set_fact:
         _want: "{{ (_action == 'start') | ternary('RUNNING', 'STOPPED') }}"
+        _acted: "{{ (_action == 'start') | ternary('started', 'stopped') }}"
         _to_change: >-
           {{ (_action == 'start') | ternary(_stopped, _running) }}
         _already: >-
@@ -233,6 +237,13 @@
     # application declares `operational.first_data.how` — so this prints what the
     # tenant documented and requires a decision. `yes=true` is the scripted path,
     # and its ABSENCE non-interactively refuses rather than assuming consent.
+    #
+    # ⚠️ STOPPING GETS ITS OWN REASON, not this one reworded. It contacts
+    # nothing; what it does is end scheduled work while every check keeps
+    # reporting healthy — which is precisely the failure that produced this
+    # command. The first version of this printed the start path's reasoning for
+    # a stop, and a correct refusal with an incorrect reason is a half-working
+    # instrument (imac via ops-dev, #1009).
     - name: "A3. What this will do, and what it will not"
       ansible.builtin.debug:
         msg: >-
@@ -258,7 +269,17 @@
                "   — before saying yes.",
              ], [
                "This sets instigator state and nothing else. Runs already in",
-               "flight are not cancelled.",
+               "flight are NOT cancelled — stopping an instigator prevents the",
+               "next fire, it does not reach into work already launched.",
+               "",
+               "⚠️ Afterwards NOTHING IS FETCHED, and the installation still",
+               "   reports healthy. That combination — stopped automation behind",
+               "   green checks — is the failure this command was written to make",
+               "   visible, so leaving it stopped by accident is the thing to",
+               "   avoid here.",
+               "",
+               "🔵 `./uis dagster automation --expect stopped` afterwards proves",
+               "   the hold is in place, which is what that flag was written for.",
              ]) }}
       when: _action != '' and (_to_change | length) > 0
 
@@ -410,7 +431,7 @@
     - name: "A12. RESULT"
       ansible.builtin.debug:
         msg: >-
-          {{ [(_to_change | length) ~ " " ~ _action ~ "ed, "
+          {{ [(_to_change | length) ~ " " ~ _acted ~ ", "
               ~ (_already | length) ~ " already " ~ _want ~ ", "
               ~ (_at_default | length) ~ " of " ~ (_after_all | length)
               ~ " ship at their default of STOPPED.", ""]

@@ -2582,13 +2582,35 @@ cmd_dagster_automation() {
         return "$EXIT_GENERAL_ERROR"
     fi
 
-    # ⚠️ Non-interactive without --yes REFUSES rather than assuming consent.
-    # Enabling automation contacts external services and starts real work; the
-    # application's own words are "a go-live decision, not a side effect".
+    # ⚠️ Non-interactive without --yes REFUSES rather than assuming consent —
+    # and the REASON is different for each direction.
+    #
+    # 🔴 THIS PRINTED THE START PATH'S REASONING FOR A STOP. "Refusing rather
+    # than assuming consent for something that contacts external services" is
+    # true of `--start` and backwards for `--stop`, which makes the system stop
+    # contacting things (imac via ops-dev, urb-agents#1009).
+    #
+    # A correct refusal with an incorrect reason is a half-working instrument,
+    # and it is the small cousin of the loopback guard withdrawn the same day:
+    # there the refusal was right and the remedy it printed told a tenant to
+    # hardcode a value the platform had already moved once.
+    #
+    # ⚠️ Stopping deserves its own confirmation for its own reason. The defect
+    # that produced this whole command was automation sitting STOPPED while
+    # every signal read green — so a stop nobody meant to perform is exactly
+    # how a working installation goes quietly idle again.
     if [[ -n "$action" && "$assume_yes" != true && ! -t 0 ]]; then
         log_error "'--$action' needs a confirmation and stdin is not a terminal."
-        echo "  Pass --yes to confirm in a script. Refusing rather than assuming" >&2
-        echo "  consent for something that contacts external services." >&2
+        echo "  Pass --yes to confirm in a script." >&2
+        if [[ "$action" == "start" ]]; then
+            echo "  Refusing rather than assuming consent: starting automation" >&2
+            echo "  contacts external services and begins real work." >&2
+        else
+            echo "  Refusing rather than assuming consent: stopping automation" >&2
+            echo "  ends scheduled work. Nothing is fetched afterwards, and a" >&2
+            echo "  stopped installation still reports healthy — which is the" >&2
+            echo "  failure this command exists to make visible." >&2
+        fi
         return "$EXIT_GENERAL_ERROR"
     fi
 
