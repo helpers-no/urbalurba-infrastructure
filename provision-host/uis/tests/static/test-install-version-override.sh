@@ -62,9 +62,41 @@ _try() {  # $1 = spec -> sets TRY_RC
 
 _try "v20260914-1fa7961@$GOOD"; rc="$TRY_RC"
 if [[ "$rc" == "0" && "$SOURCE_DIGEST" == "$GOOD" && "$OFF_CATALOGUE" == "1" ]]; then
-    pass "a tag@digest overrides the catalogue pin"
+    pass "🔴 a DIFFERENT tag@digest overrides the pin and marks the host off-catalogue"
 else
-    fail "a tag@digest overrides the catalogue pin" "rc=$rc digest=$SOURCE_DIGEST off=$OFF_CATALOGUE"
+    fail "🔴 a different tag@digest marks the host off-catalogue" "rc=$rc digest=$SOURCE_DIGEST off=$OFF_CATALOGUE"
+fi
+
+# 🔴 OFF-CATALOGUE IS A COMPARISON, NOT A FLAG-PRESENCE TEST. 1.6.88 set the
+# marker whenever --version was used, so passing the pin the catalogue itself
+# advertises printed "this is not what the catalogue points at" directly above
+# the catalogue pointer it had just matched (imac via ops-dev, #987).
+#
+# ⚠️ The intended use is verifying a NOMINEE, and a nominee is normally the pin
+# about to BECOME the catalogue pin — so the ordinary path left a false "not
+# current" claim on the verification host.
+_try "v20260914-9509ea5@$CAT"; rc="$TRY_RC"
+if [[ "$rc" == "0" && "$OFF_CATALOGUE" == "0" ]]; then
+    pass "🔴 --version naming exactly the catalogue pin is NOT off-catalogue"
+else
+    fail "🔴 --version naming exactly the catalogue pin is not off-catalogue" \
+         "rc=$rc off=$OFF_CATALOGUE — this claimed a difference against an identical pin"
+fi
+
+if ! grep -q "OFF-CATALOGUE INSTALL" "$TMP/out"; then
+    pass "and it does not print the off-catalogue banner in that case"
+else
+    fail "it does not print the banner for an identical pin" \
+         "the banner contradicted itself two lines apart: $(cat "$TMP/out")"
+fi
+
+# ⚠️ A digest that matches while the TAG differs is still a difference worth
+# marking — the same bytes under another name is not the catalogue's pin.
+_try "v20260914-other@$CAT"; rc="$TRY_RC"
+if [[ "$OFF_CATALOGUE" == "1" ]]; then
+    pass "a matching digest under a different tag is still off-catalogue"
+else
+    fail "a matching digest under a different tag is still off-catalogue" "off=$OFF_CATALOGUE"
 fi
 
 # 🔴 THE LOAD-BEARING REFUSAL. Off-catalogue is precisely where nothing has
@@ -138,6 +170,73 @@ if [[ -z "$out" ]]; then
     pass "🔴 a catalogue install silences it — the warning does not cry wolf"
 else
     fail "🔴 a catalogue install silences it" "still warning on a current host: $out"
+fi
+
+# 🔴 SELF-CLEARING. A nominee verified with --version is normally the pin about
+# to BECOME the catalogue pin, so a marker only a reinstall could retract left a
+# false "not current" claim on the verification host from the moment
+# dev-templates caught up (ops-dev, #987).
+OFF_CATALOGUE=1 CATALOGUE_DIGEST="$CAT" \
+    _record_application testapp art v-old "$GOOD" "dagster" "cl" '{}' "" testapp >/dev/null 2>&1
+out="$(_report_off_catalogue testapp "$CAT" 2>&1)"
+if [[ "$out" == *"OFF-CATALOGUE install"* ]]; then
+    pass "🔴 true positive: it DOES report when the recorded pin differs from the catalogue"
+else
+    fail "🔴 true positive: it reports a genuine difference" \
+         "silent on a host that really is off-catalogue: $out"
+fi
+
+out="$(_report_off_catalogue testapp "$GOOD" 2>&1)"
+if [[ -z "$out" ]]; then
+    pass "🔴 and it CLEARS ITSELF when the catalogue moves to that pin — no reinstall"
+else
+    fail "🔴 it clears itself when the catalogue moves to that pin" \
+         "still claiming 'not current' about a host that now is: $out"
+fi
+
+# ⚠️ Both conditions, not either. Comparing pins alone would warn on every host
+# whose catalogue has moved since install — that is "behind", a different thing,
+# and would be the cry-wolf failure this record already had once.
+# 🔴 THE BEHAVIOURAL VERSION, because the structural one was not enough. A
+# mutation dropping the provenance condition left all 18 assertions passing:
+# nothing exercised "installed FROM the catalogue, and the catalogue then moved
+# on". That host is BEHIND, which is a different thing, and warning about it
+# would be the cry-wolf failure this record already had once.
+OFF_CATALOGUE=0 CATALOGUE_DIGEST="$GOOD" \
+    _record_application testapp art v-cat "$GOOD" "dagster" "cl" '{}' "" testapp >/dev/null 2>&1
+out="$(_report_off_catalogue testapp "$CAT" 2>&1)"
+if [[ -z "$out" ]]; then
+    pass "🔴 a catalogue install whose catalogue MOVED ON is silent — behind is not off-catalogue"
+else
+    fail "🔴 a catalogue install whose catalogue moved on is silent" \
+         "warning about a host that never used --version: $out"
+fi
+
+# ⚠️ Comments stripped: a scan that can match the prose explaining a rule is a
+# scan that passes when the rule is gone. That has happened in this repo.
+_rep="$(sed -n '/^_report_off_catalogue() {/,/^}$/p' "$LIB" | grep -v '^[[:space:]]*#')"
+if grep -q 'off_catalogue == true' <<<"$_rep" && grep -q '!= \$cat' <<<"$_rep"; then
+    pass "⚠️ the report needs BOTH --version provenance and a live difference"
+else
+    fail "⚠️ the report needs both provenance and a live difference" \
+         "one condition alone re-opens a false-positive class"
+fi
+
+# ⚠️ With no catalogue pin to compare against it must say it could not compare,
+# rather than reporting either currency or drift.
+#
+# ⚠️ Re-record off-catalogue first: the record is keyed on app_name, so the
+# catalogue-install assertion above REPLACED it. Without this line the
+# assertion below passed for the wrong reason — no matching row rather than a
+# correct refusal to guess. Found by a mutation that should have failed and did
+# not.
+OFF_CATALOGUE=1 CATALOGUE_DIGEST="$CAT" \
+    _record_application testapp art v-old "$GOOD" "dagster" "cl" '{}' "" testapp >/dev/null 2>&1
+out="$(_report_off_catalogue testapp "" 2>&1)"
+if [[ "$out" == *"could NOT be determined"* ]]; then
+    pass "⚠️ an unreadable catalogue pin is 'could not compare', not a drift claim"
+else
+    fail "⚠️ an unreadable catalogue pin is 'could not compare'" "out=$out"
 fi
 
 # ⚠️ And the row must not arrive as one field. mikefarah `+ "\t" +` emits a
