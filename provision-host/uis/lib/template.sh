@@ -156,6 +156,27 @@ _apply_off_catalogue_version() {
 
     SOURCE_TAG="$tag"
     SOURCE_DIGEST="$digest"
+
+    # 🔴 OFF-CATALOGUE IS A COMPARISON, NOT A FLAG-PRESENCE TEST.
+    #
+    # 1.6.88 set the marker whenever `--version` was used. imac passed the pin
+    # the catalogue itself advertises — byte-identical tag AND digest — and got
+    # "this is not what the catalogue points at" printed directly above the
+    # catalogue pointer it had just matched (ops-dev, #987).
+    #
+    # ⚠️ And it was worse than a contradiction in the output. The flag exists to
+    # verify a NOMINEE, and a nominee is normally the pin about to BECOME the
+    # catalogue pin — so the ordinary intended use left a false "not current"
+    # claim on the verification host, retractable only by a plain reinstall.
+    # "Is this host current?" is the question actually being asked about that
+    # host, and the marker made the honest answer read as no.
+    if [[ "$tag" == "$CATALOGUE_TAG" && "$digest" == "$CATALOGUE_DIGEST" ]]; then
+        OFF_CATALOGUE=0
+        log_info "--version names exactly what the catalogue points at — installing normally."
+        echo "    ${tag}  ${digest}" >&2
+        return 0
+    fi
+
     OFF_CATALOGUE=1
 
     # ⚠️ LOUD, because the whole risk of this flag is that it stops looking
@@ -166,9 +187,9 @@ _apply_off_catalogue_version() {
     echo "    catalogue: ${CATALOGUE_TAG}  ${CATALOGUE_DIGEST}" >&2
     echo "    installing: ${SOURCE_TAG}  ${SOURCE_DIGEST}" >&2
     echo "" >&2
-    echo "  This is recorded, so the host does not quietly read as current." >&2
-    echo "  'uis template info $template_id' will say so until a catalogue" >&2
-    echo "  install replaces it." >&2
+    echo "  This is recorded. It clears itself once the catalogue points here —" >&2
+    echo "  'uis template info $template_id' compares against the catalogue as it" >&2
+    echo "  stands, so no reinstall is needed to retract the claim." >&2
     echo "" >&2
     return 0
 }
@@ -1593,20 +1614,49 @@ _report_off_catalogue() {
     #
     # ⚠️ jq's semantics here are the predictable ones, and converting costs one
     # process on a command that already does network I/O.
-    rows=$(yq -o=json "$file" 2>/dev/null | jq -r --arg id "$id" \
+    # 🔴 SELF-CLEARING, BECAUSE THE CLAIM IS ABOUT NOW AND THE RECORD IS ABOUT
+    # THEN. A nominee verified with `--version` is normally the pin about to
+    # BECOME the catalogue pin, so a marker that only a reinstall could retract
+    # left a false "not current" claim on the verification host from the moment
+    # dev-templates caught up (ops-dev, #987).
+    #
+    # So this reports on TWO conditions, and needs both:
+    #   the install used --version           (provenance, from the record)
+    #   the recorded pin differs from the catalogue AS IT STANDS NOW
+    #
+    # ⚠️ BOTH, not either. Comparing pins alone would warn on every host whose
+    # catalogue has moved since install — which is "behind", a different thing,
+    # and would be the cry-wolf failure this record already had once.
+    #
+    # ⚠️ And with no catalogue digest to compare against, this says it could not
+    # compare rather than reporting either currency or drift. A marker that
+    # guesses in the dark is the thing it exists to replace.
+    rows=$(yq -o=json "$file" 2>/dev/null | jq -r --arg id "$id" --arg cat "$catalogue_digest" \
         '.applications[]? | select(.id == $id and .off_catalogue == true)
+         | select($cat == "" or (.pin // "") != $cat)
          | [(.app_name // "?"), (.tag // "?"), (.pin // "?")] | @tsv' 2>/dev/null) || return 0
     [[ -z "$rows" ]] && return 0
     echo "" >&2
-    log_warn "This host has an OFF-CATALOGUE install of '$id'."
+    if [[ -z "$catalogue_digest" ]]; then
+        log_warn "'$id' was installed with --version here, and the catalogue pin could not be read."
+    else
+        log_warn "This host has an OFF-CATALOGUE install of '$id'."
+    fi
     while IFS=$'\t' read -r an tg pn; do
         [[ -z "$an" ]] && continue
         echo "    $an  installed at $tg" >&2
         echo "             $pn" >&2
     done <<< "$rows"
-    [[ -n "$catalogue_digest" ]] && echo "    catalogue now points at $catalogue_digest" >&2
+    if [[ -z "$catalogue_digest" ]]; then
+        echo "  Whether that is still current could NOT be determined — the" >&2
+        echo "  comparison needs the catalogue entry, and this is not a claim" >&2
+        echo "  that the host has drifted." >&2
+        return 0
+    fi
+    echo "    catalogue now points at $catalogue_digest" >&2
     echo "  It was installed with --version, so it is deliberate — but it is not" >&2
-    echo "  current. A plain 'uis template install $id' replaces it." >&2
+    echo "  current. A plain 'uis template install $id' replaces it, and this" >&2
+    echo "  notice clears itself if the catalogue moves here instead." >&2
     return 0
 }
 
