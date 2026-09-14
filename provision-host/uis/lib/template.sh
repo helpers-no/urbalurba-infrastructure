@@ -2332,7 +2332,7 @@ CHECK_DETAIL=""
 # Every capture is now `|| true`-guarded and the status read deliberately.
 _check_state() {
     local app_id="$1" cl_csv="${2:-}" verbose="${3:-0}"
-    CHECK_STATE=""; CHECK_DETAIL=""
+    CHECK_STATE=""; CHECK_DETAIL=""; CHECK_SCOPE=""
 
     local template info dir artifact tag digest vis
     template=$(_get_template "$app_id" 2>/dev/null) || true
@@ -2361,6 +2361,19 @@ _check_state() {
         # runtime one, and they need different fixes from different people.
         CHECK_STATE="no-check"; CHECK_DETAIL="declares no check command"; return 0
     fi
+    # 🔴 WHAT THE APPLICATION SAYS ITS CHECK COVERS.
+    #
+    # atlas's check answers "is Brreg internally consistent" and was PRESENTED
+    # as "is atlas working" — 41 other ingest sources are covered by a 24-hour
+    # window that cannot see a weekly source going stale, and a healthy exit 0
+    # stood while a third of the data might not have moved (Terje via ops-dev,
+    # urb-agents#1040).
+    #
+    # ⚠️ UIS cannot widen a tenant's check. What it can stop doing is relaying a
+    # narrow verdict as though it were a broad one — and the narrowing is
+    # ALREADY DECLARED, in the description UIS reads in order to run the check
+    # and then showed to nobody on this surface.
+    CHECK_SCOPE=$(yq -r '.commands.check.description // ""' "$info" 2>/dev/null) || CHECK_SCOPE=""
     where=$(yq -r '.commands.check.in // "code-location"' "$info" 2>/dev/null) || where="code-location"
     if [[ "$where" != "code-location" ]]; then
         # Refusing rather than guessing where to run it: a tenant's script in
@@ -3054,6 +3067,18 @@ cmd_template_check() {
     case "$CHECK_STATE" in
         healthy)
             echo "  $template_id reported success. UIS relayed this; it did not verify it." >&2
+            # ⚠️ AND SAY WHAT THE SUCCESS WAS ABOUT. "Reported success" reads as
+            # "the application is working"; the application's own description
+            # says which question it answered. Anything outside that question is
+            # not covered by this exit code, and only the declaration can say
+            # where the edge is.
+            if [[ -n "$CHECK_SCOPE" ]]; then
+                echo "" >&2
+                echo "  What that verdict covers, in the application's own words:" >&2
+                printf '    %s\n' "$(printf '%s' "$CHECK_SCOPE" | tr '\n' ' ' | sed 's/  */ /g')" >&2
+                echo "    ⚠️  Anything outside that question is NOT covered by this" >&2
+                echo "        exit code, however healthy it reads." >&2
+            fi
             local _q=0
             _check_qualify_by_automation healthy || _q=$?
             [[ "$_q" -eq 2 ]] && return 2

@@ -60,6 +60,7 @@
     ,"requires": ["postgresql"]
     ,"helmChart": "dagster/dagster"
     ,"namespace": "dagster"
+    ,"inCluster": { "scheme": "http", "nameTemplate": "dagster-dagster-webserver", "port": 80 }
   }
 ,
   {
