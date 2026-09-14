@@ -1016,7 +1016,7 @@ TEMPLATE_CONFIG_KEYS="database init schemas url_prefix namespace secret_name_pre
 # the schema, the deploy-time verification and the docs, and atlas declared it,
 # while this line silently dropped it one step before the renderer did
 # (imac via ops-dev, #745).
-TEMPLATE_CODE_LOCATION_KEYS="name image tag module why env_secrets digest"
+TEMPLATE_CODE_LOCATION_KEYS="name image tag module why env_secrets digest env_from_exports"
 
 # Write one service's config to $plan_dir/<service_id>.conf as key=value lines.
 #
@@ -1055,7 +1055,15 @@ _write_service_conf() {
     if [[ "$(yq -r ".provides.services[$idx].config | has(\"code_location\")" "$info_file" 2>/dev/null)" == "true" ]]; then
         local ck
         for ck in $TEMPLATE_CODE_LOCATION_KEYS; do
-            if [[ "$ck" == "env_secrets" ]]; then
+            if [[ "$ck" == "env_from_exports" ]]; then
+                # 🔴 A MAP, flattened to one JSON line. The conf file is flat
+                # key=value, and `env_secrets` solves the list case by joining
+                # on commas — that does not work here because both the variable
+                # NAME and the export KEY matter and either may contain
+                # characters a separator would claim.
+                v=$(yq -o=json -I0 ".provides.services[$idx].config.code_location.env_from_exports // {}" "$info_file" 2>/dev/null)
+                [[ "$v" == "{}" ]] && v=""
+            elif [[ "$ck" == "env_secrets" ]]; then
                 # 🔴 A SCALAR IS LEGAL AND USED TO BE SILENTLY DISCARDED.
                 #
                 # This read only handled the list form: `"a-string" | join(",")`
@@ -1603,7 +1611,7 @@ _code_locations_file() {
 # in order to roll the pod at all.
 _write_code_location() {
     local cl_name="$1" cl_image="$2" cl_tag="$3" cl_module="$4" cl_why="$5" cl_env_secrets="${6:-}"
-    local cl_digest="${7:-}"
+    local cl_digest="${7:-}" cl_env_map="${8:-}" cl_exports="${9:-{\}}"
     local file
     file="$(_code_locations_file)"
 
@@ -1655,6 +1663,40 @@ _write_code_location() {
             = (strenv(cl_env_secrets) | split(","))'
         if ! cl_name="$cl_name" cl_env_secrets="$cl_env_secrets" yq -i "$sec_expr" "$file"; then
             log_error "Failed to write env_secrets for '$cl_name'"
+            return 1
+        fi
+    fi
+
+    # 🔴 Resolve NAME -> export key -> value, and REFUSE on a missing export
+    # rather than writing an empty one. An env var set to "" is not the same as
+    # unset and is worse: the check would run, reach nothing, and have to guess
+    # why — which is the state this whole command exists to make legible.
+    if [[ -n "$cl_env_map" && "$cl_env_map" != "{}" ]]; then
+        local _pairs _n _k _val _missing=""
+        # ⚠️ `-r`, not `-o=json`. The JSON form quotes each string, so the
+        # variable name arrived as `"ATLAS_POSTGREST_URL` and the export key as
+        # `api-url"` — the lookup missed, the write was refused, and the error
+        # message showed the stray quotes. Found by running it.
+        _pairs=$(printf '%s' "$cl_env_map" | yq -r 'to_entries | .[] | .key + "=" + .value' 2>/dev/null) || _pairs=""
+        while IFS= read -r _pair; do
+            [[ -z "$_pair" ]] && continue
+            _n="${_pair%%=*}"; _k="${_pair#*=}"
+            _val=$(printf '%s' "$cl_exports" | exp_k="$_k" yq -r '.[strenv(exp_k)] // ""' 2>/dev/null) || _val=""
+            if [[ -z "$_val" ]]; then
+                _missing+="$_n (export '$_k') "
+                continue
+            fi
+            local env_expr='(.code_locations[] | select(.name == strenv(cl_name)) | .env[strenv(en)]) = strenv(ev)'
+            if ! cl_name="$cl_name" en="$_n" ev="$_val" yq -i "$env_expr" "$file"; then
+                log_error "Failed to write env var '$_n' for '$cl_name'"
+                return 1
+            fi
+        done <<< "$_pairs"
+        if [[ -n "$_missing" ]]; then
+            log_error "Code location '$cl_name' declares env_from_exports naming exports that do not exist:"
+            echo "    ${_missing% }" >&2
+            echo "  Refusing: an env var set to empty is not the same as unset, and" >&2
+            echo "  the check would reach nothing and have to guess why." >&2
             return 1
         fi
     fi
@@ -2775,7 +2817,26 @@ cmd_template_install() {
                 log_info "Wiring the Secret this install created into '$cl_n': $plan_secret"
             fi
 
-            _write_code_location "$cl_n" "$cl_i" "$cl_t" "$cl_m" "$cl_w" "$cl_s" "$cl_d" || return 1
+            # 🔴 THE INSTALLER ALREADY KNOWS THE VALUE AND WAS NOT PASSING IT.
+            #
+            # atlas's check needs ATLAS_POSTGREST_URL; the artifact exports
+            # `api-url: http://api-{{ params.app_name }}.localhost`; the
+            # installer computes it and PRINTS it to the operator — and the pod
+            # that runs the check never sees it. So a stock install reported
+            # "could not look" on a healthy application (ops-dev, #950).
+            #
+            # ⚠️ atlas declined the easy fix and was right to: "a tool that
+            # answers 'healthy' without ever asking the public API is the false
+            # pass this whole command exists to prevent." The cannot-look state
+            # is the SAFETY NET; the variable arriving is the OUTCOME.
+            #
+            # 🔵 Declared as NAME -> export key, not as a value, so nothing is
+            # restated. The definition already says what the URL is once.
+            local cl_e cl_x
+            cl_e=$(_conf_get "$conf" code_location_env_from_exports)
+            cl_x="{}"
+            [[ -n "$cl_e" ]] && cl_x=$(_collect_exports "$info_file" "$params_file")
+            _write_code_location "$cl_n" "$cl_i" "$cl_t" "$cl_m" "$cl_w" "$cl_s" "$cl_d" "$cl_e" "$cl_x" || return 1
 
             log_info "Redeploying $svc so it picks up the code location..."
             if ! uis deploy "$svc" >&2; then

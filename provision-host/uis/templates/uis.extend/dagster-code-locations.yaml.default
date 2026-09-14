@@ -71,6 +71,24 @@ code_locations: []
 #                         image field to CHANGE to roll the pod, so `latest`
 #                         silently keeps serving old code after a "successful"
 #                         deploy
+#   env         optional  plain environment variables for the pod, written by
+#                         `uis template install` from the application's own
+#                         exports. Not hand-written in the normal case.
+#
+#    🔵 An application declares `env_from_exports` in its artifact as
+#       NAME -> export key, and the installer resolves it:
+#
+#         code_location:
+#           env_from_exports:
+#             ATLAS_POSTGREST_URL: api-url
+#
+#       The value is whatever `exports.api-url` resolved to at install. Nothing
+#       is restated — the definition already says what the URL is, once.
+#
+#    ⚠️ A named export that does not exist REFUSES the install. An env var set
+#       to empty is not the same as unset and is worse: the check would run,
+#       reach nothing, and have to guess why.
+#
 #   resources   optional  requests for the code-location pod. UIS sets a default
 #                         of cpu 100m / memory 384Mi; declare this only if your
 #                         image genuinely needs more.
