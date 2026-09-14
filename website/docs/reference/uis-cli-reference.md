@@ -341,6 +341,90 @@ service's extend file" mechanism.** Two other files would qualify
 (`prometheus-targets.yaml`, `monitors.yaml`) and the generic form was declined:
 one consumer does not tell you the shape of three.
 
+### `commands:` — letting an operator ask whether your output is still true
+
+An optional top-level block in the **artifact**. UIS runs what it declares and
+interprets nothing:
+
+```yaml
+commands:
+  check:
+    description: "Does the output reflect the input?"
+    run: /opt/atlas/atlas-status.sh
+    in: code-location
+```
+
+Surfaced as `uis template check <id>`, which execs `run` in the code location's
+pod and passes the application's own exit code straight through.
+
+:::danger Every other check in this platform asks whether a component is healthy
+An application served a **deleted company over its public API for 7.5 hours**
+while every operator-visible signal was green:
+
+```
+feed job SUCCESS every 30 min · exit_code 0 · backlog 0
+watermark advancing · GET /entity 200 · 5 instigators RUNNING
+
+meanwhile  the transform had failed 16 consecutive times
+           119 changes unapplied — 22 of them deletions
+           the register 8.4 hours stale
+```
+
+It was found because a human asked a question. **`uis verify dagster` would have
+passed throughout** — it proves the daemon can fire schedules, not that the data
+is right.
+:::
+
+:::note Why `check` and not `status`
+`status` already means *is it up* in four places, and `verify` means *does this
+component work* in about six. This command asks neither. Giving it either word
+would give the same name to the claim that was **true** during those 7.5 hours
+and the claim that was **false**.
+:::
+
+:::danger The command must ship IN THE IMAGE, with what it needs
+Measured against a real artifact before this shipped: the application's script
+lived in its **repository**, not its image, and `psql` was absent from the image
+too. Run as declared it printed a header of **blank values and exited 0**.
+
+A blank reading as *"nothing to report"* when the truth is *"I could not look"*
+is the failure this command exists to end — so UIS pre-flights that the command
+is present and executable, and treats exit **127** as *could not be asked* rather
+than as a failed check.
+:::
+
+:::note UIS relays the answer; it does not certify it
+On exit 0 the output says **"reported success. UIS relayed this; it did not
+verify it."**
+
+The application's own point, applied to the platform: *"exits 0" is not "the
+output reflects the input", and a criterion that accepts the former will be
+satisfied by a stub.* UIS cannot judge whether the numbers are right — that is
+the application's to own. It can refuse to claim it did.
+:::
+
+:::warning An application that declares nothing says so
+`uis template check` on an application with no `commands.check` reports that it
+**cannot tell you whether its output reflects its input**, and exits **2** —
+distinct from 1, so a script can tell *"checked, and it is wrong"* from *"there
+is nothing here that can check"*. A missing pod exits 2 as well, saying
+**NOTHING WAS CHECKED**.
+
+Silence would make this a thing one application has and nobody else does.
+
+**Four states, and conflating any two is the defect:**
+
+| | |
+|---|---|
+| 1 | declared, healthy |
+| 2 | declared, unhealthy |
+| 3 | declared **nothing** |
+| 4 | **could not be asked** |
+
+*"3 of 4 healthy"* silently drops what it could not ask. A stopped application
+must still produce a line, in state 4, with a reason — not vanish from the list.
+:::
+
 ### `operational:` — what installing this will actually do
 
 An optional top-level block in the **artifact**, rendered by
