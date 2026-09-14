@@ -13,19 +13,28 @@
 # for eleven days. Nobody was wrong — the checks answered the question they were
 # asked. This playbook asks the other one.
 #
-# It reports; it does not change anything. Turning automation on or off is a
-# separate action and deliberately not in here (see the note at the foot).
+# It reports by default, and switches automation on or off when asked. See the
+# note at the foot for what is proven and what is still unobserved.
 #
 # Usage:
 #   ansible-playbook 361-dagster-automation.yml -e "target_host=rancher-desktop"
 #   ansible-playbook 361-dagster-automation.yml -e "target_host=... expect=running"
+#   ansible-playbook 361-dagster-automation.yml -e "target_host=... action=start yes=true"
 #   ./uis dagster automation
 #   ./uis dagster automation --expect running
+#   ./uis dagster automation --start        (confirms; --yes for scripts)
 #
 # `expect` turns a report into an assertion:
 #   running  every schedule and sensor must be RUNNING; any STOPPED one fails
 #   stopped  every one must be STOPPED — for restoring a deliberate fixture
 #   (unset)  report only, exit 0 whatever the state
+#
+# `action` changes state, then RE-READS and refuses success on a partial change:
+#   start    switch on every schedule and sensor not already RUNNING
+#   stop     switch off every one not already STOPPED. Deterministically
+#            STOPPED — `resetSchedule`/`resetSensor` revert to `defaultStatus`
+#            instead, which is a DIFFERENT verb and not this one
+#   (unset)  change nothing
 
 - name: Report Dagster automation state
   hosts: localhost
@@ -38,6 +47,8 @@
     merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
     probe: "dagster-automation-{{ 9999 | random }}"
     _expect: "{{ expect | default('') }}"
+    _action: "{{ action | default('') }}"
+    _assume_yes: "{{ (yes | default(false)) | bool }}"
 
   tasks:
     - name: "0. Refuse an expect value that is not one of the two"
@@ -47,6 +58,14 @@
           expect={{ _expect }} is not valid. Use `running`, `stopped`, or omit it to
           report without asserting. A typo must not silently become "report only" —
           that would turn an assertion you asked for into one that cannot fail.
+
+    - name: "0b. Refuse an action value that is not one of the two"
+      ansible.builtin.assert:
+        that: _action in ['', 'start', 'stop']
+        fail_msg: >-
+          action={{ _action }} is not valid. Use `start`, `stop`, or omit it to
+          report only. Same reasoning as `expect`: a typo must not silently
+          become a no-op that reports success.
 
     # Same probe shape as 360-test-dagster.yml A1, and for the same reason: NOT
     # `kubectl run --rm -i`, which can return rc=0 with empty stdout when the
@@ -58,7 +77,7 @@
           -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
           --command -- curl -s -m 20 -X POST \
           -H 'Content-Type: application/json' \
-          -d '{"query":"{ repositoriesOrError { ... on RepositoryConnection { nodes { name location { name } schedules { name scheduleState { status } } sensors { name sensorState { status } } } } } }"}' \
+          -d '{"query":"{ repositoriesOrError { ... on RepositoryConnection { nodes { name location { name } schedules { id name defaultStatus scheduleState { id selectorId status } } sensors { id name defaultStatus sensorState { id selectorId status } } } } } }"}' \
           http://dagster-dagster-webserver:80/graphql >/dev/null
         for i in $(seq 1 30); do
           phase=$(kubectl get pod {{ probe }} -n {{ dagster_ns }} --context {{ _target }} \
@@ -95,13 +114,30 @@
       ansible.builtin.set_fact:
         _nodes: "{{ (_gql.stdout | from_json).data.repositoriesOrError.nodes | default([]) }}"
 
-    - name: "4. Flatten schedules and sensors into one list"
+    # ⚠️ CARRIES ITS NODE WITH IT. A flat `map(attribute='schedules') | flatten`
+    # loses which repository and code location each one came from — and a
+    # ScheduleSelector needs both. The earlier report never needed them, so this
+    # accumulates per node rather than flattening blindly.
+    #
+    # 🔵 `repositoryName` is the repository's own name, which for a code location
+    # declaring none is the literal `__repository__`, and
+    # `repositoryLocationName` is the CODE-LOCATION name — not the application
+    # id. Neither is a value worth guessing (imac, urb-agents#991).
+    - name: "4. Flatten schedules and sensors into one list, keeping their selectors"
       ansible.builtin.set_fact:
-        _instigators: >-
-          {{ _nodes | map(attribute='schedules') | flatten
-             | map('combine', {'kind': 'schedule'}) | list
-           + _nodes | map(attribute='sensors') | flatten
-             | map('combine', {'kind': 'sensor'}) | list }}
+        _instigators: "{{ (_instigators | default([])) + _from_node }}"
+      loop: "{{ _nodes }}"
+      loop_control:
+        loop_var: n
+        label: "{{ n.name }}"
+      vars:
+        _from_node: >-
+          {{ (n.schedules | default([])
+               | map('combine', {'kind': 'schedule', 'repo': n.name,
+                                 'location': n.location.name}) | list)
+           + (n.sensors | default([])
+               | map('combine', {'kind': 'sensor', 'repo': n.name,
+                                 'location': n.location.name}) | list) }}
 
     - name: "5. Split them by state"
       ansible.builtin.set_fact:
@@ -139,6 +175,271 @@
               "   fire schedules, not that any schedule is switched on. This is the",
               "   other half of that question."] }}
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # SWITCHING IT ON AND OFF
+    #
+    # 🔴 EVERY STOP ARGUMENT IN THE SCHEMA IS NULLABLE. `stopRunningSchedule()`
+    # with nothing supplied TYPE-CHECKS, silently does nothing, and returns
+    # success. imac introspected 1.13.19 and that is a property of the schema,
+    # not a worry — so the schema will never catch a wrong call, and the RE-READ
+    # below is the only thing that can (imac via ops-dev, urb-agents#991).
+    #
+    # ⚠️ The names are NOT symmetric and a guess by symmetry is wrong:
+    #     startSchedule(scheduleSelector: ScheduleSelector!)
+    #     startSensor(sensorSelector: SensorSelector!)
+    #     stopRunningSchedule(id:) — NOT stopSchedule, which does not exist
+    #     stopSensor(id:)          — its other args are named for JOBS
+    #
+    # ⚠️ `--stop` means STOPPED, deterministically. `resetSchedule`/`resetSensor`
+    # exist and revert to `defaultStatus` instead; the two coincide only while
+    # every default here is STOPPED, and would diverge the day a tenant declares
+    # default_status=RUNNING. A flag named `stop` that quietly reverted to
+    # RUNNING would be the worst kind of surprise, so reset is left as its own
+    # future verb rather than folded into this one.
+    - name: "A1. Which instigators are not already in the requested state"
+      ansible.builtin.set_fact:
+        _want: "{{ (_action == 'start') | ternary('RUNNING', 'STOPPED') }}"
+        _to_change: >-
+          {{ (_action == 'start') | ternary(_stopped, _running) }}
+        _already: >-
+          {{ (_action == 'start') | ternary(_running, _stopped) }}
+      when: _action != ''
+
+    # 🔴 A NAME GOES INTO A SINGLE-QUOTED SHELL STRING. Dagster identifiers
+    # cannot contain a quote, so this should never fire — which is exactly why
+    # it is asserted rather than assumed. A name that could close the quote
+    # would turn a mutation into arbitrary shell.
+    - name: "A2. Refuse a name or location that could escape the shell quoting"
+      ansible.builtin.assert:
+        that:
+          - _to_change | map(attribute='name') | select('search', "['\"$`\\\\]") | list | length == 0
+          - _nodes | map(attribute='location') | map(attribute='name') | select('search', "['\"$`\\\\]") | list | length == 0
+        fail_msg: >-
+          A schedule, sensor or code-location name contains a shell
+          metacharacter. Refusing rather than interpolating it.
+      when: _action != '' and (_to_change | length) > 0
+
+    # ⚠️ CONFIRMATION, because the web UI supplied deliberateness incidentally.
+    #
+    # Enabling automation contacts external services and starts real work — the
+    # tenant's own words for it are "a go-live decision, not a side effect of
+    # installing". Today it means opening a web UI, which is deliberate enough
+    # that a careful operator reads the surrounding text; a one-line flag removes
+    # that friction, so "enable, then discover the order mattered" becomes the
+    # easy mistake and this verb is what makes it easy (atlas via ops-dev, #991).
+    #
+    # 🔵 UIS cannot know whether first data has been loaded, and a guard that
+    # guessed would block legitimate work. But the ordering IS readable — an
+    # application declares `operational.first_data.how` — so this prints what the
+    # tenant documented and requires a decision. `yes=true` is the scripted path,
+    # and its ABSENCE non-interactively refuses rather than assuming consent.
+    - name: "A3. What this will do, and what it will not"
+      ansible.builtin.debug:
+        msg: >-
+          {{ ["About to " ~ _action | upper ~ " " ~ (_to_change | length) ~ " of "
+              ~ (_instigators | length) ~ " instigators:", ""]
+           + (_to_change | map(attribute='name') | map('regex_replace', '^', '  ' ~ _action ~ '  ') | list)
+           + ["", (_already | length) ~ " already " ~ _want ~ ", left alone.", ""]
+           + (_action == 'start') | ternary([
+               "This sets instigator state and NOTHING ELSE. It does not backfill.",
+               "",
+               "⚠️ An automation-condition sensor may fire PROMPTLY rather than at",
+               "   some next scheduled time: `AutomationCondition.on_cron` means",
+               "   'cron tick passed AND deps updated since that tick', and on a",
+               "   fresh install both are trivially true immediately.",
+               "",
+               "⚠️ How much runs at once is the APPLICATION'S setting, not the",
+               "   platform's. 'it started' and 'it started everything' are",
+               "   different things and this says only the first.",
+               "",
+               "⚠️ If this application documents an ORDER for loading first data,",
+               "   enabling automation first lets the sensor choose the order",
+               "   instead. Read `uis template info <id>` — operational.first_data",
+               "   — before saying yes.",
+             ], [
+               "This sets instigator state and nothing else. Runs already in",
+               "flight are not cancelled.",
+             ]) }}
+      when: _action != '' and (_to_change | length) > 0
+
+    - name: "A4. Confirm, unless yes=true was passed"
+      ansible.builtin.pause:
+        prompt: "Type the word {{ _action }} to proceed (anything else aborts)"
+      register: _confirm
+      when: _action != '' and (_to_change | length) > 0 and not _assume_yes
+
+    - name: "A5. An unconfirmed action changes nothing"
+      ansible.builtin.assert:
+        that: (_confirm.user_input | default('') | trim | lower) == _action
+        fail_msg: >-
+          Not confirmed — nothing was changed. Pass `yes=true` (or
+          `--yes`) to skip this prompt in a script.
+        success_msg: "Confirmed."
+      when: _action != '' and (_to_change | length) > 0 and not _assume_yes
+
+    # 🔴 THE SCRIPT IS BASE64-ENCODED INTO THE POD, and that is not fussiness.
+    #
+    # The payload is JSON (double quotes) inside a `-d` argument inside an
+    # `sh -c` inside a YAML scalar. Nesting the quote characters is how a
+    # mutation silently becomes a different mutation — or nothing at all, which
+    # in this schema reports success. base64 is alphanumeric, so exactly one
+    # layer of quoting exists and it is trivially correct.
+    #
+    # ⚠️ `curlimages/curl` is Alpine, so busybox supplies `sh` and `base64`.
+    - name: "A6. Render the mutation script"
+      ansible.builtin.set_fact:
+        _mut_script: |-
+          {% for i in _to_change %}
+          {% if _action == 'start' and i.kind == 'schedule' %}
+          curl -s -m 20 -X POST -H 'Content-Type: application/json' -d '{"query":"mutation{startSchedule(scheduleSelector:{repositoryName:\"{{ i.repo }}\",repositoryLocationName:\"{{ i.location }}\",scheduleName:\"{{ i.name }}\"}){__typename}}"}' http://dagster-dagster-webserver:80/graphql; echo
+          {% elif _action == 'start' %}
+          curl -s -m 20 -X POST -H 'Content-Type: application/json' -d '{"query":"mutation{startSensor(sensorSelector:{repositoryName:\"{{ i.repo }}\",repositoryLocationName:\"{{ i.location }}\",sensorName:\"{{ i.name }}\"}){__typename}}"}' http://dagster-dagster-webserver:80/graphql; echo
+          {% elif i.kind == 'schedule' %}
+          curl -s -m 20 -X POST -H 'Content-Type: application/json' -d '{"query":"mutation{stopRunningSchedule(id:\"{{ i.scheduleState.id }}\"){__typename}}"}' http://dagster-dagster-webserver:80/graphql; echo
+          {% else %}
+          curl -s -m 20 -X POST -H 'Content-Type: application/json' -d '{"query":"mutation{stopSensor(id:\"{{ i.sensorState.id }}\"){__typename}}"}' http://dagster-dagster-webserver:80/graphql; echo
+          {% endif %}
+          {% endfor %}
+      when: _action != '' and (_to_change | length) > 0
+
+    - name: "A6b. Switch them"
+      ansible.builtin.shell: |
+        set -e
+        kubectl run {{ probe }}-act --image=curlimages/curl --restart=Never \
+          -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- sh -c "echo {{ _mut_script | b64encode }} | base64 -d | sh" >/dev/null
+        for n in $(seq 1 40); do
+          phase=$(kubectl get pod {{ probe }}-act -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ] && break
+          sleep 2
+        done
+        kubectl logs {{ probe }}-act -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod {{ probe }}-act -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
+      register: _mut
+      changed_when: true
+      failed_when: false
+      when: _action != '' and (_to_change | length) > 0
+
+    # ⚠️ The mutation output is PRINTED but never believed. GraphQL returns 200
+    # with an `errors` array for a rejected mutation, and every stop argument
+    # here is nullable so a no-op returns a clean success. This is for the
+    # operator to read; A13 is what decides.
+    - name: "A6c. What Dagster answered (informational — A13 decides)"
+      ansible.builtin.debug:
+        msg: "{{ (_mut.stdout | default('') | trim | split('\n')) | default(['<no output>'], true) }}"
+      when: _action != '' and (_to_change | length) > 0
+
+    # 🔴 THE RE-READ IS THE WHOLE GUARANTEE, AND IT IS COMPARED AGAINST ITSELF.
+    #
+    # Not against the list this playbook acted on. If the enumeration above ever
+    # misses an instigator — the default automation-condition sensor is not in a
+    # code location's declared sensors, and only appears because Dagster
+    # materialises it — then acting on four of five and checking those four would
+    # report "all started" while one stayed stopped. Comparing the RE-READ
+    # against the REQUESTED STATE cannot make that mistake: the missed one is
+    # still there, still stopped, and still fails the command.
+    - name: "A7. Re-read the state from Dagster, after acting"
+      ansible.builtin.shell: |
+        set -e
+        kubectl run {{ probe }}-recheck --image=curlimages/curl --restart=Never \
+          -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- curl -s -m 20 -X POST \
+          -H 'Content-Type: application/json' \
+          -d '{"query":"{ repositoriesOrError { ... on RepositoryConnection { nodes { name location { name } schedules { id name defaultStatus scheduleState { id selectorId status } } sensors { id name defaultStatus sensorState { id selectorId status } } } } } }"}' \
+          http://dagster-dagster-webserver:80/graphql >/dev/null
+        for n in $(seq 1 30); do
+          phase=$(kubectl get pod {{ probe }}-recheck -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ] && break
+          sleep 2
+        done
+        kubectl logs {{ probe }}-recheck -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod {{ probe }}-recheck -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
+      register: _gql2
+      changed_when: false
+      failed_when: false
+      retries: 5
+      delay: 6
+      until: _gql2.stdout is search('nodes')
+      when: _action != '' and (_to_change | length) > 0
+
+    - name: "A8. The re-read must have succeeded before any claim about it"
+      ansible.builtin.assert:
+        that:
+          - _gql2.stdout | default('') | length > 0
+          - _gql2.stdout is search('nodes')
+        fail_msg: >-
+          The mutations were sent, and the state could NOT be re-read.
+          ⚠️ This is not "it worked" and not "it failed" — it is unknown, and the
+          only honest report. Run `./uis dagster automation` to see where it
+          landed.
+          response: {{ _gql2.stdout | default('<empty>') | truncate(300) }}
+        success_msg: "Re-read succeeded."
+      when: _action != '' and (_to_change | length) > 0
+
+    - name: "A9. Split the RE-READ by state"
+      ansible.builtin.set_fact:
+        _after: >-
+          {{ (_gql2.stdout | from_json).data.repositoriesOrError.nodes | default([]) }}
+      when: _action != '' and (_to_change | length) > 0
+
+    - name: "A10. Flatten and classify what the re-read found"
+      ansible.builtin.set_fact:
+        _after_all: >-
+          {{ _after | map(attribute='schedules') | flatten
+             | map('combine', {'kind': 'schedule'}) | list
+           + _after | map(attribute='sensors') | flatten
+             | map('combine', {'kind': 'sensor'}) | list }}
+      when: _action != '' and (_to_change | length) > 0
+
+    - name: "A11. Anything still not in the requested state"
+      ansible.builtin.set_fact:
+        _wrong: >-
+          {{ _after_all | selectattr('scheduleState', 'defined')
+               | rejectattr('scheduleState.status', 'equalto', _want) | list
+           + _after_all | selectattr('sensorState', 'defined')
+               | rejectattr('sensorState.status', 'equalto', _want) | list }}
+        _at_default: >-
+          {{ _after_all | selectattr('defaultStatus', 'defined')
+               | selectattr('defaultStatus', 'equalto', 'STOPPED') | list }}
+      when: _action != '' and (_to_change | length) > 0
+
+    - name: "A12. RESULT"
+      ansible.builtin.debug:
+        msg: >-
+          {{ [(_to_change | length) ~ " " ~ _action ~ "ed, "
+              ~ (_already | length) ~ " already " ~ _want ~ ", "
+              ~ (_at_default | length) ~ " of " ~ (_after_all | length)
+              ~ " ship at their default of STOPPED.", ""]
+           + (_to_change | map(attribute='name') | map('regex_replace', '^', '  ' ~ _action | upper ~ '  ') | list) }}
+      when: _action != '' and (_to_change | length) > 0
+
+    # 🔴 A PARTIAL START MUST NOT LOOK COMPLETE. A green that could not have gone
+    # red is the defect, not the evidence (imac, #991).
+    - name: "A13. Refuse success unless the re-read shows EVERY instigator in the requested state"
+      ansible.builtin.assert:
+        that: (_wrong | length) == 0
+        fail_msg: >-
+          {{ _action | upper }} did not take for {{ _wrong | length }} of
+          {{ _after_all | length }}: {{ _wrong | map(attribute='name') | join(', ') }}.
+          ⚠️ The mutations returned without error — every stop argument in this
+          schema is NULLABLE, so a call that changes nothing type-checks and
+          reports success. This re-read is what caught it.
+        success_msg: >-
+          Every schedule and sensor is {{ _want }}, confirmed by re-reading
+          Dagster rather than by trusting the mutation.
+      when: _action != '' and (_to_change | length) > 0
+
+    - name: "A14. Nothing to do is a success, and says so rather than claiming work"
+      ansible.builtin.debug:
+        msg: >-
+          All {{ _instigators | length }} schedules and sensors are already
+          {{ _want }}. Nothing was changed.
+      when: _action != '' and (_to_change | length) == 0
+
     - name: "7. Assert the expected state, when one was asked for"
       ansible.builtin.assert:
         that: >-
@@ -154,20 +455,33 @@
         success_msg: "Every schedule and sensor is {{ _expect | upper }}, as expected."
       when: _expect != ''
 
-# ⚠️ WHY THIS ONLY REPORTS, AND DOES NOT START OR STOP
+# ✅ WHY IT NOW STARTS AND STOPS, AND WHAT IS STILL UNOBSERVED
 #
-# Switching automation on and off belongs here too — it is the obvious next verb,
-# and `--expect stopped` exists precisely so a deliberate STOPPED fixture can be
-# restored and proven restored.
+# This file used to end with a note saying the verbs belonged here and were not
+# implemented because the mutation signatures are version-sensitive and this
+# repository's maintainer has no cluster to check them against. That was the
+# right call and the note asked for exactly one thing: a GraphQL introspection
+# on a live instance.
 #
-# It is not implemented because the mutation signatures are version-sensitive
-# (`startSchedule` takes a selector, `stopRunningSchedule` has historically wanted
-# an origin id) and this repository's maintainer has no cluster to check them
-# against the deployed chart, 1.13.19. Guessing them into a playbook would produce
-# a command that silently does nothing on the wrong signature — which is the exact
-# defect class this file was written to close.
+# imac ran it against the deployed chart (dagster-1.13.19, read-only, no mutation
+# called) and the answer changed two assumptions:
 #
-# The check needed is a GraphQL introspection on a live instance, which takes
-# seconds for whoever holds the cluster and is impossible here. When that answer
-# exists, the verbs belong in this file, and each must RE-READ the state after
-# acting and fail if it did not change.
+#   stopSchedule DOES NOT EXIST. It is stopRunningSchedule.
+#   stopSensor's other arguments are named for JOBS — jobOriginId, jobSelectorId
+#   — so a guess by symmetry from sensorSelector would have been wrong.
+#   EVERY stop argument is NULLABLE, so a call supplying none of them
+#   TYPE-CHECKS, does nothing, and reports success.
+#
+# 🔴 That last one is why A7–A13 exist. The schema cannot catch a wrong stop, so
+# the re-read is the only thing that can.
+#
+# It also answered the enumeration question: `repositoriesOrError { nodes {
+# sensors } }` DOES return `default_automation_condition_sensor`, which is not in
+# a code location's declared sensors and exists only because Dagster materialises
+# it. Reusing this file's own reader therefore sees all five rather than four —
+# and A13 compares against the RE-READ rather than against the action list, so a
+# missed one would fail the command instead of hiding inside "all started".
+#
+# ⚠️ STILL UNOBSERVED: imac called no mutation. Those are SIGNATURES, not proof
+# that a start works, and the first real `--start` is the thing that will tell
+# us. This playbook is written so that if it does not work, it says so.

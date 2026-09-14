@@ -178,6 +178,8 @@ Uptime Kuma:
 Dagster:
   dagster verify                 Prove the daemon can fire schedules
   dagster automation             Report whether schedules and sensors are switched ON
+                                 --start / --stop switches them, then RE-READS and
+                                 refuses success on a partial change
                                  [--expect running|stopped] asserts instead of reporting
   dagster run <job>              Launch one job now, rather than waiting for its cron
                                  [--wait] polls the RUN to completion and reports
@@ -2550,12 +2552,28 @@ cmd_dagster_run() {
     run_verify_playbook "362-dagster-run.yml" "${args[@]}"
 }
 
+# uis dagster automation [--expect running|stopped] [--start|--stop] [--yes]
+#
+# 🔴 THE CLI USED TO SEND THE OPERATOR AWAY TO A WEB UI. Its own banner said UIS
+# "can report that state but cannot change it", so a correctly installed
+# application fetched nothing until someone clicked — while every UIS signal read
+# green (ops-dev, urb-agents#991).
+#
+# ⚠️ `--expect` was written as the assertion half of a loop whose other half did
+# not exist. `--start` closes it: switch on, then assert, from one surface.
 cmd_dagster_automation() {
-    local expect=""
+    local expect="" action="" assume_yes=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --expect) expect="${2:-}"; shift 2 ;;
-            *) shift ;;
+            --start)  action="start"; shift ;;
+            --stop)   action="stop"; shift ;;
+            --yes|-y) assume_yes=true; shift ;;
+            -*)       log_error "Unknown option: $1"
+                      echo "Usage: uis dagster automation [--expect running|stopped] [--start|--stop] [--yes]" >&2
+                      return "$EXIT_GENERAL_ERROR" ;;
+            *)        log_error "Unexpected argument: $1"
+                      return "$EXIT_GENERAL_ERROR" ;;
         esac
     done
     if [[ -n "$expect" && "$expect" != "running" && "$expect" != "stopped" ]]; then
@@ -2564,12 +2582,22 @@ cmd_dagster_automation() {
         return "$EXIT_GENERAL_ERROR"
     fi
 
-    print_section "Dagster automation state"
-    if [[ -n "$expect" ]]; then
-        run_verify_playbook "361-dagster-automation.yml" -e "expect=$expect"
-    else
-        run_verify_playbook "361-dagster-automation.yml"
+    # ⚠️ Non-interactive without --yes REFUSES rather than assuming consent.
+    # Enabling automation contacts external services and starts real work; the
+    # application's own words are "a go-live decision, not a side effect".
+    if [[ -n "$action" && "$assume_yes" != true && ! -t 0 ]]; then
+        log_error "'--$action' needs a confirmation and stdin is not a terminal."
+        echo "  Pass --yes to confirm in a script. Refusing rather than assuming" >&2
+        echo "  consent for something that contacts external services." >&2
+        return "$EXIT_GENERAL_ERROR"
     fi
+
+    print_section "Dagster automation state"
+    local args=()
+    [[ -n "$expect" ]] && args+=(-e "expect=$expect")
+    [[ -n "$action" ]] && args+=(-e "action=$action")
+    [[ "$assume_yes" == true ]] && args+=(-e "yes=true")
+    run_verify_playbook "361-dagster-automation.yml" "${args[@]}"
 }
 
 cmd_postgrest_verify() {
@@ -3101,7 +3129,7 @@ main() {
                     cmd_dagster_run "$@"
                     ;;
                 *)
-                    echo "  Use: ./uis dagster verify | automation [--expect running|stopped] | run <job> [--wait]" >&2
+                    echo "  Use: ./uis dagster verify | automation [--expect running|stopped] [--start|--stop] [--yes] | run <job> [--wait]" >&2
                     ;;
             esac
             ;;
