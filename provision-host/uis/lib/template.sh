@@ -2911,6 +2911,108 @@ cmd_template_progress() {
     return "$rc"
 }
 
+# Read Dagster's instigator state: how many schedules and sensors are RUNNING.
+#
+# 🔴 A HEALTHY VERDICT ON A STOPPED PIPELINE IS A FALSE ALL-CLEAR.
+#
+# `uis template check atlas` reported healthy, exit 0, and told the operator
+# "3 newer deletion(s) awaiting the next transform (:10/:40) — not a fault"
+# while every schedule and sensor was STOPPED. There is no next transform. The
+# sentence is not incomplete, it is FALSE (imac via ops-dev, urb-agents#1036).
+#
+# ⚠️ AND IT IS THE FIRST STATE EVERY OPERATOR IS IN. A fresh install ships with
+# automation stopped, so the documented happy path — install, load first data,
+# run the status command — passes straight through it.
+#
+# 🔵 imac's framing: "a false alarm wastes attention, a false all-clear spends
+# it." The sentence was added to FIX a false alarm, and that fix was right; it
+# asserts a future event without checking that anything is scheduled to produce
+# it.
+#
+# Sets AUTO_RUNNING / AUTO_TOTAL, or returns 1 when it could not look — which is
+# NOT the same as zero running and must never be rendered as such.
+_check_automation_state() {
+    AUTO_RUNNING=""; AUTO_TOTAL=""
+    command -v jq >/dev/null 2>&1 || return 1
+    local probe="uis-autostate-$RANDOM" out krc=0
+    local q='{"query":"{ repositoriesOrError { ... on RepositoryConnection { nodes { schedules { name scheduleState { status } } sensors { name sensorState { status } } } } } }"}'
+    out=$(kubectl run "$probe" --image=curlimages/curl --restart=Never \
+            -n dagster --quiet --rm -i --command -- \
+            curl -s -m 20 -X POST -H 'Content-Type: application/json' \
+            -d "$q" http://dagster-dagster-webserver:80/graphql 2>/dev/null) || krc=$?
+    [[ "$krc" -ne 0 || -z "$out" || "$out" != *repositoriesOrError* ]] && return 1
+    local counts
+    counts=$(printf '%s' "$out" | jq -r '
+        [ (.data.repositoriesOrError.nodes // [])[]
+          | ((.schedules // [])[] | .scheduleState.status),
+            ((.sensors   // [])[] | .sensorState.status) ]
+        | "\([ .[] | select(. == "RUNNING") ] | length) \(length)"' 2>/dev/null) || return 1
+    [[ "$counts" =~ ^[0-9]+\ [0-9]+$ ]] || return 1
+    AUTO_RUNNING="${counts%% *}"; AUTO_TOTAL="${counts##* }"
+    return 0
+}
+
+# Qualify a check verdict with what is actually running.
+#
+# 🔴 THE ONE RULE ops-dev ASSERTED: the output must not say a scheduled event is
+# coming without having checked that something is scheduled. So this prints a
+# measured fact and withholds trust in forward-looking sentences. It never
+# claims the application is wrong about its data.
+#
+# ⚠️ ONLY 0-OF-N CHANGES THE EXIT CODE, and the boundary is deliberate:
+#
+#   0 running     nothing can be producing output, so "does the output reflect
+#                 the input" is UNANSWERABLE, not answered. could-not-ask.
+#   some running  UIS cannot tell whether the stopped one is the one this
+#                 check's claim depended on. Only the application knows which
+#                 instigator its own sentence refers to — so this qualifies the
+#                 OUTPUT and leaves the verdict alone, rather than inventing a
+#                 new false alarm to replace the false all-clear.
+#   could not look  says so. Silence here would be the could-not-look defect
+#                 this project has paid for repeatedly.
+#
+# Returns 0 to keep the caller's verdict, 2 to downgrade it to could-not-ask.
+_check_qualify_by_automation() {
+    local state="$1"
+    if [[ -z "$AUTO_TOTAL" ]]; then
+        echo "" >&2
+        log_warn "Could not read whether anything is scheduled to run."
+        echo "    So a sentence about a future scheduled run cannot be relied on" >&2
+        echo "    here — and this is 'could not look', not 'nothing is running'." >&2
+        echo "    './uis dagster automation' asks directly." >&2
+        return 0
+    fi
+    [[ "$AUTO_TOTAL" == "0" ]] && return 0
+    [[ "$AUTO_RUNNING" == "$AUTO_TOTAL" ]] && return 0
+
+    echo "" >&2
+    if [[ "$AUTO_RUNNING" == "0" ]]; then
+        log_warn "NOTHING IS RUNNING: 0 of $AUTO_TOTAL schedules and sensors are switched on."
+        echo "    Any sentence above about a future run — 'awaiting the next" >&2
+        echo "    transform', a cadence, 'not a fault' — assumes something is" >&2
+        echo "    scheduled. Nothing is." >&2
+        echo "" >&2
+        echo "    ⚠️  So this is not a clean bill of health. It is a question that" >&2
+        echo "        cannot be answered: with nothing producing output, whether the" >&2
+        echo "        output reflects the input is undecidable." >&2
+        echo "" >&2
+        echo "    A fresh install ships stopped. Switch it on:" >&2
+        echo "      ./uis dagster automation --start" >&2
+        if [[ "$state" == "healthy" ]]; then
+            return 2
+        fi
+        return 0
+    fi
+    log_warn "$AUTO_RUNNING of $AUTO_TOTAL schedules and sensors are running."
+    echo "    ⚠️  If a sentence above expects a future scheduled run, check that" >&2
+    echo "        the schedule it names is one of the running ones:" >&2
+    echo "          ./uis dagster automation" >&2
+    echo "    UIS cannot tell which instigator this application's claim depends" >&2
+    echo "    on — only the application knows that — so the verdict above is" >&2
+    echo "    left as it was rather than guessed at." >&2
+    return 0
+}
+
 cmd_template_check() {
     local template_id="${1:-}"
     [[ -z "$template_id" ]] && { cmd_template_check_all; return $?; }
@@ -2945,13 +3047,20 @@ cmd_template_check() {
         CHECK_STATE="uis-error"; CHECK_DETAIL="evaluator set no state"
     fi
 
+    # 🔴 READ WHAT IS RUNNING BEFORE RELAYING A VERDICT ABOUT THE FUTURE.
+    _check_automation_state || true
+
     echo "" >&2
     case "$CHECK_STATE" in
         healthy)
             echo "  $template_id reported success. UIS relayed this; it did not verify it." >&2
+            local _q=0
+            _check_qualify_by_automation healthy || _q=$?
+            [[ "$_q" -eq 2 ]] && return 2
             return 0 ;;
         unhealthy)
             log_warn "$template_id $CHECK_DETAIL"
+            _check_qualify_by_automation unhealthy || true
             return 1 ;;
         no-check)
             log_warn "'$template_id' declares no check command."
