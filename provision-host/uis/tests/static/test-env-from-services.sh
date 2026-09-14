@@ -317,8 +317,19 @@ while IFS=$'\t' read -r sid sport splay; do
     [[ -z "$sid" ]] && continue
     # the playbook's NNN- prefix names its template set
     _prefix="${splay%%-*}"
-    _tpl=("$REPO_ROOT"/ansible/playbooks/templates/${_prefix}-*)
-    _ir="$(ls "$REPO_ROOT"/ansible/playbooks/templates/${_prefix}-*ingressroute* 2>/dev/null | head -1)"
+    # 🔴 BOTH MANIFEST HOMES. UIS keeps service manifests in TWO places —
+    # `ansible/playbooks/templates/` for per-app rendered ones and `manifests/`
+    # for product-level ones — and the first version of this guard looked only
+    # in the first. Declaring `inCluster` on `dagster`, whose IngressRoute lives
+    # in `manifests/360-dagster-ingressroute.yaml`, failed the guard for the
+    # wrong reason: the port was right and the search was incomplete.
+    #
+    # ⚠️ Found by USING the mechanism rather than by reading the guard. A search
+    # that looks in one of two real locations reports absence it has not
+    # established — the could-not-look defect, wearing a test's clothes.
+    _tpl=("$REPO_ROOT"/ansible/playbooks/templates/${_prefix}-* "$REPO_ROOT"/manifests/${_prefix}-*)
+    _ir="$(ls "$REPO_ROOT"/ansible/playbooks/templates/${_prefix}-*ingressroute* \
+               "$REPO_ROOT"/manifests/${_prefix}-*ingressroute* 2>/dev/null | head -1)"
     if [[ -n "$_ir" ]]; then
         _routed="$(grep -oE '^[[:space:]]*port:[[:space:]]*[0-9]+' "$_ir" | grep -oE '[0-9]+' | head -1)"
         _port_strong=$((_port_strong + 1))
@@ -328,7 +339,11 @@ while IFS=$'\t' read -r sid sport splay; do
     fi
     # weaker tier: the number must be a port some manifest for this service
     # actually publishes, so a typed or invented value still fails.
-    if [[ -e "${_tpl[0]}" ]] && grep -qhE "^[[:space:]]*(port|targetPort):[[:space:]]*${sport}([[:space:]]|$)" "${_tpl[@]}" 2>/dev/null; then
+    # ⚠️ A glob that matched nothing expands to the pattern itself, so only
+    # real files are passed to grep — otherwise one missing home makes grep fail
+    # and the port reads as unpublished.
+    _real=(); for _f in "${_tpl[@]}"; do [[ -f "$_f" ]] && _real+=("$_f"); done
+    if [[ "${#_real[@]}" -gt 0 ]] && grep -qhE "^[[:space:]]*(port|targetPort):[[:space:]]*${sport}([[:space:]]|$)" "${_real[@]}" 2>/dev/null; then
         _port_weak+="$sid "
     else
         _port_bad+="$sid declares inCluster.port $sport, which no manifest for '$splay' publishes"$'\n'

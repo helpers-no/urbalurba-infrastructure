@@ -144,6 +144,44 @@ else
          "setting 0 on a failed read is how 'unreachable' becomes 'nothing is running'"
 fi
 
+# ── a narrow verdict must not be relayed as a broad one ─────────────────────
+# 🔴 atlas's check answers "is Brreg internally consistent" and was PRESENTED as
+# "is atlas working". 41 other ingest sources are covered by a 24-hour window
+# that cannot see a weekly source going stale, so exit 0 stood while a third of
+# the data might not have moved (Terje via ops-dev, urb-agents#1040).
+#
+# ⚠️ UIS cannot widen a tenant's check. It can stop relaying a narrow verdict as
+# a broad one — and the narrowing is ALREADY DECLARED in the description UIS
+# reads in order to run the check.
+_chk="$(sed -n '/^cmd_template_check() {/,/^}$/p' "$LIB" | grep -v '^[[:space:]]*#')"
+if grep -q 'CHECK_SCOPE' <<<"$_chk"; then
+    pass "🔴 a healthy verdict is relayed with what the application says it covers"
+else
+    fail "🔴 a healthy verdict names its own scope" \
+         "'reported success' reads as 'the application is working'"
+fi
+
+if grep -q 'NOT covered by this' <<<"$_chk"; then
+    pass "⚠️ and says anything outside that question is not covered by the exit code"
+else
+    fail "⚠️ it says what the exit code does not cover" \
+         "a scope printed without that sentence is a description, not a caveat"
+fi
+
+_cs="$(sed -n '/^_check_state() {/,/^}$/p' "$LIB" | grep -v '^[[:space:]]*#')"
+if grep -q 'commands.check.description' <<<"$_cs"; then
+    pass "the scope comes from the application's own declaration, not from UIS"
+else
+    fail "the scope comes from the declaration" "UIS describing a tenant's check is the wrong side of the boundary"
+fi
+
+# ⚠️ An application that declares no description must not get an empty section.
+if grep -qE 'if \[\[ -n "\$CHECK_SCOPE" \]\]' <<<"$_chk"; then
+    pass "⚠️ no declaration means no empty 'what it covers' block"
+else
+    fail "⚠️ an absent declaration prints nothing" "an empty section is not an answer"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]

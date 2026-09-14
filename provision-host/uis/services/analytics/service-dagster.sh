@@ -28,6 +28,29 @@ SCRIPT_PRIORITY="56"
 SCRIPT_HELM_CHART="dagster/dagster"
 SCRIPT_NAMESPACE="dagster"
 
+# === How a POD addresses this service ===
+# 🔵 An application declares `env_from_services: VAR: dagster` and UIS composes
+# http://dagster-dagster-webserver.dagster.svc.cluster.local:80 — the GraphQL
+# API, which is Dagster's SUPPORTED interface.
+#
+# 🔴 THIS EXISTS BECAUSE THE ALTERNATIVE ASKED FOR WAS DAGSTER_DATABASE_URL.
+# An application wanted job history and looked for a connection string to
+# Dagster's own metadata database (ops-dev, urb-agents#1040). UIS will not
+# supply that by default:
+#
+#   - that schema is Dagster's INTERNAL business and changes between chart
+#     versions, so a tenant reading it is coupled to a private structure — the
+#     same argument that kept `<service>.<namespace>` out of tenant artifacts;
+#   - and it is read/write credentials to the ORCHESTRATOR'S OWN database,
+#     handed to a tenant, to answer a question the GraphQL API answers.
+#
+# ⚠️ The address below is what UIS's own playbooks already dial in 14 places,
+# and the IngressRoute in manifests/360-dagster-ingressroute.yaml routes the UI
+# to the same service and port. It is not a value anyone has to guess.
+SCRIPT_IN_CLUSTER_SCHEME="http"
+SCRIPT_IN_CLUSTER_NAME="dagster-dagster-webserver"
+SCRIPT_IN_CLUSTER_PORT="80"
+
 # === Extended Metadata (Optional) ===
 SCRIPT_KIND="Component"        # Component | Resource
 SCRIPT_TYPE="service"          # service | tool | library | database | cache | message-broker
