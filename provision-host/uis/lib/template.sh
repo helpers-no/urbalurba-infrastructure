@@ -709,9 +709,25 @@ _install_summary_operational() {
             # writes an `automation:` sentence must not buy back the old silence.
             echo "⚠️  This application does not state whether its automation ships switched on."
         fi
-        echo "    UIS can report that state but cannot change it — schedules AND"
-        echo "    sensors are switched on in the Dagster UI:"
-        echo "      ./uis dagster automation"
+        # 🔴 THIS SENTENCE OUTLIVED ITS TRUTH BY A DAY. It said UIS "can report
+        # that state but cannot change it — schedules AND sensors are switched
+        # on in the Dagster UI", which was true until 1.6.90 built `--start`
+        # this morning. ops-dev quoted this very banner on #991 as the thing
+        # that sent operators away to a web UI; the capability was then built
+        # and the banner asserting its absence shipped alongside it
+        # (ops-dev, urb-agents#1057).
+        #
+        # ⚠️ A doc going stale is read by contributors. THIS is printed to every
+        # operator at the end of every install, and it sent them somewhere the
+        # CLI no longer needs them to go.
+        #
+        # 🔵 Both verbs named, because an asset driven by an automation
+        # condition has no schedule to switch on — someone told to "enable the
+        # schedules" would enable every schedule and still not be running it.
+        echo "    Switch it on when you are ready to go live:"
+        echo "      ./uis dagster automation           what is running now"
+        echo "      ./uis dagster automation --start   switch every schedule AND"
+        echo "                                         sensor on, then re-read"
         # ⚠️ Named separately because an asset driven by an automation condition
         # has no schedule to switch on at all: someone told to "enable the
         # schedules" would enable every schedule and still not be running it.

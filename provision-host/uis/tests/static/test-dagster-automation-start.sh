@@ -248,6 +248,64 @@ else
          "signatures are not proof a start works, and the file should say so"
 fi
 
+# ── no shipped text may claim the capability does not exist ─────────────────
+# 🔴 THE INSTALL BANNER OUTLIVED ITS TRUTH BY A DAY. It told every operator
+# "UIS can report that state but cannot change it — schedules AND sensors are
+# switched on in the Dagster UI". True until 1.6.90 built `--start` that
+# morning; shipped alongside it (ops-dev, urb-agents#1057).
+#
+# ⚠️ And it is the second such statement in one day: 361-dagster-automation.yml
+# ended with a note saying these verbs were NOT implemented, removed in the same
+# release that implemented them. A claim about a missing capability is the kind
+# that keeps passing every test while being false.
+#
+# 🔵 atlas read a doc with this sentence, believed it, and told ops-dev the
+# catalogue wording was wrong because "there is no --start". It was checking a
+# source rather than assuming — and the source was out of date.
+_shipped="$(cat "$REPO_ROOT"/provision-host/uis/lib/*.sh "$REPO_ROOT"/provision-host/uis/manage/*.sh \
+                "$REPO_ROOT"/ansible/playbooks/361-dagster-automation.yml 2>/dev/null \
+            | grep -vE '^[[:space:]]*#')"
+
+if [[ -n "$_shipped" ]]; then
+    pass "control: the shipped-text scan has content ($(printf '%s' "$_shipped" | wc -l) lines)"
+else
+    fail "control: the shipped-text scan has content" "the glob is wrong and the checks below are vacuous"
+fi
+
+# ⚠️ Matching the CLAIM, not the words "cannot change" — which appear in honest
+# sentences elsewhere. Anchored on the specific false assertion.
+if ! grep -qF 'cannot change it' <<<"$_shipped"; then
+    pass "🔴 no shipped text still says UIS cannot change automation state"
+else
+    fail "🔴 no shipped text says UIS cannot change it" \
+         "printed to every operator at install, and false since 1.6.90"
+fi
+
+if ! grep -qiE 'switched on in the Dagster UI' <<<"$_shipped"; then
+    pass "🔴 and none still sends the operator to the web UI to do it"
+else
+    fail "🔴 none sends the operator to the web UI" \
+         "the CLI can do it; directing them elsewhere is the gap this closed"
+fi
+
+# ✅ The banner must name the verb instead, and BOTH kinds — an asset driven by
+# an automation condition has no schedule to switch on, so "enable the
+# schedules" would leave it stopped.
+_banner="$(sed -n '/Switch it on when you are ready to go live/,/then re-read/p' \
+             "$REPO_ROOT/provision-host/uis/lib/template.sh")"
+if grep -q 'automation --start' <<<"$_banner"; then
+    pass "✅ the install banner names ./uis dagster automation --start"
+else
+    fail "✅ the banner names the verb" "removing a false sentence without naming the true one leaves nothing"
+fi
+
+if grep -qi 'sensor' <<<"$_banner"; then
+    pass "and says sensors as well as schedules"
+else
+    fail "it says sensors too" \
+         "an automation-condition asset has no schedule; 'enable the schedules' leaves it stopped"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
