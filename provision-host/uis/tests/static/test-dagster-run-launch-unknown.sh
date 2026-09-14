@@ -79,12 +79,74 @@ else
     fail "it names how to check first" "a warning with no way to act is the correct-and-unreachable shape"
 fi
 
-# ⚠️ The rejected case must say the opposite: no run started, retry is safe.
-if grep -qi 'no run was started and re-running is safe' <<<"$_reject"; then
-    pass "⚠️ a REJECTED launch says no run started, so a retry is safe"
+# 🔴 REPLACED, AND THIS ONE ENFORCED THE REGRESSION.
+#
+# It required the rejected branch to say "no run was started and re-running is
+# safe". Dagster created a run TWELVE SECONDS after such a failure, one per
+# invocation (imac via ops-dev, urb-agents#1075) — so this assertion was
+# demanding the unsafe wording and would have BLOCKED the fix.
+#
+# ⚠️ Fourth time today an assertion was right about the file and wrong about the
+# world, and the first that actively required a defect. Replaced rather than
+# deleted: a deleted control and a satisfied control look identical.
+#
+# 🔵 The rule it should have encoded: UIS must not assert the ABSENCE of a side
+# effect it did not check — and here it cannot check, because the row may appear
+# after any query it makes.
+if ! grep -qi 'no run was started' <<<"$_reject"; then
+    pass "🔴 a rejected launch NO LONGER claims no run was started"
 else
-    fail "⚠️ a rejected launch says a retry is safe" \
-         "leaving both cases ambiguous makes the operator guess in the expensive direction"
+    fail "🔴 a rejected launch does not claim no run was started" \
+         "a PythonError can leave a run row; one appeared 12 s later, one per invocation"
+fi
+
+if ! grep -qi 're-running is safe' <<<"$_reject"; then
+    pass "🔴 and does not tell the operator a retry is safe"
+else
+    fail "🔴 it does not call a retry safe" \
+         "the conservative wording it replaced was the CORRECT one"
+fi
+
+# ⚠️ Both non-success branches must now give the same conservative instruction.
+if grep -qi 'DO NOT RE-RUN WITHOUT LOOKING' <<<"$_reject" \
+   && grep -qi 'DO NOT RUN THIS AGAIN WITHOUT LOOKING' <<<"$_empty"; then
+    pass "⚠️ both non-success branches say check before retrying"
+else
+    fail "⚠️ both branches say check before retrying" \
+         "one confident branch beside one conservative one is where the operator guesses wrong"
+fi
+
+# 🔵 ASKED, BUT NOT AS PROOF. The run list is queried and reported; "saw none"
+# is stated as "none YET" because the row appeared 12 s after the call.
+if grep -q 'runsOrError(limit' <<<"$pb"; then
+    pass "🔵 the run list is queried after a failed launch"
+else
+    fail "🔵 the run list is queried" "asking is one call to the endpoint the launch just used"
+fi
+
+if grep -qi 'none YET' <<<"$_reject"; then
+    pass "🔴 and an empty result is reported as 'none YET', not as 'none'"
+else
+    fail "🔴 an empty result is 'none yet'" \
+         "a query that can be wrong seconds later cannot justify a safety claim"
+fi
+
+if grep -q '__unreadable__' <<<"$pb"; then
+    pass "⚠️ an unreadable run list is its own outcome, not folded into 'none'"
+else
+    fail "⚠️ an unreadable run list is its own outcome" \
+         "collapsing it is how an unread list becomes a claim of absence"
+fi
+
+# 🔴 ORPHANS DO NOT STAY INERT. ops-dev left three as a before-picture and
+# Dagster reaped them to FAILURE — so an orphan pollutes the failure count
+# without ever having executed, and anything reading run history as health sees
+# it.
+if grep -qi 'reaped to FAILURE' <<<"$_reject"; then
+    pass "🔴 it warns that an orphan is later reaped to FAILURE"
+else
+    fail "🔴 it warns about the reaped orphan" \
+         "a failure that never ran, counted as a failure, is a false signal nobody attributed"
 fi
 
 # 🔴 IT MUST SHOW WHAT IT LOOKED AT. The original failure reported that it did

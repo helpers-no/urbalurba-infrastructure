@@ -264,16 +264,89 @@
                    job={{ _job }} location={{ _sel_loc }} repo={{ _sel_repo }}
           stderr: {{ _launch.stderr | default('(none)') | truncate(400) }}
 
+    # 🔴 ASK WHETHER A RUN EXISTS, AND DO NOT TREAT THE ANSWER AS PROOF.
+    #
+    # 1.6.104 told the operator "no run was started and re-running is safe"
+    # whenever the body lacked LaunchRunSuccess. Dagster created a run TWELVE
+    # SECONDS LATER, and one per invocation: 9 -> 10 -> 11 (imac via ops-dev,
+    # urb-agents#1075).
+    #
+    # 🔴 The inference was unsound. A `PythonError` from launchPipelineExecution
+    # can still leave a run row — and the error seen was a DB failure PARTWAY
+    # THROUGH, which is exactly when a partial write is likely.
+    #
+    # ⚠️ AND ASKING IS NOT SUFFICIENT EITHER. The row appeared 12 s after the
+    # invocation, so a query immediately after the failure can legitimately find
+    # nothing and be wrong seconds later. "Asked and saw none" is "none YET".
+    #
+    # 🔵 So this read exists to REPORT, never to justify a retry. UIS cannot
+    # establish the absence of this side effect, and the message below no longer
+    # claims to.
+    - name: "7a2. Ask whether a run for this job exists, to report it"
+      ansible.builtin.shell: |
+        set -e
+        kubectl run {{ probe }}-q --image=curlimages/curl --restart=Never \
+          -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- curl -s -m 20 -X POST \
+          -H 'Content-Type: application/json' \
+          -d '{"query":"{ runsOrError(limit:5){ ... on Runs { results { runId jobName status } } } }"}' \
+          http://dagster-dagster-webserver:80/graphql >/dev/null
+        for i in $(seq 1 15); do
+          phase=$(kubectl get pod {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          { [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ]; } && break
+          sleep 2
+        done
+        kubectl logs {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
+      register: _runprobe
+      changed_when: false
+      failed_when: false
+      when: not (_launch.stdout is search('LaunchRunSuccess'))
+
+    - name: "7a3. Summarise what the run list showed for this job"
+      ansible.builtin.set_fact:
+        # ⚠️ Three outcomes, and "could not look" is one of them. Collapsing it
+        # into "none" is how an unread list becomes a claim of absence.
+        _recent_runs: >-
+          {{ ((_runprobe.stdout | from_json).data.runsOrError.results
+              | selectattr('jobName', 'equalto', _job)
+              | map(attribute='runId') | map('truncate', 9, true, '')
+              | join(', '))
+             if (_runprobe.stdout | default('') is search('runsOrError'))
+             else '__unreadable__' }}
+      when: not (_launch.stdout is search('LaunchRunSuccess'))
+
     - name: "7b. The launch must have produced a run id"
       ansible.builtin.assert:
         that:
           - _launch.rc == 0
           - _launch.stdout is search('LaunchRunSuccess')
         fail_msg: >-
-          Dagster REJECTED the launch (rc={{ _launch.rc }}). This is an answer,
-          not a failure to read one: the body is below and does not contain
-          LaunchRunSuccess, so no run was started and re-running is safe once
-          the cause is fixed.
+          Dagster REJECTED the launch (rc={{ _launch.rc }}). This is an ANSWER,
+          not a failure to read one — the body is below and does not contain
+          LaunchRunSuccess.
+
+          🔴 BUT A RUN MAY STILL EXIST, AND UIS CANNOT PROVE OTHERWISE. A
+          PythonError from launchPipelineExecution can leave a run row, and a DB
+          failure partway through is exactly when a partial write is likely. One
+          was observed appearing TWELVE SECONDS after the call, one per
+          invocation.
+
+          {{ ('runs for this job in the last 5: ' ~ _recent_runs)
+             if (_recent_runs | default('') not in ['', '__unreadable__'])
+             else ('no run for this job in the last 5 — but that is "none YET",
+                    not "none": the row can appear seconds later'
+                   if (_recent_runs | default('') == '')
+                   else 'the run list could not be read, so nothing is known
+                         about whether a run exists') }}
+
+          ⚠️  DO NOT RE-RUN WITHOUT LOOKING. Check, then decide:
+            ./uis template progress <app>     which runs exist and their state
+          An orphaned run sits at NOT_STARTED and is later reaped to FAILURE, so
+          it will pollute the failure count without ever having executed —
+          anything reading run history as a health signal will see it.
 
           job={{ _job }} location={{ _sel_loc }} repo={{ _sel_repo }}
           body: {{ _launch.stdout | default('(no body)') | truncate(600) }}
