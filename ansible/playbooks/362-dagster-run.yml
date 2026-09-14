@@ -177,6 +177,28 @@
           contradiction rather than a user error — report it.
 
     # ─── launch ──────────────────────────────────────────────────────────────
+    #
+    # 🔴 SAY HOW LONG THIS MAY TAKE, BEFORE IT TAKES IT.
+    #
+    # A bare `uis dagster run <job>` was still sitting in this task at TEN
+    # MINUTES with nothing printed. imac killed it at 900 s, saw no message at
+    # all — and killing it is what created an orphan (ops-dev, #1078).
+    #
+    # ⚠️ The wait itself is correct: `launchPipelineExecution` genuinely takes
+    # minutes for a large plan, and shortening the budget is what cut the launch
+    # off in the first place. What was wrong is that the operator experienced it
+    # as SILENCE, and the first thing an impatient one does is exactly what the
+    # message would have told them not to.
+    - name: "5c. Say how long the launch may take, before waiting"
+      ansible.builtin.debug:
+        msg:
+          - "Launching {{ _job }} — waiting up to {{ _launch_budget }}s for Dagster to confirm it."
+          - "This is not a hang. A large execution plan takes minutes to resolve;"
+          - "one job has been measured at over 300s while another returns in under one."
+          - "⚠️  If you interrupt this, a run may already have been created — and it"
+          - "    will sit at NOT_STARTED rather than executing. Check with"
+          - "    './uis template progress <app>' before launching again."
+
     - name: "6. Launch the run"
       ansible.builtin.shell: |
         set -e
@@ -207,6 +229,72 @@
       register: _launch
       changed_when: true
       failed_when: false
+
+    # 🔴 ASK WHETHER A RUN EXISTS, AND DO NOT TREAT THE ANSWER AS PROOF.
+    #
+    # 1.6.104 told the operator "no run was started and re-running is safe"
+    # whenever the body lacked LaunchRunSuccess. Dagster created a run TWELVE
+    # SECONDS LATER, and one per invocation: 9 -> 10 -> 11 (imac via ops-dev,
+    # urb-agents#1075).
+    #
+    # 🔴 The inference was unsound. A `PythonError` from launchPipelineExecution
+    # can still leave a run row — and the error seen was a DB failure PARTWAY
+    # THROUGH, which is exactly when a partial write is likely.
+    #
+    # ⚠️ AND ASKING IS NOT SUFFICIENT EITHER. The row appeared 12 s after the
+    # invocation, so a query immediately after the failure can legitimately find
+    # nothing and be wrong seconds later. "Asked and saw none" is "none YET".
+    #
+    # 🔵 So this read exists to REPORT, never to justify a retry. UIS cannot
+    # establish the absence of this side effect, and the messages below no longer
+    # claim to.
+    #
+    # 🔴 AND IT RUNS BEFORE THE ASSERTIONS, WHICH IS THE WHOLE POINT OF ITS
+    # POSITION. 1.6.105 placed it AFTER 7a — an `assert` that fails hard and
+    # ends the play — so in the one branch that actually creates an orphan (the
+    # empty body, the timeout path) the query never executed and the message
+    # could not name the run. imac proved it twice: a run created 18 s after the
+    # invocation, and zero run-id-shaped strings in the output (ops-dev,
+    # urb-agents#1078).
+    #
+    # ⚠️ A diagnostic placed after the abort it diagnoses is not a diagnostic.
+    # And the "none YET, not none" wording — which came from imac's own +12 s
+    # measurement — lived past that abort and had never once been reached.
+    - name: "7a1. Ask whether a run for this job exists, BEFORE anything asserts"
+      ansible.builtin.shell: |
+        set -e
+        kubectl run {{ probe }}-q --image=curlimages/curl --restart=Never \
+          -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- curl -s -m 20 -X POST \
+          -H 'Content-Type: application/json' \
+          -d '{"query":"{ runsOrError(limit:5){ ... on Runs { results { runId jobName status } } } }"}' \
+          http://dagster-dagster-webserver:80/graphql >/dev/null
+        for i in $(seq 1 15); do
+          phase=$(kubectl get pod {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          { [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ]; } && break
+          sleep 2
+        done
+        kubectl logs {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
+      register: _runprobe
+      changed_when: false
+      failed_when: false
+      when: not (_launch.stdout is search('LaunchRunSuccess'))
+
+    - name: "7a2. Summarise what the run list showed for this job"
+      ansible.builtin.set_fact:
+        # ⚠️ Three outcomes, and "could not look" is one of them. Collapsing it
+        # into "none" is how an unread list becomes a claim of absence.
+        _recent_runs: >-
+          {{ ((_runprobe.stdout | from_json).data.runsOrError.results
+              | selectattr('jobName', 'equalto', _job)
+              | map(attribute='runId') | map('truncate', 9, true, '')
+              | join(', '))
+             if (_runprobe.stdout | default('') is search('runsOrError'))
+             else '__unreadable__' }}
+      when: not (_launch.stdout is search('LaunchRunSuccess'))
 
     # 🔴 A LAUNCH IS A SIDE EFFECT. AN UNPARSEABLE RESULT IS NOT "IT DID NOT RUN".
     #
@@ -245,6 +333,15 @@
           {{ (_launch.stderr | default('') | regex_search('UIS_LAUNCH_PHASE=(\S+)', '\1') | first) | default('unknown') }},
           and reading logs from a pod that has not finished returns nothing.
 
+          {{ ('🔴 A RUN ALREADY EXISTS for this job: ' ~ _recent_runs ~
+              ' — check its state before launching another.')
+             if (_recent_runs | default('') not in ['', '__unreadable__'])
+             else ('no run for this job in the last 5 — but that is "none YET",
+                    not "none": one was observed appearing 18 s after the call'
+                   if (_recent_runs | default('') == '')
+                   else 'the run list could not be read, so nothing is known
+                         about whether a run exists') }}
+
           🔵 THE MEASURED CAUSE, if the phase above is Failed: the call ran out
           of time. This waited {{ _launch_budget }}s. `launchPipelineExecution`
           returns in under a second for a small job and had not returned after
@@ -263,60 +360,6 @@
           command: kubectl run ... curl POST launchPipelineExecution
                    job={{ _job }} location={{ _sel_loc }} repo={{ _sel_repo }}
           stderr: {{ _launch.stderr | default('(none)') | truncate(400) }}
-
-    # 🔴 ASK WHETHER A RUN EXISTS, AND DO NOT TREAT THE ANSWER AS PROOF.
-    #
-    # 1.6.104 told the operator "no run was started and re-running is safe"
-    # whenever the body lacked LaunchRunSuccess. Dagster created a run TWELVE
-    # SECONDS LATER, and one per invocation: 9 -> 10 -> 11 (imac via ops-dev,
-    # urb-agents#1075).
-    #
-    # 🔴 The inference was unsound. A `PythonError` from launchPipelineExecution
-    # can still leave a run row — and the error seen was a DB failure PARTWAY
-    # THROUGH, which is exactly when a partial write is likely.
-    #
-    # ⚠️ AND ASKING IS NOT SUFFICIENT EITHER. The row appeared 12 s after the
-    # invocation, so a query immediately after the failure can legitimately find
-    # nothing and be wrong seconds later. "Asked and saw none" is "none YET".
-    #
-    # 🔵 So this read exists to REPORT, never to justify a retry. UIS cannot
-    # establish the absence of this side effect, and the message below no longer
-    # claims to.
-    - name: "7a2. Ask whether a run for this job exists, to report it"
-      ansible.builtin.shell: |
-        set -e
-        kubectl run {{ probe }}-q --image=curlimages/curl --restart=Never \
-          -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
-          --command -- curl -s -m 20 -X POST \
-          -H 'Content-Type: application/json' \
-          -d '{"query":"{ runsOrError(limit:5){ ... on Runs { results { runId jobName status } } } }"}' \
-          http://dagster-dagster-webserver:80/graphql >/dev/null
-        for i in $(seq 1 15); do
-          phase=$(kubectl get pod {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} \
-            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
-          { [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ]; } && break
-          sleep 2
-        done
-        kubectl logs {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
-        kubectl delete pod {{ probe }}-q -n {{ dagster_ns }} --context {{ _target }} \
-          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
-      register: _runprobe
-      changed_when: false
-      failed_when: false
-      when: not (_launch.stdout is search('LaunchRunSuccess'))
-
-    - name: "7a3. Summarise what the run list showed for this job"
-      ansible.builtin.set_fact:
-        # ⚠️ Three outcomes, and "could not look" is one of them. Collapsing it
-        # into "none" is how an unread list becomes a claim of absence.
-        _recent_runs: >-
-          {{ ((_runprobe.stdout | from_json).data.runsOrError.results
-              | selectattr('jobName', 'equalto', _job)
-              | map(attribute='runId') | map('truncate', 9, true, '')
-              | join(', '))
-             if (_runprobe.stdout | default('') is search('runsOrError'))
-             else '__unreadable__' }}
-      when: not (_launch.stdout is search('LaunchRunSuccess'))
 
     - name: "7b. The launch must have produced a run id"
       ansible.builtin.assert:
