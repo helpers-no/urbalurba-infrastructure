@@ -2564,9 +2564,13 @@ cmd_template_check_all() {
 # Sets: PROG_LINES, PROG_DONE, PROG_FAILED, PROG_RUNNING, PROG_ABSENT,
 #       PROG_FAILED_NAMES, PROG_UNDECLARED
 _progress_classify() {
-    local runs_json="$1" jobs="$2"
+    local runs_json="$1" jobs="$2" now="${3:-0}"
     PROG_LINES=""; PROG_DONE=0; PROG_FAILED=0; PROG_RUNNING=0; PROG_ABSENT=0
-    PROG_FAILED_NAMES=""; PROG_UNDECLARED=""
+    PROG_FAILED_NAMES=""; PROG_UNDECLARED=""; PROG_ELAPSED=""
+    # ⚠️ `now` is a PARAMETER, not a `date` call in here. A classifier that
+    # reads the clock cannot be tested against a fixture twice and get the same
+    # answer, and this function exists precisely so its failure path can be
+    # driven on demand.
 
     # Latest run per job, by startTime. A job re-run after a failure must read as
     # its CURRENT state, not its worst ever.
@@ -2582,9 +2586,15 @@ _progress_classify() {
     for j in $jobs; do
         local st dur line
         st=$(printf '%s' "$latest" | jq -r --arg j "$j" '.[$j].status // ""' 2>/dev/null)
-        dur=$(printf '%s' "$latest" | jq -r --arg j "$j" '
+        # 🔴 AN IN-FLIGHT JOB GETS AN ELAPSED TOO, and that is the point of this
+        # change. An operator told "~11 minutes" who is 25 minutes in has no way
+        # to tell SLOW from STUCK (ops-dev, #1026) — measured wall time is the
+        # only answer that does not depend on anyone's prose being current.
+        dur=$(printf '%s' "$latest" | jq -r --arg j "$j" --argjson now "${now:-0}" '
             if (.[$j].startTime != null and .[$j].endTime != null)
             then "  " + (((.[$j].endTime - .[$j].startTime) | floor | tostring) + "s")
+            elif (.[$j].startTime != null and $now > 0)
+            then "  " + ((($now - .[$j].startTime) | floor | tostring) + "s so far")
             else "" end' 2>/dev/null)
         case "$st" in
             "")        line=$(printf '    %-26s %s' "$j" "·  not started"); PROG_ABSENT=$((PROG_ABSENT+1)) ;;
@@ -2593,7 +2603,7 @@ _progress_classify() {
                        line=$(printf '    %-26s %s%s' "$j" "🔴 FAILED" "$dur")
                        PROG_FAILED=$((PROG_FAILED+1)); PROG_FAILED_NAMES+="$j " ;;
             STARTED|STARTING|QUEUED|NOT_STARTED|CANCELING)
-                       line=$(printf '    %-26s ⏳ %s' "$j" "$(printf '%s' "$st" | tr '[:upper:]' '[:lower:]')")
+                       line=$(printf '    %-26s ⏳ %s%s' "$j" "$(printf '%s' "$st" | tr '[:upper:]' '[:lower:]')" "$dur")
                        PROG_RUNNING=$((PROG_RUNNING+1)) ;;
             # ⚠️ A status this release does not know is NOT folded into a state it
             # does. Counting it as "in flight" would be the guess that turns a
@@ -2603,6 +2613,22 @@ _progress_classify() {
         esac
         PROG_LINES+="$line"$'\n'
     done
+
+    # 🔵 THE CASCADE TOTAL, from the orchestrator's own timestamps rather than
+    # from an estimate. Earliest start of a declared job to the latest end — or
+    # to `now` while anything is still running.
+    if [[ "$PROG_DONE" -gt 0 || "$PROG_RUNNING" -gt 0 || "$PROG_FAILED" -gt 0 ]]; then
+        PROG_ELAPSED=$(printf '%s' "$latest" | jq -r --argjson now "${now:-0}" --arg jobs "$jobs" '
+            ($jobs | split(" ")) as $want
+            | [ to_entries[] | select(.key as $k | $want | index($k)) | .value ] as $rs
+            | ([ $rs[] | .startTime // empty ] | min) as $from
+            | ([ $rs[] | .endTime // empty ] | max) as $to
+            | if $from == null then ""
+              elif ([ $rs[] | select(.endTime == null) ] | length) > 0 and $now > 0
+                then (($now - $from) | floor | tostring)
+              elif $to == null then ""
+              else (($to - $from) | floor | tostring) end' 2>/dev/null) || PROG_ELAPSED=""
+    fi
 
     # 🔵 P5's second half. The declared order is printed; a job Dagster has RUN
     # that the definition does not declare is a real disagreement between the
@@ -2625,8 +2651,31 @@ _progress_classify() {
 # has NOT STARTED, which is the state a fresh install spends most of its life in
 # (imac's P1).
 _progress_summary() {
+    local declared_takes="${1:-}"
     printf '\n    %s succeeded · %s failed · %s in flight · %s not started\n' \
         "$PROG_DONE" "$PROG_FAILED" "$PROG_RUNNING" "$PROG_ABSENT"
+
+    # 🔴 MEASURED WALL TIME, AND THE APPLICATION'S ESTIMATE, SIDE BY SIDE.
+    #
+    # ops-dev: "an operator told ~11 minutes who is 25 minutes in has no way to
+    # tell slow from stuck." A cold install measured 29.5 minutes against an
+    # estimate of ~11, which was written on a warm host and predates the bulk
+    # load (#1026).
+    #
+    # ⚠️ UIS does NOT correct the estimate — it belongs to the application and
+    # only the application can revise it. What the platform can do is show what
+    # actually happened next to it, so the reader does not have to trust either
+    # one alone. The same reason the check verb exists at all.
+    if [[ -n "$PROG_ELAPSED" && "$PROG_ELAPSED" -gt 0 ]] 2>/dev/null; then
+        printf '    %s elapsed so far, measured from Dagster (%s min)\n' \
+            "${PROG_ELAPSED}s" "$(( (PROG_ELAPSED + 30) / 60 ))"
+        if [[ -n "$declared_takes" ]]; then
+            printf '    the application estimates: %s\n' \
+                "$(printf '%s' "$declared_takes" | tr '\n' ' ' | cut -c1-96)"
+            printf '    ⚠️  that estimate is the APPLICATION'"'"'S and may predate its own\n'
+            printf '        workloads. The elapsed figure above is measured; prefer it.\n'
+        fi
+    fi
     if [[ -n "$PROG_UNDECLARED" ]]; then
         printf '\n    ⚠️  Dagster has run jobs this definition does not declare as first data:\n'
         printf '        %s\n' "${PROG_UNDECLARED% }"
@@ -2789,10 +2838,12 @@ cmd_template_progress() {
         return 2
     fi
 
-    _progress_classify "$PROGRESS_RUNS" "$jobs"
+    local takes
+    takes=$(yq -r '.operational.first_data.takes // ""' "$info" 2>/dev/null) || takes=""
+    _progress_classify "$PROGRESS_RUNS" "$jobs" "$(date -u +%s)"
     printf '%s' "$PROG_LINES"
     local rc=0
-    _progress_summary || rc=$?
+    _progress_summary "$takes" || rc=$?
 
     # imac's P6: loaded is not running, and a fresh install ships STOPPED, so the
     # two are routinely different. Reported in the same breath rather than

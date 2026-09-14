@@ -201,6 +201,66 @@ else
          "a hardcoded list in the platform is the thing that drifts from the tenant"
 fi
 
+# ── measured elapsed, because prose goes stale and wall time does not ───────
+# 🔴 A cold install measured 29.5 min against an estimate of ~11. An operator
+# told 11 minutes who is 25 minutes in cannot tell SLOW from STUCK (ops-dev,
+# #1026) — and that is the same gap Terje hit asking for a status command.
+#
+# ⚠️ `now` is passed in. A classifier that read the clock could not be tested
+# against a fixture twice and get the same answer.
+_progress_classify "$(_runs "$(_r a_refresh SUCCESS 1000 1300),$(_r b_refresh STARTED 1400)")" "$JOBS" 2000
+if [[ "$PROG_ELAPSED" == "1000" ]]; then
+    pass "🔴 elapsed runs from the first start to NOW while anything is in flight"
+else
+    fail "🔴 elapsed runs to now while in flight" "got '$PROG_ELAPSED', wanted 1000 (2000 - 1000)"
+fi
+
+if [[ "$PROG_LINES" == *"600s so far"* ]]; then
+    pass "🔴 an in-flight job shows how long it has been running, not a blank"
+else
+    fail "🔴 an in-flight job shows its elapsed" "a job with no duration is indistinguishable from a stuck one: $PROG_LINES"
+fi
+
+_progress_classify "$(_runs "$(_r a_refresh SUCCESS 1000 1300),$(_r b_refresh SUCCESS 1400 1900)")" "$JOBS" 9999
+if [[ "$PROG_ELAPSED" == "900" ]]; then
+    pass "once nothing is in flight, elapsed is first start to last end — not to now"
+else
+    fail "elapsed stops at the last end when nothing is running" "got '$PROG_ELAPSED', wanted 900"
+fi
+
+# ⚠️ The application's estimate is SHOWN, never corrected. Only the application
+# can revise its own figure; the platform's job is to put measured wall time
+# beside it so the reader need not trust either alone.
+_progress_classify "$(_runs "$(_r a_refresh SUCCESS 1000 1300),$(_r b_refresh STARTED 1400)")" "$JOBS" 2000
+out="$(_progress_summary '~11 minutes for the first four')"
+if [[ "$out" == *"elapsed so far, measured from Dagster"* && "$out" == *"~11 minutes"* \
+      && "$out" == *"prefer it"* ]]; then
+    pass "⚠️ measured elapsed is shown beside the application's estimate, and preferred"
+else
+    fail "⚠️ measured elapsed is shown beside the estimate" "out=$out"
+fi
+
+# 🔴 And UIS must not rewrite a tenant's estimate. The figure lives in the
+# artifact; only its author can revise it.
+# ⚠️ COMMENTS STRIPPED. The first version of this scanned the whole file and
+# tripped on the comment EXPLAINING why no estimate is hardcoded — the prose
+# about a rule satisfying the check for the rule, inverted. Third time today.
+if ! grep -v '^[[:space:]]*#' "$LIB" | grep -qE '11 minutes|29\.5 min'; then
+    pass "🔴 no tenant time estimate is hardcoded in the platform"
+else
+    fail "🔴 no tenant estimate is hardcoded in the platform" \
+         "a number copied out of an artifact is a second place that must agree"
+fi
+
+# ⚠️ With no runs at all there is nothing to time, and it must not print 0s.
+_progress_classify "$(_runs "")" "$JOBS" 5000
+out="$(_progress_summary 'some estimate')"
+if [[ -z "$PROG_ELAPSED" && "$out" != *"elapsed"* ]]; then
+    pass "⚠️ nothing started means no elapsed line, not '0s elapsed'"
+else
+    fail "⚠️ nothing started prints no elapsed line" "elapsed='$PROG_ELAPSED' out=$out"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL  Skipped: $SKIP"
 [[ "$FAIL" -eq 0 ]]
