@@ -401,6 +401,7 @@
     ,"image": "postgrest/postgrest:v14.10"
     ,"configurable": true
     ,"multiInstance": true
+    ,"inCluster": { "scheme": "http", "nameTemplate": "{app}-postgrest", "port": 3000 }
   }
 ,
   {

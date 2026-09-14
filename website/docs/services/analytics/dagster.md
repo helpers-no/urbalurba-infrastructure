@@ -119,6 +119,51 @@ passes it to Helm. Nothing in the product changes.
 | `module` | required | Python module exposing `definitions` |
 | `why` | required | what this installation loses if it stops running |
 | `env_secrets` | optional | secrets **in the `dagster` namespace** to expose to the pods. ⚠️ Every key becomes an environment variable, and the two ways to create the secret produce **different** key names — see below |
+| `env_from_services` | optional | plain environment variables set to the **in-cluster address of a UIS service** — see below |
+
+### Addressing another UIS service from a code location
+
+A code-location pod that has to call a UIS service — a REST API, a database —
+needs an address that is valid **inside the cluster**. An application's own
+published URL is not it:
+
+```yaml
+exports:
+  api-url: "http://api-myapp.localhost"     # a browser on the HOST
+```
+
+`.localhost` is loopback by definition ([RFC 6761]), so delivering that value
+into a pod points the pod at **itself**. The failure looks like a broken
+cluster: the name resolves, the connection is refused, and the ingress is
+blameless.
+
+[RFC 6761]: https://www.rfc-editor.org/rfc/rfc6761
+
+Name the **service** instead, and UIS composes the address:
+
+```yaml
+code_location:
+  name: myapp-data
+  env_from_services:
+    MYAPP_API_URL: postgrest
+```
+
+The pod receives `MYAPP_API_URL=http://myapp-postgrest.postgrest.svc.cluster.local:3000`.
+
+:::warning Do not write that address yourself
+The namespace, the service name and the port belong to UIS and **change between
+releases** — `gravitee` has already moved from namespace `default` to
+`gravitee`. An application holding the literal address breaks silently the day
+UIS moves it, in a different repository, with no signal at the source.
+
+Naming the service keeps the moving part on the side that moves it: UIS updates
+its own service data in the same release and your definition needs no change.
+:::
+
+A service UIS publishes no in-cluster address for is **refused**, not guessed
+at — and so is a variable set by both `env_from_services` and
+`env_from_exports`, since nothing would say which wins.
+
 
 ### Creating a secret for `env_secrets`
 

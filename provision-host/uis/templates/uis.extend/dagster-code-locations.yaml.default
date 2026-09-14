@@ -89,6 +89,42 @@ code_locations: []
 #       to empty is not the same as unset and is worse: the check would run,
 #       reach nothing, and have to guess why.
 #
+#    🔴 AN EXPORT IS HOST-FACING AND THIS VALUE LANDS IN A POD. `exports.api-url`
+#       is `http://api-<app>.localhost` — the address a developer types in a
+#       browser on the machine running the cluster. A pod is a different network
+#       namespace and `.localhost` is loopback BY DEFINITION (RFC 6761), so the
+#       pod calls ITSELF. A cluster WITH the ingress behaves identically: the
+#       measured failure was `curl` exiting 7, resolved-and-refused, not 6.
+#
+#       Use `env_from_services` below instead. ⚠️ This release does not yet
+#       REFUSE a loopback export — the refusal is written and held back until
+#       every published artifact has moved, because turning a failing check into
+#       a failed install is the worse failure. Do not read "not refused" as
+#       "works".
+#
+#    🔵 `env_from_services` — NAME -> a UIS SERVICE ID. The platform composes
+#       the in-cluster address:
+#
+#         code_location:
+#           env_from_services:
+#             ATLAS_POSTGREST_URL: postgrest
+#
+#       resolves to `http://<app>-postgrest.postgrest.svc.cluster.local:3000`.
+#
+#    ⚠️ DO NOT WRITE THAT ADDRESS YOURSELF, even though you can now see it.
+#       The namespace, the service name and the port belong to UIS and change
+#       between releases — `gravitee` moved from namespace `default` to
+#       `gravitee`, and an artifact that had hardcoded the old one would have
+#       broken silently that day, in a different repository, with no signal
+#       here. Naming the SERVICE keeps the moving part on the side that moves
+#       it: UIS updates `services.json` in the same release and your artifact
+#       needs no change.
+#
+#       The parts come from that service's `inCluster` block. A service with no
+#       such block is REFUSED rather than guessed at, and the same variable set
+#       by both `env_from_exports` and `env_from_services` is refused too —
+#       nothing would say which wins.
+#
 #   resources   optional  requests for the code-location pod. UIS sets a default
 #                         of cpu 100m / memory 384Mi; declare this only if your
 #                         image genuinely needs more.
