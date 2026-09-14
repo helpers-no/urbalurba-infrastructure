@@ -42,7 +42,7 @@ fi
 
 # 🔴 TWO DISTINCT ASSERTIONS. One outcome for "no body" and "body without the
 # marker" is what made a running job read as a failed launch.
-_empty="$(sed -n '/7a\./,/7b\./p' "$PB")"
+_empty="$(sed -n '/7a\. Distinguish/,/7b\./p' "$PB")"
 _reject="$(sed -n '/7b\./,/8\./p' "$PB")"
 
 if [[ -n "$_empty" && -n "$_reject" ]]; then
@@ -376,6 +376,81 @@ if grep -q 'never starts and is not retried' <<<"$pb"; then
     pass "and says an orphaned run never starts on its own"
 else
     fail "it says an orphan never starts" "an operator who waits for it waits forever"
+fi
+
+# ── a diagnostic placed after the abort it diagnoses is not a diagnostic ────
+# 🔴 1.6.105 put the run-list query AFTER 7a — an `assert` that fails hard and
+# ends the play. So in the one branch that actually creates an orphan (empty
+# body, the timeout path) the query never executed and the message could not
+# name the run. imac proved it twice: a run created 18 s after the invocation,
+# and ZERO run-id-shaped strings in the output (ops-dev, urb-agents#1078).
+#
+# ⚠️ And the "none YET, not none" wording — which came from imac's own +12 s
+# measurement — lived past that abort and had never once been reached.
+_probe_line="$(grep -n '7a1\. Ask whether a run' "$PB" | cut -d: -f1)"
+_a_line="$(grep -n '7a\. Distinguish' "$PB" | cut -d: -f1)"
+_b_line="$(grep -n '7b\. The launch must' "$PB" | cut -d: -f1)"
+if [[ -n "$_probe_line" && -n "$_a_line" && "$_probe_line" -lt "$_a_line" ]]; then
+    pass "🔴 the run-list query runs BEFORE the assertion that can end the play"
+else
+    fail "🔴 the query runs before the first assertion" \
+         "query at ${_probe_line:-none}, first assert at ${_a_line:-none} — behind an abort it never executes"
+fi
+
+if [[ -n "$_probe_line" && -n "$_b_line" && "$_probe_line" -lt "$_b_line" ]]; then
+    pass "and before the second one too, so both branches can name the run"
+else
+    fail "it runs before both assertions" "query at ${_probe_line:-none}, 7b at ${_b_line:-none}"
+fi
+
+# 🔴 THE EMPTY-BODY BRANCH IS THE ONE THAT CREATES THE ORPHAN, so it is the one
+# that most needs to name it.
+if grep -q '_recent_runs' <<<"$_empty"; then
+    pass "🔴 the empty-body branch reports the run list, not just the rejected branch"
+else
+    fail "🔴 the empty-body branch reports the run list" \
+         "that is the branch where an orphan is actually created"
+fi
+
+if grep -qi 'A RUN ALREADY EXISTS' <<<"$_empty"; then
+    pass "and names it outright when one is found"
+else
+    fail "it names a found run outright" "a generic 'may have' when the id is known is a withheld answer"
+fi
+
+# ── silence is what makes an operator do the thing the message warns against ─
+# 🔴 A bare `uis dagster run <job>` sat in the launch task at TEN MINUTES with
+# nothing printed. imac killed it at 900 s having seen no message at all — and
+# the kill is what created an orphan.
+#
+# ⚠️ The wait itself is correct: shortening the budget is what cut the launch off
+# in the first place. What was wrong is that it was experienced as silence.
+_pre="$(sed -n '/5c\. Say how long/,/6\. Launch the run/p' "$PB")"
+if [[ -n "$_pre" ]] && grep -q 'waiting up to' <<<"$_pre"; then
+    pass "🔴 the wait is announced BEFORE it is waited"
+else
+    fail "🔴 the wait is announced before it happens" \
+         "up to 900s of silence, and the impatient response creates an orphan"
+fi
+
+if grep -qi 'not a hang' <<<"$_pre"; then
+    pass "and says explicitly that it is not a hang"
+else
+    fail "it says it is not a hang" "an operator cannot distinguish a long wait from a hang without being told"
+fi
+
+if grep -qi 'If you interrupt this' <<<"$_pre"; then
+    pass "🔴 and warns that interrupting may leave a run behind"
+else
+    fail "🔴 it warns about interrupting" \
+         "the kill is what created the orphan; the warning belongs before the wait, not after"
+fi
+
+# ⚠️ The announced number must be the budget actually used, not a literal.
+if grep -q '_launch_budget' <<<"$_pre"; then
+    pass "⚠️ it announces the budget variable, so the number cannot drift"
+else
+    fail "⚠️ it announces the budget variable" "a hardcoded number in the notice will disagree with the wait"
 fi
 
 echo ""
