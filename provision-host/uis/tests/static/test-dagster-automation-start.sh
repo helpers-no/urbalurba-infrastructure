@@ -143,6 +143,55 @@ else
          "the verb is what makes 'enable, then discover order mattered' the easy mistake"
 fi
 
+# ── the two defects imac found in operator-facing text ──────────────────────
+# 🔴 "5 stoped" — one 'p', in the line an operator reads as THE OUTCOME. The
+# cause was `_action ~ "ed"`: English is not a string operation (#1009).
+# ⚠️ The first version of THIS assertion used `~ *"ed"` and did not match the
+# real text `~ "ed, "`, so reintroducing the defect left it green. A scan whose
+# pattern cannot match what it is looking for is not a check — caught by
+# mutating the code it was written to protect.
+if ! grep -qF '_action ~ "ed' <<<"$pb"; then
+    pass "🔴 the past tense is a lookup, not an 'ed' suffix on the action word"
+else
+    fail "🔴 the past tense is a lookup, not a suffix" "stop + ed = 'stoped', in the outcome line"
+fi
+
+if grep -q "ternary('started', 'stopped')" <<<"$pb"; then
+    pass "and both words are spelled out where a reader can check them"
+else
+    fail "both words are spelled out" "a derived word cannot be proofread"
+fi
+
+# 🔴 A CORRECT REFUSAL WITH AN INCORRECT REASON IS A HALF-WORKING INSTRUMENT.
+# The --stop refusal printed the START path's reasoning — "contacts external
+# services" — which is backwards: stopping makes the system STOP contacting
+# things. Same class as the loopback guard withdrawn the same morning, where the
+# refusal was right and the remedy it printed was wrong (#1009).
+_ref="$(sed -n '/needs a confirmation and stdin is not a terminal/,/EXIT_GENERAL_ERROR/p' "$CLI")"
+if grep -q 'action" == "start"' <<<"$_ref"; then
+    pass "🔴 the non-interactive refusal gives a DIFFERENT reason per direction"
+else
+    fail "🔴 the refusal gives a different reason per direction" \
+         "one reason for both means one of them is false"
+fi
+
+# ⚠️ And the stop branch must not claim it contacts anything.
+_stopbranch="$(awk '/action" == "start"/,/^        fi$/' "$CLI" | sed -n '/else/,$p')"
+if [[ -n "$_stopbranch" ]] && ! grep -q 'contacts external services' <<<"$_stopbranch"; then
+    pass "⚠️ the stop reason does not claim it contacts external services"
+else
+    fail "⚠️ the stop reason does not claim it contacts external services" \
+         "stopping contacts nothing — that is the start path's reason reused"
+fi
+
+# 🔵 The honest reason for confirming a stop is the defect that produced this
+# whole command: automation stopped while every check reads green.
+if grep -q 'reports healthy' <<<"$_ref" || grep -q 'still reports healthy' <<<"$pb"; then
+    pass "🔵 the stop path names its own risk: stopped automation behind green checks"
+else
+    fail "🔵 the stop path names its own risk" "a confirmation with no stated risk teaches nothing"
+fi
+
 # ── --stop means stopped, not reset ─────────────────────────────────────────
 if ! grep -qE 'resetSchedule|resetSensor' <<<"$pb"; then
     pass "--stop does not silently become reset-to-default"
