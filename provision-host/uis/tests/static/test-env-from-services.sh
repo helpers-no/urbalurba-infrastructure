@@ -291,6 +291,50 @@ else
     fail "the refusal names the likely cause" "'unknown key' alone points at the wrong file"
 fi
 
+# ── the declared port must be the one the platform itself routes the API to ──
+# 🔴 imac measured what my own test could not: PostgREST's admin port answers
+# 200 on /ready, /live AND /metrics, so "the wrong port is green on every
+# liveness surface" (#961). A wrong `inCluster.port` would compose an address
+# that resolves, connects, and answers — with the wrong API.
+#
+# ⚠️ MY TEST ABOVE CANNOT CATCH THAT. It asserts 3000 against services.json,
+# which I also wrote: a control that shares the instrument shares its failure.
+# So tie the number to something UIS states independently — the IngressRoute,
+# which is by definition the port the PUBLIC API is served on. If the declared
+# port is the admin one, these disagree.
+_ports_checked=0; _port_bad=""
+while IFS=$'\t' read -r sid sport splay; do
+    [[ -z "$sid" ]] && continue
+    # the playbook's NNN- prefix names its template set
+    _prefix="${splay%%-*}"
+    _ir="$(ls "$REPO_ROOT"/ansible/playbooks/templates/${_prefix}-*ingressroute* 2>/dev/null | head -1)"
+    if [[ -z "$_ir" ]]; then
+        # ⚠️ No ingress means no independent statement of the API port here.
+        # Say so rather than passing quietly — an unchecked service must not
+        # look identical to a checked one.
+        _port_bad+="$sid has no IngressRoute template; the port is unverified against anything but services.json"$'\n'
+        continue
+    fi
+    _routed="$(grep -oE '^[[:space:]]*port:[[:space:]]*[0-9]+' "$_ir" | grep -oE '[0-9]+' | head -1)"
+    _ports_checked=$((_ports_checked + 1))
+    [[ "$_routed" == "$sport" ]] || \
+        _port_bad+="$sid declares inCluster.port $sport but $(basename "$_ir") routes the API to ${_routed:-<none>}"$'\n'
+done <<< "$(jq -r '.services[] | select(.inCluster != null) | [.id, (.inCluster.port|tostring), .playbook] | @tsv' "$SERVICES_JSON" 2>/dev/null)"
+
+if [[ "$_ports_checked" -gt 0 ]]; then
+    pass "control: $_ports_checked in-cluster port(s) had an independent source to check against"
+else
+    fail "control: an in-cluster port had an independent source to check against" \
+         "nothing was compared — this assertion is vacuous as written"
+fi
+
+if [[ -z "$_port_bad" ]]; then
+    pass "🔴 the declared in-cluster port is the one the IngressRoute serves the API on"
+else
+    fail "🔴 the declared in-cluster port is the one the IngressRoute serves the API on" \
+         "${_port_bad%$'\n'}"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL  Skipped: $SKIP"
 [[ "$FAIL" -eq 0 ]]
