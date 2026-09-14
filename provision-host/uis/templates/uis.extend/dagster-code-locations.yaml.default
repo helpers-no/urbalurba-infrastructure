@@ -121,9 +121,20 @@ code_locations: []
 #       needs no change.
 #
 #       The parts come from that service's `inCluster` block. A service with no
-#       such block is REFUSED rather than guessed at, and the same variable set
-#       by both `env_from_exports` and `env_from_services` is refused too —
-#       nothing would say which wins.
+#       such block is REFUSED rather than guessed at.
+#
+#    🔴 MOVING TO env_from_services IS A REPLACEMENT, NOT AN ADDITION. Setting
+#       the same variable in both blocks is refused. That refusal looks the
+#       wrong way round — an older UIS ignores `env_from_services`, delivers the
+#       host-facing export and installs — and it is deliberate:
+#
+#         replace   an older UIS sets NOTHING. The check reports "cannot check"
+#                   and names the variable. One line, and true.
+#         add both  an older UIS delivers the LOOPBACK value, which resolves,
+#                   reaches the pod itself, and reads as a cluster problem.
+#
+#       So delete the `env_from_exports` entry in the same change that adds the
+#       `env_from_services` one. Nothing is installed when the refusal fires.
 #
 #   resources   optional  requests for the code-location pod. UIS sets a default
 #                         of cpu 100m / memory 384Mi; declare this only if your

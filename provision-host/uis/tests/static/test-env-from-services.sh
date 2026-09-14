@@ -142,6 +142,21 @@ else
     fail "one variable claimed by both maps is refused" "rc=$rc out=$out"
 fi
 
+# 🔴 THE REFUSAL LOOKS BACKWARDS: an older UIS ignores env_from_services,
+# delivers the host-facing export and INSTALLS, while this release refuses — so
+# the host that upgraded is the one that stops (ops-dev, #967). It is still
+# right, because refusing forces "replace, in one change", and an older UIS then
+# sets NOTHING (one CANNOT line naming the variable) instead of delivering the
+# loopback value (which resolves, hits the pod itself, and reads as a cluster
+# problem). The message has to say WHICH to keep, or an author mid-migration is
+# told there is a choice when there is not.
+if [[ "$out" == *"REPLACE"* && "$out" == *"env_from_exports"* ]]; then
+    pass "🔴 the collision says REPLACE, naming which entry to delete"
+else
+    fail "🔴 the collision says REPLACE, naming which entry to delete" \
+         "'declare it in one of them' leaves the author to guess, and the wrong guess is the loopback one"
+fi
+
 f="$(_def '          env_from_services:
             APP_URL: postgrest')"
 out="$(_validate_env_from_services "$f" "" 2>&1)"; rc=$?

@@ -1276,10 +1276,37 @@ _validate_env_from_services() {
             # ⚠️ One variable, two sources, and nothing says which wins. Refuse
             # rather than pick: a silently-chosen answer is the shape this whole
             # change exists to remove.
+            #
+            # 🔴 THIS LOOKS BACKWARDS AND IS NOT. Measured on the real atlas
+            # artifact with both keys added: an OLDER UIS ignores
+            # env_from_services, delivers the host-facing export, and INSTALLS
+            # with the wrong value — while this release REFUSES. The host that
+            # upgraded is the one that stops (ops-dev, #967).
+            #
+            # ✅ It is still the right way round, because of what each choice
+            # does to the transition:
+            #
+            #   refuse    forces "replace, in one change". An older UIS then
+            #             sets nothing, and the check reports CANNOT naming the
+            #             variable — one line, and true.
+            #   precede   would let an artifact carry both. An older UIS then
+            #             delivers the LOOPBACK value, which resolves, connects
+            #             to the pod itself, and reads as a cluster problem —
+            #             the failure that cost a day to disprove.
+            #
+            # ⚠️ So the refusal is what makes the worse outcome unreachable.
+            # The message below therefore says REPLACE rather than "pick one":
+            # an author mid-migration needs to be told which, not asked.
+            #
+            # 🔵 And it refuses from the plan builder, so nothing is installed
+            # when it fires. A backwards that is also destructive would be a
+            # different argument.
             if [[ -n "$exp_map" && "$exp_map" != "{}" ]] && \
                printf '%s' "$exp_map" | en="$name" yq -e 'has(strenv(en))' >/dev/null 2>&1; then
                 bad+="    $name is set by BOTH env_from_exports and env_from_services"$'\n'
-                bad+="      nothing says which would win — declare it in one of them"$'\n'
+                bad+="      REPLACE the env_from_exports entry, do not add beside it:"$'\n'
+                bad+="      keep the env_from_services one, which is valid inside a pod,"$'\n'
+                bad+="      and delete '$name' from env_from_exports"$'\n'
                 continue
             fi
             rc=0; _service_in_cluster_url "$svc_id" "$app_name" >/dev/null || rc=$?

@@ -160,9 +160,22 @@ Naming the service keeps the moving part on the side that moves it: UIS updates
 its own service data in the same release and your definition needs no change.
 :::
 
-A service UIS publishes no in-cluster address for is **refused**, not guessed
-at — and so is a variable set by both `env_from_services` and
-`env_from_exports`, since nothing would say which wins.
+A service UIS publishes no in-cluster address for is **refused**, not guessed at.
+
+:::info Moving an existing variable is a replacement, not an addition
+Setting the same variable in **both** `env_from_exports` and
+`env_from_services` is refused, so delete the old entry in the same change that
+adds the new one.
+
+The refusal looks the wrong way round — an older UIS ignores
+`env_from_services`, delivers the host-facing export, and installs. It is
+deliberate. Replacing means an older UIS sets **nothing**, and the check reports
+*cannot check* naming the variable: one line, and true. Adding both means an
+older UIS delivers the **loopback** value, which resolves, reaches the pod
+itself, and reads as a cluster problem.
+
+Nothing is installed when the refusal fires — it runs before the plan.
+:::
 
 
 ### Creating a secret for `env_secrets`
