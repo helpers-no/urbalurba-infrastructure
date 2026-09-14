@@ -91,6 +91,61 @@ else
     fail "the concurrency cap still explains why" "the reason is what stops it being raised on request"
 fi
 
+# ── the run pods have a floor of their own ──────────────────────────────────
+# 🔴 THEY USED TO INHERIT THE CODE LOCATION'S. The chart propagates a user
+# deployment's resources to the run pods it launches, so the ephemeral pods
+# doing the work were scheduled against 384Mi/100m — a number measured on a
+# long-lived pod peaking at 300 MiB. imac measured four run pods from inside
+# their own cgroups: 590 MiB and ~628m average, 45-54% and 528% over
+# (ops-dev, urb-agents#1010).
+_rl="$(sed -n '/^runLauncher:/,/^[a-z]/p' "$CFG" | grep -v '^[[:space:]]*#')"
+
+if grep -q 'k8sRunLauncher' <<<"$_rl" && grep -q 'requests' <<<"$_rl"; then
+    pass "🔴 run pods have their own requests, not the code location's"
+else
+    fail "🔴 run pods have their own requests" \
+         "inheriting a floor measured on a different pod doing a different thing"
+fi
+
+_mem="$(grep -oE 'memory: *[0-9]+Mi' <<<"$_rl" | grep -oE '[0-9]+' | head -1)"
+if [[ -n "$_mem" && "$_mem" -ge 590 ]]; then
+    pass "the memory request covers the largest MEASURED run (590 MiB), with headroom"
+else
+    fail "the memory request covers the largest measured run" "got ${_mem:-<none>}Mi against 590 MiB measured"
+fi
+
+# 🔴 NO LIMITS. The memory limit is BLOCKED on a bootstrap measurement:
+# brreg_bootstrap is the job an operator runs FIRST and the one most likely to
+# exceed anything chosen from today's numbers, so a limit from 590 MiB could
+# turn it into an OOM kill on a new operator's first action. The CPU limit is
+# DECIDED AGAINST: it throttles rather than fails, converting a resourcing
+# problem into a mysterious performance problem.
+if ! grep -q 'limits' <<<"$_rl"; then
+    pass "🔴 no run-pod limits — a sampled figure is a floor, never a ceiling"
+else
+    fail "🔴 no run-pod limits" \
+         "a memory limit set from a sample that excludes the largest workload is a kill threshold"
+fi
+
+# ⚠️ THE REQUEST IS MULTIPLIED BY THE CONCURRENCY CAP, and that coupling is the
+# thing a future reader will not know. A pod that cannot be SCHEDULED reads as a
+# hang; one that bursts above its request is requests working as intended.
+_cpu="$(grep -oE 'cpu: *[0-9]+m' <<<"$_rl" | grep -oE '[0-9]+' | head -1)"
+_cap="$(grep -oE 'maxConcurrentRuns: *[0-9]+' "$CFG" | grep -oE '[0-9]+' | head -1)"
+if [[ -n "$_cpu" && -n "$_cap" ]] && (( _cpu * _cap <= 2000 )); then
+    pass "⚠️ cpu request x maxConcurrentRuns ($_cpu m x $_cap) still fits a laptop profile"
+else
+    fail "⚠️ cpu request x maxConcurrentRuns fits a laptop profile" \
+         "${_cpu:-?}m x ${_cap:-?} reserves more than 2 cores before the last pod can be placed"
+fi
+
+if grep -qi 'coupled to the run-pod request' "$CFG"; then
+    pass "and the concurrency cap says it is coupled to that request"
+else
+    fail "the concurrency cap says it is coupled to that request" \
+         "raising one without the other is how pods become unschedulable"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
