@@ -121,6 +121,58 @@ _template_source_allowed() {
 # is why the catalogue records both and UIS pulls the digest (Terje, #361).
 # `latest` and bare branch-looking refs are refused outright, so a catalogue
 # entry cannot smuggle in a moving target even if the build let it through.
+# Apply `--version <tag>@<digest>`: install a version the catalogue does not
+# point at, so a nominee can be verified BEFORE it is advertised to everyone.
+#
+# 🔴 THE DIGEST IS REQUIRED AND A BARE TAG IS REFUSED. Resolving the tag here
+# would be the one place it must not happen: an off-catalogue install is exactly
+# the case where nobody has pinned anything, so the tag is at its most likely to
+# move — and a tag that moved between nomination and verification means
+# verifying something else and reporting success. That is the dispatch race this
+# project has already paid for once, and every nomination carries both values.
+#
+# ⚠️ THE ARTIFACT STILL COMES FROM THE CATALOGUE. This overrides WHICH VERSION,
+# never WHERE FROM: the id must exist, and the allowlist still applies. A flag
+# that could also redirect the source would be a different and much larger hole.
+_apply_off_catalogue_version() {
+    local template_id="$1" spec="${OFF_CATALOGUE_SPEC:-}"
+    local tag="${spec%%@*}" digest="${spec#*@}"
+
+    if [[ "$spec" != *"@"* || -z "$tag" || -z "$digest" ]]; then
+        log_error "--version needs <tag>@<digest>, and '$spec' is not that."
+        echo "  A tag alone is not accepted here, on purpose. Off-catalogue is" >&2
+        echo "  precisely where nothing has pinned the tag, so it is where a tag" >&2
+        echo "  is most likely to have moved since it was nominated — and" >&2
+        echo "  verifying a different artifact than the one under discussion, and" >&2
+        echo "  reporting success, is worse than not verifying at all." >&2
+        echo "" >&2
+        echo "  A nomination carries both. For example:" >&2
+        echo "    ./uis template install $template_id --version v20260914-1fa7961@sha256:<64 hex>" >&2
+        return 1
+    fi
+
+    # Reuses the catalogue's own rule: digest shape, and no moving tag.
+    _template_pin_is_immutable "$tag" "$digest" || return 1
+
+    SOURCE_TAG="$tag"
+    SOURCE_DIGEST="$digest"
+    OFF_CATALOGUE=1
+
+    # ⚠️ LOUD, because the whole risk of this flag is that it stops looking
+    # unusual. The operator is told what the catalogue says as well as what they
+    # asked for, so "is this host current?" is answerable from the output.
+    echo "" >&2
+    log_warn "OFF-CATALOGUE INSTALL — this is not what the catalogue points at."
+    echo "    catalogue: ${CATALOGUE_TAG}  ${CATALOGUE_DIGEST}" >&2
+    echo "    installing: ${SOURCE_TAG}  ${SOURCE_DIGEST}" >&2
+    echo "" >&2
+    echo "  This is recorded, so the host does not quietly read as current." >&2
+    echo "  'uis template info $template_id' will say so until a catalogue" >&2
+    echo "  install replaces it." >&2
+    echo "" >&2
+    return 0
+}
+
 _template_pin_is_immutable() {
     local tag="$1" digest="$2"
     if [[ -z "$digest" ]]; then
@@ -426,6 +478,14 @@ cmd_template_info() {
         local vis
         vis="$(_json_field "$template" '.visibility')"
         echo "Visible:  ${vis:-public}"
+
+        # 🔴 SAY SO IF THIS HOST IS NOT ON THE CATALOGUE'S PIN. `--version`
+        # exists so a nominee can be verified before it is advertised, and the
+        # whole risk of that flag is a host drifting off-catalogue with the only
+        # record in a chat thread. The pin above answers "what would install";
+        # this answers "what IS installed", which is a different question and
+        # the one that goes stale.
+        _report_off_catalogue "$template_id" "$(_template_source_field "$template" digest)"
 
         # 🔴 RENDER THE APPLICATION'S OWN OPERATIONAL BLOCK.
         #
@@ -1507,6 +1567,49 @@ _application_installed() {
     [[ "$(app_id="$id" yq -r '[.applications[] | select(.id == strenv(app_id))] | length' "$file" 2>/dev/null)" -ge 1 ]]
 }
 
+# Warn when this host has an off-catalogue install of this id.
+#
+# Reads the record rather than the registry: the point is what IS here, which
+# `--version` can make differ from what the catalogue advertises.
+_report_off_catalogue() {
+    local id="$1" catalogue_digest="${2:-}" file rows
+    file="$(_applications_file)"
+    [[ -f "$file" ]] || return 0
+    command -v yq >/dev/null 2>&1 || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    # 🔴 yq TO JSON, THEN jq — AND BOTH HALVES OF THAT ARE A BUG I HIT HERE.
+    #
+    # Written first as chained mikefarah selects with `+ "\t" +`, and running it
+    # showed two failures at once:
+    #
+    #   select(.off_catalogue == true) did NOT drop a false row. It passed a
+    #   null through, so `rows` was non-empty and this warned "your host is
+    #   OFF-CATALOGUE" on every host with any recorded application. A control
+    #   that cries wolf is worse than no control — it is the one people learn
+    #   to scroll past.
+    #
+    #   `+ "\t" +` emits a LITERAL backslash-t, so `IFS=$'\t' read` got the
+    #   whole row in one field. Same trap already recorded once this project.
+    #
+    # ⚠️ jq's semantics here are the predictable ones, and converting costs one
+    # process on a command that already does network I/O.
+    rows=$(yq -o=json "$file" 2>/dev/null | jq -r --arg id "$id" \
+        '.applications[]? | select(.id == $id and .off_catalogue == true)
+         | [(.app_name // "?"), (.tag // "?"), (.pin // "?")] | @tsv' 2>/dev/null) || return 0
+    [[ -z "$rows" ]] && return 0
+    echo "" >&2
+    log_warn "This host has an OFF-CATALOGUE install of '$id'."
+    while IFS=$'\t' read -r an tg pn; do
+        [[ -z "$an" ]] && continue
+        echo "    $an  installed at $tg" >&2
+        echo "             $pn" >&2
+    done <<< "$rows"
+    [[ -n "$catalogue_digest" ]] && echo "    catalogue now points at $catalogue_digest" >&2
+    echo "  It was installed with --version, so it is deliberate — but it is not" >&2
+    echo "  current. A plain 'uis template install $id' replaces it." >&2
+    return 0
+}
+
 # Read one export of an installed application.
 _application_export() {
     local id="$1" key="$2" file
@@ -1572,10 +1675,19 @@ _record_application() {
             "code_locations": (strenv(code_locations) | split(",") | map(select(. != ""))),
             "requires":       (strenv(requires_csv)   | split(",") | map(select(. != ""))),
             "app_name":  strenv(app_name),
-            "exports":   (strenv(exports_json) | from_json)
+            "exports":   (strenv(exports_json) | from_json),
+            "off_catalogue": (strenv(off_catalogue) == "1"),
+            "catalogue_pin": strenv(catalogue_pin)
           }])'
 
+    # 🔴 RECORDED, so an off-catalogue host does not read as current. The only
+    # record of imac's deliberate off-catalogue state was a bus comment, and a
+    # test host whose drift lives in a chat thread is a test host that drifts
+    # (ops-dev, #981). `catalogue_pin` keeps what the catalogue said AT THE
+    # TIME, so the divergence is legible later without re-reading the registry.
     if ! app_id="$app_id" artifact="$artifact" tag="$tag" digest="$digest" \
+         off_catalogue="${OFF_CATALOGUE:-0}" \
+         catalogue_pin="${CATALOGUE_DIGEST:-}" \
          installed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
          services="$services" code_locations="$code_locations" \
          requires_csv="$requires_csv" \
@@ -2694,13 +2806,13 @@ cmd_template_remove() {
     return 0
 }
 
-# Command: uis template install <id># Command: uis template install <id>
+# Command: uis template install <id>
 cmd_template_install() {
     local template_id="${1:-}"
     shift || true
 
     if [[ -z "$template_id" ]]; then
-        log_error "Usage: uis template install <id> [--dry-run] [--refresh] [--param key=value]..."
+        log_error "Usage: uis template install <id> [--dry-run] [--refresh] [--param key=value]... [--version <tag>@<digest>]"
         return 1
     fi
 
@@ -2722,6 +2834,23 @@ cmd_template_install() {
                 REGISTRY_REFRESH=true
                 shift
                 ;;
+            --version)
+                # 🔴 INSTALL A VERSION THE CATALOGUE DOES NOT POINT AT.
+                #
+                # Without this the catalogue pin is the only installable thing,
+                # so a nominee could not be verified until after it had been
+                # advertised to everyone. Every nomination to date was therefore
+                # unverified at install, or verified by hand-editing a registry
+                # cache — a method nobody reproduces, and a step nobody
+                # reproduces is one that quietly stops happening (ops-dev,
+                # #981).
+                if [[ -z "${2:-}" ]]; then
+                    log_error "--version needs <tag>@<digest>"
+                    return 1
+                fi
+                OFF_CATALOGUE_SPEC="$2"
+                shift 2
+                ;;
             --param)
                 if [[ -z "${2:-}" ]]; then
                     log_error "--param needs key=value"
@@ -2735,7 +2864,7 @@ cmd_template_install() {
                 ;;
             -*)
                 log_error "Unknown option: $1"
-                echo "Usage: uis template install <id> [--dry-run] [--refresh] [--param key=value]..." >&2
+                echo "Usage: uis template install <id> [--dry-run] [--refresh] [--param key=value]... [--version <tag>@<digest>]" >&2
                 return 1
                 ;;
             *)
@@ -2777,6 +2906,11 @@ cmd_template_install() {
         SOURCE_ARTIFACT=$(_template_source_field "$template" artifact)
         SOURCE_TAG=$(_template_source_field "$template" tag)
         SOURCE_DIGEST=$(_template_source_field "$template" digest)
+        CATALOGUE_TAG="$SOURCE_TAG"
+        CATALOGUE_DIGEST="$SOURCE_DIGEST"
+        if [[ -n "${OFF_CATALOGUE_SPEC:-}" ]]; then
+            _apply_off_catalogue_version "$template_id" || return 1
+        fi
         local visibility
         visibility="$(_json_field "$template" '.visibility')"; visibility="${visibility:-public}"
 
@@ -3344,6 +3478,11 @@ run_template() {
             echo "                    \"not found\" without it."
             echo "  info <id>         Show template details"
             echo "  install <id>      Install a template (deploy + configure services)"
+            echo "                    --version <tag>@<digest> installs a version the"
+            echo "                    catalogue does NOT point at, for verifying a"
+            echo "                    nominee before it is advertised. Recorded, and"
+            echo "                    'template info' says so until a plain install"
+            echo "                    replaces it."
             echo "    --dry-run       Pull the definition and print the numbered plan."
             echo "                    Installs NOTHING. The best way to see what an"
             echo "                    application is before committing to it."
