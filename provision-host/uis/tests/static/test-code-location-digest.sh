@@ -273,6 +273,44 @@ else
     fail "an application can override either value" "a platform default must be overridable by a tenant that knows better"
 fi
 
+# ── env_from_exports is validated BEFORE any side effect ─────────────────────
+# 🔴 The resolution lives in the writer, which runs after the database and both
+# namespaces are ensured — so a bad declaration was caught only once the install
+# had already changed the cluster. "Refuses safely after side effects" is a
+# different guarantee from "refuses before them" (ops-dev, #959).
+_lib_code="$(grep -v '^[[:space:]]*#' "$LIB")"
+
+if grep -q '_validate_env_from_exports' <<<"$_lib_code"; then
+    pass "🔴 env_from_exports is validated before the plan runs"
+else
+    fail "🔴 env_from_exports is validated before the plan runs" \
+         "a misnamed export is otherwise caught after the cluster has changed"
+fi
+
+# ⚠️ The call must be in _resolve_provides, which builds the plan — not in the
+# writer, which executes it.
+_rp="$(sed -n '/^_resolve_provides() {/,/^}/p' "$LIB" | grep -v '^[[:space:]]*#')"
+if grep -q '_validate_env_from_exports "\$info_file"' <<<"$_rp"; then
+    pass "it runs from the plan builder, not the executor"
+else
+    fail "it runs from the plan builder" "validating inside the writer is validating after the fact"
+fi
+
+# ⚠️ UIS must NOT synthesise an in-cluster address by guessing a tenant's
+# service topology. This test is deliberately a literal scan: the point is that
+# NO service DNS name is written into the lib at all.
+#
+# 🔵 It will be REPLACED, not deleted, when `env_from_services` lands — at that
+# point UIS does compose an address, but from published platform data
+# (services.json), never from a literal here. Replacing a negative control is a
+# decision; deleting one is how a control gets disarmed.
+if grep -q 'svc.cluster.local' <<<"$_lib_code"; then
+    fail "UIS does not synthesise a tenant's in-cluster address" \
+         "the platform guessing a tenant's address scheme is the next silently-different value"
+else
+    pass "UIS does not synthesise a tenant's in-cluster address"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]

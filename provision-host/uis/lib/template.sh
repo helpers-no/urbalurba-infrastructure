@@ -1143,6 +1143,48 @@ _conf_get() {
     sed -n "s/^${key}=//p" "$conf" | head -1
 }
 
+# Validate every `env_from_exports` declaration BEFORE anything is executed.
+#
+# 🔴 IT USED TO REFUSE LATE. The resolution lives in `_write_code_location`,
+# which runs after the database and both namespaces have been ensured — so a
+# misnamed export was caught only once the install had already changed the
+# cluster. imac checked there was no half-applied state and there was not, but
+# "refuses safely after side effects" is a different guarantee from "refuses
+# before them", and the second is the one worth having (ops-dev, #959).
+#
+# This check is a pure read of the definition. Nothing needs a cluster.
+_validate_env_from_exports() {
+    local info_file="$1" n_svc i map k v exp_keys bad=""
+    command -v yq >/dev/null 2>&1 || return 0
+    n_svc=$(yq -r '.provides.services // [] | length' "$info_file" 2>/dev/null) || return 0
+    [[ "$n_svc" =~ ^[0-9]+$ ]] || return 0
+    exp_keys=$(yq -r '.exports // {} | keys | .[]' "$info_file" 2>/dev/null)
+
+    for ((i=0; i<n_svc; i++)); do
+        map=$(yq -o=json -I0 ".provides.services[$i].config.code_location.env_from_exports // {}" "$info_file" 2>/dev/null)
+        [[ -z "$map" || "$map" == "{}" ]] && continue
+        while IFS= read -r k; do
+            [[ -z "$k" ]] && continue
+            local name="${k%%=*}" key="${k#*=}"
+            if ! grep -qxF "$key" <<< "$exp_keys"; then
+                bad+="    $name names export '$key', which this definition does not declare"$'\n'
+            fi
+        done <<< "$(printf '%s' "$map" | yq -r 'to_entries | .[] | .key + "=" + .value' 2>/dev/null)"
+    done
+
+    if [[ -n "$bad" ]]; then
+        log_error "This definition's env_from_exports cannot be delivered:"
+        printf '%s' "$bad" >&2
+        echo "" >&2
+        echo "  env_from_exports names an export KEY, and the key must appear" >&2
+        echo "  in this definition's own exports: block." >&2
+        echo "" >&2
+        echo "  Refused before anything was installed." >&2
+        return 1
+    fi
+    return 0
+}
+
 # Resolve `provides` into an ordered deployment plan.
 #
 # Outputs one entry per line: <priority>|<service_id>
@@ -1153,6 +1195,9 @@ _resolve_provides() {
     local plan_dir="$3"
 
     mkdir -p "$plan_dir" || return 1
+
+    # ⚠️ Before the plan, therefore before any side effect.
+    _validate_env_from_exports "$info_file" || return 1
 
     # Collect services from provides.stacks (expand via stacks.json). These are
     # deploy-only: a stack names services, not per-app configuration.
