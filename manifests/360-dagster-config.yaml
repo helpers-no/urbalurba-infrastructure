@@ -56,25 +56,65 @@ runLauncher:
   # actual work were scheduled against a number measured on a different pod
   # doing a different thing.
   #
-  # imac measured four run pods from inside them — `memory.peak` and `cpu.stat`
-  # out of the pods' own cgroup, attributed by the `dagster/job` label, by an
+  # imac measured run pods from inside them — `memory.peak` and `cpu.stat` out
+  # of the pods' own cgroup, attributed by the `dagster/job` label, by an
   # unattended watcher that launched nothing:
   #
-  #     ASSET_JOB (ingest)   590 MiB   ~628m CPU averaged over a 40 s run
-  #     ASSET_JOB            551 MiB
-  #     brreg_transform      558 MiB
-  #     brreg_transform      556 MiB
+  #     api_v1_checks        887 MiB   ~805m CPU over a 41 s run   <- the ceiling
+  #     ASSET_JOB (ingest)   590 MiB   ~628m over 40 s
+  #     transform_checks     559 MiB   ~341m over 359 s
+  #     brreg_transform      558 / 556 MiB
   #     request              384Mi     100m
   #
-  # 45-54% over on memory; 528% over on CPU, and that is the AVERAGE rather
-  # than a peak. 556 reproduced as 558 on independent runs of the same job, so
-  # these are stable figures rather than one sample (ops-dev, #1010).
+  # 🔴 THE CEILING MOVED THREE TIMES IN ONE MORNING, each figure true when it
+  # was stated. The first version of this block sized 768Mi from 590 MiB and was
+  # 119 MiB UNDER the peak before it merged. imac's conclusion is the useful
+  # one: "a ceiling taken from the largest single job anyone has measured has
+  # moved every single time a new job ran."
   #
-  # ⚠️ MEMORY: 768Mi is 590 MiB plus ~28%, the same rule the code-location
-  # default already states — a sampled figure is a reliable floor and a probable
-  # peak, not a ceiling. And 590 MiB is the largest MEASURED, not the maximum:
-  # `transform_and_publish` is unmeasured and `brreg_bootstrap` (210 MB gzip,
-  # 1.17M rows) has never been watched.
+  # ⚠️ SO THE NEXT REVISION OF THIS NUMBER COMES FROM A CASCADE WINDOW, not from
+  # whichever single job is currently the biggest. That is imac's method and it
+  # is recorded here so this file stops inviting the same mistake.
+  #
+  # ⚠️ Every figure is "at least": `api_v1_checks` got 5 samples in 41 s against
+  # ~13 expected. `memory.peak` is a kernel HIGH-WATER MARK and monotonic, so
+  # the reading is a true peak for the window watched — the sampling gaps affect
+  # WHICH JOBS were seen, not whether a watched pod's peak was captured.
+  #
+  # ⚠️ MEMORY: 1Gi, chosen against 887 MiB rather than 590.
+  #
+  # The code-location default adds ~28% to its figure because that came from
+  # metrics-server, which resamples on the order of tens of seconds and gives a
+  # probable peak. This figure comes from the kernel's own high-water mark, so
+  # the same multiplier is not needed for the same reason — 1Gi is ~15% over a
+  # measured ceiling rather than ~28% over a sampled guess. Different
+  # instrument, different margin.
+  #
+  # 🔴 AND HERE IS HOW THE CONCURRENCY TRADE RESOLVES ON THIS AXIS, because it
+  # does not resolve the way it did for CPU.
+  #
+  # 4 x 1Gi is 4 GiB reserved before the fourth run pod can be placed, which is
+  # a lot on a laptop profile — the same arithmetic that argued CPU down from
+  # 628m. But the escape used there is NOT available here: "bursting over a
+  # request is what requests are for" is true of CPU, which is compressible, and
+  # false of memory, which is not. An under-requested memory pod does not burst;
+  # it is BY CONSTRUCTION always above its request while doing normal work,
+  # which is precisely what makes it the preferred eviction candidate under node
+  # pressure — and with no limit set, the eviction need not land on the offender.
+  #
+  # 🔵 So the request covers the measured peak, and the lever for the 4x problem
+  # is `maxConcurrentRuns` below — NOT a request that pretends the pods are
+  # smaller than they are. Under-requesting to fit four of them in is the exact
+  # defect this block was written to fix, one level up.
+  #
+  # ⚠️ That cap is deliberately NOT changed here: it is platform policy with its
+  # own reasoning, it is additive with a tenant's own ingest concurrency, and
+  # lowering it trades throughput for placement. It is a decision to take
+  # openly, not a side effect of a sizing fix.
+  #
+  # 590 MiB was never the maximum and 887 MiB is not either: `brreg_bootstrap`
+  # (210 MB gzip, 1.17M rows) has still never been watched, and it is the job an
+  # operator runs first.
   #
   # 🔴 CPU IS DELIBERATELY *NOT* THE MEASURED 628m, AND THIS IS THE REASON.
   #
@@ -108,7 +148,7 @@ runLauncher:
       resources:
         requests:
           cpu: 350m
-          memory: 768Mi
+          memory: 1Gi
 
 # ⚠️ CONCURRENCY CAP — platform policy, deliberately NOT tenant code.
 #
@@ -122,9 +162,16 @@ runLauncher:
 #
 # ⚠️ AND IT IS COUPLED TO THE RUN-POD REQUEST ABOVE. Whatever a run pod requests
 # is reserved this many times over before the last one can be scheduled, so
-# raising this multiplies the reservation. 4 x 350m / 768Mi is 1.4 cores and
-# 3 GiB. Raising either number without looking at the other is how pods become
+# raising this multiplies the reservation. 4 x 350m / 1Gi is 1.4 cores and
+# 4 GiB. Raising either number without looking at the other is how pods become
 # unschedulable, which reads as a hang rather than as a resourcing decision.
+#
+# 🔴 AND THIS IS NOW THE LEVER FOR THAT ARITHMETIC, not the request. The memory
+# request covers a measured peak and cannot be argued down the way CPU was:
+# memory is incompressible, so a pod under its request is not bursting, it is
+# the first thing evicted. If 4 GiB of reservation does not fit a profile, the
+# honest change is HERE — fewer concurrent runs — rather than a request that
+# claims the pods are smaller than they are.
 concurrency:
   enabled: true
   runs:
