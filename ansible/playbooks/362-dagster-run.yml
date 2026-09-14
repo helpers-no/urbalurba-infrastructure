@@ -149,6 +149,11 @@
           { [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ]; } && break
           sleep 2
         done
+        # 🔴 REPORT THE PHASE. Reading logs from a pod that has NOT finished
+        # returns whatever has been written so far, which for a slow mutation is
+        # nothing — and the caller then cannot tell an empty body from a body
+        # without the marker. That is the whole defect below.
+        echo "UIS_LAUNCH_PHASE=${phase:-unknown}" >&2
         kubectl logs {{ probe }}-l -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
         kubectl delete pod {{ probe }}-l -n {{ dagster_ns }} --context {{ _target }} \
           --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
@@ -156,14 +161,67 @@
       changed_when: true
       failed_when: false
 
-    - name: "7. The launch must have produced a run id"
+    # 🔴 A LAUNCH IS A SIDE EFFECT. AN UNPARSEABLE RESULT IS NOT "IT DID NOT RUN".
+    #
+    # `uis dagster run transform_checks --wait` reported
+    #
+    #     "Launch did not return a run id (rc=0). "
+    #
+    # — rc 0, and NOTHING after it: stdout was EMPTY. The mutation had
+    # succeeded and the job was running. imac read exit 2 as "it did not run"
+    # and ran it again, and two invocations produced three concurrent runs of
+    # the ~649-test dbt suite on a 3-CPU VM (imac via ops-dev, urb-agents#1052).
+    #
+    # ⚠️ THE SECOND-ORDER COST IS WORSE THAN THE DUPLICATE WORK. Three dbt
+    # suites contending for one database can make a check fail — and that
+    # failure is an artefact of the duplicate launches, not a finding about the
+    # data. A false launch failure can therefore manufacture a false check
+    # failure.
+    #
+    # 🔵 The assertion was right to refuse to claim success it could not parse.
+    # What was wrong is that "I could not read the answer" and "the answer was
+    # no" arrived as the same outcome — the could-not-look defect, on a command
+    # whose failure mode is to do the expensive thing twice.
+    #
+    # So the two cases are now separated, and the unknown one says DO NOT RETRY
+    # BLINDLY and how to check.
+    - name: "7a. Distinguish an empty launch response from a rejected launch"
+      ansible.builtin.assert:
+        that:
+          - _launch.stdout | default('') | trim | length > 0
+        fail_msg: >-
+          ⚠️  A RUN MAY HAVE BEEN LAUNCHED. UIS could not read the answer.
+
+          The launch call returned rc={{ _launch.rc }} and an EMPTY body, so
+          whether Dagster accepted it is UNKNOWN — this is not "the launch
+          failed". The probe pod's phase was
+          {{ (_launch.stderr | default('') | regex_search('UIS_LAUNCH_PHASE=(\S+)', '\1') | first) | default('unknown') }},
+          and reading logs from a pod that has not finished returns nothing.
+
+          🔴 DO NOT RUN THIS AGAIN WITHOUT LOOKING. Launching is a side effect;
+          a second attempt adds a second concurrent run of the same job. Check
+          first:
+            ./uis template progress <app>     which first-data jobs are running
+            ./uis dagster run <job> --wait    only after confirming none is
+
+          command: kubectl run ... curl POST launchPipelineExecution
+                   job={{ _job }} location={{ _sel_loc }} repo={{ _sel_repo }}
+          stderr: {{ _launch.stderr | default('(none)') | truncate(400) }}
+
+    - name: "7b. The launch must have produced a run id"
       ansible.builtin.assert:
         that:
           - _launch.rc == 0
           - _launch.stdout is search('LaunchRunSuccess')
         fail_msg: >-
-          Launch did not return a run id (rc={{ _launch.rc }}).
-          {{ _launch.stdout | default('(no body)') }}
+          Dagster REJECTED the launch (rc={{ _launch.rc }}). This is an answer,
+          not a failure to read one: the body is below and does not contain
+          LaunchRunSuccess, so no run was started and re-running is safe once
+          the cause is fixed.
+
+          job={{ _job }} location={{ _sel_loc }} repo={{ _sel_repo }}
+          body: {{ _launch.stdout | default('(no body)') | truncate(600) }}
+          stderr: {{ _launch.stderr | default('(none)') | truncate(300) }}
 
     - name: "8. Keep the run id"
       ansible.builtin.set_fact:
