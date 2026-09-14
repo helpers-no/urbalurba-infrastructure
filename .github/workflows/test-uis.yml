@@ -102,6 +102,22 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
+      - name: Install yq (mikefarah v4)
+        # 🔴 WITHOUT THIS, EVERY yq-DEPENDENT ASSERTION SKIPS AND NOBODY NOTICES.
+        # Three prometheus assertions have skipped on every run since they were
+        # written, and `uis template install` is yq-driven end to end — a
+        # grep-only test of a function that COMPOSES a value is not a test of it.
+        #
+        # ⚠️ NOT `apt-get install yq`: on Ubuntu that is the python jq-wrapper,
+        # a different tool with different syntax. Pinned and checksummed.
+        run: |
+          curl -fsSL -o /tmp/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64
+          echo "6dc2d0cd4e0caca5aeffd0d784a48263591080e4a0895abe69f3a76eb50d1ba3  /tmp/yq" \
+            | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
+          yq --version
+
       - name: Run static tests
         run: bash provision-host/uis/tests/run-tests.sh static
 
@@ -113,6 +129,22 @@ jobs:
 
       - name: Install jq
         run: sudo apt-get install -y jq
+
+      - name: Install yq (mikefarah v4)
+        # 🔴 WITHOUT THIS, EVERY yq-DEPENDENT ASSERTION SKIPS AND NOBODY NOTICES.
+        # Three prometheus assertions have skipped on every run since they were
+        # written, and `uis template install` is yq-driven end to end — a
+        # grep-only test of a function that COMPOSES a value is not a test of it.
+        #
+        # ⚠️ NOT `apt-get install yq`: on Ubuntu that is the python jq-wrapper,
+        # a different tool with different syntax. Pinned and checksummed.
+        run: |
+          curl -fsSL -o /tmp/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64
+          echo "6dc2d0cd4e0caca5aeffd0d784a48263591080e4a0895abe69f3a76eb50d1ba3  /tmp/yq" \
+            | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
+          yq --version
 
       - name: Run unit tests
         run: bash provision-host/uis/tests/run-tests.sh unit

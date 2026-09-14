@@ -1016,7 +1016,7 @@ TEMPLATE_CONFIG_KEYS="database init schemas url_prefix namespace secret_name_pre
 # the schema, the deploy-time verification and the docs, and atlas declared it,
 # while this line silently dropped it one step before the renderer did
 # (imac via ops-dev, #745).
-TEMPLATE_CODE_LOCATION_KEYS="name image tag module why env_secrets digest env_from_exports"
+TEMPLATE_CODE_LOCATION_KEYS="name image tag module why env_secrets digest env_from_exports env_from_services"
 
 # Write one service's config to $plan_dir/<service_id>.conf as key=value lines.
 #
@@ -1055,13 +1055,13 @@ _write_service_conf() {
     if [[ "$(yq -r ".provides.services[$idx].config | has(\"code_location\")" "$info_file" 2>/dev/null)" == "true" ]]; then
         local ck
         for ck in $TEMPLATE_CODE_LOCATION_KEYS; do
-            if [[ "$ck" == "env_from_exports" ]]; then
+            if [[ "$ck" == "env_from_exports" || "$ck" == "env_from_services" ]]; then
                 # 🔴 A MAP, flattened to one JSON line. The conf file is flat
                 # key=value, and `env_secrets` solves the list case by joining
                 # on commas — that does not work here because both the variable
                 # NAME and the export KEY matter and either may contain
                 # characters a separator would claim.
-                v=$(yq -o=json -I0 ".provides.services[$idx].config.code_location.env_from_exports // {}" "$info_file" 2>/dev/null)
+                v=$(yq -o=json -I0 ".provides.services[$idx].config.code_location.$ck // {}" "$info_file" 2>/dev/null)
                 [[ "$v" == "{}" ]] && v=""
             elif [[ "$ck" == "env_secrets" ]]; then
                 # 🔴 A SCALAR IS LEGAL AND USED TO BE SILENTLY DISCARDED.
@@ -1185,6 +1185,114 @@ _validate_env_from_exports() {
     return 0
 }
 
+# The in-cluster address of a UIS service, composed from published platform data.
+#
+# 🔴 THE TENANT NAMES A SERVICE; UIS COMPOSES THE ADDRESS. The alternative —
+# a tenant artifact declaring `<service>.<namespace>.svc.cluster.local` — asks
+# it to encode something UIS does not keep stable: `namespace` was undeclared in
+# service.schema.json until this release, and gravitee moved from `default` to
+# `gravitee` in 2d0570d. An artifact that had hardcoded the old value would have
+# broken silently that day, in a different repository, with no signal here.
+#
+# ⚠️ The FORM is Kubernetes' DNS spec and is not UIS's to change. The NAME, the
+# NAMESPACE and the PORT are, so they are read from services.json at install
+# time and never restated anywhere else.
+#
+# Prints the URL, or nothing (and returns 1) when this service publishes no
+# in-cluster address. Absent must REFUSE, never fall through to a guess: a
+# guessed address that resolves is the failure that cost a day to disprove.
+_service_in_cluster_url() {
+    local svc_id="$1" app_name="$2" entry scheme name ns port
+    [[ -f "$SERVICES_JSON" ]] || return 1
+    entry=$(jq -c --arg id "$svc_id" '.services[] | select(.id == $id)' "$SERVICES_JSON" 2>/dev/null)
+    [[ -z "$entry" ]] && return 2          # 2: no such service id at all
+    scheme=$(jq -r '.inCluster.scheme // ""' <<< "$entry")
+    name=$(jq -r '.inCluster.nameTemplate // ""' <<< "$entry")
+    port=$(jq -r '.inCluster.port // ""' <<< "$entry")
+    ns=$(jq -r '.namespace // ""' <<< "$entry")
+    [[ -z "$scheme" || -z "$name" || -z "$port" || -z "$ns" ]] && return 1
+    # `{app}` is the only expansion, and an unresolvable one must not silently
+    # produce `-postgrest`.
+    if [[ "$name" == *'{app}'* ]]; then
+        [[ -z "$app_name" ]] && return 3   # 3: needs app_name, none available
+        name="${name//\{app\}/$app_name}"
+    fi
+    printf '%s://%s.%s.svc.cluster.local:%s\n' "$scheme" "$name" "$ns" "$port"
+    return 0
+}
+
+# Validate every `env_from_services` declaration BEFORE anything is executed,
+# and refuse a variable claimed by both maps.
+#
+# Like _validate_env_from_exports this is a pure read: services.json and the
+# definition, no cluster.
+_validate_env_from_services() {
+    local info_file="$1" app_name="${2:-}" n_svc i map k bad="" rc
+    command -v yq >/dev/null 2>&1 || return 0
+    n_svc=$(yq -r '.provides.services // [] | length' "$info_file" 2>/dev/null) || return 0
+    [[ "$n_svc" =~ ^[0-9]+$ ]] || return 0
+
+    for ((i=0; i<n_svc; i++)); do
+        local exp_map
+        exp_map=$(yq -o=json -I0 ".provides.services[$i].config.code_location.env_from_exports // {}" "$info_file" 2>/dev/null)
+        map=$(yq -o=json -I0 ".provides.services[$i].config.code_location.env_from_services // {}" "$info_file" 2>/dev/null)
+        [[ -z "$map" || "$map" == "{}" ]] && continue
+        while IFS= read -r k; do
+            [[ -z "$k" ]] && continue
+            local name="${k%%=*}" svc_id="${k#*=}"
+            # ⚠️ One variable, two sources, and nothing says which wins. Refuse
+            # rather than pick: a silently-chosen answer is the shape this whole
+            # change exists to remove.
+            if [[ -n "$exp_map" && "$exp_map" != "{}" ]] && \
+               printf '%s' "$exp_map" | en="$name" yq -e 'has(strenv(en))' >/dev/null 2>&1; then
+                bad+="    $name is set by BOTH env_from_exports and env_from_services"$'\n'
+                bad+="      nothing says which would win — declare it in one of them"$'\n'
+                continue
+            fi
+            rc=0; _service_in_cluster_url "$svc_id" "$app_name" >/dev/null || rc=$?
+            # ⚠️ THE REMEDY TRAVELS WITH THE CAUSE. A shared footer explaining
+            # in-cluster addressing reads as actionable to someone whose actual
+            # problem is a name collision — the same "correct and unreachable"
+            # shape this release removed from the loopback guard, reintroduced
+            # the moment a second cause was added. Each line carries its own.
+            case "$rc" in
+                0) ;;
+                2) bad+="    $name names service '$svc_id', which is not a UIS service"$'\n'
+                   bad+="      the value is a service id as it appears in services.json"$'\n' ;;
+                3) bad+="    $name names service '$svc_id', whose address is per-application"$'\n'
+                   bad+="      but this definition resolves no params.app_name"$'\n' ;;
+                *) bad+="    $name names service '$svc_id', for which UIS publishes no in-cluster address"$'\n'
+                   bad+="      UIS refuses rather than guessing one — ask for an inCluster block"$'\n'
+                   bad+="      on that service instead of hardcoding an address here"$'\n' ;;
+            esac
+        done <<< "$(printf '%s' "$map" | yq -r 'to_entries | .[] | .key + "=" + .value' 2>/dev/null)"
+    done
+
+    if [[ -n "$bad" ]]; then
+        log_error "This definition's env_from_services cannot be delivered:"
+        printf '%s' "$bad" >&2
+        echo "" >&2
+        echo "  Refused before anything was installed." >&2
+        return 1
+    fi
+    return 0
+}
+
+# Resolve NAME -> service id into NAME -> URL, as a JSON object.
+# Prints `{}` when there is nothing to resolve.
+_resolve_service_env() {
+    local map="$1" app_name="${2:-}" out="{}" k url
+    [[ -z "$map" || "$map" == "{}" ]] && { printf '{}'; return 0; }
+    while IFS= read -r k; do
+        [[ -z "$k" ]] && continue
+        local name="${k%%=*}" svc_id="${k#*=}"
+        url=$(_service_in_cluster_url "$svc_id" "$app_name") || return 1
+        out=$(printf '%s' "$out" | jq -c --arg n "$name" --arg v "$url" '.[$n] = $v') || return 1
+    done <<< "$(printf '%s' "$map" | yq -r 'to_entries | .[] | .key + "=" + .value' 2>/dev/null)"
+    printf '%s' "$out"
+    return 0
+}
+
 # Resolve `provides` into an ordered deployment plan.
 #
 # Outputs one entry per line: <priority>|<service_id>
@@ -1198,6 +1306,11 @@ _resolve_provides() {
 
     # ⚠️ Before the plan, therefore before any side effect.
     _validate_env_from_exports "$info_file" || return 1
+    # `{app}` in a service's nameTemplate resolves against the effective params,
+    # which _install_template writes before it builds the plan.
+    local _app_name
+    _app_name=$(_conf_param "$template_dir/.effective-params" app_name)
+    _validate_env_from_services "$info_file" "$_app_name" || return 1
 
     # Collect services from provides.stacks (expand via stacks.json). These are
     # deploy-only: a stack names services, not per-app configuration.
@@ -1657,6 +1770,7 @@ _code_locations_file() {
 _write_code_location() {
     local cl_name="$1" cl_image="$2" cl_tag="$3" cl_module="$4" cl_why="$5" cl_env_secrets="${6:-}"
     local cl_digest="${7:-}" cl_env_map="${8:-}" cl_exports="${9:-{\}}"
+    local cl_svc_env="${10:-{\}}"
     local file
     file="$(_code_locations_file)"
 
@@ -1744,6 +1858,34 @@ _write_code_location() {
             echo "  the check would reach nothing and have to guess why." >&2
             return 1
         fi
+    fi
+
+    # 🔵 env_from_services arrives already resolved to literal URLs — see the
+    # call site. There is nothing to look up here and nothing that can be
+    # missing: a service without a published address was refused by
+    # _validate_env_from_services before the plan ran.
+    if [[ -n "$cl_svc_env" && "$cl_svc_env" != "{}" ]]; then
+        local _spairs _sn _sv
+        _spairs=$(printf '%s' "$cl_svc_env" | yq -r 'to_entries | .[] | .key + "=" + .value' 2>/dev/null) || _spairs=""
+        while IFS= read -r _pair; do
+            [[ -z "$_pair" ]] && continue
+            _sn="${_pair%%=*}"; _sv="${_pair#*=}"
+            local senv_expr='(.code_locations[] | select(.name == strenv(cl_name)) | .env[strenv(en)]) = strenv(ev)'
+            if ! cl_name="$cl_name" en="$_sn" ev="$_sv" yq -i "$senv_expr" "$file"; then
+                log_error "Failed to write env var '$_sn' for '$cl_name'"
+                return 1
+            fi
+            # ⚠️ Prove the write, for the same reason the digest does: a value
+            # can be accepted by every layer above and still not be in the file.
+            local _sback
+            _sback=$(cl_name="$cl_name" en="$_sn" yq -r '.code_locations[] | select(.name == strenv(cl_name)) | .env[strenv(en)] // ""' "$file" 2>/dev/null)
+            if [[ "$_sback" != "$_sv" ]]; then
+                log_error "env var '$_sn' for '$cl_name' did not survive the write to $file."
+                echo "  intended: $_sv" >&2
+                echo "  in file:  ${_sback:-<absent>}" >&2
+                return 1
+            fi
+        done <<< "$_spairs"
     fi
 
     # 🔴 PROVE THE WRITE. A value can be accepted by every layer above and still
@@ -2877,11 +3019,22 @@ cmd_template_install() {
             #
             # 🔵 Declared as NAME -> export key, not as a value, so nothing is
             # restated. The definition already says what the URL is once.
-            local cl_e cl_x
+            local cl_e cl_x cl_sv cl_svenv
             cl_e=$(_conf_get "$conf" code_location_env_from_exports)
             cl_x="{}"
             [[ -n "$cl_e" ]] && cl_x=$(_collect_exports "$info_file" "$params_file")
-            _write_code_location "$cl_n" "$cl_i" "$cl_t" "$cl_m" "$cl_w" "$cl_s" "$cl_d" "$cl_e" "$cl_x" || return 1
+            # 🔵 env_from_services is resolved HERE, not in the writer: composing
+            # the address needs services.json and app_name, both of which are
+            # install-time facts. The writer is handed literals and writes them.
+            cl_sv=$(_conf_get "$conf" code_location_env_from_services)
+            cl_svenv="{}"
+            if [[ -n "$cl_sv" ]]; then
+                cl_svenv=$(_resolve_service_env "$cl_sv" "$(_conf_param "$params_file" app_name)") || {
+                    log_error "Could not resolve env_from_services for code location '$cl_n'."
+                    return 1
+                }
+            fi
+            _write_code_location "$cl_n" "$cl_i" "$cl_t" "$cl_m" "$cl_w" "$cl_s" "$cl_d" "$cl_e" "$cl_x" "$cl_svenv" || return 1
 
             log_info "Redeploying $svc so it picks up the code location..."
             if ! uis deploy "$svc" >&2; then

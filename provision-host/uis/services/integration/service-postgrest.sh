@@ -41,6 +41,26 @@ SCRIPT_PRIORITY="50"
 SCRIPT_IMAGE="postgrest/postgrest:v14.10"
 SCRIPT_NAMESPACE="postgrest"
 
+# === How a POD addresses this service ===
+# 🔵 An application declares `env_from_services: VAR: postgrest` and UIS composes
+# <scheme>://<name>.<SCRIPT_NAMESPACE>.svc.cluster.local:<port> from these.
+#
+# 🔴 THE TENANT MUST NEVER WRITE THAT ADDRESS ITSELF. The namespace and the
+# service name belong to UIS and change between releases - gravitee moved from
+# `default` to `gravitee` in 2d0570d - so an artifact holding the literal would
+# break silently that day, in a different repository, with no signal here.
+# Keeping the parts here means a move is one edit and every artifact follows.
+#
+# ⚠️ `{app}` expands to the installing definition's params.app_name: UIS deploys
+# one PostgREST per consuming application.
+#
+# ⚠️ THE PORT IS THE PRIMARY PUBLISHED ONE, NOT AN INFERENCE. The Service in
+# templates/088-postgrest-config.yml.j2 publishes TWO: `api` 3000 and `admin`
+# 3001. Anything that guesses a single port guesses wrong half the time.
+SCRIPT_IN_CLUSTER_SCHEME="http"
+SCRIPT_IN_CLUSTER_NAME="{app}-postgrest"
+SCRIPT_IN_CLUSTER_PORT="3000"
+
 # === Extended Metadata (Optional) ===
 SCRIPT_KIND="Component"
 SCRIPT_TYPE="service"

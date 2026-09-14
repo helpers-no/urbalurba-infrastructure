@@ -98,6 +98,39 @@
       "description": "Fixed well-known port for uis expose. Avoids conflicts with standard ports (e.g., PostgreSQL 35432 instead of 5432).",
       "minimum": 1024,
       "maximum": 65535
+    },
+    "namespace": {
+      "type": "string",
+      "description": "The Kubernetes namespace UIS CURRENTLY deploys this service into. This field has been in use and undeclared since the file began; declaring it does not make it stable. It is versioned with UIS and may change between releases - gravitee moved from 'default' to 'gravitee' in 2d0570d. Read it from this file at install time; never copy the value into anything published outside this repository.",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "helmChart": {
+      "type": "string",
+      "description": "Helm chart this service is installed from, as repo/chart. Informational."
+    },
+    "inCluster": {
+      "type": "object",
+      "description": "How a POD addresses this service. Present only for services whose in-cluster address has been read from the manifest that creates the Service - absent means UIS does not publish one, and a consumer must refuse rather than guess. Composed as <scheme>://<name>.<namespace>.svc.cluster.local:<port>, where <namespace> is this entry's own namespace field.",
+      "required": ["scheme", "nameTemplate", "port"],
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "enum": ["http", "https", "postgresql", "redis", "amqp", "mongodb", "tcp"],
+          "description": "URL scheme a consumer should dial."
+        },
+        "nameTemplate": {
+          "type": "string",
+          "description": "The Kubernetes Service name. '{app}' expands to the installing definition's params.app_name, for services UIS deploys one instance of per consuming application (e.g. '{app}-postgrest'). A service with a single shared instance uses a literal name.",
+          "pattern": "^[a-z0-9{}-]+$"
+        },
+        "port": {
+          "type": "integer",
+          "description": "The PRIMARY published port of the Kubernetes Service - not the container port, and not an inference. A Service may publish several (PostgREST publishes api 3000 and admin 3001); this names the one a consumer means.",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

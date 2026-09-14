@@ -98,6 +98,7 @@ generate_services_json() {
         local check_command="" remove_playbook="" requires=""
         local helm_chart="" namespace="" image=""
         local configurable="" expose_port="" multi_instance=""
+        local in_cluster_scheme="" in_cluster_name="" in_cluster_port=""
 
         while IFS= read -r line; do
             case "$line" in
@@ -206,6 +207,21 @@ generate_services_json() {
                     expose_port="${expose_port//\"/}"
                     expose_port="${expose_port//\'/}"
                     ;;
+                SCRIPT_IN_CLUSTER_SCHEME=*)
+                    in_cluster_scheme="${line#SCRIPT_IN_CLUSTER_SCHEME=}"
+                    in_cluster_scheme="${in_cluster_scheme//\"/}"
+                    in_cluster_scheme="${in_cluster_scheme//\'/}"
+                    ;;
+                SCRIPT_IN_CLUSTER_NAME=*)
+                    in_cluster_name="${line#SCRIPT_IN_CLUSTER_NAME=}"
+                    in_cluster_name="${in_cluster_name//\"/}"
+                    in_cluster_name="${in_cluster_name//\'/}"
+                    ;;
+                SCRIPT_IN_CLUSTER_PORT=*)
+                    in_cluster_port="${line#SCRIPT_IN_CLUSTER_PORT=}"
+                    in_cluster_port="${in_cluster_port//\"/}"
+                    in_cluster_port="${in_cluster_port//\'/}"
+                    ;;
             esac
         done < "$script"
 
@@ -285,6 +301,20 @@ EOF
         [[ "$configurable" == "true" ]] && echo "    ,\"configurable\": true" >> "$temp_file"
         [[ "$multi_instance" == "true" ]] && echo "    ,\"multiInstance\": true" >> "$temp_file"
         [[ -n "$expose_port" ]] && echo "    ,\"exposePort\": $expose_port" >> "$temp_file"
+        # 🔴 ALL THREE OR NONE. `inCluster` is what UIS composes a pod-facing
+        # address from, and a partial block would compose a wrong one - a
+        # guessed address that RESOLVES is worse than no address at all. A
+        # service that declares some but not all of them is a bug in the service
+        # script, so say so rather than emitting half a block.
+        if [[ -n "$in_cluster_scheme" || -n "$in_cluster_name" || -n "$in_cluster_port" ]]; then
+            if [[ -n "$in_cluster_scheme" && -n "$in_cluster_name" && -n "$in_cluster_port" ]]; then
+                echo "    ,\"inCluster\": { \"scheme\": \"$(json_escape "$in_cluster_scheme")\", \"nameTemplate\": \"$(json_escape "$in_cluster_name")\", \"port\": $in_cluster_port }" >> "$temp_file"
+            else
+                log_error "$id declares only part of SCRIPT_IN_CLUSTER_{SCHEME,NAME,PORT} - all three are required"
+                rm -f "$temp_file"
+                return 1
+            fi
+        fi
 
         # Close JSON object
         echo "  }" >> "$temp_file"

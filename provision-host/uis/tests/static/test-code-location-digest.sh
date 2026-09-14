@@ -296,19 +296,41 @@ else
     fail "it runs from the plan builder" "validating inside the writer is validating after the fact"
 fi
 
-# ⚠️ UIS must NOT synthesise an in-cluster address by guessing a tenant's
-# service topology. This test is deliberately a literal scan: the point is that
-# NO service DNS name is written into the lib at all.
+# ⚠️ UIS composes an in-cluster address, and must compose it from PUBLISHED
+# PLATFORM DATA — never from a literal written here.
 #
-# 🔵 It will be REPLACED, not deleted, when `env_from_services` lands — at that
-# point UIS does compose an address, but from published platform data
-# (services.json), never from a literal here. Replacing a negative control is a
-# decision; deleting one is how a control gets disarmed.
-if grep -q 'svc.cluster.local' <<<"$_lib_code"; then
-    fail "UIS does not synthesise a tenant's in-cluster address" \
-         "the platform guessing a tenant's address scheme is the next silently-different value"
+# 🔵 This REPLACES an earlier assertion that no `svc.cluster.local` appeared in
+# the lib at all. That was true and load-bearing while option (b) — UIS guessing
+# a tenant's address — was still on the table; `env_from_services` retired it
+# deliberately. Replacing a negative control is a decision; deleting one is how
+# a control gets disarmed, so the stronger form is stated here rather than the
+# weaker one dropped.
+_dns_lines="$(grep -n 'svc\.cluster\.local' <<<"$_lib_code" || true)"
+if [[ -n "$_dns_lines" ]]; then
+    pass "control: the composition is present to be checked"
 else
-    pass "UIS does not synthesise a tenant's in-cluster address"
+    fail "control: the composition is present to be checked" \
+         "no service DNS anywhere — env_from_services cannot be resolving anything"
+fi
+
+# 🔴 Every occurrence must be a FORMAT, with the name and namespace as
+# placeholders. A literal `foo.bar.svc.cluster.local` here is a namespace
+# hardcoded in the platform's own CLI, which is the thing a tenant was told not
+# to do.
+if grep -qE '[a-z0-9-]+\.[a-z0-9-]+\.svc\.cluster\.local' <<<"$_dns_lines"; then
+    fail "🔴 no service DNS name is hardcoded — only composed" \
+         "a literal namespace here breaks the same way a tenant's would, and gravitee already moved once"
+else
+    pass "🔴 no service DNS name is hardcoded — only composed"
+fi
+
+# ⚠️ And the parts must be READ, not assumed.
+_ic="$(sed -n '/^_service_in_cluster_url() {/,/^}$/p' "$LIB")"
+if grep -q 'SERVICES_JSON' <<<"$_ic" && grep -q 'inCluster' <<<"$_ic"; then
+    pass "the name, namespace and port are read from services.json"
+else
+    fail "the name, namespace and port are read from services.json" \
+         "composing from anything else puts the moving part back in the wrong file"
 fi
 
 echo ""
