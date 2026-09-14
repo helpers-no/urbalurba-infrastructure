@@ -107,11 +107,32 @@ else
          "inheriting a floor measured on a different pod doing a different thing"
 fi
 
-_mem="$(grep -oE 'memory: *[0-9]+Mi' <<<"$_rl" | grep -oE '[0-9]+' | head -1)"
-if [[ -n "$_mem" && "$_mem" -ge 590 ]]; then
-    pass "the memory request covers the largest MEASURED run (590 MiB), with headroom"
+# 🔴 THE CEILING MOVES. 768Mi was sized from 590 MiB and was 119 MiB UNDER the
+# peak before it merged — api_v1_checks measured 887 MiB, the third "biggest
+# job" of one morning (#1010). So this asserts against the highest figure
+# measured to date, and it is expected to be raised again.
+#
+# ⚠️ Accepts Mi or Gi, because writing the number as 1Gi is what broke the first
+# version of this assertion — a pattern that matches only one unit silently
+# stops checking when someone changes units.
+_memraw="$(grep -oE 'memory: *[0-9]+(Mi|Gi)' <<<"$_rl" | head -1)"
+_memnum="$(grep -oE '[0-9]+' <<<"$_memraw" | head -1)"
+if [[ "$_memraw" == *Gi ]]; then _mem=$(( _memnum * 1024 )); else _mem="$_memnum"; fi
+if [[ -n "$_mem" && "$_mem" -ge 887 ]]; then
+    pass "the memory request covers the largest MEASURED peak (887 MiB)"
 else
-    fail "the memory request covers the largest measured run" "got ${_mem:-<none>}Mi against 590 MiB measured"
+    fail "the memory request covers the largest measured peak" \
+         "got ${_mem:-<none>}Mi against 887 MiB measured — below the peak means always above the request, which is the first thing evicted"
+fi
+
+# ⚠️ And memory is INCOMPRESSIBLE, so the argument that talked CPU down from its
+# measured figure must not be reused here. The file has to say so, because the
+# two sit four lines apart and read as symmetric.
+if grep -qi 'incompressible' "$CFG"; then
+    pass "⚠️ the file states why the CPU argument does not transfer to memory"
+else
+    fail "⚠️ the file states why the CPU argument does not transfer to memory" \
+         "'bursting over a request is intended' is true of CPU and false of memory"
 fi
 
 # 🔴 NO LIMITS. The memory limit is BLOCKED on a bootstrap measurement:
