@@ -1928,10 +1928,38 @@ _check_state() {
     fi
     # ⚠️ The application's exit code is the verdict and is relayed, not judged.
     # UIS interprets nothing — the same contract as `operational`.
+    # 🔴 THE EXIT-CODE CONTRACT. An application must be able to say "I could not
+    # look", and until now it could not: `*` collapsed every non-zero code into
+    # UNHEALTHY, so a check that had lost its database connection made a
+    # DEFINITE claim that the data was wrong.
+    #
+    # imac measured it: atlas's check exits 2 for CANNOT, and with
+    # ATLAS_POSTGREST_URL unset UIS reported "UNHEALTHY — reported a problem
+    # (exit 2)" while the data was fine throughout (ops-dev, #946).
+    #
+    # ⚠️ ops-dev turned my own argument on me and was right. I removed the
+    # "anything else" bucket from state 4 so a defect of MINE could not hide in
+    # a benign state — and left the same bucket in place for tenants, where a
+    # tenant's "could not look" hides in an alarming one.
+    #
+    #   0    healthy      the output reflects the input
+    #   1    unhealthy    it does not — a DEFINITE claim
+    #   2    cannot look  the check could not reach what it needed
+    #   127  cannot look  the command or a dependency is missing (shell-reserved)
+    #   *    treated as a problem, and SAID to be outside the contract
+    #
+    # 🔵 The remaining catch-all is deliberate and the asymmetry is the
+    # principle: a catch-all must fail toward ALARM, never toward reassurance.
+    # State 4's catch-all failed toward reassurance — a UIS bug looked like an
+    # honest "cannot tell" — which is why it had to go. This one puts an
+    # undefined code into the alarming state, and says UIS is interpreting
+    # rather than relaying a meaning the contract defines.
     case "$rc" in
         0)   CHECK_STATE="healthy";       CHECK_DETAIL="reported success (relayed, not verified)" ;;
+        1)   CHECK_STATE="unhealthy";     CHECK_DETAIL="reported a problem (exit 1)" ;;
+        2)   CHECK_STATE="could-not-ask"; CHECK_DETAIL="the check could not reach what it needed (exit 2)" ;;
         127) CHECK_STATE="could-not-ask"; CHECK_DETAIL="the check ran but something it needs was missing (127)" ;;
-        *)   CHECK_STATE="unhealthy";     CHECK_DETAIL="reported a problem (exit $rc)" ;;
+        *)   CHECK_STATE="unhealthy";     CHECK_DETAIL="exit $rc is outside the check contract — treated as a problem" ;;
     esac
     return 0
 }

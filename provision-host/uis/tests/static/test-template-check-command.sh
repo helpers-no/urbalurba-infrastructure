@@ -100,7 +100,10 @@ fi
 # ── the application owns the verdict ──────────────────────────────────────────
 # The verdict is the application's: rc is captured from the exec and mapped,
 # never re-judged. Checked as behaviour rather than as a sentence about it.
-if grep -q 'reported a problem (exit \$rc)' <<<"$_code" && grep -qE 'rc=\$\?' <<<"$_code"; then
+# The verdict is the application's: rc is captured and MAPPED by the contract,
+# never re-judged. The literal string this used to match was replaced when the
+# contract landed — assert the mapping instead.
+if grep -q 'outside the check contract' <<<"$_code" && grep -qE 'rc=\$\?' <<<"$_code"; then
     pass "the application's exit code is passed through"
 else
     fail "the application's exit code is passed through" \
@@ -279,6 +282,50 @@ if grep -q 'could not reach pod' <<<"$_body"; then
     pass "an unreachable pod is distinguished from a missing command"
 else
     fail "an unreachable pod is distinguished from a missing command" ""
+fi
+
+# ── the exit-code contract: an application must be able to say "cannot look" ──
+# 🔴 `*` collapsed every non-zero code into UNHEALTHY, so a check that had lost
+# its database connection made a DEFINITE claim that the data was wrong. atlas
+# exits 2 for CANNOT; with ATLAS_POSTGREST_URL unset, UIS reported UNHEALTHY
+# while the data was fine throughout (ops-dev, #946).
+#
+# ⚠️ ops-dev turned my own argument on me: I removed the "anything else" bucket
+# from state 4 so a defect of MINE could not hide in a benign state, and left the
+# same bucket for tenants, where their "cannot look" hides in an alarming one.
+if grep -qE '^\s+2\)\s+CHECK_STATE="could-not-ask"' <<<"$_body"; then
+    pass "🔴 exit 2 means the application could not look"
+else
+    fail "🔴 exit 2 means the application could not look" \
+         "without it a tenant cannot express cannot-look and it renders as a definite UNHEALTHY"
+fi
+
+if grep -qE '^\s+1\)\s+CHECK_STATE="unhealthy"' <<<"$_body"; then
+    pass "exit 1 stays a definite claim"
+else
+    fail "exit 1 stays a definite claim" "the contract needs both halves to mean anything"
+fi
+
+# 🔵 The remaining catch-all is deliberate, and the asymmetry is the principle:
+# a catch-all must fail toward ALARM, never toward reassurance. State 4's failed
+# toward reassurance — a UIS bug looked like an honest "cannot tell".
+if grep -q 'outside the check contract' <<<"$_body"; then
+    pass "an undefined exit code says UIS is interpreting, not relaying"
+else
+    fail "an undefined exit code says UIS is interpreting" \
+         "silently calling it unhealthy claims a meaning the contract does not define"
+fi
+
+# ⚠️ Scoped to the EXIT-CODE case block. Applied to the whole function it also
+# matched the probe's `*)` — which legitimately means "cannot tell whether the
+# command is present" and SHOULD be could-not-ask. An assertion that cannot tell
+# two catch-alls apart is the defect it is testing for.
+_rc_case="$(sed -n '/case "\$rc" in/,/esac/p' "$LIB")"
+if grep -qE '\*\)\s+CHECK_STATE="could-not-ask"' <<<"$_rc_case"; then
+    fail "the catch-all fails toward alarm, not reassurance" \
+         "an undefined code landing in cannot-look is the state-4 mistake repeated for tenants"
+else
+    pass "the catch-all fails toward alarm, not reassurance"
 fi
 
 echo ""

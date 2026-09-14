@@ -393,6 +393,40 @@ is present and executable, and treats exit **127** as *could not be asked* rathe
 than as a failed check.
 :::
 
+#### The exit-code contract
+
+Your check's exit code is the verdict. UIS maps it and never re-judges it:
+
+| exit | meaning |
+|---|---|
+| **0** | the output reflects the input |
+| **1** | it does **not** — a definite claim |
+| **2** | **could not look** — the check could not reach what it needed |
+| **127** | could not look — the command or a dependency is missing |
+| anything else | treated as a problem, and reported as *outside the contract* |
+
+:::danger An application must be able to say "I could not look"
+Until 1.6.81 every non-zero code collapsed into **UNHEALTHY**, so a check that
+had lost its database connection made a **definite claim that the data was
+wrong**. Measured: an application exiting 2 for *cannot* was reported as
+`UNHEALTHY — reported a problem (exit 2)` while its data was fine throughout.
+
+The platform builds four states to keep *cannot look* apart from *unhealthy*,
+and it collapsed at the one hop nobody guarded — the application's own exit code.
+:::
+
+:::note Why there is still a catch-all, and why it points the other way
+A catch-all must fail toward **alarm**, never toward reassurance.
+
+`UIS FAILED TO EVAL` exists because the *could not be asked* state used to have
+an "anything else" bucket — and a defect in UIS looked like an honest "cannot
+tell". That catch-all failed toward reassurance, so it was removed.
+
+An undefined **exit code** goes the other way: it lands in the alarming state,
+and the output says UIS is *interpreting* rather than relaying a meaning the
+contract defines.
+:::
+
 :::note UIS relays the answer; it does not certify it
 On exit 0 the output says **"reported success. UIS relayed this; it did not
 verify it."**
