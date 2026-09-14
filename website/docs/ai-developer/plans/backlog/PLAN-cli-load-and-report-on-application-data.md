@@ -61,6 +61,14 @@ under 20 seconds, creating the `raw` and `marts` schemas and 47 tables.
 
       ⚠️ **The two mutations return different types and guessing costs a
       round.** `startSchedule` returns `ScheduleStateResult`; `startSensor`
+
+      > **RESOLVED 2026-09-14 in UIS 1.6.90.** `uis dagster automation
+      > --start|--stop` exists: it switches every declared schedule and sensor,
+      > re-reads the state from Dagster, and refuses success on a partial
+      > change. The paragraph above describes the gap as it stood and is kept
+      > as the record of why the verb was built — not as a current limitation
+      > (ops-dev, urb-agents#991, #1057).
+
       returns `Sensor`. Guessing `SensorStateResult` gives a bare HTTP 400 with
       nothing in it (atlas, `urb-agents#629`, from a production go-live). That
       asymmetry is the reason this verb is worth more than the two-line
