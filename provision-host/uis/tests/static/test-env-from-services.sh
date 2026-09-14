@@ -217,6 +217,65 @@ else
          "hand-added to services.json and will be erased by the next regeneration: ${_drift% }"
 fi
 
+# ── a definition newer than this binary ──────────────────────────────────────
+# 🔴 MEASURED ON 1.6.83: an `env_from_services:` block was dropped in SILENCE.
+# rc=0, no output, the key absent from the conf — the pod then came up with the
+# variable unset and the check reported "could not look" with nothing anywhere
+# saying why. The cause is that the reader walks the WHITELIST, so a key the
+# whitelist lacks is never looked at (ops-dev, #960).
+#
+# ⚠️ `config.*` one level up has refused unknown keys since it was written. The
+# asymmetry was the defect.
+eval "$(sed -n '/^TEMPLATE_CONFIG_KEYS=/p;/^TEMPLATE_CODE_LOCATION_KEYS=/p' "$LIB")"
+eval "$(sed -n '/^_conf_get() {/,/^}$/p' "$LIB")"
+eval "$(sed -n '/^_write_service_conf() {/,/^}$/p' "$LIB")"
+
+_conf_for() {
+    local extra="$1" d="$TMP/plan"; rm -rf "$d"; mkdir -p "$d"
+    cat > "$TMP/wire.yaml" <<YAML
+id: testapp
+provides:
+  services:
+    - service: dagster
+      config:
+        code_location:
+          name: testapp
+          image: ghcr.io/x/testapp
+          tag: v1
+          module: testapp.defs
+          why: "the pipelines"
+$extra
+YAML
+    _write_service_conf "$d" "$TMP/wire.yaml" 0 dagster 2>"$TMP/err"
+    echo "$?"
+}
+
+rc="$(_conf_for '          env_from_services:
+            APP_URL: postgrest')"
+if [[ "$rc" == "0" ]] && grep -q '^code_location_env_from_services=' "$TMP/plan/dagster.conf"; then
+    pass "a known key reaches the plan"
+else
+    fail "a known key reaches the plan" "rc=$rc conf=$(cat "$TMP/plan/dagster.conf" 2>/dev/null)"
+fi
+
+rc="$(_conf_for '          env_from_the_future:
+            APP_URL: something')"
+if [[ "$rc" != "0" ]] && grep -q "Unknown code_location key 'env_from_the_future'" "$TMP/err"; then
+    pass "🔴 a code_location key this binary cannot act on REFUSES, it does not drop it"
+else
+    fail "🔴 a code_location key this binary cannot act on REFUSES" \
+         "rc=$rc err=$(cat "$TMP/err" 2>/dev/null | head -2)"
+fi
+
+# ⚠️ And it must say WHY, because the reader is holding a definition that is
+# correct and a binary that is old — "unknown key" alone sends them to the
+# artifact, which is the wrong file.
+if grep -q "NEWER than this" "$TMP/err"; then
+    pass "the refusal names the likely cause: the artifact is newer than this UIS"
+else
+    fail "the refusal names the likely cause" "'unknown key' alone points at the wrong file"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL  Skipped: $SKIP"
 [[ "$FAIL" -eq 0 ]]

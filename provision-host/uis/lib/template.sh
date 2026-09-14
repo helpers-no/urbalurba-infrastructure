@@ -1053,6 +1053,39 @@ _write_service_conf() {
     # code_location, flattened. env_secrets is a list and is stored
     # comma-joined; the writer splits it again.
     if [[ "$(yq -r ".provides.services[$idx].config | has(\"code_location\")" "$info_file" 2>/dev/null)" == "true" ]]; then
+        # 🔴 AN UNKNOWN SUBKEY HERE USED TO BE DROPPED IN SILENCE, AND THE LOOP
+        # BELOW IS WHY: it walks the WHITELIST and reads each key, so a key the
+        # whitelist does not contain is never looked at. Measured on 1.6.83 with
+        # an `env_from_services:` block: rc=0, no output, the key simply absent
+        # from the conf — the pod then comes up with the variable unset and the
+        # check reports "could not look" with nothing anywhere saying why
+        # (ops-dev, #960).
+        #
+        # ⚠️ THE ASYMMETRY IS THE DEFECT. `config.*` one level up has refused
+        # unknown keys since it was written; `code_location.*` never did. A
+        # definition is a DELIVERY INSTRUCTION — unlike `operational.*`, which
+        # is prose and only warns — so an instruction this binary cannot carry
+        # out must refuse, not proceed with part of it.
+        #
+        # 🔵 The usual cause is an artifact newer than this UIS, so the message
+        # says so. This cannot help a host already running an older release —
+        # nothing shipped now can — but it closes the class from here on.
+        local clk
+        while IFS= read -r clk; do
+            [[ -z "$clk" ]] && continue
+            case " $TEMPLATE_CODE_LOCATION_KEYS " in
+                *" $clk "*) ;;
+                *)  log_error "Unknown code_location key '$clk' for service '$svc'."
+                    echo "  Supported: $TEMPLATE_CODE_LOCATION_KEYS" >&2
+                    echo "" >&2
+                    echo "  This usually means the application definition is NEWER than this" >&2
+                    echo "  UIS — the key exists, this release cannot act on it, and carrying" >&2
+                    echo "  out part of a delivery instruction is worse than refusing it." >&2
+                    echo "  Upgrade with './uis pull' and install again." >&2
+                    return 1 ;;
+            esac
+        done <<< "$(yq -r ".provides.services[$idx].config.code_location // {} | keys | .[]" "$info_file" 2>/dev/null)"
+
         local ck
         for ck in $TEMPLATE_CODE_LOCATION_KEYS; do
             if [[ "$ck" == "env_from_exports" || "$ck" == "env_from_services" ]]; then
