@@ -529,6 +529,13 @@
       # An application may override either value; the default applies when it
       # does not.
       #
+      # 🔴 `env:` carries values UIS COMPUTED — the code location declares
+      # NAME -> export key and the installer resolves it, so nothing is
+      # restated. atlas's check needs ATLAS_POSTGREST_URL; the artifact exports
+      # `api-url`; the installer knew the value, printed it to the operator and
+      # did not pass it to the pod that runs the check, so a stock install
+      # reported "could not look" on a healthy application (ops-dev, #950).
+      #
       # ⚠️ THE DEFAULTS ARE APPLIED ONE LEVEL AT A TIME, not as
       # `cl.resources.requests.cpu | default(...)`. That chained form depends on
       # what an undefined attribute returns when you access an attribute OF it,
@@ -564,6 +571,13 @@
                   requests:
                     cpu: "{{ _req.cpu | default('100m', true) }}"
                     memory: "{{ _req.memory | default('384Mi', true) }}"
+          {% if cl.env is defined and cl.env %}
+                env:
+          {% for k, v in cl.env.items() %}
+                  - name: {{ k }}
+                    value: "{{ v }}"
+          {% endfor %}
+          {% endif %}
           {% if cl.env_secrets is defined and cl.env_secrets | length > 0 %}
                 envSecrets:
           {% for s in cl.env_secrets %}
