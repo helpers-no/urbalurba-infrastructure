@@ -2533,6 +2533,276 @@ cmd_template_check_all() {
 #
 # ⚠️ `--check` exists as a FLAG on `pull` ("is there an update"). Different
 # surface, different grammatical role, and no collision — but worth knowing.
+# ── uis template progress <id> ───────────────────────────────────────────────
+#
+# 🔴 NOTHING ANSWERED "HOW FAR THROUGH THE FIRST INSTALL AM I?"
+#
+# Terje asked for status while a cold install was running and imac answered by
+# reading its own script's log and poking kubectl — the thing this programme
+# spent the day removing. What the product said at that moment was:
+#
+#     ✗ cannot answer: relation "marts.dim_brreg_enhet" does not exist
+#     ⚠ COULD NOT BE ASKED (exit 2)
+#
+# ⚠️ That is CORRECT. The marts tables genuinely did not exist and the check
+# refused to guess. But to an operator whose install is progressing perfectly it
+# is a red ✗ that reads as breakage — and every other status verb reports
+# LIVENESS, which this programme established is green while the data is absent
+# (ops-dev, urb-agents#1023; reference implementation by imac in uis-tester).
+#
+# 🔵 So this verb exists to say "that red ✗ is expected right now", with the
+# evidence for why.
+
+# Classify declared first-data jobs against Dagster's run history.
+#
+# 🔴 SEPARATED FROM THE PROBE ON PURPOSE. The probe needs a cluster; this needs
+# a JSON blob. A classifier that can only be exercised against a live install is
+# one whose FAILURE path never gets tested — and the failure path is the one that
+# matters most here, because a first-data job failing while the summary says "in
+# flight" is worse than no command at all.
+#
+# Sets: PROG_LINES, PROG_DONE, PROG_FAILED, PROG_RUNNING, PROG_ABSENT,
+#       PROG_FAILED_NAMES, PROG_UNDECLARED
+_progress_classify() {
+    local runs_json="$1" jobs="$2"
+    PROG_LINES=""; PROG_DONE=0; PROG_FAILED=0; PROG_RUNNING=0; PROG_ABSENT=0
+    PROG_FAILED_NAMES=""; PROG_UNDECLARED=""
+
+    # Latest run per job, by startTime. A job re-run after a failure must read as
+    # its CURRENT state, not its worst ever.
+    local latest
+    latest=$(printf '%s' "$runs_json" | jq -c '
+        [ (.data.runsOrError.results // [])[] | select(.jobName != null) ]
+        | group_by(.jobName)
+        | map(sort_by(.startTime // 0) | last)
+        | INDEX(.jobName)' 2>/dev/null) || latest="{}"
+    [[ -z "$latest" || "$latest" == "null" ]] && latest="{}"
+
+    local j
+    for j in $jobs; do
+        local st dur line
+        st=$(printf '%s' "$latest" | jq -r --arg j "$j" '.[$j].status // ""' 2>/dev/null)
+        dur=$(printf '%s' "$latest" | jq -r --arg j "$j" '
+            if (.[$j].startTime != null and .[$j].endTime != null)
+            then "  " + (((.[$j].endTime - .[$j].startTime) | floor | tostring) + "s")
+            else "" end' 2>/dev/null)
+        case "$st" in
+            "")        line=$(printf '    %-26s %s' "$j" "·  not started"); PROG_ABSENT=$((PROG_ABSENT+1)) ;;
+            SUCCESS)   line=$(printf '    %-26s %s%s' "$j" "✅ succeeded" "$dur"); PROG_DONE=$((PROG_DONE+1)) ;;
+            FAILURE|CANCELED)
+                       line=$(printf '    %-26s %s%s' "$j" "🔴 FAILED" "$dur")
+                       PROG_FAILED=$((PROG_FAILED+1)); PROG_FAILED_NAMES+="$j " ;;
+            STARTED|STARTING|QUEUED|NOT_STARTED|CANCELING)
+                       line=$(printf '    %-26s ⏳ %s' "$j" "$(printf '%s' "$st" | tr '[:upper:]' '[:lower:]')")
+                       PROG_RUNNING=$((PROG_RUNNING+1)) ;;
+            # ⚠️ A status this release does not know is NOT folded into a state it
+            # does. Counting it as "in flight" would be the guess that turns a
+            # stuck install into a progressing one.
+            *)         line=$(printf '    %-26s ?  %s (status this UIS does not recognise)' "$j" "$st")
+                       PROG_RUNNING=$((PROG_RUNNING+1)) ;;
+        esac
+        PROG_LINES+="$line"$'\n'
+    done
+
+    # 🔵 P5's second half. The declared order is printed; a job Dagster has RUN
+    # that the definition does not declare is a real disagreement between the
+    # artifact and the orchestrator, and naming it beats silently preferring
+    # either list.
+    local ran
+    ran=$(printf '%s' "$latest" | jq -r 'keys[]?' 2>/dev/null)
+    local r
+    while IFS= read -r r; do
+        [[ -z "$r" ]] && continue
+        case " $jobs " in *" $r "*) ;; *) PROG_UNDECLARED+="$r " ;; esac
+    done <<< "$ran"
+    return 0
+}
+
+# The summary sentence, and the exit code. Kept beside the classifier so both
+# are exercised by the same fixtures.
+#
+# 🔴 FOUR STATES, EACH COUNTED. Never "N of 6 done": that arithmetic drops what
+# has NOT STARTED, which is the state a fresh install spends most of its life in
+# (imac's P1).
+_progress_summary() {
+    printf '\n    %s succeeded · %s failed · %s in flight · %s not started\n' \
+        "$PROG_DONE" "$PROG_FAILED" "$PROG_RUNNING" "$PROG_ABSENT"
+    if [[ -n "$PROG_UNDECLARED" ]]; then
+        printf '\n    ⚠️  Dagster has run jobs this definition does not declare as first data:\n'
+        printf '        %s\n' "${PROG_UNDECLARED% }"
+        printf '        Either the artifact is behind, or something ran out of band.\n'
+    fi
+    if [[ "$PROG_FAILED" -gt 0 ]]; then
+        printf '\n    🔴 A first-data job FAILED: %s\n' "${PROG_FAILED_NAMES% }"
+        printf '       The install is NOT progressing. It is stuck, and it will stay\n'
+        printf '       stuck until that job is fixed and re-run — nothing retries it.\n'
+        return 1
+    fi
+    if [[ "$PROG_RUNNING" -gt 0 ]]; then
+        printf '\n    ⏳ First data is still loading.\n'
+        printf '       ⚠️  A red ✗ from `uis template check` is EXPECTED until this\n'
+        printf '           finishes. It means the tables do not exist yet, which is\n'
+        printf '           true and is not breakage.\n'
+        return 0
+    fi
+    if [[ "$PROG_ABSENT" -gt 0 && "$PROG_DONE" -eq 0 ]]; then
+        printf '\n    ⚠️  Nothing has run yet. First-data jobs do NOT self-trigger.\n'
+        printf '       Read the order this application documents:\n'
+        printf '         ./uis template info <id>   → operational.first_data.how\n'
+        return 0
+    fi
+    if [[ "$PROG_ABSENT" -gt 0 ]]; then
+        printf '\n    ⚠️  %s first-data job(s) have never run. Run them in the documented order.\n' "$PROG_ABSENT"
+        return 0
+    fi
+    printf '\n    ✅ Every first-data job has succeeded. `uis template check` is\n'
+    printf '       meaningful from now on.\n'
+    printf '       ⚠️  Loaded is not RUNNING: a fresh install ships with automation\n'
+    printf '           STOPPED. Switch it on with `uis dagster automation --start`.\n'
+    return 0
+}
+
+# Read Dagster's run history and instigator state through one throwaway pod.
+#
+# ⚠️ `kubectl run curlimages/curl` rather than exec-ing into an existing pod,
+# because what is inside the webserver image is not this repository's to assume —
+# and the same pattern is already proven on a real cluster in
+# 361-dagster-automation.yml. The query is imac's, verified against the deployed
+# chart rather than written from the docs.
+#
+# 🔴 IT RETURNS NON-ZERO ONLY WHEN IT COULD NOT LOOK. "Dagster answered and
+# nothing has run" and "Dagster did not answer" must never arrive as the same
+# value — rendering an unreachable orchestrator as "nothing has run yet" is
+# imac's P4, and it is the failure mode that would make this verb worse than
+# silence.
+_progress_read_dagster() {
+    local probe="uis-progress-$RANDOM"
+    local q1='{"query":"{ runsOrError { ... on Runs { results { jobName status startTime endTime } } } }"}'
+    local q2='{"query":"{ repositoriesOrError { ... on RepositoryConnection { nodes { schedules { name scheduleState { status } } sensors { name sensorState { status } } } } } }"}'
+    # Both queries in ONE pod. `RUNSPLIT` separates them because two JSON
+    # documents concatenated are not parseable, and inventing a wrapper would be
+    # a format only this function understands.
+    local script out krc=0
+    script="curl -s -m 20 -X POST -H 'Content-Type: application/json' -d '$q1' http://dagster-dagster-webserver:80/graphql; echo; echo RUNSPLIT; curl -s -m 20 -X POST -H 'Content-Type: application/json' -d '$q2' http://dagster-dagster-webserver:80/graphql"
+    out=$(kubectl run "$probe" --image=curlimages/curl --restart=Never \
+            -n dagster --quiet --rm -i --command -- \
+            sh -c "echo $(printf '%s' "$script" | base64 -w0) | base64 -d | sh" 2>/dev/null) || krc=$?
+    # ⚠️ rc AND content, because `--rm -i` has been seen to return 0 with empty
+    # stdout when the container outlives the attach — the same hazard 360-test
+    # and 361 both name. Either one failing is "could not look".
+    if [[ "$krc" -ne 0 || -z "$out" || "$out" != *runsOrError* ]]; then
+        PROGRESS_RUNS=""; PROGRESS_AUTO=""
+        return 1
+    fi
+    PROGRESS_RUNS="${out%%RUNSPLIT*}"
+    PROGRESS_AUTO="${out#*RUNSPLIT}"
+    # ⚠️ The automation half failing does NOT make the progress half unusable.
+    # It is reported as unreadable rather than allowed to fail the command that
+    # was asked about first data.
+    [[ "$PROGRESS_AUTO" == *repositoriesOrError* ]] || PROGRESS_AUTO=""
+    return 0
+}
+
+# imac's P6: "all data loaded" is NOT "running". A fresh install ships STOPPED,
+# so the two are routinely different and belong in the same breath.
+#
+# 🔴 UNREADABLE IS ITS OWN ANSWER HERE TOO. An empty automation payload must not
+# print "0 running" — that is a claim, and the wrong one.
+_progress_automation_line() {
+    local payload="$1"
+    if [[ -z "$payload" ]]; then
+        echo "    (could not read automation state — './uis dagster automation' asks directly)"
+        return 0
+    fi
+    local counts
+    counts=$(printf '%s' "$payload" | jq -r '
+        [ (.data.repositoriesOrError.nodes // [])[]
+          | ((.schedules // [])[] | .scheduleState.status),
+            ((.sensors   // [])[] | .sensorState.status) ]
+        | "\([ .[] | select(. == "RUNNING") ] | length) RUNNING, \([ .[] | select(. != "RUNNING") ] | length) STOPPED, of \(length) declared"' 2>/dev/null) || counts=""
+    if [[ -z "$counts" || "$counts" == *"of 0 declared"* ]]; then
+        echo "    Dagster declares no schedules or sensors — nothing to switch on."
+        return 0
+    fi
+    echo "    $counts"
+    case "$counts" in
+        "0 RUNNING"*) echo "    ⚠️  Nothing is switched on. Data loading and automation are separate"
+                      echo "        decisions: './uis dagster automation --start' switches them on." ;;
+    esac
+    return 0
+}
+
+cmd_template_progress() {
+    local app_id="${1:-}"
+    if [[ -z "$app_id" ]]; then
+        log_error "Usage: uis template progress <id>"
+        echo "  Answers 'how far through the first install am I, and is that normal?'" >&2
+        return 1
+    fi
+
+    _fetch_registry || return 2
+
+    # The declared order comes from the ARTIFACT, not from a list in this file.
+    # imac's reference implementation hardcodes it and says so; the product does
+    # not have to, because the definition declares it (imac's P5).
+    local template artifact tag digest vis dir info
+    template=$(_get_template "$app_id" 2>/dev/null) || true
+    if [[ -z "$template" || "$template" == "null" ]]; then
+        log_error "'$app_id' is not in the registry — cannot read its first-data order."
+        return 2
+    fi
+    artifact="$(_template_source_field "$template" artifact)"
+    tag="$(_template_source_field "$template" tag)"
+    digest="$(_template_source_field "$template" digest)"
+    vis="$(_json_field "$template" '.visibility')"; vis="${vis:-public}"
+    dir=$(_resolve_definition "$app_id" "$artifact" "$tag" "$digest" "$vis" 2>/dev/null) || dir=""
+    if [[ -z "$dir" || ! -f "$dir/template-info.yaml" ]]; then
+        log_error "Could not fetch the definition for '$app_id' — cannot read its first-data order."
+        return 2
+    fi
+    info="$dir/template-info.yaml"
+
+    local jobs
+    jobs=$(yq -r '[.operational.first_data.jobs // []] | flatten | join(" ")' "$info" 2>/dev/null) || jobs=""
+    if [[ -z "$jobs" || "$jobs" == "null" ]]; then
+        # 🔵 Not an error and not "could not look": this application never said
+        # it had a first-data sequence. Same distinction as `no-check`.
+        print_section "Install progress: $app_id"
+        echo "  This application declares no operational.first_data.jobs, so there is"
+        echo "  no first-data sequence to report progress through."
+        echo "  'uis template check $app_id' is the question to ask instead."
+        return 0
+    fi
+
+    print_section "Install progress: $app_id"
+    echo "  first-data order, as this application declares it:"
+    printf '    %s\n' "$(printf '%s' "$jobs" | tr ' ' '\n' | sed -n '1,20p' | paste -sd' ' -)"
+    echo ""
+
+    if ! _progress_read_dagster; then
+        log_error "COULD NOT ASK — Dagster's GraphQL API did not answer."
+        echo "  ⚠️  This is NOT 'nothing has run yet'. An unreachable orchestrator, a" >&2
+        echo "      wrong kube context and an RBAC denial all land here, and reporting" >&2
+        echo "      any of them as 'no progress' would be a false negative about the" >&2
+        echo "      one thing this command exists to report." >&2
+        echo "  './uis verify dagster' asks whether the orchestrator is alive at all." >&2
+        return 2
+    fi
+
+    _progress_classify "$PROGRESS_RUNS" "$jobs"
+    printf '%s' "$PROG_LINES"
+    local rc=0
+    _progress_summary || rc=$?
+
+    # imac's P6: loaded is not running, and a fresh install ships STOPPED, so the
+    # two are routinely different. Reported in the same breath rather than
+    # leaving the operator to find the other verb.
+    echo ""
+    echo "  Automation (a fresh install ships STOPPED):"
+    _progress_automation_line "$PROGRESS_AUTO"
+    return "$rc"
+}
+
 cmd_template_check() {
     local template_id="${1:-}"
     [[ -z "$template_id" ]] && { cmd_template_check_all; return $?; }
@@ -3508,6 +3778,9 @@ run_template() {
         check)
             cmd_template_check "$@"
             ;;
+        progress)
+            cmd_template_progress "$@"
+            ;;
         remove|uninstall)
             # ⚠️ NO `shift` here. run_template already shifted the subcommand off,
             # and the second shift ate an argument — which broke every documented
@@ -3522,6 +3795,10 @@ run_template() {
             echo "Commands:"
             echo "  check <id>        Ask the application whether its output reflects its input"
             echo "                    (not liveness — `status` and `verify` are the words for that)"
+            echo "  progress <id>     How far through the FIRST INSTALL am I, and is that normal?"
+            echo "                    Names four states — not started, in flight, succeeded,"
+            echo "                    FAILED — and says when a red x from `check` is expected."
+            echo "                    Exit 1 if a first-data job failed; 2 if it could not look."
             echo "  list              List available UIS templates"
             echo "    --refresh       Re-read the registry instead of the hourly cache."
             echo "                    An application published in the last hour reads as"
