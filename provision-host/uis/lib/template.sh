@@ -1877,15 +1877,44 @@ _check_state() {
     if [[ "$cl_name" == *"{{"* ]]; then
         CHECK_STATE="could-not-ask"; CHECK_DETAIL="code location '$cl_name' is unrendered — install record is wrong"; return 0
     fi
-    pod=$(kubectl get pods -n dagster -l "deployment=$cl_name" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || pod=""
+    # 🔴 `|| pod=""` FIXED THE ABORT BY DISCARDING THE STATUS, which made
+    # "kubectl is broken" and "there is no pod" the same answer — and UIS then
+    # stated, specifically and confidently, that there was no running pod.
+    # imac replaced kubectl with a binary exiting 9 and got exactly that
+    # (ops-dev, #939). An unreachable API server, a wrong context or an RBAC
+    # denial all land here too.
+    #
+    # ⚠️ `{.items[0]…}` cannot help: it returns 1 BOTH for a real failure and for
+    # an empty match. `{.items[*]…}` returns 0 with empty output when nothing
+    # matched, so rc and output finally mean different things.
+    local pod_list krc=0
+    pod_list=$(kubectl get pods -n dagster -l "deployment=$cl_name" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null) || krc=$?
+    if [[ "$krc" -ne 0 ]]; then
+        CHECK_STATE="could-not-ask"
+        CHECK_DETAIL="kubectl failed (exit $krc) — cannot tell whether a pod exists"
+        return 0
+    fi
+    pod="${pod_list%% *}"
     if [[ -z "$pod" ]]; then
         # ⚠️ G1: a stopped application still produces a LINE, with a reason. It
         # must not vanish from the list and must not abort the run.
         CHECK_STATE="could-not-ask"; CHECK_DETAIL="no running pod for code location '$cl_name'"; return 0
     fi
-    if ! kubectl exec -n dagster "$pod" -- bash -lc "command -v ${run_cmd%% *} >/dev/null 2>&1 || test -x ${run_cmd%% *}" >/dev/null 2>&1; then
-        CHECK_STATE="could-not-ask"; CHECK_DETAIL="${run_cmd%% *} is not in the image"; return 0
+    # 🔴 Same conflation one line down: `!` on a kubectl exec cannot tell "the
+    # command is not in the image" from "I could not reach the pod". The probe
+    # therefore always exits 0 and SAYS which, so the status belongs to kubectl
+    # alone (imac, #939).
+    local probe prc=0
+    probe=$(kubectl exec -n dagster "$pod" -- bash -lc \
+        "if command -v ${run_cmd%% *} >/dev/null 2>&1 || test -x ${run_cmd%% *}; then echo PRESENT; else echo ABSENT; fi" 2>/dev/null) || prc=$?
+    if [[ "$prc" -ne 0 ]]; then
+        CHECK_STATE="could-not-ask"; CHECK_DETAIL="could not reach pod $pod (kubectl exec exit $prc)"; return 0
     fi
+    case "$probe" in
+        *PRESENT*) : ;;
+        *ABSENT*)  CHECK_STATE="could-not-ask"; CHECK_DETAIL="${run_cmd%% *} is not in the image"; return 0 ;;
+        *)         CHECK_STATE="could-not-ask"; CHECK_DETAIL="probe returned nothing — cannot tell if ${run_cmd%% *} is present"; return 0 ;;
+    esac
 
     local rc=0
     # ⚠️ ONE path for both forms. The single and the listing used to resolve

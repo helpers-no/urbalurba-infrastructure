@@ -123,7 +123,18 @@ grep -q 'check <id>' <<<"$_code" && pass "listed in the template subcommand help
 # `cmd_template_check` looked in the old place and reported five behaviours
 # missing that were present — a test measuring the wrong object, which is the
 # thing this suite keeps catching in me.
-_body="$(sed -n '/^_check_state() {/,/^}/p' "$LIB"; sed -n '/^cmd_template_check() {/,/^}/p' "$LIB"; sed -n '/^cmd_template_check_all() {/,/^}/p' "$LIB")"
+# ⚠️ COMMENT-STRIPPED. This was not, and my own comment explaining the
+# `|| pod=""` defect satisfied the assertion forbidding it — AND defeated its
+# negative control, which passed against the reintroduced bug. Eighth time today
+# a scan matched prose about the thing instead of the thing, and the first where
+# it disarmed the control as well as the check.
+# ⚠️ BRACES. Without them the pipe binds to the LAST sed only, so two of the
+# three functions kept their comments and the strip silently did a third of its
+# job — which is how the `|| pod=""` assertion still failed against code that
+# does not contain it.
+_body="$( { sed -n '/^_check_state() {/,/^}/p' "$LIB"
+            sed -n '/^cmd_template_check() {/,/^}/p' "$LIB"
+            sed -n '/^cmd_template_check_all() {/,/^}/p' "$LIB"; } | grep -v '^[[:space:]]*#')"
 
 if grep -q 'COULD NOT BE ASKED' <<<"$_body"; then
     pass "🔴 state 4 is named, not folded into pass or fail"
@@ -228,6 +239,46 @@ if grep -q 'NOT could-not-ask' <<<"$_state_all"; then
     pass "an authoring gap is not folded into a runtime failure"
 else
     fail "an authoring gap is not folded into a runtime failure"          "they need different fixes from different people"
+fi
+
+# ── a broken kubectl is not an absent pod ────────────────────────────────────
+# 🔴 My fix for the errexit abort created a confident wrong answer: `|| pod=""`
+# discarded kubectl's status, so a kubectl exiting 9 produced "no running pod
+# for code location 'atlas-data'" — specific, confident and false (ops-dev,
+# #939). atlas's sentence one layer further in: a bug wearing a connectivity
+# failure's clothes.
+if grep -q 'items\[\*\]' <<<"$_body"; then
+    pass "🔴 the pod query distinguishes an empty match from a failure"
+else
+    fail "🔴 the pod query distinguishes empty from failure" \
+         "{.items[0]…} returns 1 for BOTH, so rc carries no information"
+fi
+
+if grep -q 'cannot tell whether a pod exists' <<<"$_body"; then
+    pass "a failing kubectl says so instead of naming a missing pod"
+else
+    fail "a failing kubectl says so" "'no running pod' is a claim UIS cannot make when kubectl failed"
+fi
+
+if grep -q '|| pod=""' <<<"$_body"; then
+    fail "kubectl's status is not discarded" "|| pod=\"\" throws away the only signal that separates the two"
+else
+    pass "kubectl's status is not discarded"
+fi
+
+# ⚠️ Same conflation on the probe: `!` on a kubectl exec cannot tell "not in the
+# image" from "could not reach the pod".
+if grep -q 'PRESENT' <<<"$_body" && grep -q 'ABSENT' <<<"$_body"; then
+    pass "the probe reports presence in its OUTPUT, not its exit status"
+else
+    fail "the probe reports presence in its output" \
+         "sharing the exit status with kubectl makes the two failures one"
+fi
+
+if grep -q 'could not reach pod' <<<"$_body"; then
+    pass "an unreachable pod is distinguished from a missing command"
+else
+    fail "an unreachable pod is distinguished from a missing command" ""
 fi
 
 echo ""
