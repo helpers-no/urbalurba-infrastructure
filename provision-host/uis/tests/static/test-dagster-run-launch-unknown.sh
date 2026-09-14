@@ -134,6 +134,64 @@ else
          "Ansible retrying a launch launches again; idempotence is not a property of this call"
 fi
 
+# ── "Launched" must be an observation, not an assertion ─────────────────────
+# 🔴 The launch call returning a run id was observed; that the run would be
+# ENQUEUED and RUN was asserted and never checked. imac reported a run sitting
+# at NOT_STARTED indefinitely, so "Launched" was the last thing the CLI said
+# about a job that never moved (ops-dev, urb-agents#1052).
+#
+# 🔵 Same correction as 7a/7b, on the other side of the same command: an
+# unverified consequence must not be printed as a fact.
+if grep -q 'runOrError' <<<"$pb"; then
+    pass "🔴 the run's own status is read after launching"
+else
+    fail "🔴 the status is read after launching" \
+         "'Launched' asserts an outcome the launch call does not control"
+fi
+
+_msg="$(sed -n '/9\. Launched/,/^    # 🔴 --timeout/p' "$PB")"
+if grep -q 'Dagster reports this run as' <<<"$_msg"; then
+    pass "and the message reports what Dagster said, not what UIS hoped"
+else
+    fail "the message reports the status" "out=$_msg"
+fi
+
+# 🔴 NOT_STARTED gets its own explanation: created and not submitted, which is
+# not a launch failure and not something UIS diagnoses.
+if grep -q 'NOT_STARTED means the run was CREATED and not submitted' <<<"$_msg"; then
+    pass "🔴 NOT_STARTED is explained as created-not-submitted"
+else
+    fail "🔴 NOT_STARTED is explained" \
+         "a status an operator cannot interpret is the same as no status"
+fi
+
+# ⚠️ Pattern taken from the file, not from memory: the text reads "reporting it
+# rather than diagnosing it", so 'not diagnosing it' matched nothing and failed
+# a correct message. Eighth pattern-versus-target mismatch today — and the first
+# where I had written the sentence myself minutes earlier.
+if grep -qF 'rather than diagnosing it' <<<"$_msg"; then
+    pass "⚠️ and it says UIS is reporting the condition, not diagnosing it"
+else
+    fail "⚠️ it does not claim a cause" \
+         "the coordinator condition is not established from here and must not be asserted"
+fi
+
+# 🔴 UNREADABLE IS ITS OWN VALUE. Collapsing it into a status would make an
+# unreadable state indistinguishable from a real one — and the run WAS created,
+# so the advice has to be 'do not relaunch'.
+if grep -q "else 'unreadable'" <<<"$pb"; then
+    pass "🔴 an unreadable status is its own value, not folded into a real one"
+else
+    fail "🔴 unreadable is its own value" "folding it in is the could-not-look defect again"
+fi
+
+if grep -q 'do not launch it again' <<<"$_msg"; then
+    pass "and an unreadable status still says the run WAS created"
+else
+    fail "an unreadable status says the run was created" \
+         "the id came back from Dagster; a relaunch would double the work"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
