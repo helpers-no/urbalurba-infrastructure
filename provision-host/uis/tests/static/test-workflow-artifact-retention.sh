@@ -87,6 +87,58 @@ else
     pass "logs are not shortened along with artifacts"
 fi
 
+# ── CI must not fail a TEST job because a download blipped ──────────────────
+# 🔴 A 504 from the yq release host failed the Unit Tests job with `exit 22`,
+# and the PR reported "Unit Tests fail" — a third-party blip reading as a test
+# failure, with the tests never having run. I introduced that in 1.6.84 by
+# adding an unretried download to two jobs.
+_wf="$REPO_ROOT/.github/workflows/test-uis.yml"
+if [[ -f "$_wf" ]]; then
+    # ⚠️ COMMENTS STRIPPED BEFORE COUNTING. `retry-all-errors` appears four
+    # times in this file — twice in `run:` blocks and twice in the comments
+    # explaining why — so an uncommented count of 4 satisfied `>= 2` even after
+    # one of the two real invocations was removed. The prose about a rule
+    # satisfying the check for the rule, in COUNT form this time.
+    _n_yq="$(grep -c 'name: Install yq' "$_wf")"
+    _n_retry="$(grep -v '^[[:space:]]*#' "$_wf" | grep -c 'retry-all-errors')"
+    # ⚠️ Counted, not merely present: TWO jobs install it and both must retry.
+    # A count check is what catches the second one being left behind.
+    if [[ "$_n_yq" -ge 1 && "$_n_retry" -ge "$_n_yq" ]]; then
+        pass "🔴 every yq install step retries ($_n_yq step(s), $_n_retry retry mention(s))"
+    else
+        fail "🔴 every yq install step retries" \
+             "$_n_yq install step(s) and only $_n_retry with --retry-all-errors"
+    fi
+
+    # ⚠️ `--retry-all-errors` specifically: a 504 is an HTTP RESPONSE, not a
+    # transport error, so plain `--retry` would not have covered the failure
+    # that prompted this.
+    if grep -q 'retry-all-errors' "$_wf"; then
+        pass "⚠️ it retries HTTP errors, not only transport errors"
+    else
+        fail "⚠️ it retries HTTP errors too" "a 504 is a response; plain --retry does not cover it"
+    fi
+
+    # 🔵 And when it does fail, it must say the tests did not run — otherwise
+    # the next person reads a red Unit Tests job as a code defect.
+    if grep -q 'not a test failure' "$_wf"; then
+        pass "🔵 a fetch failure says so, rather than looking like a test failure"
+    else
+        fail "🔵 a fetch failure says so" "a red test job that was never a test is the wrong signal"
+    fi
+
+    # ⚠️ The status must be CAPTURED. Tested: inside `if ! cmd; then`, `$?` is
+    # the negation's 0, not the command's status — so a message built that way
+    # reports "exit 0" for a failure.
+    if ! grep -qE 'curl exit \$\?' "$_wf"; then
+        pass "⚠️ the reported exit status is captured, not read from \$? after if-!"
+    else
+        fail "⚠️ the exit status is captured" "inside 'if ! cmd', \$? is 0 and the message would say exit 0"
+    fi
+else
+    fail "the workflow file is present" "missing: $_wf"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
