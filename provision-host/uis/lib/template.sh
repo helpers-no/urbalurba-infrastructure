@@ -2945,7 +2945,7 @@ cmd_template_progress() {
 # Sets AUTO_RUNNING / AUTO_TOTAL, or returns 1 when it could not look — which is
 # NOT the same as zero running and must never be rendered as such.
 _check_automation_state() {
-    AUTO_RUNNING=""; AUTO_TOTAL=""
+    AUTO_RUNNING=""; AUTO_TOTAL=""; AUTO_STOPPED_NAMES=""
     command -v jq >/dev/null 2>&1 || return 1
     local probe="uis-autostate-$RANDOM" out krc=0
     local q='{"query":"{ repositoriesOrError { ... on RepositoryConnection { nodes { schedules { name scheduleState { status } } sensors { name sensorState { status } } } } } }"}'
@@ -2962,6 +2962,22 @@ _check_automation_state() {
         | "\([ .[] | select(. == "RUNNING") ] | length) \(length)"' 2>/dev/null) || return 1
     [[ "$counts" =~ ^[0-9]+\ [0-9]+$ ]] || return 1
     AUTO_RUNNING="${counts%% *}"; AUTO_TOTAL="${counts##* }"
+
+    # 🔴 NAME THE STOPPED ONES. "4 RUNNING, 1 STOPPED" reads as mostly fine, and
+    # the one stopped instigator is precisely the one backing the false sentence
+    # — so the partial case survives a glance at BOTH commands (imac via
+    # ops-dev, urb-agents#1046).
+    #
+    # ⚠️ UIS still does not claim WHICH instigator a check's sentence depends on
+    # — only the application knows that. But the names are a measured fact UIS
+    # owns, and printing them lets the reader do the correlation that UIS cannot
+    # honestly do for them. "1 STOPPED: brreg_transform_half_hourly" beside a
+    # sentence about "the next transform" is legible; a bare count is not.
+    AUTO_STOPPED_NAMES=$(printf '%s' "$out" | jq -r '
+        [ (.data.repositoriesOrError.nodes // [])[]
+          | ((.schedules // [])[] | select(.scheduleState.status != "RUNNING") | .name),
+            ((.sensors   // [])[] | select(.sensorState.status   != "RUNNING") | .name) ]
+        | join(", ")' 2>/dev/null) || AUTO_STOPPED_NAMES=""
     return 0
 }
 
@@ -2984,45 +3000,69 @@ _check_automation_state() {
 #   could not look  says so. Silence here would be the could-not-look defect
 #                 this project has paid for repeatedly.
 #
-# Returns 0 to keep the caller's verdict, 2 to downgrade it to could-not-ask.
+# 🔴 IT BUILDS TEXT RATHER THAN PRINTING IT, so the caller can put the
+# retraction ABOVE the relayed verdict. "atlas reported success" printed above
+# "NOTHING IS RUNNING" — the exit code was right and the retraction unmissable
+# if read, but a reader skimming top-down met "reported success" first, on a
+# command whose whole job is not to mislead at a glance (imac via ops-dev,
+# urb-agents#1046). That ordering was structural, so the structure changed.
+#
+# Sets QUALIFY_TEXT and QUALIFY_RC (0 keep the verdict, 2 downgrade it).
 _check_qualify_by_automation() {
     local state="$1"
+    QUALIFY_TEXT=""; QUALIFY_RC=0
     if [[ -z "$AUTO_TOTAL" ]]; then
-        echo "" >&2
-        log_warn "Could not read whether anything is scheduled to run."
-        echo "    So a sentence about a future scheduled run cannot be relied on" >&2
-        echo "    here — and this is 'could not look', not 'nothing is running'." >&2
-        echo "    './uis dagster automation' asks directly." >&2
+        QUALIFY_TEXT="$(cat <<'EOT'
+⚠  Could not read whether anything is scheduled to run.
+    So a sentence below about a future scheduled run cannot be relied on
+    here — and this is 'could not look', not 'nothing is running'.
+    './uis dagster automation' asks directly.
+EOT
+)"
         return 0
     fi
     [[ "$AUTO_TOTAL" == "0" ]] && return 0
     [[ "$AUTO_RUNNING" == "$AUTO_TOTAL" ]] && return 0
 
-    echo "" >&2
+    local stopped_line=""
+    [[ -n "$AUTO_STOPPED_NAMES" ]] && stopped_line="    stopped: ${AUTO_STOPPED_NAMES}"$'\n'
+
     if [[ "$AUTO_RUNNING" == "0" ]]; then
-        log_warn "NOTHING IS RUNNING: 0 of $AUTO_TOTAL schedules and sensors are switched on."
-        echo "    Any sentence above about a future run — 'awaiting the next" >&2
-        echo "    transform', a cadence, 'not a fault' — assumes something is" >&2
-        echo "    scheduled. Nothing is." >&2
-        echo "" >&2
-        echo "    ⚠️  So this is not a clean bill of health. It is a question that" >&2
-        echo "        cannot be answered: with nothing producing output, whether the" >&2
-        echo "        output reflects the input is undecidable." >&2
-        echo "" >&2
-        echo "    A fresh install ships stopped. Switch it on:" >&2
-        echo "      ./uis dagster automation --start" >&2
-        if [[ "$state" == "healthy" ]]; then
-            return 2
-        fi
+        QUALIFY_TEXT="⚠  NOTHING IS RUNNING: 0 of $AUTO_TOTAL schedules and sensors are switched on."$'\n'
+        QUALIFY_TEXT+="$stopped_line"
+        QUALIFY_TEXT+="$(cat <<'EOT'
+    Any sentence below about a future run — 'awaiting the next transform',
+    a cadence, 'not a fault' — assumes something is scheduled. Nothing is.
+
+    ⚠️  So this is not a clean bill of health. It is a question that
+        cannot be answered: with nothing producing output, whether the
+        output reflects the input is undecidable.
+
+    A fresh install ships stopped. Switch it on:
+      ./uis dagster automation --start
+EOT
+)"
+        [[ "$state" == "healthy" ]] && QUALIFY_RC=2
         return 0
     fi
-    log_warn "$AUTO_RUNNING of $AUTO_TOTAL schedules and sensors are running."
-    echo "    ⚠️  If a sentence above expects a future scheduled run, check that" >&2
-    echo "        the schedule it names is one of the running ones:" >&2
-    echo "          ./uis dagster automation" >&2
-    echo "    UIS cannot tell which instigator this application's claim depends" >&2
-    echo "    on — only the application knows that — so the verdict above is" >&2
-    echo "    left as it was rather than guessed at." >&2
+
+    # 🔴 THE PARTIAL CASE IS QUIETER, NOT MILDER. One stopped instigator beside
+    # four running ones reads as mostly fine — and it is the stopped one that
+    # backs the false sentence. UIS still cannot claim WHICH instigator a
+    # check's claim depends on, so the verdict is left alone; what changed is
+    # that the names are printed, so the reader can make the connection UIS
+    # cannot honestly make for them.
+    QUALIFY_TEXT="⚠  $AUTO_RUNNING of $AUTO_TOTAL schedules and sensors are running — and the stopped one may be the one that matters."$'\n'
+    QUALIFY_TEXT+="$stopped_line"
+    QUALIFY_TEXT+="$(cat <<'EOT'
+    If a sentence below expects a future scheduled run, check it against
+    that list by name. A count alone reads as mostly fine.
+
+    UIS cannot tell which instigator this application's claim depends on —
+    only the application knows that — so the verdict below is left as it
+    was rather than guessed at.
+EOT
+)"
     return 0
 }
 
@@ -3066,6 +3106,18 @@ cmd_template_check() {
     echo "" >&2
     case "$CHECK_STATE" in
         healthy)
+            # 🔴 THE RETRACTION GOES FIRST WHEN THERE IS ONE. A reader skimming
+            # top-down used to meet "reported success" before the line that
+            # takes it back (imac via ops-dev, #1046). The exit code was already
+            # right; the ORDER was the defect, on a command whose whole job is
+            # not to mislead at a glance.
+            _check_qualify_by_automation healthy
+            if [[ "$QUALIFY_RC" -eq 2 && -n "$QUALIFY_TEXT" ]]; then
+                printf '  %s\n' "$QUALIFY_TEXT" >&2
+                echo "" >&2
+                echo "  Below is what the application itself reported, which UIS" >&2
+                echo "  relayed and did not verify:" >&2
+            fi
             echo "  $template_id reported success. UIS relayed this; it did not verify it." >&2
             # ⚠️ AND SAY WHAT THE SUCCESS WAS ABOUT. "Reported success" reads as
             # "the application is working"; the application's own description
@@ -3079,13 +3131,18 @@ cmd_template_check() {
                 echo "    ⚠️  Anything outside that question is NOT covered by this" >&2
                 echo "        exit code, however healthy it reads." >&2
             fi
-            local _q=0
-            _check_qualify_by_automation healthy || _q=$?
-            [[ "$_q" -eq 2 ]] && return 2
+            # A qualification that does NOT retract the verdict still belongs
+            # after it — it is a caveat, not a correction.
+            if [[ "$QUALIFY_RC" -ne 2 && -n "$QUALIFY_TEXT" ]]; then
+                echo "" >&2
+                printf '  %s\n' "$QUALIFY_TEXT" >&2
+            fi
+            [[ "$QUALIFY_RC" -eq 2 ]] && return 2
             return 0 ;;
         unhealthy)
             log_warn "$template_id $CHECK_DETAIL"
-            _check_qualify_by_automation unhealthy || true
+            _check_qualify_by_automation unhealthy
+            [[ -n "$QUALIFY_TEXT" ]] && { echo "" >&2; printf '  %s\n' "$QUALIFY_TEXT" >&2; }
             return 1 ;;
         no-check)
             log_warn "'$template_id' declares no check command."
