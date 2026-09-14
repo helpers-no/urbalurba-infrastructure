@@ -753,6 +753,58 @@ _install_summary_operational() {
 # Print the `operational:` block from an application's definition, if it has
 # one. Silent when it does not — most applications will not, and an empty
 # heading is worse than no heading.
+# Render the application's OWN declared commands.
+#
+# 🔴 THE APPLICATION WROTE A DESCRIPTION OF ITS CHECK, UIS READ THAT DESCRIPTION
+# IN ORDER TO RUN THE CHECK, AND THE OPERATOR WAS NEVER SHOWN EITHER.
+#
+# atlas has declared `commands.check` with a description since
+# v20260914-1fa7961. `uis template info atlas` was 103 lines and never mentioned
+# it (Terje via ops-dev, urb-agents#1031). That is imac's H1 from #925 — "the end
+# of an install names the command" — failing on the DISCOVERY surface instead of
+# the install summary.
+#
+# ⚠️ AND THE INVOCATION IS NAMED, not just the script. `run: /app/atlas-status.py`
+# is true and an operator cannot use it: it executes inside the code-location
+# pod. Printing the path without `./uis template check <id>` beside it would be
+# the correct-and-unreachable shape this project keeps removing.
+_template_info_commands() {
+    local info="$1" template_id="$2"
+    command -v yq >/dev/null 2>&1 || return 0
+
+    print_subsection "Commands this application declares" 2>/dev/null \
+        || { echo ""; echo "Commands this application declares"; }
+
+    if [[ "$(yq -r 'has("commands")' "$info" 2>/dev/null)" != "true" ]]; then
+        # 🔵 SAYS SO, rather than printing nothing. The same honesty the check
+        # listing already has: "declares no check" is an answer, an empty
+        # section is not.
+        echo "  This application declares no commands."
+        echo "  'uis template check $template_id' will report 'declares no check'."
+        return 0
+    fi
+
+    local keys k desc run where
+    keys=$(yq -r '.commands | keys | .[]' "$info" 2>/dev/null)
+    if [[ -z "$keys" ]]; then
+        echo "  This application declares no commands."
+        return 0
+    fi
+    while IFS= read -r k; do
+        [[ -z "$k" ]] && continue
+        desc=$(k="$k" yq -r '.commands[strenv(k)].description // ""' "$info" 2>/dev/null)
+        run=$(k="$k"  yq -r '.commands[strenv(k)].run // ""' "$info" 2>/dev/null)
+        where=$(k="$k" yq -r '.commands[strenv(k)].in // "code-location"' "$info" 2>/dev/null)
+        echo "  $k"
+        [[ -n "$desc" ]] && printf '    %s\n' "$(printf '%s' "$desc" | tr '\n' ' ' | sed 's/  */ /g')"
+        if [[ "$k" == "check" ]]; then
+            echo "    you run:  ./uis template check $template_id"
+        fi
+        [[ -n "$run" ]] && echo "    which runs '$run' inside the $where"
+    done <<< "$keys"
+    return 0
+}
+
 _template_info_operational() {
     local template_id="$1" template="$2"
     command -v yq >/dev/null 2>&1 || return 0
@@ -772,6 +824,11 @@ _template_info_operational() {
     }
     local info="$dir/template-info.yaml"
     [[ -f "$info" ]] || return 0
+
+    # 🔴 BEFORE the operational gate. An artifact may declare `commands:` and no
+    # `operational:`, and gating both on the second would hide the first.
+    _template_info_commands "$info" "$template_id"
+
     [[ "$(yq -r 'has("operational")' "$info" 2>/dev/null)" == "true" ]] || return 0
 
     local v
@@ -3745,7 +3802,7 @@ cmd_template_install() {
         # not an application) has no pin to record. Say so rather than writing a
         # record with empty fields that a later `requires` check would trust.
         echo "Note: no artifact pin for '$template_id', so no application record written." >&2
-        echo "      A dependant's `requires: $template_id` will not see it." >&2
+        echo "      A dependant's \`requires: $template_id\` will not see it." >&2
     fi
 
     print_section "Template Installation Complete"
@@ -3805,6 +3862,28 @@ run_template() {
     local subcmd="${1:-}"
     shift || true
 
+    # 🔴 `--help` WAS READ AS AN APPLICATION ID, and inconsistently.
+    #
+    #     uis template check --help    -> "'--help' has no install record"
+    #     uis template install --help  -> "Template '--help' not found in
+    #                                      registry", then advised --refresh:
+    #                                      offering to re-read the catalogue to
+    #                                      look harder for an application called
+    #                                      --help
+    #
+    # ⚠️ `uis --help` and `uis dagster --help` already honoured it, which is what
+    # makes this a defect rather than a missing feature — two of five surfaces
+    # behaved and three did not (Terje via ops-dev, urb-agents#1031).
+    #
+    # 🔵 Handled ONCE, before dispatch. Five copies of the same guard is five
+    # things that drift apart.
+    local _a
+    for _a in "$@"; do
+        case "$_a" in
+            --help|-h) set --; subcmd="help"; break ;;
+        esac
+    done
+
     case "$subcmd" in
         list)
             [[ "${1:-}" == "--refresh" ]] && REGISTRY_REFRESH=true
@@ -3845,10 +3924,10 @@ run_template() {
             echo ""
             echo "Commands:"
             echo "  check <id>        Ask the application whether its output reflects its input"
-            echo "                    (not liveness — `status` and `verify` are the words for that)"
+            echo '                    (not liveness — `status` and `verify` are the words for that)'
             echo "  progress <id>     How far through the FIRST INSTALL am I, and is that normal?"
             echo "                    Names four states — not started, in flight, succeeded,"
-            echo "                    FAILED — and says when a red x from `check` is expected."
+            echo '                    FAILED — and says when a red x from `check` is expected.'
             echo "                    Exit 1 if a first-data job failed; 2 if it could not look."
             echo "  list              List available UIS templates"
             echo "    --refresh       Re-read the registry instead of the hourly cache."
