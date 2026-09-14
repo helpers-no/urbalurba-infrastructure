@@ -110,9 +110,36 @@ jobs:
         #
         # ⚠️ NOT `apt-get install yq`: on Ubuntu that is the python jq-wrapper,
         # a different tool with different syntax. Pinned and checksummed.
+        #
+        # 🔴 RETRIED, BECAUSE THIS STEP MADE EVERY CI RUN DEPEND ON A CDN.
+        #
+        # A 504 from the release host failed this step with `exit 22`, and the
+        # PR then reported "Unit Tests fail" — so a third-party blip read as a
+        # test failure, with the actual reason buried in a step log. The tests
+        # had not run at all.
+        #
+        # ⚠️ That is the same defect class as everything this playbook work has
+        # been about: a failure reporting something other than what happened. I
+        # introduced it in 1.6.84 by adding an unretried download to two jobs.
+        #
+        # `--retry-all-errors` is needed because a 504 is an HTTP response, not
+        # a transport error, and plain `--retry` would not cover it.
+        #
+        # ⚠️ THE STATUS IS CAPTURED, NOT READ FROM `$?` INSIDE `if !`. Tested:
+        # inside `if ! cmd; then`, `$?` is 0 — the negation's status, not the
+        # command's. The first version of this would have reported "curl exit 0"
+        # for a failure, which is a message about a failure carrying the wrong
+        # value, in the step being fixed for reporting the wrong thing.
         run: |
-          curl -fsSL -o /tmp/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64
+          rc=0
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+               --max-time 120 -o /tmp/yq \
+               https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64 || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Could not DOWNLOAD yq (curl exit $rc). The tests did not run."
+            echo "This is a fetch failure, not a test failure — re-run the job."
+            exit 1
+          fi
           echo "6dc2d0cd4e0caca5aeffd0d784a48263591080e4a0895abe69f3a76eb50d1ba3  /tmp/yq" \
             | sha256sum -c -
           sudo install -m 0755 /tmp/yq /usr/local/bin/yq
@@ -138,9 +165,36 @@ jobs:
         #
         # ⚠️ NOT `apt-get install yq`: on Ubuntu that is the python jq-wrapper,
         # a different tool with different syntax. Pinned and checksummed.
+        #
+        # 🔴 RETRIED, BECAUSE THIS STEP MADE EVERY CI RUN DEPEND ON A CDN.
+        #
+        # A 504 from the release host failed this step with `exit 22`, and the
+        # PR then reported "Unit Tests fail" — so a third-party blip read as a
+        # test failure, with the actual reason buried in a step log. The tests
+        # had not run at all.
+        #
+        # ⚠️ That is the same defect class as everything this playbook work has
+        # been about: a failure reporting something other than what happened. I
+        # introduced it in 1.6.84 by adding an unretried download to two jobs.
+        #
+        # `--retry-all-errors` is needed because a 504 is an HTTP response, not
+        # a transport error, and plain `--retry` would not cover it.
+        #
+        # ⚠️ THE STATUS IS CAPTURED, NOT READ FROM `$?` INSIDE `if !`. Tested:
+        # inside `if ! cmd; then`, `$?` is 0 — the negation's status, not the
+        # command's. The first version of this would have reported "curl exit 0"
+        # for a failure, which is a message about a failure carrying the wrong
+        # value, in the step being fixed for reporting the wrong thing.
         run: |
-          curl -fsSL -o /tmp/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64
+          rc=0
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+               --max-time 120 -o /tmp/yq \
+               https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64 || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Could not DOWNLOAD yq (curl exit $rc). The tests did not run."
+            echo "This is a fetch failure, not a test failure — re-run the job."
+            exit 1
+          fi
           echo "6dc2d0cd4e0caca5aeffd0d784a48263591080e4a0895abe69f3a76eb50d1ba3  /tmp/yq" \
             | sha256sum -c -
           sudo install -m 0755 /tmp/yq /usr/local/bin/yq
