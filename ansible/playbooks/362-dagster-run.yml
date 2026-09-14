@@ -227,11 +227,68 @@
       ansible.builtin.set_fact:
         _run_id: "{{ (_launch.stdout | from_json).data.launchPipelineExecution.run.runId }}"
 
+    # 🔴 "LAUNCHED" WAS AN ASSERTION, NOT AN OBSERVATION.
+    #
+    # The launch call returning a run id was observed. That the run would then
+    # be ENQUEUED and RUN was asserted and never checked — and imac reported a
+    # run sitting at NOT_STARTED indefinitely, so "Launched" was the last thing
+    # the CLI said about a job that never moved (ops-dev, urb-agents#1052).
+    #
+    # ⚠️ NOT_STARTED is a run created and not submitted. That is a run
+    # coordinator condition and not something the launch call controls, so this
+    # does NOT claim a cause. What it stops doing is claiming an outcome: one
+    # read of the run's own status, reported as what it is.
+    #
+    # 🔵 Same correction as 7a/7b one task earlier, on the other side of the
+    # same command: an unverified consequence must not be printed as a fact.
+    - name: "8b. Read the run's status once, so 'Launched' is observed"
+      ansible.builtin.shell: |
+        set -e
+        kubectl run {{ probe }}-s --image=curlimages/curl --restart=Never \
+          -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
+          --command -- curl -s -m 20 -X POST \
+          -H 'Content-Type: application/json' \
+          -d '{"query":"{ runOrError(runId:\"{{ _run_id }}\"){ __typename ... on Run { status } } }"}' \
+          http://dagster-dagster-webserver:80/graphql >/dev/null
+        for i in $(seq 1 30); do
+          phase=$(kubectl get pod {{ probe }}-s -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
+          { [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ]; } && break
+          sleep 2
+        done
+        kubectl logs {{ probe }}-s -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }}
+        kubectl delete pod {{ probe }}-s -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} --wait=false >/dev/null 2>&1
+      register: _first_status
+      changed_when: false
+      failed_when: false
+
+    - name: "8c. Keep whatever the status read produced"
+      ansible.builtin.set_fact:
+        # ⚠️ "unreadable" is its own value and must not collapse into a status.
+        _launch_status: >-
+          {{ (_first_status.stdout | from_json).data.runOrError.status
+             if (_first_status.stdout | default('') is search('"status"'))
+             else 'unreadable' }}
+
     - name: "9. Launched"
       ansible.builtin.debug:
-        msg:
-          - "Launched {{ _job }}  run {{ _run_id }}"
-          - "{{ 'Waiting for it to finish...' if _wait else 'Not waiting. Follow it with: uis dagster run ' ~ _job ~ ' --wait' }}"
+        msg: >-
+          {{ ["Launched " ~ _job ~ "  run " ~ _run_id,
+              "Dagster reports this run as: " ~ _launch_status]
+           + (["⚠️  NOT_STARTED means the run was CREATED and not submitted — it",
+               "    is not queued and nothing is executing it. That is a run",
+               "    coordinator condition, not a launch failure, and UIS is",
+               "    reporting it rather than diagnosing it.",
+               "    ./uis dagster run " ~ _job ~ " --wait   watches it, and fails on a deadline",
+               "    ./uis template progress <app>            what else is running"]
+              if _launch_status == 'NOT_STARTED' else [])
+           + (["⚠️  The status could not be read. The run WAS created — the id",
+               "    above came back from Dagster — so do not launch it again",
+               "    without looking."]
+              if _launch_status == 'unreadable' else [])
+           + [(_wait | ternary("Waiting for it to finish...",
+                "Not waiting. Follow it with: uis dagster run " ~ _job ~ " --wait"))] }}
 
     # 🔴 --timeout IS SECONDS OF WALL CLOCK, and it did not used to be.
     #
