@@ -48,6 +48,68 @@ global:
 runLauncher:
   type: K8sRunLauncher                 # one ephemeral pod per run
 
+  # 🔴 RUN PODS HAD NO FLOOR OF THEIR OWN AND INHERITED THE CODE LOCATION'S.
+  #
+  # The code-location default is 100m / 384Mi, sized from ITS measurement: a
+  # long-lived pod peaking at 300 MiB. The chart propagates a user deployment's
+  # resources to the run pods it launches, so the ephemeral pods that do the
+  # actual work were scheduled against a number measured on a different pod
+  # doing a different thing.
+  #
+  # imac measured four run pods from inside them — `memory.peak` and `cpu.stat`
+  # out of the pods' own cgroup, attributed by the `dagster/job` label, by an
+  # unattended watcher that launched nothing:
+  #
+  #     ASSET_JOB (ingest)   590 MiB   ~628m CPU averaged over a 40 s run
+  #     ASSET_JOB            551 MiB
+  #     brreg_transform      558 MiB
+  #     brreg_transform      556 MiB
+  #     request              384Mi     100m
+  #
+  # 45-54% over on memory; 528% over on CPU, and that is the AVERAGE rather
+  # than a peak. 556 reproduced as 558 on independent runs of the same job, so
+  # these are stable figures rather than one sample (ops-dev, #1010).
+  #
+  # ⚠️ MEMORY: 768Mi is 590 MiB plus ~28%, the same rule the code-location
+  # default already states — a sampled figure is a reliable floor and a probable
+  # peak, not a ceiling. And 590 MiB is the largest MEASURED, not the maximum:
+  # `transform_and_publish` is unmeasured and `brreg_bootstrap` (210 MB gzip,
+  # 1.17M rows) has never been watched.
+  #
+  # 🔴 CPU IS DELIBERATELY *NOT* THE MEASURED 628m, AND THIS IS THE REASON.
+  #
+  # A request is not free here, because `concurrency.runs.maxConcurrentRuns`
+  # below is 4 — so whatever is requested is reserved FOUR TIMES over before
+  # the scheduler will place the fourth pod. At 628m that is 2.5 cores of
+  # reservation on a profile whose target is a laptop, and a pod that cannot be
+  # SCHEDULED is a worse failure than one that bursts above its request: the
+  # first looks like a hang with no explanation, the second is what requests are
+  # for. CPU is compressible; bursting over a request is the intended behaviour,
+  # not a fault.
+  #
+  # 350m is 3.5x the old floor and 1.4 cores at full concurrency. If the
+  # concurrency cap rises, this number has to be revisited with it — that
+  # coupling is the thing to remember about both.
+  #
+  # 🔴 NO LIMITS, AND THE TWO HALVES ARE DECIDED DIFFERENTLY.
+  #
+  # Memory limit: BLOCKED, not declined. `brreg_bootstrap` is the job an
+  # operator runs FIRST and the one most likely to exceed anything chosen from
+  # today's numbers. A limit set from 590 MiB could turn it into an OOM kill on
+  # a new operator's first action — the fix creating the failure. It waits on a
+  # bootstrap measurement.
+  #
+  # CPU limit: DECIDED AGAINST. A CPU limit does not fail, it THROTTLES —
+  # slower, with no error and nothing to attribute it to. That converts a
+  # resourcing problem into a mysterious performance problem, which is the
+  # silent-degradation shape this platform keeps removing rather than adding.
+  config:
+    k8sRunLauncher:
+      resources:
+        requests:
+          cpu: 350m
+          memory: 768Mi
+
 # ⚠️ CONCURRENCY CAP — platform policy, deliberately NOT tenant code.
 #
 # A tenant with 41 data sources fanning out at once would hammer the shared
@@ -57,6 +119,12 @@ runLauncher:
 #
 # 4 is conservative on purpose and fits the laptop profile. Raise it on evidence
 # from real materialisations, not on request.
+#
+# ⚠️ AND IT IS COUPLED TO THE RUN-POD REQUEST ABOVE. Whatever a run pod requests
+# is reserved this many times over before the last one can be scheduled, so
+# raising this multiplies the reservation. 4 x 350m / 768Mi is 1.4 cores and
+# 3 GiB. Raising either number without looking at the other is how pods become
+# unschedulable, which reads as a hang rather than as a resourcing decision.
 concurrency:
   enabled: true
   runs:
