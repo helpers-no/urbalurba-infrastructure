@@ -35,7 +35,12 @@ else
     echo ""; echo "  Passed: $PASS  Failed: $FAIL"; exit 1
 fi
 
-_q() { AUTO_RUNNING="$1"; AUTO_TOTAL="$2"; QOUT="$(_check_qualify_by_automation "$3" 2>&1)"; QRC=$?; }
+# ⚠️ The qualifier BUILDS text now rather than printing it, so the caller can
+# put a retraction above the verdict it retracts. The harness reads the
+# variables rather than captured output — and it must not run the function in a
+# subshell, which is how this test file lost its globals once already.
+_q() { AUTO_RUNNING="$1"; AUTO_TOTAL="$2"; AUTO_STOPPED_NAMES="${4:-}"
+       _check_qualify_by_automation "$3"; QOUT="$QUALIFY_TEXT"; QRC="$QUALIFY_RC"; }
 
 # ── 🔴 THE REPORTED DEFECT ───────────────────────────────────────────────────
 _q 0 5 healthy
@@ -79,11 +84,36 @@ fi
 # stopped instigator is the one this check's claim depended on — only the
 # application knows which one its own sentence refers to. Guessing would invent
 # a new false alarm to replace the false all-clear.
-_q 3 5 healthy
-if [[ "$QRC" == "0" && "$QOUT" == *"3 of 5"* && "$QOUT" == *"cannot tell which instigator"* ]]; then
+_q 4 5 healthy brreg_transform_half_hourly
+if [[ "$QRC" == "0" && "$QOUT" == *"4 of 5"* && "$QOUT" == *"cannot tell which instigator"* ]]; then
     pass "🔴 PARTIAL automation qualifies the output and does NOT change the verdict"
 else
     fail "🔴 partial automation does not change the verdict" "rc=$QRC out=$QOUT"
+fi
+
+# 🔴 THE PARTIAL CASE IS QUIETER, NOT MILDER. "4 RUNNING, 1 STOPPED" reads as
+# mostly fine, and the stopped one is precisely the one backing the false
+# sentence — so it survives a glance at BOTH commands (imac via ops-dev, #1046).
+# UIS still cannot claim which instigator matters, but the NAMES are a fact it
+# owns, and printing them lets the reader make the connection.
+if [[ "$QOUT" == *"stopped: brreg_transform_half_hourly"* ]]; then
+    pass "🔴 the STOPPED instigators are named, not just counted"
+else
+    fail "🔴 the stopped instigators are named" \
+         "a bare count reads as mostly fine: $QOUT"
+fi
+
+if [[ "$QOUT" == *"may be the one that matters"* && "$QOUT" == *"reads as mostly fine"* ]]; then
+    pass "⚠️ and the text says a count alone is what reads as mostly fine"
+else
+    fail "⚠️ it says why a count alone misleads" "out=$QOUT"
+fi
+
+_q 0 5 healthy "a, b, c, d, e"
+if [[ "$QOUT" == *"stopped: a, b, c, d, e"* ]]; then
+    pass "the total case names them too"
+else
+    fail "the total case names them too" "out=$QOUT"
 fi
 
 _q 5 5 healthy
@@ -104,8 +134,11 @@ fi
 
 # 🔴 COULD NOT LOOK IS NOT ZERO RUNNING. Rendering an unreadable state as
 # "nothing is running" would be the defect this project has paid for repeatedly.
-AUTO_RUNNING=""; AUTO_TOTAL=""
-QOUT="$(_check_qualify_by_automation healthy 2>&1)"; QRC=$?
+# ⚠️ Through the same helper as every other case. The first version of this
+# block still captured stdout in a subshell — the pattern that broke when the
+# qualifier stopped printing — so it read empty and failed a correct function.
+# Two assertions, same cause, caught by running it.
+_q "" "" healthy
 if [[ "$QRC" == "0" && "$QOUT" == *"Could not read"* && "$QOUT" != *"NOTHING IS RUNNING"* ]]; then
     pass "🔴 an unreadable automation state says 'could not look', not 'nothing is running'"
 else
@@ -142,6 +175,39 @@ if grep -q 'AUTO_RUNNING=""' <<<"$_st" && grep -qE 'return 1' <<<"$_st"; then
 else
     fail "⚠️ the reader returns failure when it cannot look" \
          "setting 0 on a failed read is how 'unreachable' becomes 'nothing is running'"
+fi
+
+# ── 🔴 THE RETRACTION PRINTS BEFORE THE VERDICT IT RETRACTS ─────────────────
+# "atlas reported success" used to print ABOVE "NOTHING IS RUNNING". The exit
+# code was right and the retraction unmissable if read — but a reader skimming
+# top-down met "reported success" first, on a command whose whole job is not to
+# mislead at a glance (imac via ops-dev, #1046). The order was structural, so
+# the structure changed: the qualifier builds text and the caller places it.
+_hb="$(sed -n '/^        healthy)/,/^        unhealthy)/p' "$LIB" | grep -v '^[[:space:]]*#')"
+# ⚠️ ANCHORED ON A STRING THAT OCCURS EXACTLY ONCE. The first version ordered
+# on `QUALIFY_TEXT`, which appears FOUR times in this branch — one of them in a
+# condition that stays above the success line whatever the emission order does.
+# So moving the call below the verdict left the assertion green. Token counts
+# checked before relying on position; sixth pattern-versus-target mismatch today
+# and the first where the pattern matched too MANY places.
+_qual_n="$(grep -c 'Below is what the application itself reported' <<<"$_hb")"
+_succ_n="$(grep -c 'reported success' <<<"$_hb")"
+_qual_line="$(grep -n 'Below is what the application itself reported' <<<"$_hb" | head -1 | cut -d: -f1)"
+_succ_line="$(grep -n 'reported success' <<<"$_hb" | head -1 | cut -d: -f1)"
+if [[ "$_qual_n" == "1" && "$_succ_n" == "1" && "$_qual_line" -lt "$_succ_line" ]]; then
+    pass "🔴 the retraction is emitted BEFORE the relayed success line"
+else
+    fail "🔴 the retraction precedes the relayed success line" \
+         "retraction at ${_qual_line:-none} (x$_qual_n), success at ${_succ_line:-none} (x$_succ_n)"
+fi
+
+# ⚠️ But a caveat that does NOT retract belongs AFTER the verdict — it is a
+# caveat, not a correction, and leading with it would be the false alarm.
+if grep -q 'QUALIFY_RC" -ne 2' <<<"$_hb"; then
+    pass "⚠️ a non-retracting caveat still prints after the verdict"
+else
+    fail "⚠️ a non-retracting caveat prints after the verdict" \
+         "leading with every caveat makes the normal path read as a problem"
 fi
 
 # ── a narrow verdict must not be relayed as a broad one ─────────────────────
