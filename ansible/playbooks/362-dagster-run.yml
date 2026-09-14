@@ -44,6 +44,49 @@
     # 5-minute ceiling would have failed a healthy run. This bounds "something is
     # actually wrong", not "this is taking a while".
     _timeout: "{{ (timeout | default(3600)) | int }}"
+    # 🔴 THE LAUNCH CALL HAD A 60-SECOND BUDGET AND NEEDS MINUTES.
+    #
+    # imac measured it: `launchPipelineExecution` returned in 0.5 s for
+    # api_v1_checks and had NOT returned after 300 s for transform_checks — 600x
+    # apart, with a hardcoded `curl -m 60` between them (ops-dev,
+    # urb-agents#1068). Every symptom on #1052 falls out of that one number:
+    #
+    #   curl -m 60 expires -> pod phase Failed, EMPTY body
+    #                      -> "a run MAY have been launched"  (correct, and it
+    #                         was NOT a reporting defect — 1.6.101/1.6.103 were
+    #                         right and could never have fixed this)
+    #   call cut mid-flight -> Dagster holds a run it never submitted
+    #                      -> NOT_STARTED, one orphan per attempt
+    #
+    # ⚠️ WHY the call is slow is imac's guess (679 asset checks, plan
+    # resolution) and is carried as a guess. UIS's job is not to be cut off
+    # mid-launch.
+    #
+    # 🔵 AND THE BUDGET IS NOT INVENTED. 900 s is the number this platform
+    # already chose for this same tenant's plan size: `startTimeoutSeconds: 900`
+    # in manifests/360-dagster-config.yaml, raised because a 711-event plan died
+    # with START_TIMEOUT before its pod existed. Same cause, same patience.
+    #
+    # ⚠️ Capped at the operator's own `--timeout` so a smaller deadline is
+    # honoured rather than silently overridden — someone who says "give up after
+    # 30 s" means it.
+    #
+    # ⚠️ Blocking for minutes IS the answer here, not a workaround. The
+    # alternative is returning before Dagster has submitted the run, which is
+    # exactly what produced the orphan.
+    _launch_budget: "{{ [(_timeout | int), 900] | min }}"
+    # ⚠️ A SEPARATE VAR WITH EXPLICIT PARENTHESES, not `| int + 5` inline.
+    # Jinja binds filters tighter than arithmetic, so `x | int + 5` is *probably*
+    # `(x|int) + 5` — and "probably" is not good enough for a number that decides
+    # whether a pod is allowed to finish before its logs are read. There is no
+    # Ansible on this host to settle it, so the expression is written so it
+    # cannot be misparsed instead of assuming which way it parses.
+    #
+    # 🔵 It must EXCEED the curl budget: the loop sleeps 2 s per iteration, so
+    # ((budget + 1) / 2) + 5 iterations is always more than `budget` seconds.
+    # That ordering is the whole point — the previous code read logs from a pod
+    # that had not finished.
+    _launch_polls: "{{ ((((_launch_budget | int) + 1) // 2) + 5) | int }}"
     probe: "dagrun-probe-{{ 999999 | random }}"
 
   tasks:
@@ -139,11 +182,15 @@
         set -e
         kubectl run {{ probe }}-l --image=curlimages/curl --restart=Never \
           -n {{ dagster_ns }} --context {{ _target }} --kubeconfig {{ merged_kubeconf_file }} \
-          --command -- curl -s -m 60 -X POST \
+          --command -- curl -s -m {{ _launch_budget }} -X POST \
           -H 'Content-Type: application/json' \
           -d '{"query":"mutation($e:ExecutionParams!){ launchPipelineExecution(executionParams:$e){ __typename ... on LaunchRunSuccess { run { runId status } } ... on PythonError { message } ... on InvalidSubsetError { message } } }","variables":{"e":{"selector":{"repositoryLocationName":"{{ _sel_loc }}","repositoryName":"{{ _sel_repo }}","jobName":"{{ _job }}"},"mode":"default"}}}' \
           http://dagster-dagster-webserver:80/graphql >/dev/null
-        for i in $(seq 1 60); do
+        # 🔴 THE SECOND HARDCODED BUDGET, and raising the curl alone would not
+        # have helped: this loop gave up after 60 x 2 s = 120 s and then read
+        # logs from a pod that had not finished, which returns nothing. Two
+        # independent caps, either of which cuts the launch off.
+        for i in $(seq 1 {{ _launch_polls }}); do
           phase=$(kubectl get pod {{ probe }}-l -n {{ dagster_ns }} --context {{ _target }} \
             --kubeconfig {{ merged_kubeconf_file }} -o jsonpath='{.status.phase}' 2>/dev/null)
           { [ "$phase" = "Succeeded" ] || [ "$phase" = "Failed" ]; } && break
@@ -197,6 +244,15 @@
           failed". The probe pod's phase was
           {{ (_launch.stderr | default('') | regex_search('UIS_LAUNCH_PHASE=(\S+)', '\1') | first) | default('unknown') }},
           and reading logs from a pod that has not finished returns nothing.
+
+          🔵 THE MEASURED CAUSE, if the phase above is Failed: the call ran out
+          of time. This waited {{ _launch_budget }}s. `launchPipelineExecution`
+          returns in under a second for a small job and had not returned after
+          300 s for a large one, and a call cut off mid-flight leaves Dagster
+          holding a run it never submitted — which then sits at NOT_STARTED
+          forever. So a previous attempt may have left exactly such a run.
+          Raise the deadline rather than retrying at the same one:
+            ./uis dagster run {{ _job }} --wait --timeout 1800
 
           🔴 DO NOT RUN THIS AGAIN WITHOUT LOOKING. Launching is a side effect;
           a second attempt adds a second concurrent run of the same job. Check
@@ -277,9 +333,12 @@
           {{ ["Launched " ~ _job ~ "  run " ~ _run_id,
               "Dagster reports this run as: " ~ _launch_status]
            + (["⚠️  NOT_STARTED means the run was CREATED and not submitted — it",
-               "    is not queued and nothing is executing it. That is a run",
-               "    coordinator condition, not a launch failure, and UIS is",
-               "    reporting it rather than diagnosing it.",
+               "    is not queued and nothing is executing it.",
+               "    🔵 MEASURED CAUSE: a launch call cut off mid-flight leaves",
+               "        Dagster holding an unsubmitted run. This one had",
+               "        " ~ _launch_budget ~ "s and the id came back, so if it stays",
+               "        NOT_STARTED the submission is what did not complete.",
+               "        An orphan like this never starts and is not retried.",
                "    ./uis dagster run " ~ _job ~ " --wait   watches it, and fails on a deadline",
                "    ./uis template progress <app>            what else is running"]
               if _launch_status == 'NOT_STARTED' else [])

@@ -169,11 +169,28 @@ fi
 # rather than diagnosing it", so 'not diagnosing it' matched nothing and failed
 # a correct message. Eighth pattern-versus-target mismatch today — and the first
 # where I had written the sentence myself minutes earlier.
-if grep -qF 'rather than diagnosing it' <<<"$_msg"; then
-    pass "⚠️ and it says UIS is reporting the condition, not diagnosing it"
+# 🔵 REPLACED, NOT DELETED. This asserted that the message claims no cause,
+# which was right while no cause was known. imac has since MEASURED it — a
+# launch cut off mid-flight leaves an unsubmitted run — so the message now names
+# that, and the assertion would otherwise enforce a weaker truth than the world
+# has. Third time today an assertion was correct about the file and wrong about
+# the world; replacing beats deleting, because a deleted control and a satisfied
+# one look identical.
+#
+# ⚠️ THE LINE IS BETWEEN THE TWO CAUSES. Why the run is unsubmitted is
+# measured. WHY THE CALL IS SLOW is imac's guess — 679 asset checks, plan
+# resolution — and is labelled a guess, so the product must not assert it.
+if grep -qF 'MEASURED CAUSE' <<<"$_msg"; then
+    pass "🔵 it names the measured cause of an unsubmitted run"
 else
-    fail "⚠️ it does not claim a cause" \
-         "the coordinator condition is not established from here and must not be asserted"
+    fail "🔵 it names the measured cause" "the mechanism is established and withholding it helps nobody"
+fi
+
+if ! grep -qiE 'asset check|plan resolution' <<<"$_msg"; then
+    pass "⚠️ and still does NOT assert why the call is slow — that remains a guess"
+else
+    fail "⚠️ it does not assert the unestablished half" \
+         "679 asset checks is imac's labelled guess; the product must not print it as fact"
 fi
 
 # 🔴 UNREADABLE IS ITS OWN VALUE. Collapsing it into a status would make an
@@ -190,6 +207,113 @@ if grep -q 'do not launch it again' <<<"$_msg"; then
 else
     fail "an unreadable status says the run was created" \
          "the id came back from Dagster; a relaunch would double the work"
+fi
+
+# ── the launch must not be cut off mid-flight ───────────────────────────────
+# 🔴 THE MEASURED CAUSE OF EVERYTHING ON #1052. imac timed it:
+# `launchPipelineExecution` returned in 0.5 s for api_v1_checks and had NOT
+# returned after 300 s for transform_checks — 600x apart, against a hardcoded
+# `curl -m 60`. A call cut off mid-flight leaves Dagster holding a run it never
+# submitted, which then sits at NOT_STARTED forever (ops-dev, #1068).
+#
+# 🔵 So the reporting fixes were right and could never have fixed it. This is
+# the cause; those were the symptom described honestly.
+if ! grep -qE 'curl -s -m 60 -X POST' <<<"$pb"; then
+    pass "🔴 the launch no longer has a hardcoded 60-second budget"
+else
+    fail "🔴 the launch has no hardcoded 60s budget" \
+         "0.5 s for one job and >300 s for another, with 60 s between them"
+fi
+
+if grep -q 'curl -s -m {{ _launch_budget }}' <<<"$pb"; then
+    pass "the budget comes from a variable, not a literal"
+else
+    fail "the budget comes from a variable" "a literal cannot follow the operator's deadline"
+fi
+
+# ⚠️ THE SECOND HARDCODED CAP. Raising the curl alone would not have helped:
+# the pod-wait loop gave up after 60 x 2 s = 120 s and then read logs from a pod
+# that had not finished, which returns nothing.
+if ! grep -qE 'for i in \$\(seq 1 60\); do' <<<"$pb"; then
+    pass "⚠️ the pod-wait loop is no longer capped at 120s either"
+else
+    fail "⚠️ the pod-wait loop is not separately capped" \
+         "two independent caps, either of which cuts the launch off"
+fi
+
+# 🔴 AND THE POLL WINDOW MUST EXCEED THE CURL BUDGET, or the pod is still
+# running when its logs are read — which is the empty body.
+_vars="$(sed -n '/^  vars:/,/^  tasks:/p' "$PB")"
+if grep -q '_launch_polls' <<<"$_vars" && grep -q '_launch_budget' <<<"$_vars"; then
+    pass "🔴 the poll count is derived from the budget, in one place"
+else
+    fail "🔴 the poll count is derived from the budget" \
+         "two numbers that must agree, computed apart, will not agree for long"
+fi
+
+# ⚠️ THE DIVISOR AND OFFSET ARE READ OUT OF THE PLAYBOOK, not retyped here.
+#
+# 🔴 The first version recomputed the invariant with its OWN formula — so it
+# proved that MY arithmetic was sound and said nothing about the playbook's.
+# Changing the playbook to `// 4`, which halves the poll window, left it green.
+# That is the same defect as asserting a port against a file I also wrote:
+# a test of a copy of the logic is not a test of the logic.
+# ⚠️ ALL THREE NUMBERS, and the extraction was checked against the real line
+# before being written here. A first attempt matched the INNER `+ 1` as the
+# offset and a second matched nothing at all — so the positions are taken
+# explicitly: first `+ N` is the inner term, last is the outer, and `// N` is
+# the divisor.
+_pollexpr="$(grep -F '_launch_polls:' "$PB")"
+_pluses="$(grep -oE '\+ [0-9]+' <<<"$_pollexpr" | grep -oE '[0-9]+')"
+_inner="$(head -1 <<<"$_pluses")"
+_outer="$(tail -1 <<<"$_pluses")"
+_div="$(grep -oE '// [0-9]+' <<<"$_pollexpr" | grep -oE '[0-9]+' | head -1)"
+_bad=""
+if [[ -z "$_div" || -z "$_inner" || -z "$_outer" || "$_inner" == "$_outer" ]]; then
+    _bad="could not read three distinct numbers out of: $_pollexpr"
+else
+    for _t in 3600 900 300 61 30 2 1; do
+        _b=$(( _t < 900 ? _t : 900 ))
+        _p=$(( ((_b + _inner) / _div) + _outer ))
+        (( _p * 2 > _b )) || _bad+="timeout=$_t (polls=$_p covers $((_p*2))s vs budget ${_b}s) "
+    done
+fi
+if [[ -z "$_bad" ]]; then
+    pass "⚠️ poll window exceeds the curl budget for every deadline (+$_inner ÷$_div +$_outer, read from the playbook)"
+else
+    fail "⚠️ poll window exceeds the curl budget" "fails at: ${_bad% }"
+fi
+
+# 🔵 The 900s cap is not invented — it is the number this platform already chose
+# for this tenant's plan size, and the file has to say so or the next reader
+# treats it as arbitrary.
+if grep -q 'startTimeoutSeconds: 900' "$PB"; then
+    pass "🔵 the cap cites the existing 900s precedent rather than asserting a number"
+else
+    fail "🔵 the cap cites its precedent" \
+         "an unexplained timeout is the next thing someone raises without asking why"
+fi
+
+# ⚠️ And a smaller operator deadline must still win.
+if grep -qF "[(_timeout | int), 900] | min" <<<"$_vars"; then
+    pass "⚠️ a smaller --timeout is honoured, not silently overridden"
+else
+    fail "⚠️ a smaller --timeout is honoured" "someone who says 'give up after 30s' means it"
+fi
+
+# 🔴 Now that the cause is measured, the NOT_STARTED message names it — and says
+# the orphan never starts, which changes what the operator should do.
+if grep -q 'MEASURED CAUSE' <<<"$pb"; then
+    pass "🔴 the messages attribute the measured cause, now that there is one"
+else
+    fail "🔴 the messages attribute the cause" \
+         "1.6.103 correctly refused to guess; the guess is now a measurement"
+fi
+
+if grep -q 'never starts and is not retried' <<<"$pb"; then
+    pass "and says an orphaned run never starts on its own"
+else
+    fail "it says an orphan never starts" "an operator who waits for it waits forever"
 fi
 
 echo ""
