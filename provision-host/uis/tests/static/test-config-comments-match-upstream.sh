@@ -91,80 +91,75 @@ else
     fail "the concurrency cap still explains why" "the reason is what stops it being raised on request"
 fi
 
-# ── the run pods have a floor of their own ──────────────────────────────────
-# 🔴 THEY USED TO INHERIT THE CODE LOCATION'S. The chart propagates a user
-# deployment's resources to the run pods it launches, so the ephemeral pods
-# doing the work were scheduled against 384Mi/100m — a number measured on a
-# long-lived pod peaking at 300 MiB. imac measured four run pods from inside
-# their own cgroups: 590 MiB and ~628m average, 45-54% and 528% over
-# (ops-dev, urb-agents#1010).
-_rl="$(sed -n '/^runLauncher:/,/^[a-z]/p' "$CFG" | grep -v '^[[:space:]]*#')"
-
-if grep -q 'k8sRunLauncher' <<<"$_rl" && grep -q 'requests' <<<"$_rl"; then
-    pass "🔴 run pods have their own requests, not the code location's"
-else
-    fail "🔴 run pods have their own requests" \
-         "inheriting a floor measured on a different pod doing a different thing"
-fi
-
-# 🔴 THE CEILING MOVES. 768Mi was sized from 590 MiB and was 119 MiB UNDER the
-# peak before it merged — api_v1_checks measured 887 MiB, the third "biggest
-# job" of one morning (#1010). So this asserts against the highest figure
-# measured to date, and it is expected to be raised again.
+# ── the run-pod resources block was INERT, and must not come back ───────────
+# 🔴 REPLACES five assertions that checked the CONTENT of a setting which turned
+# out to have no effect. 1.6.92 added `config.k8sRunLauncher.resources`, 1.6.93
+# raised it to 1Gi, and imac then read the live object: run pods were created
+# with the CODE-LOCATION default of 384Mi (ops-dev, urb-agents#1026).
 #
-# ⚠️ Accepts Mi or Gi, because writing the number as 1Gi is what broke the first
-# version of this assertion — a pattern that matches only one unit silently
-# stops checking when someone changes units.
-_memraw="$(grep -oE 'memory: *[0-9]+(Mi|Gi)' <<<"$_rl" | head -1)"
-_memnum="$(grep -oE '[0-9]+' <<<"$_memraw" | head -1)"
-if [[ "$_memraw" == *Gi ]]; then _mem=$(( _memnum * 1024 )); else _mem="$_memnum"; fi
-if [[ -n "$_mem" && "$_mem" -ge 887 ]]; then
-    pass "the memory request covers the largest MEASURED peak (887 MiB)"
+# ⚠️ Those assertions were not wrong about the file. They were wrong about the
+# world, and they passed the whole time. Replaced rather than deleted, because a
+# deleted control and a satisfied control look identical in a green run.
+#
+# 🔵 Why it is inert, from chart dagster-1.13.19 rather than inferred:
+# `includeConfigInLaunchedRuns` defaults true, which puts the deployment's whole
+# container context — INCLUDING `resources` — on
+# DAGSTER_CLI_API_GRPC_CONTAINER_CONTEXT; the chart calls the run launcher's own
+# value a "Default". The code location's context is merged over it and wins.
+_rl_code="$(sed -n '/^runLauncher:/,/^[a-z]/p' "$CFG" | grep -v '^[[:space:]]*#')"
+
+if ! grep -q 'k8sRunLauncher' <<<"$_rl_code"; then
+    pass "🔴 no inert run-launcher resources block — it never reached run pods"
 else
-    fail "the memory request covers the largest measured peak" \
-         "got ${_mem:-<none>}Mi against 887 MiB measured — below the peak means always above the request, which is the first thing evicted"
+    fail "🔴 no inert run-launcher resources block" \
+         "a setting that looks like it sizes run pods and does not is worse than none: the next person sizes it and measures nothing"
 fi
 
-# ⚠️ And memory is INCOMPRESSIBLE, so the argument that talked CPU down from its
-# measured figure must not be reused here. The file has to say so, because the
-# two sit four lines apart and read as symmetric.
-if grep -qi 'incompressible' "$CFG"; then
-    pass "⚠️ the file states why the CPU argument does not transfer to memory"
+# ⚠️ AND THE FILE MUST SAY WHY, or the next reader re-adds it for the same
+# reason it was added the first time.
+if grep -q 'includeConfigInLaunchedRuns' "$CFG"; then
+    pass "⚠️ the file records the mechanism that makes it inert"
 else
-    fail "⚠️ the file states why the CPU argument does not transfer to memory" \
-         "'bursting over a request is intended' is true of CPU and false of memory"
+    fail "⚠️ the file records the mechanism" "removal without the reason invites the re-add"
 fi
 
-# 🔴 NO LIMITS. The memory limit is BLOCKED on a bootstrap measurement:
-# brreg_bootstrap is the job an operator runs FIRST and the one most likely to
-# exceed anything chosen from today's numbers, so a limit from 590 MiB could
-# turn it into an OOM kill on a new operator's first action. The CPU limit is
-# DECIDED AGAINST: it throttles rather than fails, converting a resourcing
-# problem into a mysterious performance problem.
-if ! grep -q 'limits' <<<"$_rl"; then
-    pass "🔴 no run-pod limits — a sampled figure is a floor, never a ceiling"
+if grep -q 'PRECEDENCE against the container context is NOT' "$CFG"; then
+    pass "🔵 and names the lever whose precedence it has NOT established, rather than using it"
 else
-    fail "🔴 no run-pod limits" \
-         "a memory limit set from a sample that excludes the largest workload is a kill threshold"
+    fail "🔵 it names what is not established" \
+         "guessing a precedence is how the inert block came to exist"
 fi
 
-# ⚠️ THE REQUEST IS MULTIPLIED BY THE CONCURRENCY CAP, and that coupling is the
-# thing a future reader will not know. A pod that cannot be SCHEDULED reads as a
-# hang; one that bursts above its request is requests working as intended.
-_cpu="$(grep -oE 'cpu: *[0-9]+m' <<<"$_rl" | grep -oE '[0-9]+' | head -1)"
-_cap="$(grep -oE 'maxConcurrentRuns: *[0-9]+' "$CFG" | grep -oE '[0-9]+' | head -1)"
-if [[ -n "$_cpu" && -n "$_cap" ]] && (( _cpu * _cap <= 2000 )); then
-    pass "⚠️ cpu request x maxConcurrentRuns ($_cpu m x $_cap) still fits a laptop profile"
+# 🔴 `includeConfigInLaunchedRuns: false` would make the run launcher's value
+# win — and stop the code location's env reaching run pods, which is the defect
+# where a check's variable never arrived (#957).
+# ⚠️ Pattern verified against the file's actual bytes BEFORE being written into
+# the assertion. The first version required the phrase and the flag name on one
+# line, which backticks around the flag broke, and its fallback was lowercase
+# where the file is uppercase — so it matched nothing and failed a correct file.
+# That is the fifth pattern-versus-target mismatch of the day.
+if grep -q 'env_secrets' "$CFG" && grep -qF 'IS NOT AN OPTION' "$CFG"; then
+    pass "🔴 it records why disabling that flag is not the way out"
 else
-    fail "⚠️ cpu request x maxConcurrentRuns fits a laptop profile" \
-         "${_cpu:-?}m x ${_cap:-?} reserves more than 2 cores before the last pod can be placed"
+    fail "🔴 it records why disabling the flag is not the way out" \
+         "turning it off would break the env delivery the memory argument was in service of"
 fi
 
-if grep -qi 'coupled to the run-pod request' "$CFG"; then
-    pass "and the concurrency cap says it is coupled to that request"
+# ⚠️ The concurrency cap is platform policy and must survive an edit to the
+# block above it — a first version of this change deleted it along with the
+# inert resources, and the test caught that.
+if grep -qE '^\s+maxConcurrentRuns: [0-9]+' "$CFG"; then
+    pass "⚠️ the concurrency cap is still set — it is policy, not part of the removal"
 else
-    fail "the concurrency cap says it is coupled to that request" \
-         "raising one without the other is how pods become unschedulable"
+    fail "⚠️ the concurrency cap is still set" "removing the inert block took platform policy with it"
+fi
+
+# 🔵 And its coupling note now points at the lever that actually applies.
+if grep -q "COUPLED TO THE CODE LOCATION'S" "$CFG"; then
+    pass "🔵 the coupling note points at the code location, not at this file"
+else
+    fail "🔵 the coupling note points at the real lever" \
+         "pointing at a setting that does nothing is the same defect one layer up"
 fi
 
 echo ""

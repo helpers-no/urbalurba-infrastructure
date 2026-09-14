@@ -48,107 +48,67 @@ global:
 runLauncher:
   type: K8sRunLauncher                 # one ephemeral pod per run
 
-  # 🔴 RUN PODS HAD NO FLOOR OF THEIR OWN AND INHERITED THE CODE LOCATION'S.
+  # 🔴 A RUN-POD `resources` BLOCK HERE IS INERT, AND 1.6.92/93 SHIPPED ONE.
   #
-  # The code-location default is 100m / 384Mi, sized from ITS measurement: a
-  # long-lived pod peaking at 300 MiB. The chart propagates a user deployment's
-  # resources to the run pods it launches, so the ephemeral pods that do the
-  # actual work were scheduled against a number measured on a different pod
-  # doing a different thing.
+  # 1.6.92 added `config.k8sRunLauncher.resources` to give run pods a floor of
+  # their own, and 1.6.93 raised it to 1Gi. imac then read the live object on a
+  # 1.6.93 host: run pods were created with `requests: {cpu: 100m, memory:
+  # 384Mi}` — the CODE-LOCATION default — and no limit. The change shipped and
+  # never reached the path that creates run pods (ops-dev, urb-agents#1026).
   #
-  # imac measured run pods from inside them — `memory.peak` and `cpu.stat` out
-  # of the pods' own cgroup, attributed by the `dagster/job` label, by an
-  # unattended watcher that launched nothing:
+  # ⚠️ SO EVERY SIZING FIGURE ARGUED THAT DAY WAS ARGUED AGAINST A REQUEST THAT
+  # WAS NEVER APPLIED.
   #
-  #     api_v1_checks        887 MiB   ~805m CPU over a 41 s run   <- the ceiling
-  #     ASSET_JOB (ingest)   590 MiB   ~628m over 40 s
-  #     transform_checks     559 MiB   ~341m over 359 s
-  #     brreg_transform      558 / 556 MiB
-  #     request              384Mi     100m
+  # 🔵 WHY, read out of chart dagster-1.13.19 rather than inferred:
   #
-  # 🔴 THE CEILING MOVED THREE TIMES IN ONE MORNING, each figure true when it
-  # was stated. The first version of this block sized 768Mi from 590 MiB and was
-  # 119 MiB UNDER the peak before it merged. imac's conclusion is the useful
-  # one: "a ceiling taken from the largest single job anyone has measured has
-  # moved every single time a new job ran."
+  #   values.yaml, on this very key:
+  #     "Default compute resource requirements for the container in the Job's
+  #      Pod."  -> a DEFAULT, not the final word.
   #
-  # ⚠️ SO THE NEXT REVISION OF THIS NUMBER COMES FROM A CASCADE WINDOW, not from
-  # whichever single job is currently the biggest. That is imac's method and it
-  # is recorded here so this file stops inviting the same mistake.
+  #   dagster-user-deployments values.yaml:
+  #     includeConfigInLaunchedRuns.enabled: true    <- the chart's default
   #
-  # ⚠️ Every figure is "at least": `api_v1_checks` got 5 samples in 41 s against
-  # ~13 expected. `memory.peak` is a kernel HIGH-WATER MARK and monotonic, so
-  # the reading is a true peak for the window watched — the sampling gaps affect
-  # WHICH JOBS were seen, not whether a watched pod's peak was captured.
+  #   charts/dagster-user-deployments/templates/deployment-user.yaml:78
+  #     when that is enabled, the deployment's whole container context is set on
+  #     DAGSTER_CLI_API_GRPC_CONTAINER_CONTEXT
   #
-  # ⚠️ MEMORY: 1Gi, chosen against 887 MiB rather than 590.
+  #   .../templates/helpers/_helpers.tpl:179
+  #     and that context includes `resources:` — the CODE LOCATION's.
   #
-  # The code-location default adds ~28% to its figure because that came from
-  # metrics-server, which resamples on the order of tens of seconds and gives a
-  # probable peak. This figure comes from the kernel's own high-water mark, so
-  # the same multiplier is not needed for the same reason — 1Gi is ~15% over a
-  # measured ceiling rather than ~28% over a sampled guess. Different
-  # instrument, different margin.
+  # The run launcher's value is the default; the code location's context is
+  # merged over it. The code location wins. imac's measurement and the chart's
+  # own comment agree, which is why this is stated rather than suspected.
   #
-  # 🔴 AND HERE IS HOW THE CONCURRENCY TRADE RESOLVES ON THIS AXIS, because it
-  # does not resolve the way it did for CPU.
+  # 🔴 THE BLOCK IS REMOVED RATHER THAN CORRECTED. A setting that looks like it
+  # sizes run pods and does not is worse than no setting: the next person sizes
+  # it, measures nothing, and argues about numbers against a request that was
+  # never applied. That already happened once here.
   #
-  # 4 x 1Gi is 4 GiB reserved before the fourth run pod can be placed, which is
-  # a lot on a laptop profile — the same arithmetic that argued CPU down from
-  # 628m. But the escape used there is NOT available here: "bursting over a
-  # request is what requests are for" is true of CPU, which is compressible, and
-  # false of memory, which is not. An under-requested memory pod does not burst;
-  # it is BY CONSTRUCTION always above its request while doing normal work,
-  # which is precisely what makes it the preferred eviction candidate under node
-  # pressure — and with no limit set, the eviction need not land on the offender.
+  # ⚠️ WHAT THE LEVERS ACTUALLY ARE, AND WHAT IS NOT ESTABLISHED:
   #
-  # 🔵 So the request covers the measured peak, and the lever for the 4x problem
-  # is `maxConcurrentRuns` below — NOT a request that pretends the pods are
-  # smaller than they are. Under-requesting to fit four of them in is the exact
-  # defect this block was written to fix, one level up.
+  #   the code location's own `resources` (360-setup-dagster.yml) — ONE number
+  #     for both pod classes, because the chart deliberately shares one
+  #     container context between the code-location pod and the runs it
+  #     launches. This is the platform lever that demonstrably works.
   #
-  # ⚠️ That cap is deliberately NOT changed here: it is platform policy with its
-  # own reasoning, it is additive with a tenant's own ingest concurrency, and
-  # lowering it trades throughput for placement. It is a decision to take
-  # openly, not a side effect of a sizing fix.
+  #   `config.k8sRunLauncher.runK8sConfig.containerConfig.resources` — raw
+  #     config, and its PRECEDENCE against the container context is NOT
+  #     established here. Not used, and not assumed: guessing a precedence is
+  #     how this block came to exist.
   #
-  # 590 MiB was never the maximum and 887 MiB is not either: `brreg_bootstrap`
-  # (210 MB gzip, 1.17M rows) has still never been watched, and it is the job an
-  # operator runs first.
+  #   per-job `dagster-k8s/config` tags — the tenant's, and the right home for a
+  #     job-specific figure such as the cold-install outlier.
   #
-  # 🔴 CPU IS DELIBERATELY *NOT* THE MEASURED 628m, AND THIS IS THE REASON.
+  # 🔴 AND `includeConfigInLaunchedRuns: false` IS NOT AN OPTION. The same env
+  # var carries `env_config_maps`, `env_secrets` and `env` for the deployment,
+  # so disabling it would stop the code location's environment reaching run
+  # pods — which is exactly the defect where a check's variable never arrived
+  # (#957). Turning it off to win an argument about memory would break the
+  # thing that argument was in service of.
   #
-  # A request is not free here, because `concurrency.runs.maxConcurrentRuns`
-  # below is 4 — so whatever is requested is reserved FOUR TIMES over before
-  # the scheduler will place the fourth pod. At 628m that is 2.5 cores of
-  # reservation on a profile whose target is a laptop, and a pod that cannot be
-  # SCHEDULED is a worse failure than one that bursts above its request: the
-  # first looks like a hang with no explanation, the second is what requests are
-  # for. CPU is compressible; bursting over a request is the intended behaviour,
-  # not a fault.
-  #
-  # 350m is 3.5x the old floor and 1.4 cores at full concurrency. If the
-  # concurrency cap rises, this number has to be revisited with it — that
-  # coupling is the thing to remember about both.
-  #
-  # 🔴 NO LIMITS, AND THE TWO HALVES ARE DECIDED DIFFERENTLY.
-  #
-  # Memory limit: BLOCKED, not declined. `brreg_bootstrap` is the job an
-  # operator runs FIRST and the one most likely to exceed anything chosen from
-  # today's numbers. A limit set from 590 MiB could turn it into an OOM kill on
-  # a new operator's first action — the fix creating the failure. It waits on a
-  # bootstrap measurement.
-  #
-  # CPU limit: DECIDED AGAINST. A CPU limit does not fail, it THROTTLES —
-  # slower, with no error and nothing to attribute it to. That converts a
-  # resourcing problem into a mysterious performance problem, which is the
-  # silent-degradation shape this platform keeps removing rather than adding.
-  config:
-    k8sRunLauncher:
-      resources:
-        requests:
-          cpu: 350m
-          memory: 1Gi
+  # No replacement value is set here today: a figure on a path that does not
+  # apply it changes nothing, and the next one comes from a cascade window
+  # rather than from whichever job is currently the biggest.
 
 # ⚠️ CONCURRENCY CAP — platform policy, deliberately NOT tenant code.
 #
@@ -160,18 +120,19 @@ runLauncher:
 # 4 is conservative on purpose and fits the laptop profile. Raise it on evidence
 # from real materialisations, not on request.
 #
-# ⚠️ AND IT IS COUPLED TO THE RUN-POD REQUEST ABOVE. Whatever a run pod requests
-# is reserved this many times over before the last one can be scheduled, so
-# raising this multiplies the reservation. 4 x 350m / 1Gi is 1.4 cores and
-# 4 GiB. Raising either number without looking at the other is how pods become
-# unschedulable, which reads as a hang rather than as a resourcing decision.
+# 🔴 AND IT IS COUPLED TO THE CODE LOCATION'S `resources`, NOT to anything in
+# this file. Whatever a run pod requests is reserved this many times over before
+# the last one can be placed — and per the block above, what a run pod requests
+# comes from the code-location container context in 360-setup-dagster.yml.
+# Raising either without looking at the other is how pods become unschedulable,
+# which reads as a hang rather than as a resourcing decision.
 #
-# 🔴 AND THIS IS NOW THE LEVER FOR THAT ARITHMETIC, not the request. The memory
-# request covers a measured peak and cannot be argued down the way CPU was:
-# memory is incompressible, so a pod under its request is not bursting, it is
-# the first thing evicted. If 4 GiB of reservation does not fit a profile, the
-# honest change is HERE — fewer concurrent runs — rather than a request that
-# claims the pods are smaller than they are.
+# ⚠️ The reservation arithmetic does NOT bind the documented first-data path —
+# six jobs launched serially, one pod at a time. It binds the moment automation
+# is enabled before that sequence, because a sensor then launches on its own
+# tick and decides the order. Nothing enforces the serial order; it is
+# procedure, declared in the application's operational.first_data.how
+# (atlas via ops-dev, #1026).
 concurrency:
   enabled: true
   runs:
