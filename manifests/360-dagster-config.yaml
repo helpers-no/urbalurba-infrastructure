@@ -187,19 +187,124 @@ dagsterDaemon:
     #
     #   ~1350 serialised round trips for 675 checks, against 8 for 4.
     #
-    # ⚠️ THIS IS MARGIN, NOT A CURE — that part is unchanged. WHERE the cure is
-    # has changed, and this file must stop naming one it cannot support: it said
-    # "the durable fix is on the tenant side — splitting a monolithic job". That
-    # is NOT ESTABLISHED. The arithmetic above scales with checks per run
-    # creation, so N smaller jobs would each pay 1/N and no one has run that;
-    # and the observed failure is WORSE than the ~84 s those numbers extrapolate
-    # to at 675 checks, so a term is still missing. Naming a fix on that
-    # evidence is what sent the tenant off to decompose a job for a reason that
-    # may not be the reason.
+    # ⚠️ THIS IS MARGIN, NOT A CURE — that part has never changed.
+    #
+    # 🔵 WHAT IS ESTABLISHED: RUN CREATION WRITES ONE EVENT AT A TIME.
+    # Verified in dagster 1.13.19 / dagster_postgres 0.29.19 — the versions this
+    # chart pin actually ships, re-read at those versions after a first reading
+    # fifteen patch releases behind gave a version-fragile answer (atlas,
+    # urb-agents#1177):
+    #
+    #   ASSET_CHECK_EVALUATION_PLANNED is in BATCH_WRITABLE_EVENTS
+    #     dagster/_core/events/__init__.py:275
+    #   but dagster_postgres's store_event_batch fast-paths ONLY
+    #   ASSET_MATERIALIZATION and ASSET_OBSERVATION
+    #     dagster_postgres/event_log/event_log.py:243
+    #   everything else falls to super().store_event_batch(), which loops
+    #     dagster/_core/storage/event_log/base.py:290-292
+    #   and each event takes TWO connection checkouts: an INSERT into
+    #   `event_logs` plus a NOTIFY on the first, then `asset_check_executions`
+    #   on a second from index_connection()
+    #     event_log.py:183/191/221, sql_event_log.py:3058
+    #
+    # So a run creating N asset checks pays N serialised write cycles. That is a
+    # code-level fact at the pinned version and it does not depend on which
+    # process runs it.
+    #
+    # 🔴 WHAT IS *NOT* ESTABLISHED, AND WHAT THIS COMMENT CLAIMED UNTIL IT WAS
+    # CHECKED: that connection POOLING is the missing term. This block said "the
+    # missing term is NullPool, and it is now measured rather than read", and
+    # named `create_pg_engine` as hard-coding it. Both halves were wrong:
+    #
+    #   `create_pg_engine` only forwards **engine_kwargs (utils.py:169-177).
+    #   NullPool is passed by the CALLER, PostgresEventLogStorage.__init__
+    #   (event_log.py:98-103) — so it is the default, not a hard-code.
+    #
+    #   🔴 AND THE WEBSERVER IS POOLED. optimize_for_webserver sets
+    #   pool_size=1 (event_log.py:125-138), called from
+    #   dagster_webserver/cli.py:252 — and `launchPipelineExecution` is a
+    #   GraphQL call the WEBSERVER serves, so the webserver is what creates the
+    #   run. The claim was "connection setup per event" about a process that
+    #   pools.
+    #
+    # ⚠️ THE CHURN IS REAL AND UNEXPLAINED, which is a different sentence from
+    # the one this file used to carry. imac measured it (urb-agents#1160),
+    # sampling every 0.5 s across a 176 s planning window:
+    #
+    #   184 distinct dagster backends seen
+    #   122 of them lived UNDER ONE SECOND
+    #   114 new backends appeared in the single 10-second bucket at run creation
+    #
+    # What is missing is WHICH PROCESS produced it. The daemon and run pods do
+    # take the NullPool default, so churn from them is expected and says nothing
+    # about run creation. One column settles it: re-sample pg_stat_activity with
+    # `application_name`, which dagster sets, and the short-lived backends name
+    # themselves. If they turn out to be the webserver, that is a MORE
+    # interesting finding than the one we thought we had.
+    #
+    # 🔵 Pool arguments are not reachable from chart values either way —
+    # `postgresql.postgresqlParams` urlencodes into the URL query string, which
+    # is libpq territory, while pool_size/poolclass are SQLAlchemy engine kwargs
+    # set at the call site. So there is no platform configuration to reach for,
+    # whichever way the churn question lands.
+    #
+    # 🔴 HOW TO CHECK IT AGAIN — AND THE WAY I GOT IT WRONG FIRST, WHICH IS THE
+    # PART WORTH KEEPING. I predicted the connection COUNT would read 1-3 during
+    # a launch, and told the measurer that a stable count meant "pooled". It read
+    # 4, jumped to 25, and sat near 23. The webserver, the daemon and a run pod
+    # hold connections of their own the whole time, and that held cohort sits on
+    # top of the churning one. Anyone following my guidance would have seen 23
+    # stable backends and cleared NullPool: the wrong answer, from the right
+    # query, read the wrong way.
+    #
+    #   USE LIFETIME, NOT DEPTH. Sample `pid` + `backend_start` and count the
+    #   backends that live under a second. 100+ inside ten seconds is the
+    #   signature. DEPTH IS UNINFORMATIVE IN BOTH DIRECTIONS — it mixes a held
+    #   cohort with a churning one and reads as neither.
+    #
+    #   And exclude your own sampler (`application_name='psql'`), which
+    #   reconnects on every sample and would otherwise be most of what you count.
+    #
+    # 🔴 IT IS A LATENCY, NOT A FAILURE, AND EVERY EARLIER VERSION OF THIS
+    # COMMENT IMPLIED OTHERWISE. On 2ffdb01 `transform_checks` LAUNCHED — twice,
+    # exit 0, no orphans — with zero occurrences of `too many retries`,
+    # OperationalError, TimeoutError or PythonError in either launch log.
+    # `PythonError: too many retries for DB connection` was a hypothesis from
+    # #1046, it DOES NOT REPRODUCE, and it stays unestablished. Nothing here
+    # should be written as though it were the symptom.
+    #
+    #   What it costs instead, measured:
+    #     ~685 planning events in ~885 s   =  0.8 events per second
+    #     the same run then executed 681 checks in ~390 s
+    #   PLANNING THE RUN COSTS MORE THAN TWICE AS LONG AS RUNNING IT.
+    #
+    # ⚠️ AND THE COST IS NOT FIXED PER EVENT. Planning stalled for 2.5 minutes at
+    # 479 events across a :30 feed cycle, and the same launch took 364 s once and
+    # 885 s the next time. Serialised connect-per-write LOSES TO CONCURRENT LOAD.
+    # A budget is therefore the right shape here and a formula is not.
+    #
+    # 🔴 WHICH IS WHY THIS IS 1800 AND NO LONGER 900. The 885 s launch above
+    # left FIFTEEN SECONDS of margin against the previous value, and the 2.4x
+    # spread between those two runs is load, not plan size — so the next launch
+    # under a heavier tick would have died of START_TIMEOUT while completely
+    # healthy, which is the exact false failure this setting exists to prevent.
+    # Raised on a measurement, per the rule below, and not on a request.
+    #
+    # 🔵 THE LEVER IS THE TENANT'S, and it rests on the VERIFIED half, not on
+    # the churn. Cost scales with checks written per run creation — that is
+    # store_event_batch's fast path excluding this event type, read at the pinned
+    # version — so N smaller jobs each pay 1/N whatever is or is not pooling.
+    # This file said the same thing until 1.6.107 and said it WITHOUT EVIDENCE,
+    # which sent a tenant off to decompose a job for a reason that might not have
+    # been the reason. It says it again now resting on source, at the right
+    # version, with lines.
+    #
+    # The durable fix is upstream: include ASSET_CHECK_EVALUATION_PLANNED in the
+    # Postgres store_event_batch fast path. Not shippable from here.
     #
     # ⚠️ Do not raise this further without asking how many CHECKS the run
     # creates. Not how large the plan is — that is not the variable.
-    startTimeoutSeconds: 900
+    startTimeoutSeconds: 1800
 
 dagsterWebserver:
   replicaCount: 1

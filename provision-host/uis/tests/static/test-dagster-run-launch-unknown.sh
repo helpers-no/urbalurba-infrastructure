@@ -326,6 +326,8 @@ fi
 # explicitly: first `+ N` is the inner term, last is the outer, and `// N` is
 # the divisor.
 _pollexpr="$(grep -F '_launch_polls:' "$PB")"
+_cap="$(grep -F '_launch_budget:' "$PB" | grep -oE ', [0-9]+\]' | grep -oE '[0-9]+' | head -1)"
+[[ "$_cap" =~ ^[0-9]+$ ]] || _cap=0
 _pluses="$(grep -oE '\+ [0-9]+' <<<"$_pollexpr" | grep -oE '[0-9]+')"
 _inner="$(head -1 <<<"$_pluses")"
 _outer="$(tail -1 <<<"$_pluses")"
@@ -333,9 +335,16 @@ _div="$(grep -oE '// [0-9]+' <<<"$_pollexpr" | grep -oE '[0-9]+' | head -1)"
 _bad=""
 if [[ -z "$_div" || -z "$_inner" || -z "$_outer" || "$_inner" == "$_outer" ]]; then
     _bad="could not read three distinct numbers out of: $_pollexpr"
+elif [[ "$_cap" -eq 0 ]]; then
+    _bad="could not read the budget cap out of: $(grep -F '_launch_budget:' "$PB")"
 else
-    for _t in 3600 900 300 61 30 2 1; do
-        _b=$(( _t < 900 ? _t : 900 ))
+    # ⚠️ THE CAP IS READ OUT OF THE PLAYBOOK TOO, for the same reason the three
+    # poll numbers are. A literal 900 here was retyped arithmetic: when the cap
+    # moved to 1800 on a measurement, this loop went on proving the invariant for
+    # a budget the playbook no longer uses, and would have stayed green while
+    # checking nothing.
+    for _t in 3600 1800 900 300 61 30 2 1; do
+        _b=$(( _t < _cap ? _t : _cap ))
         _p=$(( ((_b + _inner) / _div) + _outer ))
         (( _p * 2 > _b )) || _bad+="timeout=$_t (polls=$_p covers $((_p*2))s vs budget ${_b}s) "
     done
@@ -346,18 +355,40 @@ else
     fail "⚠️ poll window exceeds the curl budget" "fails at: ${_bad% }"
 fi
 
-# 🔵 The 900s cap is not invented — it is the number this platform already chose
-# for this tenant's plan size, and the file has to say so or the next reader
-# treats it as arbitrary.
-if grep -q 'startTimeoutSeconds: 900' "$PB"; then
-    pass "🔵 the cap cites the existing 900s precedent rather than asserting a number"
+# 🔵 THE CAP IS NOT INVENTED, AND IT MUST EQUAL THE PLATFORM'S OWN NUMBER.
+#
+# 🔴 THIS IS A CROSS-FILE ASSERTION ON PURPOSE. `startTimeoutSeconds` in the
+# Helm values and `_launch_budget` here bound THE SAME WAIT from opposite ends:
+# the daemon gives up on a run that has not started, and the client gives up on
+# the call that creates it. If the client budget is the smaller of the two, it is
+# cut off mid-launch and Dagster keeps a run it never submitted — the orphan.
+#
+# ⚠️ The previous version asserted the literal 900 against the PLAYBOOK ONLY,
+# so it proved the comment quoted a number and never that the number was still
+# the config's. Both moved to 1800 on imac's 885 s measurement (urb-agents#1160);
+# an assertion that only reads one file would not have noticed if only one had.
+_CFG="$REPO_ROOT/manifests/360-dagster-config.yaml"
+_cfg_sto="$(grep -oE '^[[:space:]]*startTimeoutSeconds: [0-9]+' "$_CFG" 2>/dev/null | grep -oE '[0-9]+' | head -1)"
+if [[ ! "$_cfg_sto" =~ ^[0-9]+$ ]]; then
+    fail "🔵 the platform's startTimeoutSeconds is readable" "could not read it from $_CFG"
+elif [[ "$_cap" != "$_cfg_sto" ]]; then
+    fail "🔵 the client budget equals the platform's start timeout" \
+         "playbook caps at ${_cap}s, 360-dagster-config.yaml allows ${_cfg_sto}s — the smaller one cuts the launch off and leaves an orphan"
+else
+    pass "🔵 the cap equals the platform's own startTimeoutSeconds (${_cap}s), read from both files"
+fi
+
+# ⚠️ And the playbook must SAY where the number came from, or the next reader
+# treats it as arbitrary and moves one of the two.
+if grep -q "startTimeoutSeconds: $_cfg_sto" "$PB"; then
+    pass "🔵 the cap cites that precedent by name and value"
 else
     fail "🔵 the cap cites its precedent" \
          "an unexplained timeout is the next thing someone raises without asking why"
 fi
 
 # ⚠️ And a smaller operator deadline must still win.
-if grep -qF "[(_timeout | int), 900] | min" <<<"$_vars"; then
+if grep -qF "[(_timeout | int), $_cap] | min" <<<"$_vars"; then
     pass "⚠️ a smaller --timeout is honoured, not silently overridden"
 else
     fail "⚠️ a smaller --timeout is honoured" "someone who says 'give up after 30s' means it"
