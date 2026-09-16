@@ -162,6 +162,73 @@ else
          "pointing at a setting that does nothing is the same defect one layer up"
 fi
 
+# ── the start-timeout comment must not name a cure it has not established ────
+# 🔴 THE SAME DEFECT AS THE RETENTION COMMENT ABOVE, one setting down. For
+# every release from 1.5.2 to 1.6.106 this comment said the cost was building
+# the execution plan and that "the durable fix is on the tenant side — splitting
+# a monolithic job". atlas read Dagster's source and both halves were wrong:
+# plan construction is 0.01 s, and the cost is one per-check event written at
+# RUN CREATION (urb-agents#1147, atlas#319).
+#
+# ⚠️ The cost was not confusion here either. The tenant was on the point of
+# decomposing a job to satisfy a diagnosis this file asserted and had never
+# checked.
+_rm="$(sed -n '/^  runMonitoring:/,/^    startTimeoutSeconds:/p' "$CFG")"
+
+# \u26a0\ufe0f MATCHED AGAINST THE BLOCK WITH ITS COMMENT MARKERS AND LINE BREAKS
+# REMOVED, not against the raw lines. Every claim asserted below is longer than
+# one wrapped comment line, so a raw-line pattern is dead the moment someone
+# reflows the paragraph \u2014 and it dies SILENTLY, still green.
+#
+# \U0001f534 That is not hypothetical. The first version of these assertions matched
+# "UIS has not re-read" on raw lines; the file wraps after "UIS has", so that
+# alternative could never match anything. It passed on its other alternative and
+# looked fine, and the mutation written to break it edited across the same line
+# break and changed nothing. A dead pattern and a satisfied one are identical in
+# a green run \u2014 the same trap the run-launcher assertions above fell into.
+_rmflat="$(tr '\n' ' ' <<<"$_rm" | sed 's/#/ /g; s/  */ /g')"
+
+if [[ -z "$_rm" ]]; then
+    fail "the run-monitoring block is readable" "sed range matched nothing in $CFG"
+elif grep -qiE 'durable fix is on the tenant side|splitting a monolithic job so' <<<"$_rmflat" \
+     && ! grep -qi 'NOT ESTABLISHED' <<<"$_rmflat"; then
+    fail "🔴 it does not assert that splitting the tenant's job is the fix" \
+         "not established: the arithmetic says N smaller jobs each pay 1/N, and nobody has run that"
+else
+    pass "🔴 it does not assert that splitting the tenant's job is the fix"
+fi
+
+# ⚠️ Matches the CLAIM, not the words — same reason as the retention assertion.
+# "a very large plan can exhaust this" is the wrong claim; naming run creation
+# is the right one.
+if grep -qiE 'RUN CREATION' <<<"$_rmflat"; then
+    pass "🔵 it names run creation as the cost, not plan construction"
+else
+    fail "🔵 it names run creation as the cost" \
+         "building the plan is 0.01 s and one step; a comment that blames it sends the next reader at the tenant"
+fi
+
+# ⚠️ AND IT MUST SAY WHOSE READING IT IS. UIS has not re-read Dagster's source
+# and has not measured this. A borrowed diagnosis stated flatly becomes this
+# file's own authority the next time someone quotes it.
+if grep -qiE "atlas's reading|has not re-read the source" <<<"$_rmflat"; then
+    pass "⚠️ the diagnosis is attributed, not adopted as measured here"
+else
+    fail "⚠️ the diagnosis is attributed" \
+         "this file has not measured it; an unattributed claim is quoted back as the platform's own"
+fi
+
+# 🔴 And 711 must not read as a ceiling. It is the event count of one plan
+# that did not finish inside a TIME budget; there is no count limit to hold a
+# margin against, and "the real margin is N and shrinking" was written down
+# twice on that misreading.
+if grep -q '711' <<<"$_rmflat" && ! grep -qiE '711 WAS NEVER A CAP|no count limit' <<<"$_rmflat"; then
+    fail "🔴 711 is not presented as a cap" \
+         "it is a TIME budget; margin arithmetic against 711 is against a boundary that does not exist"
+else
+    pass "🔴 711 is not presented as a cap"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]

@@ -153,22 +153,52 @@ dagsterDaemon:
   # Run monitoring — the daemon fails runs that never start.
   runMonitoring:
     enabled: true
-    # Chart default is 300. Raised because a run's ENTIRE EXECUTION PLAN is
-    # constructed and persisted over gRPC BEFORE the run pod is created, so a
-    # job with a very large plan can exhaust this while everything is healthy.
+    # Chart default is 300. Raised because RUN CREATION happens BEFORE the run
+    # pod exists and writes one event per asset check, one at a time.
     #
-    # The first real tenant hit it: a job planning 711 events (645 of them asset
-    # checks) died with RunFailureReason.START_TIMEOUT before its pod existed.
-    # Not resources, not the code location — that was healthy and small jobs on
-    # it ran fine. The symptom is misleading: "start timeout" reads as a
-    # scheduling or image-pull problem, and neither was involved.
+    # The first real tenant hit it: a job whose creation wrote 711 events (645
+    # of them asset checks) died with RunFailureReason.START_TIMEOUT before its
+    # pod existed. Not resources, not the code location — that was healthy and
+    # small jobs on it ran fine. The symptom is misleading: "start timeout"
+    # reads as a scheduling or image-pull problem, and neither was involved.
     #
-    # ⚠️ THIS IS MARGIN, NOT A CURE. The durable fix is on the tenant side —
-    # splitting a monolithic job so no single plan is that large — and it is
-    # proceeding separately. Raising this further would hide the next instance
-    # of the same problem for longer rather than fixing it, so do not treat a
-    # future START_TIMEOUT as a reason to raise it again without asking what the
-    # plan size is.
+    # 🔴 711 WAS NEVER A CAP, and this comment implied it was — unchanged
+    # since it was written on 2026-08-24 (9d6bbea), so in every released
+    # version through 1.6.106. This is a TIME budget. There is no
+    # count limit here to hold a margin against, so any reasoning of the form
+    # "the real margin is N checks and shrinking" — which was written down, in
+    # two places, and acted on — is arithmetic against a boundary that does not
+    # exist.
+    #
+    # 🔵 AND THE COST IS NOT PLAN CONSTRUCTION, which that same comment named
+    # as the reason for this number. Read out of Dagster's own source by atlas
+    # (urb-agents#1147, atlas#319). Carried here as ATLAS'S READING — UIS has
+    # not re-read the source and has not measured it:
+    #
+    #   building the plan   0.01 s, one step. Not the cost.
+    #   creating the run    one ASSET_CHECK_EVALUATION_PLANNED event per check.
+    #                       That type IS in BATCH_WRITABLE_EVENTS, but
+    #                       dagster_postgres's `store_event_batch` fast-paths
+    #                       only ASSET_MATERIALIZATION and ASSET_OBSERVATION.
+    #                       Everything else falls through to
+    #                       `super().store_event_batch()`, which loops
+    #                       `store_event` — two connection checkouts and two
+    #                       inserts (`event_logs`, then the index table) each.
+    #
+    #   ~1350 serialised round trips for 675 checks, against 8 for 4.
+    #
+    # ⚠️ THIS IS MARGIN, NOT A CURE — that part is unchanged. WHERE the cure is
+    # has changed, and this file must stop naming one it cannot support: it said
+    # "the durable fix is on the tenant side — splitting a monolithic job". That
+    # is NOT ESTABLISHED. The arithmetic above scales with checks per run
+    # creation, so N smaller jobs would each pay 1/N and no one has run that;
+    # and the observed failure is WORSE than the ~84 s those numbers extrapolate
+    # to at 675 checks, so a term is still missing. Naming a fix on that
+    # evidence is what sent the tenant off to decompose a job for a reason that
+    # may not be the reason.
+    #
+    # ⚠️ Do not raise this further without asking how many CHECKS the run
+    # creates. Not how large the plan is — that is not the variable.
     startTimeoutSeconds: 900
 
 dagsterWebserver:
