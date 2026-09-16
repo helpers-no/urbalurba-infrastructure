@@ -3157,6 +3157,26 @@ cmd_template_progress() {
         echo "      wrong kube context and an RBAC denial all land here, and reporting" >&2
         echo "      any of them as 'no progress' would be a false negative about the" >&2
         echo "      one thing this command exists to report." >&2
+        # 🔴 AND THE MOST LIKELY CAUSE IS NOT ON THAT LIST. It is a launch in
+        # flight — a normal, healthy thing to be doing — and until 1.6.112 this
+        # message sent the reader looking for a broken cluster instead.
+        #
+        # The webserver serves this query, and `optimize_for_webserver` gives it
+        # `pool_size=1` with `max_overflow=20`. imac measured that ceiling pinned
+        # at 23 for 82% of a `transform_checks` launch window, and an unrelated
+        # query during one failed with `QueuePool limit of size 1 overflow 20
+        # reached ... timeout 30.00` after 33 s (urb-agents#1179). They nearly
+        # filed the resulting "hang" of THIS COMMAND as a defect; it runs in 9 s
+        # on its own.
+        echo "" >&2
+        echo "  🔴 IS A JOB LAUNCHING RIGHT NOW? That is the most likely answer and" >&2
+        echo "      it is not a fault. Dagster's webserver serves this query from a" >&2
+        echo "      pool of 1 + 20 overflow, and a check-heavy launch saturates it" >&2
+        echo "      for minutes — unrelated queries are then DENIED after 30s rather" >&2
+        echo "      than queued. This command alone takes about 9 seconds." >&2
+        echo "      Wait for the launch to finish and ask again before treating" >&2
+        echo "      this as breakage." >&2
+        echo "" >&2
         echo "  './uis verify dagster' asks whether the orchestrator is alive at all." >&2
         return 2
     fi

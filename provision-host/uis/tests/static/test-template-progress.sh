@@ -334,6 +334,38 @@ else
          "unconditional, it tells the operator to trust the figure this fix exists to qualify: $out"
 fi
 
+# ── 🔴 "COULD NOT ASK" MUST NAME THE LIKELIEST CAUSE ─────────────────
+# The message listed an unreachable orchestrator, a wrong kube context and an
+# RBAC denial — all real, all rarer than the one it omitted. This query is served
+# by the webserver, whose `optimize_for_webserver` pool is 1 + 20 overflow; imac
+# measured it pinned at its ceiling for 82% of a check-heavy launch window, with
+# unrelated queries DENIED after 30 s (`QueuePool limit of size 1 overflow 20
+# reached`), and nearly filed the resulting "hang" of this very command as a
+# defect (urb-agents#1179).
+#
+# ⚠️ A launch in flight is a healthy thing to be doing. Sending the operator to
+# look for a broken cluster is the same misattribution this command exists to
+# avoid, one layer out.
+_cmd_fn="$(sed -n '/^cmd_template_progress() {/,/^}$/p' "$LIB")"
+if [[ -z "$_cmd_fn" ]]; then
+    fail "the progress command is readable" "sed range matched nothing in $LIB"
+elif grep -qi 'launching right now' <<<"$_cmd_fn" && grep -qi 'saturates' <<<"$_cmd_fn"; then
+    pass "🔴 'could not ask' names a launch in flight as the likeliest cause"
+else
+    fail "🔴 'could not ask' names launch saturation" \
+         "without it the operator hunts a broken cluster while Dagster is merely busy"
+fi
+
+# ⚠️ AND IT MUST NOT CALL THAT A FAULT. The whole point is that this state is
+# expected; a message that names the cause and still reads as breakage has moved
+# the error rather than fixed it.
+if grep -qi 'it is not a fault' <<<"$_cmd_fn"; then
+    pass "⚠️ and says plainly that it is not a fault"
+else
+    fail "⚠️ it says a launch in flight is not a fault" \
+         "naming a cause without absolving it still reads as breakage"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL  Skipped: $SKIP"
 [[ "$FAIL" -eq 0 ]]

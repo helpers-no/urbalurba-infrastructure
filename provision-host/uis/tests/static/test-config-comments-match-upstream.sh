@@ -301,12 +301,37 @@ fi
 # exists only in the sentence being asserted. Fourth first-draft pattern today
 # that matched something other than its subject — the failure is always the
 # same, a word chosen because it is memorable rather than because it is unique.
-if grep -qiE 'CHURN IS REAL AND UNEXPLAINED' <<<"$_rmflat" \
-   && grep -qiE "application_name\`?, which dagster sets" <<<"$_rmflat"; then
-    pass "⚠️ it says the churn is unexplained, and names the column that would settle it"
+# ⚠️ THIS ASSERTION CHANGED BECAUSE THE WORLD DID, NOT TO MAKE IT PASS — and
+# the difference is worth stating, because "the test went red so I edited the
+# test" is the failure this file exists to prevent.
+#
+# It used to require the block to say the churn was UNEXPLAINED and to name the
+# column that would settle it. imac then settled it (urb-agents#1179): the churn
+# is the WEBSERVER, at run creation, 463 backends in 248 s against a control
+# window where it held three and churned none. An assertion demanding the
+# question still be open would now be demanding a false sentence.
+#
+# The guarantee is unchanged: a retracted cause must not be dropped without
+# naming what replaced it. What replaced it is an attribution rather than an
+# open question, so that is what is required.
+if grep -qiE 'CHURN IS THE WEBSERVER' <<<"$_rmflat" \
+   && grep -qiE 'control window' <<<"$_rmflat"; then
+    pass "⚠️ the churn is attributed, and the control that makes it conclusive is shown"
 else
-    fail "⚠️ the open question is stated with its next step" \
-         "dropping a retracted cause without naming what replaced it reads as explained"
+    fail "⚠️ the retracted cause is replaced by an attribution, with its control" \
+         "463 webserver backends is a number; the control window is what makes it a finding"
+fi
+
+# 🔴 AND application_name MUST NOT BE OFFERED AS THE WAY TO ATTRIBUTE IT.
+# This file said dagster sets it. It does not — empty for every dagster backend
+# across 1046 samples. That instruction was passed to the measurer as fact,
+# having been taken from a colleague without checking, in the same message that
+# asked them to verify somebody else's unverified claim.
+if grep -qiE 'application_name.{0,40}which dagster sets' <<<"$_rmflat"; then
+    fail "🔴 application_name is not offered as the attributing column" \
+         "it is empty on this deployment; client_addr against the pod list is what worked"
+else
+    pass "🔴 application_name is not offered as the attributing column"
 fi
 
 # 🔵 AND THE TENANT LEVER MUST REST ON THE VERIFIED HALF. store_event_batch
@@ -323,6 +348,84 @@ if grep -qiE 'event_log\.py:[0-9]' <<<"$_rmflat" \
 else
     fail "🔵 the source claim names its version and lines" \
          "the first reading was fifteen patch releases behind the pin, and only luck kept its conclusion standing"
+fi
+
+# ── 🔴 A SERIAL LOOP CANNOT SATURATE A POOL ──────────────────────
+# This block asserts two things that contradict each other on their face: run
+# creation writes through a SERIAL loop, and the webserver's pool is saturated
+# and churning. atlas measured that serial checkout/return reuses one connection
+# forever — 5 cycles, 1 open, 0 closes (urb-agents#1180).
+#
+# ⚠️ So the block must carry the tension rather than read as though both were
+# settled. It is the first objection a reader raises, and an unanswered one in a
+# file this size looks like nobody noticed.
+# ⚠️ Anchored on "hypothesis, unverified" as a phrase. The first version
+# accepted any of 'not established|unverified|hypothesis', and "NOT ESTABLISHED"
+# is the heading of the NullPool retraction twenty lines up — so restating the
+# hypothesis as settled left this green. Fifth incidental match today; the shape
+# is always a word picked because it is memorable rather than because it is
+# unique to the sentence being asserted.
+if grep -qiE 'serial loop cannot saturate' <<<"$_rmflat" \
+   && grep -qiE 'hypothesis, unverified' <<<"$_rmflat"; then
+    pass "🔴 the serial-versus-concurrent tension is stated, and marked unresolved"
+else
+    fail "🔴 the block states the tension it has not resolved" \
+         "claims 1-3 and the pool item cannot both be true as written; saying so is what stops a reader assuming we checked"
+fi
+
+# 🔴 AND THE OVERFLOW MECHANISM MUST NOT BE ASSERTED THE WRONG WAY. Connections
+# are closed when the pool QUEUE IS FULL (impl.py:143), not because they were
+# "overflow" — SQLAlchemy does not track that at return time. Stated the wrong
+# way, the sentence reads as false against the source a maintainer will open.
+if grep -qiE 'closed on return rather than pooled|because it (is|was) overflow' <<<"$_rmflat" \
+   && ! grep -qiE 'QUEUE CAPACITY, not identity' <<<"$_rmflat"; then
+    fail "🔴 the overflow mechanism is stated as queue capacity, not identity" \
+         "a maintainer opening _do_return_conn finds a Full branch and no overflow check"
+else
+    pass "🔴 the overflow mechanism is stated as queue capacity, not identity"
+fi
+
+# ⚠️ And the churn claim must carry the CONCURRENCY qualifier, which is
+# load-bearing: serial work does not churn at all.
+if grep -qiE 'CONCURRENT checkout past the first' <<<"$_rmflat"; then
+    pass "⚠️ the churn claim is qualified to concurrent checkouts"
+else
+    fail "⚠️ the churn claim says CONCURRENT" \
+         "unqualified it is false, and atlas measured serial reuse at 1 open and 0 closes"
+fi
+
+# ── 🔴 A SQLALCHEMY CLAIM MUST NAME WHICH IMAGE IT WAS READ FROM ────────
+# The mechanism was verified on 2.0.54 — which is the TENANT'S code-location
+# image. The webserver, the process the finding is about, runs 2.0.52
+# (urb-agents#1181). dagster requires `sqlalchemy<3,>=1.0` and dagster-postgres
+# requires nothing, so two images in one namespace resolved two versions and
+# nobody chose either.
+#
+# ⚠️ The version is the field a maintainer checks first, and it is the field
+# this thread has now been wrong about twice — once fifteen patch releases out,
+# once two.
+# ⚠️ Anchored on the PAIRING, not on the two numbers. A first version required
+# each version string and the word "webserver" anywhere in the block — and both
+# numbers appear in five other sentences here, so swapping the webserver's
+# version left it green. Sixth incidental match today, same shape every time.
+if grep -qiE 'dagster-dagster-webserver sqlalchemy 2\.0\.52' <<<"$_rmflat" \
+   && grep -qiE 'code location \(tenant image\) sqlalchemy 2\.0\.54' <<<"$_rmflat"; then
+    pass "🔴 both SQLAlchemy versions are named, with which image runs which"
+else
+    fail "🔴 the SQLAlchemy claim names its image and version" \
+         "verified on the tenant image, asserted about the webserver, two patch releases apart"
+fi
+
+# 🔴 AND `state` MUST BE RULED OUT EXPLICITLY. It is the obvious substitute
+# for the `query` column and it discriminates nothing: 251 of 255 observations of
+# the churning backends read `idle`, which is also what a connection running 1350
+# sequential sub-millisecond inserts reads at a 0.5 s sample. Someone will reach
+# for it; the file has to stop them.
+if grep -qiE 'state.{0,60}cannot discriminate|DO NOT TRY.{0,80}state' <<<"$_rmflat"; then
+    pass "🔴 pg_stat_activity.state is ruled out as the discriminator"
+else
+    fail "🔴 state is ruled out explicitly" \
+         "251 of 255 idle looks like evidence and is not, in either direction"
 fi
 
 echo ""
