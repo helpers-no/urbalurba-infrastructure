@@ -821,6 +821,113 @@ _template_info_commands() {
     return 0
 }
 
+# 🔴 SAY WHICH VERSION THE BLOCK BELOW DESCRIBES.
+#
+# `uis template info` renders the operational block from the CATALOGUE's pinned
+# digest, because that is the digest the registry entry carries. When the host
+# is running a different one, every line below — what it deploys, whether
+# anything runs afterwards, how to load the data, the cadence table — is the
+# catalogue's answer to a question the reader is asking about THIS host.
+#
+# 🔴 AND THE STATEMENT WAS NOT MISSING. IT WAS TWENTY LINES AWAY.
+#
+# This is the correction that matters, and the first version of this comment got
+# it wrong. imac's stored capture from the session that caused all this, on UIS
+# *before* this change (ops-dev, urb-agents#1164):
+#
+#     Tag:      v20260914-b7e513f
+#     Pin:      sha256:aa52587c…b2b6
+#     Visible:  public
+#
+#     ⚠ This host has an OFF-CATALOGUE install of 'atlas'.
+#          atlas  installed at v20260916-e439668
+#                   sha256:ba5305f0…875613cc
+#          catalogue now points at sha256:aa52587c…b2b6
+#
+#     … roughly twenty lines …
+#
+#     [the operational block, describing b7e513f]
+#
+# UIS named the version it was about to describe, named the one the host was
+# running, printed both digests and said they differed — all before a word of
+# the block. Three agents had that on screen and still spent an afternoon on a
+# truncation that never happened.
+#
+# ⚠️ SO THE FIX IS PLACEMENT, NOT PRESENCE, and that is not a nicety. A label
+# twenty lines from its subject is read as preamble, and preamble is skipped. It
+# has to sit immediately before the text it governs, and again before the
+# commands block, or it is decoration.
+#
+# 🔴 DO NOT CONSOLIDATE THIS BACK INTO THE HEADER on the grounds that Tag and
+# Pin are already printed up there. We did already print them up there. The
+# capture above is what that cost.
+#
+# ⚠️ WHAT THE DISTANCE COST: TWO DAYS AND A FALSE CLAIM IN ANOTHER TEAM'S
+# ARTIFACT.
+# imac tested atlas at `e439668`, installed by digest while the catalogue still
+# pinned `b7e513f`. `info` rendered b7e513f's `first_data.how` — 1114 characters,
+# complete and correct for the version it was describing — and three of us read
+# it as a TRUNCATED e439668, whose field is 2300. It is a byte-exact prefix,
+# because paragraphs had been appended to the end of the field, so the cut we
+# all "found" was where the older version simply ended. ops-dev diagnosed a
+# truncation mechanism twice, and atlas shipped a general rule about a "silent
+# cliff" in UIS that does not exist (urb-agents#1152, #1157).
+#
+# 🔵 The symptom vanished when dev-templates moved the pin an hour later, and
+# would have been unreproducible by anyone re-running the same test. The defect
+# did not vanish: the next host whose pin differs reproduces it exactly.
+#
+# 🔴 THIS FIRES ON THE PINS DIFFERING, AND DOES NOT ALSO REQUIRE
+# `off_catalogue`, WHICH IS THE OPPOSITE RULE FROM `_report_off_catalogue` ONE
+# CALL BELOW. That is deliberate and they are not in conflict:
+#
+#   _report_off_catalogue makes a CLAIM ABOUT THE HOST — "you are not current".
+#     It needs both conditions, because a host that is merely BEHIND has not
+#     drifted, and warning it had was the cry-wolf failure that record already
+#     had once (#987).
+#
+#   this makes a STATEMENT ABOUT THIS OUTPUT — "the text below is that version's".
+#     That is true whenever the pins differ, however they came to differ, and a
+#     host that is simply behind is the COMMON case rather than the exotic one.
+#     Labelling output cannot cry wolf; it is not a claim about anything.
+#
+# 🔵 And there is now a concrete case where the stricter condition fired and
+# the looser one was what was needed: in the capture above `_report_off_catalogue`
+# was CORRECT and fired, and the reader accepted it and still misread the block.
+# The warning was about the host; the confusion was about the text.
+_template_info_describes_pin() {
+    local id="$1" catalogue_digest="$2" file pins n=0
+    [[ -n "$catalogue_digest" ]] || return 0
+    file="$(_applications_file)"
+    [[ -f "$file" ]] || return 0
+    command -v yq >/dev/null 2>&1 || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    # ⚠️ yq TO JSON, THEN jq — the same reason spelled out in
+    # _report_off_catalogue: chained mikefarah selects passed nulls through there
+    # and warned on every host with any recorded application.
+    pins=$(yq -o=json "$file" 2>/dev/null | jq -r --arg id "$id" --arg cat "$catalogue_digest" \
+        '[ .applications[]? | select(.id == $id) | (.pin // "")
+           | select(. != "" and . != $cat) ] | unique | .[]' 2>/dev/null) || return 0
+    [[ -z "$pins" ]] && return 0
+    echo ""
+    echo "  ⚠️  WHAT FOLLOWS DESCRIBES THE CATALOGUE'S PIN, NOT THIS HOST'S."
+    echo "        catalogue   $catalogue_digest"
+    # ⚠️ A `while read` loop, not `printf '%s\n' $pins`. The record is keyed on
+    # app_name, so one template id can hold several tenants at several pins, and
+    # an unquoted expansion would also split on any space one of them contains.
+    while IFS= read -r _p; do
+        [[ -z "$_p" ]] && continue
+        echo "        installed   $_p"
+        n=$((n+1))
+    done <<< "$pins"
+    echo "      Every line below is the CATALOGUE version's answer — what it"
+    echo "      deploys, whether anything runs, how to load the data, the"
+    echo "      schedule. Read it as a description of this host only once those"
+    echo "      digests agree."
+    echo "      './uis template install $id' moves this host to the catalogue pin."
+    return 0
+}
+
 _template_info_operational() {
     local template_id="$1" template="$2"
     command -v yq >/dev/null 2>&1 || return 0
@@ -840,6 +947,11 @@ _template_info_operational() {
     }
     local info="$dir/template-info.yaml"
     [[ -f "$info" ]] || return 0
+
+    # 🔴 BEFORE EVERYTHING THIS FUNCTION PRINTS, including the commands block —
+    # a `commands.check` read out of the catalogue's version is as wrong about
+    # this host as a cadence table is.
+    _template_info_describes_pin "$template_id" "$digest"
 
     # 🔴 BEFORE the operational gate. An artifact may declare `commands:` and no
     # `operational:`, and gating both on the second would hide the first.
