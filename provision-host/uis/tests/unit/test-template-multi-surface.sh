@@ -995,6 +995,27 @@ else
     _mk_def "install_type: overlay"
     err=$( ( _validate_template_info "$kd/template-info.yaml" "$kd" ) 2>&1 ) && fail_test "must refuse" || true
     echo "$err" | grep -q "overlay" && pass_test || fail_test "should name the value it got: $err"
+
+    # 🔴 THE VALIDATOR IS STRUCTURAL, AND THE WARNING AGAINST MAKING IT
+    # TEXTUAL HAS TO SURVIVE A TIDY-UP. A comment with no assertion under it is
+    # what gets deleted in a cleanup, and this one exists to reach somebody who
+    # has not met the problem (ops-dev, urb-agents#1174).
+    #
+    # ⚠️ The problem: a tenant that corrects itself well keeps the withdrawn
+    # sentence INSIDE the withdrawal, so a known-bad-string check finds every
+    # retraction. dev-templates grepped a newly pinned atlas artifact, found
+    # `cannot be launched`, and nearly filed the fix as not shipped — it appears
+    # only inside the retraction, and the live text says the opposite. The
+    # obvious way to make such a gate pass is to DELETE the retractions.
+    start_test "🔴 the validator warns against a naive known-bad-string gate"
+    _vfn="$(sed -n '/^# Validate template-info.yaml/,/^_validate_template_info() {/p' "$UIS_LIB/template.sh" 2>/dev/null)"
+    if [[ -z "$_vfn" ]]; then
+        fail_test "could not read the validator's comment block from the lib"
+    elif grep -qi 'retraction' <<<"$_vfn" && grep -qi 'known-bad string' <<<"$_vfn"; then
+        pass_test
+    else
+        fail_test "the next person to add a text check meets no warning, and a gate that rewards hiding corrections is worse than no gate"
+    fi
 fi
 
 # ============================================================================
