@@ -2652,7 +2652,7 @@ cmd_template_check_all() {
 _progress_classify() {
     local runs_json="$1" jobs="$2" now="${3:-0}"
     PROG_LINES=""; PROG_DONE=0; PROG_FAILED=0; PROG_RUNNING=0; PROG_ABSENT=0
-    PROG_FAILED_NAMES=""; PROG_UNDECLARED=""; PROG_ELAPSED=""
+    PROG_FAILED_NAMES=""; PROG_UNDECLARED=""; PROG_ELAPSED=""; PROG_WINDOW_FROM=""
     # ⚠️ `now` is a PARAMETER, not a `date` call in here. A classifier that
     # reads the clock cannot be tested against a fixture twice and get the same
     # answer, and this function exists precisely so its failure path can be
@@ -2704,16 +2704,42 @@ _progress_classify() {
     # from an estimate. Earliest start of a declared job to the latest end — or
     # to `now` while anything is still running.
     if [[ "$PROG_DONE" -gt 0 || "$PROG_RUNNING" -gt 0 || "$PROG_FAILED" -gt 0 ]]; then
-        PROG_ELAPSED=$(printf '%s' "$latest" | jq -r --argjson now "${now:-0}" --arg jobs "$jobs" '
+        # 🔴 AND IT REPORTS WHERE THE WINDOW STARTS, NOT ONLY HOW WIDE IT IS.
+        #
+        # `$from` is the earliest recorded run of a declared job on this
+        # Dagster — EVER. Dagster's run history survives an upgrade, so on an
+        # upgraded host this measures from the ORIGINAL install: imac saw
+        # "143794s elapsed so far (2397 min)" on a host installed two days
+        # earlier, under a line telling the operator to prefer that figure over
+        # the application's estimate (ops-dev, urb-agents#1152).
+        #
+        # ⚠️ Harmless on a cold install. Misleading on an upgrade — which is
+        # precisely the case where someone is watching the clock to decide
+        # whether it hung.
+        #
+        # ⚠️ THE NUMBER IS NOT SILENTLY NARROWED to "since this install". The
+        # record that would scope it is keyed on app_name, so a template with
+        # two tenants has two install times and no rule here picks between them
+        # — and a window that quietly means something different from one host to
+        # the next is worse than a wide one that says where it starts. The
+        # caller prints the start; the reader decides.
+        local _pw
+        _pw=$(printf '%s' "$latest" | jq -r --argjson now "${now:-0}" --arg jobs "$jobs" '
             ($jobs | split(" ")) as $want
             | [ to_entries[] | select(.key as $k | $want | index($k)) | .value ] as $rs
             | ([ $rs[] | .startTime // empty ] | min) as $from
             | ([ $rs[] | .endTime // empty ] | max) as $to
-            | if $from == null then ""
+            | if $from == null then " "
               elif ([ $rs[] | select(.endTime == null) ] | length) > 0 and $now > 0
-                then (($now - $from) | floor | tostring)
-              elif $to == null then ""
-              else (($to - $from) | floor | tostring) end' 2>/dev/null) || PROG_ELAPSED=""
+                then ((($now - $from) | floor | tostring) + " " + (($from | floor) | tostring))
+              elif $to == null then " "
+              else ((($to - $from) | floor | tostring) + " " + (($from | floor) | tostring)) end' 2>/dev/null) || _pw=""
+        # ⚠️ Split on a SPACE, not a literal tab. Both halves are integers, and
+        # this project has already been bitten twice by a "\t" that arrived as
+        # two characters.
+        PROG_ELAPSED="${_pw%% *}"; PROG_WINDOW_FROM="${_pw##* }"
+        [[ "$PROG_ELAPSED" =~ ^[0-9]+$ ]] || PROG_ELAPSED=""
+        [[ "$PROG_WINDOW_FROM" =~ ^[0-9]+$ ]] || PROG_WINDOW_FROM=""
     fi
 
     # 🔵 P5's second half. The declared order is printed; a job Dagster has RUN
@@ -2755,11 +2781,26 @@ _progress_summary() {
     if [[ -n "$PROG_ELAPSED" && "$PROG_ELAPSED" -gt 0 ]] 2>/dev/null; then
         printf '    %s elapsed so far, measured from Dagster (%s min)\n' \
             "${PROG_ELAPSED}s" "$(( (PROG_ELAPSED + 30) / 60 ))"
+        # 🔴 SAY WHEN THE WINDOW OPENED. Without this the figure reads as "this
+        # install", and on an upgraded host it is not: Dagster's run history
+        # survives, so the earliest recorded run of a declared job can belong to
+        # an install two days ago. One absolute timestamp turns a number the
+        # operator would have trusted into one they can check.
+        if [[ -n "$PROG_WINDOW_FROM" ]]; then
+            printf '      measured from the first recorded run of these jobs: %s\n' \
+                "$(date -u -d "@$PROG_WINDOW_FROM" +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+                   || date -u -r "$PROG_WINDOW_FROM" +'%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+                   || printf 'epoch %s' "$PROG_WINDOW_FROM")"
+            printf '      ⚠️  that is EVERY recorded run on this Dagster, not this install.\n'
+            printf '          An upgraded host keeps its run history, so check that date\n'
+            printf '          before reading the figure above as "how long this has taken".\n'
+        fi
         if [[ -n "$declared_takes" ]]; then
             printf '    the application estimates: %s\n' \
                 "$(printf '%s' "$declared_takes" | tr '\n' ' ' | cut -c1-96)"
             printf '    ⚠️  that estimate is the APPLICATION'"'"'S and may predate its own\n'
-            printf '        workloads. The elapsed figure above is measured; prefer it.\n'
+            printf '        workloads. The elapsed figure above is measured — prefer it\n'
+            printf '        WHEN its window starts at this install, and not otherwise.\n'
         fi
     fi
     if [[ -n "$PROG_UNDECLARED" ]]; then
@@ -2849,14 +2890,63 @@ _progress_automation_line() {
         echo "    (could not read automation state — './uis dagster automation' asks directly)"
         return 0
     fi
-    local counts
+    # 🔴 A CODE LOCATION THAT HAS NOT FINISHED LOADING DECLARES NOTHING, AND
+    # THAT IS NOT THE SAME AS DECLARING NOTHING.
+    #
+    # Three minutes after install, `uis template progress atlas` said "Dagster
+    # declares no schedules or sensors — nothing to switch on" while FIVE were
+    # declared and running; re-run later it read "5 RUNNING, 0 STOPPED, of 5
+    # declared" (imac via ops-dev, urb-agents#1152/#1146).
+    #
+    # ⚠️ The reading was not wrong about what it could see. The CONCLUSION was
+    # wrong, and it is wrong in exactly the minutes an operator runs `progress`
+    # — "nothing to switch on" does not read as "try again later", it reads as
+    # permission to SKIP enabling automation. That is the step that makes every
+    # asset check ever run, and skipping it leaves a loaded, unvalidated install
+    # with nothing to say so.
+    #
+    # 🔵 So the node count is read FIRST. `repositoriesOrError` lists
+    # repositories that have loaded; a location still starting, or one that
+    # failed to load (the payload is then a PythonError and `... on
+    # RepositoryConnection` matches nothing), is absent rather than empty. Zero
+    # nodes is 'nobody has reported in', which is a different sentence from
+    # 'they reported in and declare none'.
+    #
+    # ⚠️ AND THE MESSAGE DOES NOT QUOTE THE SENTENCE IT REPLACES, not even to
+    # deny it. The first version said "so this is NOT 'nothing to switch on'";
+    # its own test failed it, because a reader skimming for that phrase finds it
+    # either way — and so does any assertion. A negation is not a safe place to
+    # repeat the words you are trying to stop someone acting on.
+    local nodes counts
+    nodes=$(printf '%s' "$payload" | jq -r '(.data.repositoriesOrError.nodes // []) | length' 2>/dev/null) || nodes=""
+    if [[ ! "$nodes" =~ ^[0-9]+$ ]]; then
+        echo "    (could not read automation state — './uis dagster automation' asks directly)"
+        return 0
+    fi
+    if [[ "$nodes" -eq 0 ]]; then
+        echo "    No code location has reported to Dagster yet, so this is"
+        echo "    'cannot tell yet', not 'there are none'. A code location still"
+        echo "    loading declares nothing until it finishes, and a few minutes"
+        echo "    is normal. Re-run this; './uis dagster verify' lists what has"
+        echo "    loaded."
+        return 0
+    fi
     counts=$(printf '%s' "$payload" | jq -r '
         [ (.data.repositoriesOrError.nodes // [])[]
           | ((.schedules // [])[] | .scheduleState.status),
             ((.sensors   // [])[] | .sensorState.status) ]
         | "\([ .[] | select(. == "RUNNING") ] | length) RUNNING, \([ .[] | select(. != "RUNNING") ] | length) STOPPED, of \(length) declared"' 2>/dev/null) || counts=""
-    if [[ -z "$counts" || "$counts" == *"of 0 declared"* ]]; then
-        echo "    Dagster declares no schedules or sensors — nothing to switch on."
+    # ⚠️ AND AN UNPARSEABLE PAYLOAD IS NOT 'NONE' EITHER. This branch used to
+    # catch `-z "$counts"` too, so a jq failure printed "declares no schedules or
+    # sensors" — the same claim-from-silence one line down from the comment
+    # saying an empty payload must never print "0 running".
+    if [[ -z "$counts" ]]; then
+        echo "    (could not read automation state — './uis dagster automation' asks directly)"
+        return 0
+    fi
+    if [[ "$counts" == *"of 0 declared"* ]]; then
+        echo "    This code location has loaded and declares no schedules or"
+        echo "    sensors — nothing to switch on."
         return 0
     fi
     echo "    $counts"

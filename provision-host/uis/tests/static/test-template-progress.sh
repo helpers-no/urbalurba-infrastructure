@@ -261,6 +261,79 @@ else
     fail "⚠️ nothing started prints no elapsed line" "elapsed='$PROG_ELAPSED' out=$out"
 fi
 
+# ── still loading is not 'declares nothing' ─────────────────────────
+# 🔴 Three minutes after install this said "Dagster declares no schedules or
+# sensors — nothing to switch on" with FIVE declared and running. It is wrong in
+# exactly the minutes `progress` is run, and it reads as permission to skip the
+# step that makes every asset check ever run (imac via ops-dev, #1152/#1146).
+_autoload='{"data":{"repositoriesOrError":{"nodes":[]}}}'
+out="$(_progress_automation_line "$_autoload")"
+if [[ "$out" != *"nothing to switch on"* ]]; then
+    pass "🔴 zero code locations is not reported as 'nothing to switch on'"
+else
+    fail "🔴 zero code locations is not 'nothing to switch on'" \
+         "a location that has not loaded declares nothing; that is not the same claim: $out"
+fi
+if [[ "$out" == *"loading"* || "$out" == *"reported to Dagster yet"* ]]; then
+    pass "⚠️ and it tells the operator to wait rather than to move on"
+else
+    fail "⚠️ it says to wait" \
+         "without 'still loading' the operator leaves, and automation never gets switched on: $out"
+fi
+
+# ⚠️ AND THE TRUE CASE MUST SURVIVE. A loaded location that really declares
+# nothing still has to say so — otherwise this trades one wrong sentence for
+# another.
+_autonone='{"data":{"repositoriesOrError":{"nodes":[{"schedules":[],"sensors":[]}]}}}'
+out="$(_progress_automation_line "$_autonone")"
+if [[ "$out" == *"nothing to switch on"* ]]; then
+    pass "⚠️ a loaded location that declares none still says 'nothing to switch on'"
+else
+    fail "⚠️ the genuine 'declares none' case survives" "got: $out"
+fi
+
+# 🔴 A payload jq cannot read is not 'none' either. This branch used to catch
+# an empty `counts` alongside 'of 0 declared', one line below the comment saying
+# an empty payload must never print a count.
+out="$(_progress_automation_line '{"data":{"repositoriesOrError":{"nodes":[{"schedules":"not-an-array"}]}}}')"
+if [[ "$out" != *"nothing to switch on"* ]]; then
+    pass "🔴 an unparseable payload is not reported as 'declares none'"
+else
+    fail "🔴 unparseable is not 'declares none'" "a claim from a jq failure: $out"
+fi
+
+# ── the elapsed window says where it starts ────────────────────────
+# 🔴 "143794s elapsed so far (2397 min)" was measured from an install two days
+# earlier on an upgraded host, under a line telling the operator to prefer it
+# over the estimate. Dagster's run history survives an upgrade; the figure does
+# not say so (ops-dev, #1152).
+_progress_classify "$(_runs "$(_r a_refresh SUCCESS 1000000 1000600)")" "$JOBS" 2000000
+if [[ "$PROG_WINDOW_FROM" == "1000000" ]]; then
+    pass "🔴 the classifier reports where the elapsed window opens"
+else
+    fail "🔴 the window start is reported" "got '$PROG_WINDOW_FROM'; without it the summary cannot say"
+fi
+out="$(_progress_summary 'about 11 minutes')"
+if [[ "$out" == *"1970-01-12"* || "$out" == *"epoch 1000000"* ]]; then
+    pass "⚠️ and the summary prints it as an absolute date the reader can check"
+else
+    fail "⚠️ the summary prints the window start" \
+         "a bare duration reads as 'this install' on a host where it is not: $out"
+fi
+if [[ "$out" == *"not this install"* ]]; then
+    pass "⚠️ it says the window is every recorded run, not this install"
+else
+    fail "⚠️ it names what the window covers" "got: $out"
+fi
+# 🔴 AND 'PREFER IT' IS NO LONGER UNCONDITIONAL. That instruction is what
+# turned a wide window into a wrong conclusion.
+if [[ "$out" == *"prefer it"* && "$out" == *"WHEN its window starts at this install"* ]]; then
+    pass "🔴 'prefer it' carries the condition under which it is true"
+else
+    fail "🔴 'prefer it' is qualified" \
+         "unconditional, it tells the operator to trust the figure this fix exists to qualify: $out"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL  Skipped: $SKIP"
 [[ "$FAIL" -eq 0 ]]
