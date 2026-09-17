@@ -334,6 +334,54 @@ else
          "unconditional, it tells the operator to trust the figure this fix exists to qualify: $out"
 fi
 
+# ── 🔴 THE REPORTED SHAPE: SIX COMPLETE JOBS, ONE WIDE WINDOW ──────
+#
+# imac reported this from a live host and ops-dev relayed it as a possible
+# defect in 1.6.108 (urb-agents#1186):
+#
+#   6 succeeded · 0 failed · 0 in flight · 0 not started
+#   230186s elapsed so far, measured from Dagster (3836 min)
+#
+# ⚠️ THE CASE ABOVE USES ONE JOB. This one uses six, which is the only path
+# that exercises jq's `min`/`max` ACROSS runs — the reported shape was not
+# covered, so "it works" rested on a fixture with nothing to minimise over.
+#
+# ✅ 1.6.108 is working as designed here: the window is deliberately NOT
+# narrowed to "since this install" (the record that would scope it is keyed on
+# app_name, and a template with two tenants has two install times), so the fix
+# is that the summary SAYS where the window opens. This pins that it still does
+# when several completed jobs bound it.
+_w_from=1757000000
+_w_to=$((_w_from+230186))
+_six="$(_r j1 SUCCESS $_w_from $((_w_to-500))),$(_r j2 SUCCESS $((_w_from+100)) $((_w_to-400))),$(_r j3 SUCCESS $((_w_from+200)) $((_w_to-300))),$(_r j4 SUCCESS $((_w_from+300)) $((_w_to-200))),$(_r j5 SUCCESS $((_w_from+400)) $((_w_to-100))),$(_r j6 SUCCESS $((_w_from+500)) $_w_to)"
+_progress_classify "$(_runs "$_six")" "j1 j2 j3 j4 j5 j6" $((_w_to+7200))
+
+if [[ "$PROG_DONE" == "6" && "$PROG_RUNNING" == "0" && "$PROG_FAILED" == "0" && "$PROG_ABSENT" == "0" ]]; then
+    pass "🔵 six complete jobs classify as the reported shape"
+else
+    fail "🔵 six complete jobs classify correctly" \
+         "got done=$PROG_DONE running=$PROG_RUNNING failed=$PROG_FAILED absent=$PROG_ABSENT"
+fi
+
+# 🔴 The window must span EARLIEST START to LATEST END across all six, not the
+# first or last run's own duration.
+if [[ "$PROG_ELAPSED" == "230186" && "$PROG_WINDOW_FROM" == "$_w_from" ]]; then
+    pass "🔴 the window spans earliest start to latest end across all six"
+else
+    fail "🔴 the window is the min/max across runs" \
+         "got elapsed=$PROG_ELAPSED from=$PROG_WINDOW_FROM; expected 230186 / $_w_from"
+fi
+
+out="$(_progress_summary)"
+# ⚠️ THE WHOLE POINT OF 1.6.108. A wide figure with no origin reads as "this
+# install"; the origin is what makes it checkable.
+if [[ "$out" == *"230186s elapsed so far"* && "$out" == *"measured from the first recorded run"* ]]; then
+    pass "🔴 a multi-job window still prints where it opens, directly under the figure"
+else
+    fail "🔴 the multi-job summary says where the window opens" \
+         "this is the line whose absence would make 230186s a wrong claim: $out"
+fi
+
 # ── 🔴 "COULD NOT ASK" MUST NAME THE LIKELIEST CAUSE ─────────────────
 # The message listed an unreachable orchestrator, a wrong kube context and an
 # RBAC denial — all real, all rarer than the one it omitted. This query is served
