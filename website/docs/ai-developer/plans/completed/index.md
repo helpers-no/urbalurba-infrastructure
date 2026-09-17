@@ -24,6 +24,7 @@ line, which carries one for the plans whose authors recorded it.
 
 | Plan | Goal | Last updated |
 |------|------|-----------|
+| [---](PLAN-network-cloudflare-port-and-docs-lift-up.md) | — | 2026-09-17 |
 | [Summer vacation work summary: 18 July – 19 August 2026](STATUS-summer-vacation-2026-07-18-to-08-19.md) | — | 2026-09-07 |
 | [PLAN-008: Service Migration Status & Remaining Work](STATUS-service-migration.md) | Track migration status of all 26 UIS services and complete remaining work for services that are not fully migrated. | 2026-09-07 |
 | [Validation record: the summer's work on a clean Rancher Desktop, 21 August 2026](STATUS-rancher-desktop-validation-2026-08-21.md) | — | 2026-09-07 |
@@ -54,7 +55,6 @@ line, which carries one for the plans whose authors recorded it.
 | [Deploy OpenMetadata](PLAN-openmetadata-deployment.md) | Deploy OpenMetadata 1.12.1 as a UIS platform service using the official Helm chart, reusing existing PostgreSQL and Elasticsearch | 2026-09-07 |
 | [Deploy Nextcloud + OnlyOffice](PLAN-nextcloud-deployment.md) | Deploy Nextcloud 33 with OnlyOffice Document Server as a UIS platform service, reusing existing PostgreSQL and Redis | 2026-09-07 |
 | [Plan: derive `TAILSCALE_OWNER_ID` default from `GITHUB_USERNAME` + soft-warn validation guards](PLAN-network-tailscale-owner-id-default.md) | Close the contributor-bypass gap left after PLAN-002 — a fresh install that skips the wizard and runs `./uis secrets generate` directly should still produce a non-colliding `TAILSCALE_OWNER_ID`. Soft-warn (matching the existing `DEFAULT_*` placeholder pattern) when the resolved value is missing or malformed. | 2026-09-07 |
-| [---](PLAN-network-cloudflare-port-and-docs-lift-up.md) | — | 2026-09-07 |
 | [---](PLAN-multi-platform-docs-restructure.md) | — | 2026-09-07 |
 | [PLAN: "How Deployment Works" Documentation Page](PLAN-how-deployment-works.md) | — | 2026-09-07 |
 | [Plan: Gravitee APIM 4.11 deployment on PostgreSQL](PLAN-gravitee-postgresql-deployment.md) | After this plan, `./uis deploy postgresql && ./uis deploy gravitee` on a fresh local cluster produces a working Gravitee APIM 4.11 deployment with admin Console, Developer Portal, and API Gateway, backed by PostgreSQL — no MongoDB, no Elasticsearch, no Redis. `./uis undeploy gravitee --purge` cleanly tears down all Gravitee state. | 2026-09-07 |
