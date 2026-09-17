@@ -58,9 +58,17 @@
     #   call cut mid-flight -> Dagster holds a run it never submitted
     #                      -> NOT_STARTED, one orphan per attempt
     #
-    # ⚠️ WHY the call is slow is imac's guess (679 asset checks, plan
-    # resolution) and is carried as a guess. UIS's job is not to be cut off
-    # mid-launch.
+    # 🔵 WHY the call is slow is now settled, and it is NOT what this comment
+    # used to guess. It carried imac's guess — "679 asset checks, plan
+    # resolution". Plan resolution is 0.01 s and one step. The cost is at RUN
+    # CREATION: one ASSET_CHECK_EVALUATION_PLANNED event per check, written one
+    # at a time because dagster_postgres's batch path fast-paths only
+    # materialisations and observations — two connection checkouts and two
+    # inserts each, ~1350 round trips for 675 checks. atlas read that out of
+    # Dagster's source (urb-agents#1147); UIS has not re-read it or measured it.
+    #
+    # ⚠️ IT DOES NOT CHANGE THIS NUMBER. UIS's job is not to be cut off
+    # mid-launch, whatever the launch is spending its time on.
     #
     # 🔵 AND THE BUDGET IS NOT INVENTED. 900 s is the number this platform
     # already chose for this same tenant's plan size: `startTimeoutSeconds: 900`
