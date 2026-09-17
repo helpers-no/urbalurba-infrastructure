@@ -356,6 +356,24 @@ else
          "without it the operator hunts a broken cluster while Dagster is merely busy"
 fi
 
+# 🔴 AND IT MUST NAME HOW LITTLE LOAD IT TAKES.
+#
+# 1.6.112 said "a check-heavy launch", which reads as the 685-event outlier and
+# lets a reader with an ordinary workload rule this cause out. imac verified a
+# denial against the run that actually caused it: a SCHEDULE TICK PLANNING
+# SIXTEEN ASSET CHECKS (ops-dev, urb-agents#1186). Two orders of magnitude less
+# load than the wording implied.
+#
+# ⚠️ Asserting on the measured number, not on an adjective. "check-heavy",
+# "busy" and "under load" all pass a vague grep and all leave the reader
+# guessing whether their own workload qualifies.
+if grep -qi 'sixteen asset checks' <<<"$_cmd_fn"; then
+    pass "🔴 it names the measured load that saturates the pool (16 checks)"
+else
+    fail "🔴 it names the measured load that saturates the pool" \
+         "without the number, a reader with a modest workload rules this cause out — which is what 1.6.112's 'check-heavy' invited"
+fi
+
 # ⚠️ AND IT MUST NOT CALL THAT A FAULT. The whole point is that this state is
 # expected; a message that names the cause and still reads as breakage has moved
 # the error rather than fixed it.

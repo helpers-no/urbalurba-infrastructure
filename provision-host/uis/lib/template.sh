@@ -3168,12 +3168,28 @@ cmd_template_progress() {
         # reached ... timeout 30.00` after 33 s (urb-agents#1179). They nearly
         # filed the resulting "hang" of THIS COMMAND as a defect; it runs in 9 s
         # on its own.
+        #
+        # ⚠️ AND IT DOES NOT TAKE A BIG JOB. 1.6.112 said "a check-heavy launch",
+        # which reads as the 685-event outlier and lets a reader with an ordinary
+        # workload rule this cause out. imac then verified a denial against the
+        # run that actually caused it and found a SCHEDULE TICK PLANNING SIXTEEN
+        # ASSET CHECKS (ops-dev, urb-agents#1186). The pool saturates at two
+        # orders of magnitude less load than the previous wording implied, so the
+        # number is named here rather than left to the reader's imagination.
+        #
+        # 🔵 The cost is per check event written at run creation, so what matters
+        # is that a run is being created at all — not how large it is.
         echo "" >&2
         echo "  🔴 IS A JOB LAUNCHING RIGHT NOW? That is the most likely answer and" >&2
         echo "      it is not a fault. Dagster's webserver serves this query from a" >&2
-        echo "      pool of 1 + 20 overflow, and a check-heavy launch saturates it" >&2
-        echo "      for minutes — unrelated queries are then DENIED after 30s rather" >&2
+        echo "      pool of 1 + 20 overflow, and creating a run saturates it for" >&2
+        echo "      minutes — unrelated queries are then DENIED after 30s rather" >&2
         echo "      than queued. This command alone takes about 9 seconds." >&2
+        echo "" >&2
+        echo "      ⚠️  It does NOT take a big job. A schedule tick planning just" >&2
+        echo "          SIXTEEN asset checks has been measured doing this. Do not" >&2
+        echo "          rule this cause out because your workload is modest." >&2
+        echo "" >&2
         echo "      Wait for the launch to finish and ask again before treating" >&2
         echo "      this as breakage." >&2
         echo "" >&2
