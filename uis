@@ -262,12 +262,57 @@ show_welcome() {
     ' 2>/dev/null || true
 }
 
+# 🔴 A RUNNING CONTAINER SILENTLY WINS OVER A PULLED IMAGE.
+#
+# `start_container` returns early when the container is already up — correctly,
+# because `./uis start` on a running host should be a no-op. But `docker pull`
+# does not touch a running container, so:
+#
+#   docker pull ...uis-provision-host:latest     <- new image on disk
+#   ./uis start                                  <- "already running", exit 0
+#
+# leaves the host executing the OLD code with every surface agreeing the upgrade
+# worked. imac hit this upgrading to 1.6.112 and only avoided a false result by
+# removing the container first by habit (ops-dev, urb-agents#1186): "a warm
+# container silently wins over a pulled image, and this was a version-dependent
+# change — without removing it first the upgrade would have appeared to work."
+#
+# ⚠️ `./uis pull` and `./uis restart` are NOT affected — both reach
+# `start_container` with the container already stopped, and it does `docker rm -f`
+# before `docker run`. The trap is only a pull performed OUTSIDE the launcher.
+#
+# 🔵 Same family as the launcher-vs-image split above: the version string stays
+# correct while the thing doing the work is stale. This one is cheap to detect —
+# the container records the image id it was created from — so detect it rather
+# than asking the operator to remember.
+_warn_if_container_predates_image() {
+    local _running _ondisk
+    _running="$(docker inspect --format '{{.Image}}' "$CONTAINER_NAME" 2>/dev/null)" || return 0
+    _ondisk="$(docker inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null)" || return 0
+
+    # ⚠️ Silence when either is unreadable. A missing local image is the normal
+    # answer on a host that has never pulled, and a warning there is noise.
+    [ -n "$_running" ] && [ -n "$_ondisk" ] || return 0
+    [ "$_running" = "$_ondisk" ] && return 0
+
+    log_warn "The running container was created from a DIFFERENT image than the one on disk."
+    log_warn "  running from: ${_running#sha256:}"
+    log_warn "  on disk now:  ${_ondisk#sha256:}"
+    log_warn "  A pulled image does not replace a running container, so this host is"
+    log_warn "  still executing the OLD code. 'uis start' will not change that."
+    log_warn "  Apply it with:  ./uis restart     (or ./uis pull to fetch and apply)"
+}
+
 # Start container if not running
 start_container() {
     if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         # ⚠️ BEFORE the early return. An override that cannot be honoured must
         # stop the command, not be discovered afterwards in a diff.
         _refuse_ignored_create_time_override || exit 1
+        # ⚠️ Also before the early return, and a WARNING rather than a refusal:
+        # a stale container is a real state an operator may have chosen, and
+        # `./uis start` is not the command that should refuse it.
+        _warn_if_container_predates_image
         return 0
     fi
 
