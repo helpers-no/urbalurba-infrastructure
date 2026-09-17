@@ -227,20 +227,112 @@ dagsterDaemon:
     #   run. The claim was "connection setup per event" about a process that
     #   pools.
     #
-    # ⚠️ THE CHURN IS REAL AND UNEXPLAINED, which is a different sentence from
-    # the one this file used to carry. imac measured it (urb-agents#1160),
-    # sampling every 0.5 s across a 176 s planning window:
+    # 🔴 THE CHURN IS THE WEBSERVER, AT RUN CREATION, DESPITE THE POOL.
+    # Attributed by imac (urb-agents#1179) by resolving pg_stat_activity's
+    # `client_addr` against the pod list — NOT by `application_name`, which is
+    # EMPTY for every dagster backend on this deployment across 1046 samples.
+    # Dagster does not set it, and a comment here previously said it did.
     #
-    #   184 distinct dagster backends seen
-    #   122 of them lived UNDER ONE SECOND
-    #   114 new backends appeared in the single 10-second bucket at run creation
+    #   launch window, 248 s, `uis dagster run transform_checks`:
+    #     WEBSERVER      463 backends, 156 lived under a second
+    #     DAEMON          54 backends,  54 under a second
+    #     CODE LOCATION    1
     #
-    # What is missing is WHICH PROCESS produced it. The daemon and run pods do
-    # take the NullPool default, so churn from them is expected and says nothing
-    # about run creation. One column settles it: re-sample pg_stat_activity with
-    # `application_name`, which dagster sets, and the short-lived backends name
-    # themselves. If they turn out to be the webserver, that is a MORE
-    # interesting finding than the one we thought we had.
+    #   control window, 435 s, a schedule tick the DAEMON creates:
+    #     WEBSERVER        3 backends,   0 under a second   <- holds them
+    #     DAEMON         149 backends, 133 under a second
+    #
+    # ⚠️ THE CONTROL WINDOW IS WHAT MAKES THIS CONCLUSIVE. The daemon churns
+    # heavily in ordinary operation, so a sample taken at any other moment
+    # attributes the churn to it and reads as confirmation. Only sampling across
+    # a launch specifically shows the webserver doing it.
+    #
+    # 🔴 SO BOTH OF THIS BLOCK'S EARLIER SENTENCES WERE WRONG. It said the
+    # cause was NullPool (the webserver pools); it then said the churn was
+    # unexplained and possibly the daemon (it is run creation, and it is the
+    # webserver). The measurement was never in question either time — the
+    # attribution was, twice.
+    #
+    # ⚠️ WHY IT CHURNS: CONCLUSION YES, MECHANISM NO. The first version of this
+    # paragraph carried imac's reading — "overflow connections are closed on
+    # return rather than pooled" — and atlas checked it against SQLAlchemy
+    # 2.0.54 (urb-agents#1180). That reason is WRONG and the conclusion survives
+    # it:
+    #
+    #   `QueuePool._do_return_conn` (pool/impl.py:143) offers EVERY returned
+    #   connection back to the pool and closes it only on `sqla_queue.Full`.
+    #   Nothing checks whether a connection was "overflow" — it is QUEUE
+    #   CAPACITY, not identity. But the queue is built with `pool_size`
+    #   (impl.py:137), so with pool_size=1 exactly one connection can ever sit
+    #   in it and everything else is closed on return anyway.
+    #
+    # 🔴 AND ONLY UNDER CONCURRENCY. atlas measured it with a counting creator:
+    #
+    #   SERIAL      5 checkout/return cycles -> opened 1, closed 0  (perfect reuse)
+    #   CONCURRENT  4 held at once, returned -> opened 3, closed 3
+    #
+    # So the true sentence is "every CONCURRENT checkout past the first is an
+    # open-and-close", never "every checkout". Serial work does not churn at all.
+    #
+    # ⚠️ WHICH LEAVES A TENSION THIS FILE SHOULD NOT PRETEND TO HAVE RESOLVED.
+    # Run creation writes its events through a SERIAL loop (base.py:290-292) —
+    # and a serial loop cannot saturate a pool. atlas's hypothesis, unverified
+    # and marked as such: run creation HOLDS the single pooled connection for
+    # minutes while it grinds through that loop, so every OTHER webserver query
+    # is forced into overflow, opened and closed one at a time, and denied past
+    # twenty. That fits all three measurements — churn attributed to the
+    # webserver, concurrency pinned at the ceiling, and an UNRELATED query being
+    # the one that got the 500. It is not established. Asked on #1181.
+    #
+    # 🔴 AND THE MECHANISM WAS VERIFIED ON THE WRONG VERSION. atlas checked
+    # SQLAlchemy 2.0.54; imac then read it out of the running pods
+    # (urb-agents#1181):
+    #
+    #   dagster-dagster-webserver   sqlalchemy 2.0.52   <- the process in question
+    #   dagster-daemon              sqlalchemy 2.0.52
+    #   code location (tenant image) sqlalchemy 2.0.54  <- what atlas measured
+    #
+    # 2.0.54 is what the TENANT'S image ships, not the webserver's. Two patch
+    # releases inside 2.0.x, so the QueuePool semantics very likely hold — but
+    # "very likely" is how this thread has been wrong five times, and the
+    # version field is the one a maintainer checks first. Report 2.0.52 as the
+    # version that runs and 2.0.54 as the version the mechanism was verified on,
+    # or re-probe against 2.0.52.
+    #
+    # ⚠️ AND THE LOOSE PIN IS ALREADY REALISED INSIDE ONE NAMESPACE. dagster
+    # requires `sqlalchemy<3,>=1.0` and dagster-postgres requires nothing, which
+    # let the chart's images resolve 2.0.52 while a tenant's code-location image
+    # resolved 2.0.54 — same cluster, same namespace, two versions, nobody chose
+    # either. Anything read out of SQLAlchemy here has to name WHICH image it
+    # was read from.
+    #
+    # 🔴 DO NOT TRY TO ANSWER THE SERIAL-VS-CONCURRENT QUESTION WITH
+    # `pg_stat_activity.state`. It looks like the obvious substitute for the
+    # `query` column and it cannot discriminate in either direction: of 255
+    # observations of the churning webserver backends, 251 read `idle` — but a
+    # connection running 1350 sequential sub-millisecond inserts also reads
+    # `idle` at almost every 0.5 s sample. Likewise a pooled connection observed
+    # `idle` for 248 s does NOT refute "run creation holds it", because holding
+    # is a checkout and not a running statement. `query` is what discriminates:
+    # pg_stat_activity retains the last statement for idle backends.
+    #
+    # 🔴 WHAT IS MEASURED, AND IS THE PART THAT BITES: THE CEILING DENIES.
+    # `optimize_for_webserver(statement_timeout, pool_recycle, max_overflow)`
+    # gives `pool_size=1` plus `max_overflow=20`. imac measured webserver
+    # concurrency pinned at 23 for 82% of a launch window, and an unrelated
+    # query issued during a launch failed with:
+    #
+    #   sqlalchemy.exc.TimeoutError: QueuePool limit of size 1 overflow 20
+    #   reached, connection timed out, timeout 30.00       (HTTP 500 after 33 s)
+    #
+    # The ceiling arithmetic is the code's: `pool_size + max_overflow` = 21, and
+    # imac's measured 23 is that plus the webserver's other storages. The denial
+    # is `impl.py:168` verbatim, not a lookalike.
+    #
+    # So under a check-heavy launch this is not a pooling optimisation. It is a
+    # 21-connection ceiling which DENIES unrelated readers after 30 s rather
+    # than queueing them quietly — and whatever is holding the pool, the
+    # operator-facing consequence is the same and is what the commands now say.
     #
     # 🔵 Pool arguments are not reachable from chart values either way —
     # `postgresql.postgresqlParams` urlencodes into the URL query string, which
