@@ -441,22 +441,49 @@ first real tenant hit it with a job planning **711 events** (645 of them asset
 checks): the code location was healthy, port 4000 open, and smaller jobs on the
 same location ran fine.
 
-The platform allows **900 seconds**, up from the chart default of 300:
+The platform allows **1800 seconds**, up from the chart default of 300:
 
 ```yaml
 dagsterDaemon:
   runMonitoring:
     enabled: true
-    startTimeoutSeconds: 900
+    startTimeoutSeconds: 1800
 ```
 
-:::warning This is margin, not a cure
-If you hit `START_TIMEOUT`, the question to ask is **how large is the plan**, not
-whether the timeout can go higher. The durable fix is to split a monolithic job
-so no single plan is that big; raising the ceiling further just hides the next
-instance for longer.
+It was 900 until a measured launch wrote **~685 planning events in ~885 seconds**
+— fifteen seconds of margin. The same launch took 364 s once and 885 s the next
+time, so the 2.4x spread is **concurrent load, not plan size**.
 
-Count the events in the run's plan before concluding the platform is slow.
+:::warning This is margin, not a cure
+If you hit `START_TIMEOUT`, the question to ask is **how many asset checks the
+run creates** — not how large the plan is. Plan size is not the variable.
+
+The cost is writing check events one at a time at run creation, so N smaller
+jobs each pay 1/N of it. That makes splitting a job a real lever, but only when
+the check count is what is driving it — check the count before decomposing
+anything.
+:::
+
+:::danger This value ships in the image and does NOT reach a running cluster
+`startTimeoutSeconds` lives in the deployed Dagster release, not in the
+provision-host image. **Upgrading UIS does not apply it.** The running value is
+whatever the last Dagster deploy wrote:
+
+```bash
+kubectl get configmap dagster-instance -n dagster \
+  -o jsonpath='{.data.dagster\.yaml}' | grep start_timeout_seconds
+```
+
+To apply the shipped value, redeploy Dagster:
+
+```bash
+uis deploy dagster
+```
+
+That runs `helm upgrade` with these values. The chart annotates the daemon
+Deployment with a checksum of the instance ConfigMap, so the daemon rolls and
+re-reads automatically — no manual restart. Re-read the ConfigMap afterwards to
+confirm; a command exiting 0 is not the same as a value having changed.
 :::
 
 ## What an install actually costs
