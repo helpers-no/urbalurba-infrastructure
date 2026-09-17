@@ -17,7 +17,7 @@ The plan was never executed as a single unified "execute" PR — the deliverable
 |---|---|---|
 | 1 — `cmd_network_*` family | ✓ Done | `provision-host/uis/manage/uis-cli.sh` has `cmd_network` dispatcher with init/list/up/status/down/verify/expose/unexpose. |
 | 2 — Remove cloudflare-tunnel from services.json | ✓ Done | `website/src/data/services.json` no longer lists `cloudflare-tunnel`. |
-| 3 — Small Cloudflare bugs from survey | ✓ Done | Bugs surfaced during the port shipped alongside Phase 1. |
+| 3 — Small Cloudflare bugs from survey | ✓ Done — **3.3 corrected later** | 3.1 (replica count) and 3.2 (empty-token check) shipped alongside Phase 1. **3.3 did not**: `cloudflare.env.template` kept shipping `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ZONE_ID`, which no playbook reads, plus a "create an API token" link — so the template asked operators for a credential the tunnel never uses. That is exactly the "don't prompt for vars no playbook reads" trap 3.3 was written to catch. Fixed in 1.6.117. |
 | 4 — Verification on rancher-desktop / `*.skryter.no` | ✓ Done | Verified end-to-end against the `*.skryter.no` tunnel during the port-PR rounds. |
 | 5 — Docs lift-up | ✓ Done | `networking/cloudflare.md` + `cloudflare-setup.md` rewritten on `uis network` flow; legacy `uis deploy cloudflare-tunnel` / `uis cloudflare verify/teardown` refs swept in PR #185. |
 | 6 — Tester verification round | ✓ Done | Covered alongside the port-PRs; closed end-to-end on `*.skryter.no`. |

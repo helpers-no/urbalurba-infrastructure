@@ -71,6 +71,27 @@ else
     fail_test "Missing CREDENTIALS setting"
 fi
 
+# cloudflare.env.template must document only credentials something reads.
+# It shipped CLOUDFLARE_API_TOKEN and CLOUDFLARE_ZONE_ID until 1.6.117 — no
+# playbook has ever read either, so the template was asking operators to create
+# a Cloudflare API token the tunnel never uses. The tunnel token is the only
+# credential (820-deploy + 822-verify read it); BASE_DOMAIN_CLOUDFLARE is
+# optional and only gates verify's end-to-end probe.
+start_test "cloudflare.env.template has CLOUDFLARE_TUNNEL_TOKEN"
+if grep -q "^CLOUDFLARE_TUNNEL_TOKEN=" "$TEMPLATES_DIR/uis.secrets/service-keys/cloudflare.env.template"; then
+    pass_test
+else
+    fail_test "Missing CLOUDFLARE_TUNNEL_TOKEN — the tunnel's only credential"
+fi
+
+start_test "cloudflare.env.template documents no unread credentials"
+if grep -qE '^#?[[:space:]]*(CLOUDFLARE_API_TOKEN|CLOUDFLARE_ZONE_ID)=' \
+        "$TEMPLATES_DIR/uis.secrets/service-keys/cloudflare.env.template"; then
+    fail_test "Reintroduced CLOUDFLARE_API_TOKEN/CLOUDFLARE_ZONE_ID — nothing reads these"
+else
+    pass_test
+fi
+
 # Note: Cloud-init template selection is handled by CLI code (PLAN-002),
 # not by config files. The mapping is: host-type -> cloud-init-template
 
