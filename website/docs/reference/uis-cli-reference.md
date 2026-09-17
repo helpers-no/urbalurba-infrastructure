@@ -749,6 +749,42 @@ A script that treats any non-zero as failure will now notice; one that only
 checks for zero was previously told success. Exit 0 still means you are on the
 version `main` advertises.
 
+### ⚠️ A pulled image is not a running image
+
+`docker pull` fetches an image. It does **not** touch a container that is
+already running, and `./uis start` on a running host is a deliberate no-op. So
+this sequence upgrades nothing and reports success:
+
+```
+$ docker pull ghcr.io/helpers-no/uis-provision-host:latest
+$ ./uis start
+```
+
+The host keeps executing the **old** code, `./uis version` is still correct, and
+every surface agrees the upgrade worked. imac hit this upgrading to 1.6.112 and
+only avoided a false test result by removing the container first out of habit.
+
+✅ **`./uis pull` and `./uis restart` are not affected.** Both stop the container
+first, and starting it again recreates it from the image on disk. The trap is
+only a pull performed **outside** the launcher.
+
+🔴 **Since 1.6.114 `./uis start` says so.** When the running container was
+created from a different image than the one now on disk, it prints both image
+ids and names the command that applies it:
+
+```
+[UIS] The running container was created from a DIFFERENT image than the one on disk.
+[UIS]   running from: 3f9a…
+[UIS]   on disk now:  c71b…
+[UIS]   A pulled image does not replace a running container, so this host is
+[UIS]   still executing the OLD code. 'uis start' will not change that.
+[UIS]   Apply it with:  ./uis restart     (or ./uis pull to fetch and apply)
+```
+
+It is a **warning, not a refusal** — running a container deliberately pinned to
+an older image is a legitimate thing to be doing, and `start` is not the command
+that should second-guess it.
+
 ### The registry entry — the seam with the catalogue
 
 The `source` block above lives in the **catalogue**, not in the artifact. The
