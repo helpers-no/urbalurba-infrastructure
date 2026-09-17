@@ -387,6 +387,47 @@ else
          "an unexplained timeout is the next thing someone raises without asking why"
 fi
 
+# 🔴 AND THE OPERATOR-FACING DOC MUST CARRY THE SAME NUMBER.
+#
+# The assertion above proved the playbook and the Helm values agreed while
+# website/docs/services/analytics/dagster.md still said 900 and still told the
+# reader to ask "how large is the plan" — the question 1.6.107 removed from the
+# config for being the wrong variable. Both moved to 1800 in 1.6.110; the page
+# an operator actually reads did not, and nothing here noticed.
+#
+# ⚠️ Two files that must agree is how this keeps happening (docs.yml says the
+# same about its own path lists). The doc is the third file, so assert it.
+_DOC="$REPO_ROOT/website/docs/services/analytics/dagster.md"
+if [[ ! -f "$_DOC" ]]; then
+    fail "🔵 the Dagster service doc is readable" "not found at $_DOC"
+else
+    _doc_sto="$(grep -oE '^[[:space:]]*startTimeoutSeconds: [0-9]+' "$_DOC" 2>/dev/null | grep -oE '[0-9]+' | head -1)"
+    if [[ ! "$_doc_sto" =~ ^[0-9]+$ ]]; then
+        fail "🔵 the doc states a startTimeoutSeconds" "could not read one from $_DOC"
+    elif [[ "$_doc_sto" != "$_cfg_sto" ]]; then
+        fail "🔵 the doc's startTimeoutSeconds equals the platform's" \
+             "dagster.md says ${_doc_sto}s, 360-dagster-config.yaml ships ${_cfg_sto}s — the operator reads the doc"
+    else
+        pass "🔵 the doc carries the platform's own startTimeoutSeconds (${_doc_sto}s)"
+    fi
+
+    # ⚠️ And it must say the value does not arrive by upgrading the image.
+    # 1.6.110 shipped the ceiling to a host whose cluster kept running 900,
+    # because the value lives in the deployed Dagster release (ops-dev #1186).
+    #
+    # 🔴 DO NOT ASSERT ON 'uis deploy dagster' HERE. That string already appears
+    # five times in this page for unrelated reasons, so the assertion passed
+    # with the whole delivery warning deleted — I removed the warning to check
+    # and the test stayed green. Assert on what is UNIQUE to the warning: the
+    # ConfigMap an operator reads to see the value the cluster is really running.
+    if grep -q 'start_timeout_seconds' "$_DOC" && grep -q 'dagster-instance' "$_DOC"; then
+        pass "🔵 the doc says how to read the value the cluster is actually running"
+    else
+        fail "🔵 the doc says how to read the running value" \
+             "a ceiling that ships unapplied is a remedy an operator follows to no effect"
+    fi
+fi
+
 # ⚠️ And a smaller operator deadline must still win.
 if grep -qF "[(_timeout | int), $_cap] | min" <<<"$_vars"; then
     pass "⚠️ a smaller --timeout is honoured, not silently overridden"
