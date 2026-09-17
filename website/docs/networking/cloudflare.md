@@ -19,6 +19,23 @@ The novice path — from a fresh provision-host container to a service reachable
 
 This guide assumes rancher-desktop as the target cluster — that's what was verified for this round. The pipeline is cluster-agnostic, so the same commands work against AKS once the platform is up.
 
+### There is no key or certificate to create
+
+The tunnel token is the only credential. It's a self-contained string that embeds the tunnel id and its secret, so you copy it from the dashboard rather than generating anything:
+
+| Not needed | Why |
+|---|---|
+| `cloudflared tunnel login`, `cert.pem`, a per-tunnel credentials file | That's the older certificate-based model. UIS deploys the token-based connector; the old path survives only under `networking/cloudflare/legacy/` |
+| A TLS certificate | Cloudflare terminates TLS at its edge — the cluster serves plain HTTP to the connector |
+| A Cloudflare API token | UIS never calls the Cloudflare API. The DNS record is created by the Public Hostname rule you add in the dashboard |
+| An SSH key | The connector dials out to Cloudflare over HTTPS/QUIC |
+
+`CLOUDFLARE_DNS_TOKEN` in `00-common-values.env.template` is the one thing that looks like a counter-example. It's optional and unrelated to the tunnel: only `ansible/playbooks/utility/u01-add-domains-to-tunnel.yml` reads it, for bulk DNS automation. `uis network verify cloudflare` prints whether it's set and never requires it, so leave the placeholder alone unless you run that playbook.
+
+:::caution One tunnel per cluster
+Routing is configured server-side at Cloudflare, so the token decides which hostnames a cluster answers for. Give a second cluster the same token and it becomes another connector on the same tunnel — Cloudflare will then load-balance those hostnames across both clusters. Create a separate tunnel, with its own hostname, for each cluster you deploy to.
+:::
+
 ## Quick start — three commands
 
 ```bash
@@ -57,6 +74,8 @@ The wizard prompts for the **tunnel token** (required) and the **base domain** (
 | `.uis.secrets/secrets-config/00-common-values.env.template` (patched) | `uis secrets generate` — feeds the token into the cluster's `urbalurba-secrets` k8s Secret |
 
 If the file already exists, the wizard offers three options: skip (keep existing), re-prompt (overwrite), or show (print path + values and exit).
+
+`init` is the one step that needs a real terminal — it reads the token from a prompt and refuses with *"requires an interactive terminal"* when stdin isn't a TTY (piped input, `docker exec` without `-it`, most CI and agent sessions). If you're scripting the rest, run this step by hand and let automation pick up from `up`.
 
 ### 3. Deploy the cloudflared pods
 
