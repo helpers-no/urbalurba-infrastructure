@@ -1221,6 +1221,41 @@ _yaml_field() {
 }
 
 # Validate template-info.yaml
+#
+# 🔴 THIS IS A STRUCTURAL CHECK, AND A CONTENT ONE MUST NOT BE BOLTED ON
+# NAIVELY. If you are here to add "refuse an artifact whose text still contains
+# <known-bad string>" — a stale claim, a retired instruction, a wrong version
+# number — read this first. It is the obvious next feature and the obvious
+# version of it is harmful (ops-dev, urb-agents#1174).
+#
+# ⚠️ A RETRACTION IS EXACTLY WHAT SUCH A SEARCH FINDS. A tenant that corrects
+# itself well keeps the withdrawn sentence INSIDE the withdrawal, because a
+# correction that does not travel with the claim it corrects leaves the next
+# reader meeting the correction without the error.
+#
+# It has already nearly cost a false regression report. dev-templates grepped a
+# newly pinned atlas artifact, found `cannot be launched` still present, and
+# nearly filed the fix as not shipped. It appears only inside the withdrawal;
+# the live text reads "All 685 can be run on demand". Only reading the whole
+# sentence resolves it.
+#
+# 🔴 SO THE INCENTIVE IS PERVERSE: the more honestly a template records its
+# own corrections, the more a naive gate punishes it — and the obvious way to
+# make the gate pass is to DELETE THE RETRACTIONS. A gate that rewards hiding
+# corrections is worse than no gate.
+#
+# 🔵 THE SHAPE THAT SURVIVES is one that knows about withdrawal: the string
+# is a finding only OUTSIDE a retraction, which means the artifact needs a way
+# to MARK one. That is a format decision to agree with tenants first, not a
+# lint to add here.
+#
+# ⚠️ AND THIS REPOSITORY HAS ALREADY MET IT, one layer in, which is the useful
+# precedent. `tests/static/test-config-comments-match-upstream.sh` greps our own
+# comments for claims, and the assertion about a tenant-side fix fires only when
+# the phrase appears WITHOUT the evidence beside it — never on the phrase alone.
+# An earlier assertion in that family did fire on the phrase alone, and it would
+# have blocked the very commit that corrected the claim. The escape clause is
+# not a nicety; it is what makes a text assertion safe to write at all.
 _validate_template_info() {
     local info_file="$1"
     local template_dir="$2"
