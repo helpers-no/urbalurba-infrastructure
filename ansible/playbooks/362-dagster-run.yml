@@ -70,10 +70,17 @@
     # ⚠️ IT DOES NOT CHANGE THIS NUMBER. UIS's job is not to be cut off
     # mid-launch, whatever the launch is spending its time on.
     #
-    # 🔵 AND THE BUDGET IS NOT INVENTED. 900 s is the number this platform
-    # already chose for this same tenant's plan size: `startTimeoutSeconds: 900`
-    # in manifests/360-dagster-config.yaml, raised because a 711-event plan died
-    # with START_TIMEOUT before its pod existed. Same cause, same patience.
+    # 🔵 AND THE BUDGET IS NOT INVENTED. 1800 s is the number this platform
+    # already chose for this same tenant: `startTimeoutSeconds: 1800` in
+    # manifests/360-dagster-config.yaml. Same cause, same patience — and the two
+    # MUST stay equal, because they bound the same wait from opposite ends. A
+    # static test reads both files and fails if they drift.
+    #
+    # ⚠️ IT WAS 900 UNTIL A MEASUREMENT MOVED IT. imac timed a real launch at
+    # 885 s (urb-agents#1160) — fifteen seconds inside the old cap — and the same
+    # job took 364 s on its other run, because serialised connect-per-write loses
+    # to concurrent load. A cap that close to the measurement fails healthy runs
+    # on a busy tick.
     #
     # ⚠️ Capped at the operator's own `--timeout` so a smaller deadline is
     # honoured rather than silently overridden — someone who says "give up after
@@ -82,7 +89,7 @@
     # ⚠️ Blocking for minutes IS the answer here, not a workaround. The
     # alternative is returning before Dagster has submitted the run, which is
     # exactly what produced the orphan.
-    _launch_budget: "{{ [(_timeout | int), 900] | min }}"
+    _launch_budget: "{{ [(_timeout | int), 1800] | min }}"
     # ⚠️ A SEPARATE VAR WITH EXPLICIT PARENTHESES, not `| int + 5` inline.
     # Jinja binds filters tighter than arithmetic, so `x | int + 5` is *probably*
     # `(x|int) + 5` — and "probably" is not good enough for a number that decides
@@ -201,8 +208,11 @@
       ansible.builtin.debug:
         msg:
           - "Launching {{ _job }} — waiting up to {{ _launch_budget }}s for Dagster to confirm it."
-          - "This is not a hang. A large execution plan takes minutes to resolve;"
-          - "one job has been measured at over 300s while another returns in under one."
+          - "This is not a hang, and for a check-heavy job it is not quick."
+          - "MEASURED: a 681-check job planned at ~0.8 events/second — 885s once"
+          - "and 364s on another run of the same job. The spread is concurrent"
+          - "load, not plan size. Planning costs more than twice as long as the"
+          - "run that follows it. A job with four checks returns in under a second."
           - "⚠️  If you interrupt this, a run may already have been created — and it"
           - "    will sit at NOT_STARTED rather than executing. Check with"
           - "    './uis template progress <app>' before launching again."

@@ -190,12 +190,38 @@ _rmflat="$(tr '\n' ' ' <<<"$_rm" | sed 's/#/ /g; s/  */ /g')"
 
 if [[ -z "$_rm" ]]; then
     fail "the run-monitoring block is readable" "sed range matched nothing in $CFG"
-elif grep -qiE 'durable fix is on the tenant side|splitting a monolithic job so' <<<"$_rmflat" \
-     && ! grep -qi 'NOT ESTABLISHED' <<<"$_rmflat"; then
-    fail "🔴 it does not assert that splitting the tenant's job is the fix" \
-         "not established: the arithmetic says N smaller jobs each pay 1/N, and nobody has run that"
+elif grep -qiE 'lever is the tenant|durable fix is on the tenant side|splitting a monolithic job so|smaller jobs each pay' <<<"$_rmflat" \
+     && ! grep -qiE 'NOT ESTABLISHED|store_event_batch' <<<"$_rmflat"; then
+    fail "🔴 a tenant-side fix is named only with the evidence for it" \
+         "1.6.107 removed this claim BECAUSE it was asserted bare, and a tenant decomposed a job for a reason that might not have been the reason"
 else
-    pass "🔴 it does not assert that splitting the tenant's job is the fix"
+    pass "🔴 a tenant-side fix is named only with the evidence for it"
+fi
+
+# 🔴 LIFETIME, NOT DEPTH — and this assertion exists because I got it wrong.
+# I predicted the connection COUNT would read 1-3 during a launch and told the
+# measurer that a stable count meant "pooled". It read ~23: the webserver, the
+# daemon and a run pod hold connections while the churn happens underneath.
+# Anyone repeating my guidance clears NullPool from the right query read the
+# wrong way (urb-agents#1160).
+if grep -qiE 'LIFETIME, NOT DEPTH' <<<"$_rmflat" \
+   && grep -qiE 'uninformative in both directions' <<<"$_rmflat"; then
+    pass "🔴 it says to measure connection LIFETIME, and that depth decides nothing"
+else
+    fail "🔴 it names lifetime as the discriminator" \
+         "depth mixes a held cohort with a churning one and reads as neither — the next reader repeats the mistake this file records"
+fi
+
+# ⚠️ AND IT IS A LATENCY, NOT A FAILURE. `PythonError: too many retries for DB
+# connection` was a hypothesis from #1046 and does not reproduce — two launches
+# succeeded with zero occurrences of it. A file that still describes a failure
+# sends the next reader hunting an exception nothing raises.
+if grep -qiE 'DOES NOT REPRODUCE' <<<"$_rmflat" \
+   && grep -qiE 'latency, not a failure' <<<"$_rmflat"; then
+    pass "⚠️ the retry error is recorded as unreproduced, not as the symptom"
+else
+    fail "⚠️ it does not present the retry error as the symptom" \
+         "the measured claim is that the launch is SLOW, which is smaller and different"
 fi
 
 # ⚠️ Matches the CLAIM, not the words — same reason as the retention assertion.
@@ -227,6 +253,76 @@ if grep -q '711' <<<"$_rmflat" && ! grep -qiE '711 WAS NEVER A CAP|no count limi
          "it is a TIME budget; margin arithmetic against 711 is against a boundary that does not exist"
 else
     pass "🔴 711 is not presented as a cap"
+fi
+
+# ── 🔴 THE CHURN IS MEASURED; ITS CAUSE IS NOT ─────────────────────
+# 1.6.110 shipped this block saying "the missing term is NullPool, and it is now
+# MEASURED rather than read", naming `create_pg_engine` as hard-coding it. Both
+# halves were wrong and atlas caught them at the pinned version
+# (urb-agents#1177):
+#
+#   create_pg_engine only forwards **engine_kwargs; the CALLER passes NullPool
+#   and the WEBSERVER — which serves launchPipelineExecution and therefore
+#   creates the run — calls optimize_for_webserver and is POOLED
+#
+# ⚠️ So the file asserted connection setup per event about a process that pools,
+# in the very block whose 1.6.107 revision exists to stop exactly that. The
+# measurement stands; the explanation does not. A wrong mechanism stated as
+# measured is worse than the unmeasured one it replaced, because the word
+# "measured" is what stops the next reader checking.
+# 🔴 AND THIS ASSERTION NEEDED THE ESCAPE CLAUSE IMMEDIATELY, which is the
+# best available argument for the warning at _validate_template_info (#1174).
+# Its first version fired on the phrase alone — and the corrected block QUOTES
+# the retracted claim, because recording what the file used to say is the point.
+# So the test failed the very commit that withdrew the claim, within the hour of
+# writing down that a naive string gate finds exactly the retractions.
+#
+# ⚠️ The string is a finding only OUTSIDE a withdrawal. That is the same shape
+# as the tenant-lever assertion above, and the third time this file has needed
+# it.
+if grep -qiE 'missing term is NullPool|hard-codes[^.]*NullPool|create_pg_engine hard' <<<"$_rmflat" \
+   && ! grep -qiE 'WHAT IS \*NOT\* ESTABLISHED|Both halves were wrong' <<<"$_rmflat"; then
+    fail "🔴 pooling is not named as the established cause of the churn" \
+         "the webserver pools and is what creates the run; which process churns is still unknown"
+else
+    pass "🔴 pooling is named as retracted, never as the established cause"
+fi
+
+# ⚠️ AND THE UNKNOWN MUST BE NAMED, not merely left out. A block that quietly
+# drops the wrong cause reads as though the churn were explained.
+# ⚠️ ANCHORED ON THE CLAIM, NOT ON A COMMON PHRASE. The first version required
+# "which process", which also occurs in "it does not depend on which process
+# runs it" — a sentence about the VERIFIED half, for an unrelated reason. So
+# deleting the open question left the assertion green.
+#
+# ⚠️ The `application_name` half needed the same treatment: it also appears in
+# the sampler-exclusion note twenty lines down, so removing it from the
+# INSTRUCTION left this green too. Both halves are now anchored on wording that
+# exists only in the sentence being asserted. Fourth first-draft pattern today
+# that matched something other than its subject — the failure is always the
+# same, a word chosen because it is memorable rather than because it is unique.
+if grep -qiE 'CHURN IS REAL AND UNEXPLAINED' <<<"$_rmflat" \
+   && grep -qiE "application_name\`?, which dagster sets" <<<"$_rmflat"; then
+    pass "⚠️ it says the churn is unexplained, and names the column that would settle it"
+else
+    fail "⚠️ the open question is stated with its next step" \
+         "dropping a retracted cause without naming what replaced it reads as explained"
+fi
+
+# 🔵 AND THE TENANT LEVER MUST REST ON THE VERIFIED HALF. store_event_batch
+# excluding this event type is source at the pinned version; the churn is a
+# measurement with no attributed cause. The lever follows from the first and not
+# the second, and the file has to say which.
+# ⚠️ `store_event_batch` alone is too weak here too — it also appears in the
+# durable-fix sentence at the end of the block, so the lever could lose its
+# source and stay green. The anchor is a FILE-AND-LINE citation, which exists
+# only where the claim is actually sourced.
+if grep -qiE 'event_log\.py:[0-9]' <<<"$_rmflat" \
+   && grep -qiE '1\.13\.19' <<<"$_rmflat" && grep -qiE '0\.29\.19' <<<"$_rmflat"; then
+    pass "🔵 the verified claim cites file and line, and the version it was verified at"
+else
+    fail "🔵 the source claim names its version and lines" \
+         "the first reading was fifteen patch releases behind the pin, and only luck kept its conclusion standing"
 fi
 
 echo ""
