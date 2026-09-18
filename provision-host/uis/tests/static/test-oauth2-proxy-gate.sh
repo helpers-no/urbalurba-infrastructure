@@ -511,4 +511,114 @@ else
     fail_test "the refusal message does not state the real rule"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.126: rotating a credential must actually roll the pod.
+#
+# The three credentials arrive as env.valueFrom.secretKeyRef. Kubernetes does
+# not restart a pod when a referenced Secret changes and the pod template was
+# otherwise byte-identical between runs, so `deploy` had nothing to roll: it
+# printed success while the gate carried on with the OLD credentials, and the
+# breakage would surface later when the old value was revoked at the provider.
+# ---------------------------------------------------------------------------
+
+start_test "the pod template carries a secret version, so a rotation rolls it"
+if _code_only "$DEPLOY" | grep -q 'urbalurba.io/secret-version: "{{ oauth2_secret_version }}"'; then
+    pass_test
+else
+    fail_test "no secret version on the pod template — a credential rotation would roll nothing"
+fi
+
+start_test "the secret version sits on the POD template, not the Deployment metadata"
+# An annotation on the Deployment's own metadata changes nothing about the pod,
+# so it would look like this fix and roll nothing. Assert it appears after the
+# pod template opens. The render suite checks the parsed position too; this one
+# runs on a dev host, where no Jinja renderer exists.
+_tpl=$(grep -n '^  template:' "$DEPLOY" | head -1 | cut -d: -f1)
+_ann=$(grep -n 'urbalurba.io/secret-version' "$DEPLOY" | grep -v '^\s*#' | head -1 | cut -d: -f1)
+if [[ -n "$_tpl" && -n "$_ann" && "$_ann" -gt "$_tpl" ]]; then
+    pass_test
+else
+    fail_test "secret version is not inside the pod template (template=$_tpl annotation=$_ann)"
+fi
+
+start_test "the playbook passes the secret version it just read"
+if _code_only "$SETUP" | grep -q 'oauth2_secret_version: "{{ urbalurba_secrets.resources\[0\].metadata.resourceVersion }}"'; then
+    pass_test
+else
+    fail_test "the template variable is never supplied, so the render fails or the annotation is constant"
+fi
+
+start_test "the deploy waits for the rollout, not for any pod being Running"
+# During a rolling update the OLD pod is Running, so an until-Running loop passes
+# instantly and the play asserts against a gate that was never replaced. That is
+# how "deployed successfully" was printed over the previous credentials.
+# 🔴 Match the ARGV, not the word. The first version grepped for 'rollout'
+# anywhere, which matched the register name `gate_rollout` — so replacing the
+# command with `kubectl get deployment` left the assertion passing. Found by
+# mutation, the same weak-assertion shape as 1.6.125's middleware-name check.
+if _code_only "$SETUP" | grep -qE '^\s+- rollout$' \
+   && _code_only "$SETUP" | grep -qE '^\s+- status$' \
+   && _code_only "$SETUP" | grep -qE '^\s+- deployment/oauth2-proxy$'; then
+    pass_test
+else
+    fail_test "no 'kubectl rollout status deployment/oauth2-proxy' — the play can continue against the pod it meant to replace"
+fi
+
+start_test "the old until-Running loop is gone rather than left beside it"
+# Leaving it is not harmless: it re-introduces the instant pass and makes the
+# rollout wait look redundant to the next reader.
+# 🔴 grep -F, not -E. The first version of this check used an ERE containing an
+# unescaped `|` and `(`, so it was an ALTERNATION and matched any mention of
+# gate_pods.resources at all. It failed — and the failure was real for a
+# different reason than the pattern claimed, which is how the undefined
+# gate_pods variable was found. A literal match cannot go wrong that way.
+_pat="gate_pods.resources | map(attribute='status.phase')"
+if ! printf '%s\n' "$_pat" | grep -qF "$_pat"; then
+    fail_test "positive control failed: the until-Running pattern matches nothing"
+elif _code_only "$SETUP" | grep -qF "$_pat"; then
+    fail_test "the until-Running loop is still there: $(_code_only "$SETUP" | grep -nF "$_pat" | head -1)"
+else
+    pass_test
+fi
+
+start_test "a pod serving an older secret version fails the deploy"
+if grep -q '08c Fail if a pod is still serving an older secret version' "$SETUP"; then
+    pass_test
+else
+    fail_test "nothing re-queries the running pod, so a silent non-rotation still reports success"
+fi
+
+# ---------------------------------------------------------------------------
+# A lint for the class of bug above, not just the instance.
+#
+# Deleting a task takes its `register:` with it, and any OTHER task still reading
+# that variable then fails at runtime with "'x' is undefined" — on every deploy,
+# for everyone. It is invisible to review because the reference and the register
+# are far apart, and no YAML check catches it. This found a real one in 1.6.126:
+# the until-Running loop was removed and two references in the report survived.
+# ---------------------------------------------------------------------------
+
+start_test "every registered variable these playbooks read is also registered"
+_missing=""
+for _pb in "$SETUP" "$REMOVE"; do
+    # names that are registered in this file
+    _regs=$(_code_only "$_pb" | sed -n 's/^[[:space:]]*register:[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' | sort -u)
+    # names dereferenced as a registered result: x.stdout / x.rc / x.resources
+    _refs=$(_code_only "$_pb" \
+        | grep -oE '[A-Za-z_][A-Za-z0-9_]*\.(stdout|stdout_lines|rc|resources)' \
+        | cut -d. -f1 | sort -u)
+    for _r in $_refs; do
+        # play vars and facts are legitimate non-register sources; only flag a
+        # name that looks like a task result and has no register anywhere here.
+        if ! printf '%s\n' "$_regs" | grep -qx "$_r"; then
+            _missing="$_missing $(basename "$_pb"):$_r"
+        fi
+    done
+done
+if [[ -z "$_missing" ]]; then
+    pass_test
+else
+    fail_test "read but never registered —$_missing"
+fi
+
 print_summary

@@ -274,8 +274,82 @@
         oauth2_issuer: "{{ gate_config.issuer | default('') }}"
         oauth2_allowed_emails: "{{ gate_config.allowed_emails | default([]) }}"
         oauth2_cookie_domain: "{{ gate_config.cookie_domain | default('') }}"
+        # Read in task 03, so this costs no extra call. See the annotation in the
+        # template: without it a credential rotation rolls nothing and the gate
+        # keeps using the old values while the deploy reports success.
+        oauth2_secret_version: "{{ urbalurba_secrets.resources[0].metadata.resourceVersion }}"
 
-    - name: "08 Wait for the gate pod to be Running"
+    # 🔴 WAIT FOR THE ROLLOUT, NOT FOR "A POD IS RUNNING".
+    #
+    # The old check asked whether every pod with app=oauth2-proxy was Running.
+    # During a rolling update the OLD pod is Running, so it passed instantly and
+    # the play went on to assert against a gate that had not been replaced. That
+    # is how "✓ deployed successfully" was printed over a pod still holding the
+    # previous credentials.
+    #
+    # `rollout status` waits for the new ReplicaSet to be available and returns
+    # non-zero on timeout, so a stuck roll fails the play instead of passing it.
+    - name: "08 Wait for the new gate pod to replace the old one"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig={{ kubeconfig_file }}
+          - rollout
+          - status
+          - deployment/oauth2-proxy
+          - -n
+          - "{{ gate_namespace }}"
+          - --timeout=180s
+      register: gate_rollout
+      changed_when: false
+
+    - name: "08b Confirm the running pod carries the secret version just applied"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig={{ kubeconfig_file }}
+          - get
+          - pods
+          - -n
+          - "{{ gate_namespace }}"
+          - -l
+          - app=oauth2-proxy
+          - -o
+          - jsonpath={.items[*].metadata.annotations.urbalurba\.io/secret-version}
+      register: running_secret_version
+      changed_when: false
+
+    # 🔵 The re-query the tester asked for, applied here: prove the pod that is
+    # actually serving is the one built from the credentials we just read, rather
+    # than trusting that the apply implied it.
+    - name: "08c Fail if a pod is still serving an older secret version"
+      ansible.builtin.fail:
+        msg: |
+          The gate is running a pod built from a different secret version.
+
+          expected: {{ urbalurba_secrets.resources[0].metadata.resourceVersion }}
+          serving:  {{ running_secret_version.stdout | default('(none)') }}
+
+          A credential rotation has not taken effect. The old values are still
+          in use and will keep working until they are revoked at the provider.
+      # A plain string comparison, deliberately. replicas is 1, so the jsonpath
+      # yields exactly one value; if an old pod lingers it yields two and the
+      # strings differ, which fails the play — wrong in the safe direction. A
+      # split/unique/difference chain would read better and cannot be rendered on
+      # a dev host to prove it.
+      when: >-
+        (running_secret_version.stdout | default('') | trim)
+        != urbalurba_secrets.resources[0].metadata.resourceVersion
+
+    # Read once for the report below. NO until-loop: `rollout status` above has
+    # already waited for the new ReplicaSet, and re-adding a wait here would
+    # restore the instant-pass this release removed.
+    #
+    # ⚠️ This register is load-bearing. Task 10 reads gate_pods, and deleting the
+    # until-loop took its `register:` with it — which left two references to an
+    # undefined variable and would have failed every deploy. Caught by a static
+    # assertion, not by review.
+    - name: "08d Read the gate pod for the report"
       kubernetes.core.k8s_info:
         kind: Pod
         namespace: "{{ gate_namespace }}"
@@ -283,11 +357,7 @@
           - "app=oauth2-proxy"
         kubeconfig: "{{ kubeconfig_file }}"
       register: gate_pods
-      until:
-        - gate_pods.resources | length > 0
-        - gate_pods.resources | map(attribute='status.phase') | list | select('equalto', 'Running') | list | length == gate_pods.resources | length
-      retries: 24
-      delay: 5
+      changed_when: false
 
     # A RUNNING POD IS NOT A WORKING GATE. /ping answers before oauth2-proxy has
     # ever contacted the provider, so a wrong client secret, an unregistered
