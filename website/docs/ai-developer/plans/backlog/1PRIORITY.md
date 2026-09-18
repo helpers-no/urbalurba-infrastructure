@@ -2,7 +2,7 @@
 
 **Purpose**: triage tool, not a roadmap. Decides *what to investigate next* — not *what to build next*. The 38 INVESTIGATE files in `backlog/` were written at different times for different reasons; this doc separates the ones ready to be done from the ones that should wait, and orders the ready ones by what they unblock.
 
-**Last updated**: 2026-09-10 (fourteenth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
+**Last updated**: 2026-09-18 (fifteenth refresh). Re-rank whenever an INVESTIGATE moves to `completed/`, a child PLAN ships, or a new INVESTIGATE lands.
 
 **How to read the tiers**: tier order is the order to *start* the investigation, not the order to *finish*. Tier 1 means "next on deck"; Tier 4 means "don't open this yet — wait for prereqs or product clarity." Tier 0 is "in flight — no fresh investigation work needed but the file still lives here because work isn't fully shipped."
 
@@ -51,6 +51,44 @@ from git alone comes up with no application secrets.**
 services advertise `configure`; two have handlers. The two that work are exactly the two
 Atlas needs — so the provisioning half of the rule works for the first tenant and fails
 for the second. Retract the six; build none on speculation.
+
+---
+
+## Decision — Traefik v3 is a requirement (Terje, 2026-09-18)
+
+**Stated for the first time, and it was already true.** Every Traefik object in
+`manifests/` uses `apiVersion: traefik.io/v1alpha1` — the v3 CRD group — and
+**none** uses v2's `traefik.containo.us` (34 of 34, counted). So UIS has required
+v3 since the manifests were written; what was missing was saying so and checking
+it.
+
+**Where the two platforms stand:**
+
+| Platform | Traefik | How |
+|---|---|---|
+| rancher-desktop | **v3.6.13** | k3s manages it via a HelmChart CR; `003-setup-traefik.yml` detects that and **skips** the helm install |
+| AKS / GCP / AWS / bare k8s | chart **39.0.7** | UIS installs it, pinned for rancher-desktop parity (`traefik-39.0.701+up39.0.7`, proxy `3.6.13`) |
+
+🔴 **The gap is that nothing asserts the running version.** On rancher-desktop UIS
+installs nothing, so the version is whatever k3s shipped — and applying v3 CRDs
+to a v2 controller produces the failure mode recorded in `#199`: **every service
+404s while the playbooks report success and exit 0.** Same shape as the three
+Cloudflare commands fixed in 1.6.118 — the system has the information and reports
+the opposite.
+
+⚠️ **The UIS-managed install is the half that needs work** (Terje: *"on other
+systems we must install traefik into uis. here we need to do an update"*). The pin
+exists for parity, so it is only correct as long as it tracks what
+rancher-desktop ships; the playbook's own note says the two *"migrate together as
+one coordinated change"* when k3s moves to chart v40. Nothing enforces that
+either — it is a comment, not a check.
+
+**What the decision unblocks:** `PathRegexp` is v3-only, and per-path auth
+policies need it — one gate for a host and a stricter gate for a subset of its
+paths. Without v3 that has to be expressed as a path *prefix* or a separate
+hostname, which would mean changing a tenant's existing URL convention. With v3
+stated, the tenant's convention survives untouched. See
+`PLAN-service-oauth2-proxy`.
 
 ---
 
@@ -524,6 +562,7 @@ INVESTIGATEs that still live in `backlog/` because their work isn't fully shippe
 |---|---|---|---|
 | **NEW** | [templates-multi-surface-application](INVESTIGATE-templates-multi-surface-application.md) | S–M | **Filed 2026-09-07 from the first real application tenant** (`urb-agents#159`). Ranked Tier 1 for two independent reasons. First, **there is a person waiting**: a front-end is being built against this tenant's API, so the install being four hand-sequenced steps is on someone's critical path. Second, **TPL-F3 is a latent defect regardless of this tenant** — `template.sh:405` calls `uis deploy "$svc"` with no `--app` while the configure call two lines below passes `--app`, so the two halves of one loop disagree about whether a service is multi-instance; any multi-instance service is unusable from a template today. ⚠️ **This is option A and it must stay option A.** Do not let it grow into a UIS `Application` type — [ANALYSIS-nais-uis](./ANALYSIS-nais-uis.md) §4 item 13 defers that behind items 1, 3 and 5, none of which have landed, and §4's own note is that building the declaration before the capabilities is the way to get a half-built abstraction. The mechanism to extend already exists and is called a template. **TPL-Q3 (may an app ship its own template from its own repo?) needs a product ruling from Terje, not a design** — it means executing a deploy plan, and piping an init file into `psql`, from an arbitrary repository. |
 | **NEW** | [system-topology-coverage](INVESTIGATE-system-topology-coverage.md) | M | **Filed 2026-08-26 from an ops requirement.** Three defects in one morning, all the same class: an assumption true only of the development topology. The tester and production differ on exactly two axes — context name and postgres shape — and all three defects lived there. Ranked Tier 1 because it is the systemic version of a failure that has already cost four hand-found production defects, and because part of the answer is cheap: a **lint**, not a second cluster. Outcomes 1 and 4 shipped; **outcome 2 (exercise the proxy topology) is open**. ⚠️ Do not "fix" this by switching the tester to production's shape — in-cluster postgres is a supported configuration and swapping moves the blind spot. |
+| **NEW** | Traefik v3 — declare it, assert it, and keep the managed install in parity | S–M | **Filed 2026-09-18 from Terje's decision above.** Two pieces, both small, neither done. (1) **Assert the running version** before applying v3 CRDs, and refuse with the reason. Today nothing checks, and `#199`'s failure mode is the worst kind: v3 manifests on a v2 controller 404 every service *while the playbook exits 0*. (2) **Keep the UIS-managed install in parity** — `003-setup-traefik.yml` pins chart 39.0.7 to match what rancher-desktop's k3s ships, and the playbook's note that both sides *"migrate together as one coordinated change"* is a comment rather than a check, so the two can drift silently. ⚠️ **Ranked Tier 1 because a tenant is waiting**: per-path auth policies need `PathRegexp`, which is v3-only, and a service being migrated onto UIS gates restricted pages by a path pattern today. Without the assertion we would be building on an assumption the platform does not verify. 🔵 **Related but not the same as Tier 2 #9 (version-pinning)** — that one is about image tags across services; this is a *minimum platform version* with no enforcement. |
 | 1 | [secrets-template-defaults-clarity](INVESTIGATE-secrets-template-defaults-clarity.md) | S | Foundational fix to the secrets workflow every service depends on. The current silent-overwrite confusion between `00-common-values.env.template` and `default-secrets.env` produces bug reports from contributors and slows every onboarding. Investigation already half-shipped via the existing template scaffolding; closing it out is a small read-and-decide. |
 | 2 | [verification-playbooks-usage](INVESTIGATE-system-verification-playbooks-usage.md) | M | **Promoted from Tier 2 on evidence, and the evidence keeps arriving.** Written 2026-03-12, it states the risk as "verification playbooks present but not wired into active setup or test flows → deployments report success when no real validation happened." Three separate confirmations since: (1) `031-test-alloy.yml` was reachable by no command at all while its docs page told users to run it; (2) uptime-kuma's verify was invisible to `test-all`; (3) **`kubectl run --rm -i` silently returns rc=0 with empty stdout** when the container outlives the attach — every `until:` asserting on stdout then reads a successful call as a failure. (3) is the serious one: the same idiom appears across other services' verify playbooks, so an unknown number of them can fail or pass for reasons unrelated to the service. All three are fixed ad-hoc; this investigation is the systematic version. **Stays Tier 1, not Tier 0, on purpose** — its child plans are point fixes to the services that happened to break, not the investigation's output. |
 | 3 | [external-or-in-cluster-services](INVESTIGATE-system-external-or-in-cluster-services.md) | M | **New 2026-08-13.** OpenBao, the registry cache and the backup chain run on Odin, built by hand, with no service definition — the exact state Alloy was in before it was made a real service. Rebuild Odin and they are rebuilt from memory; OpenBao holds the vault recovery keys. The requirement is that they also run on Rancher Desktop, which needs one convention: how a service is *provided externally* in one installation and *deployed in-cluster* in another, behind one interface. `.uis.extend/` is the half-built precedent (shipped twice, for watching external things, never for substituting them), and six database services already live this shape undeclared. A full `pct list` of Odin found **six** components, not three: `pg` and `minio` already have both a service definition *and* a hand-built proxy (unproductised, not missing), `bao` and the `registry` mirrors have nothing, and **`nas` (Samba/NFS) is parked pending a scope decision** — the laptop answer is probably Rancher Desktop's existing storage class rather than shipping Samba, but that should be decided deliberately. `ops` is not a service: it is the host running `uis-provision-host` itself. **First child plan SHIPPED 2026-08-14** — PostgreSQL and MinIO both run from the convention, and the reference installation has zero hand-written proxies left. Remaining children: `bao`, the `registry` mirrors, cluster backup. **Decide alongside the observability artifact convention** — same question in a different costume, and two answers would never converge. |
