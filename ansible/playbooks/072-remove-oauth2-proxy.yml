@@ -2,14 +2,32 @@
 # file: ansible/playbooks/072-remove-oauth2-proxy.yml
 # Description: Remove the oauth2-proxy gate and every route it fronts.
 #
-# ⚠️ PROTECTED SERVICES FAIL CLOSED, NOT OPEN.
-# Removing the gate removes the protected IngressRoutes with it, so those hosts
-# stop being reachable rather than becoming anonymous. That is the safe
-# direction and it is deliberate — the alternative would silently republish an
-# admin UI, which is the incident this whole mechanism exists to prevent.
+# 🔴 REMOVING THE GATE REOPENS THE HOSTS. IT DOES NOT CLOSE THEM.
 #
-# To keep a service serving without a login, remove it from protected-services.yaml
-# and re-run the setup playbook. Do not reach for this one.
+# This header used to claim the opposite: that removing the gate made the
+# protected hosts unreachable rather than anonymous, and that this was the safe
+# direction. It was false. The tester measured it on 2026-09-18: after
+# `./uis undeploy oauth2-proxy`, dagster.localhost answered 200.
+#
+# ⚠️ The old wording is deliberately NOT quoted here. test-oauth2-proxy-gate.sh
+# asserts that phrasing is absent from this file, and an assertion cannot tell a
+# quotation from a claim — the same trap as Jinja syntax inside a YAML comment,
+# which broke a release on the same day.
+#
+# The reason is that the generated route is not the service's only route. A UIS
+# service ships its own IngressRoute; the gate adds a second, higher-priority one
+# in front of it. Delete the generated route and the service's own route is
+# simply uncovered — anonymous again, exactly as it was before the gate existed.
+# The gate can only take away what it added.
+#
+# So undeploy is the wrong verb for "keep it serving, drop the login" only
+# because it also deletes the gate pod, not because it closes anything. To
+# un-gate and keep the gate running, set `protected: []` in
+# protected-services.yaml and re-run the SETUP playbook.
+#
+# ⚠️ And do not restore the old claim on the grounds that it sounds safer. A
+# comment asserting a safety property the code does not have is worse than no
+# comment: it is the reason nobody checked.
 
 - name: Remove oauth2-proxy login gate
   hosts: localhost
@@ -113,6 +131,25 @@
               -l urbalurba.io/generated-by=oauth2-proxy
       when: (leftover.stdout | default('') | trim) != ''
 
+    # ⚠️ ASKED BEFORE THE DELETE, so the summary can say what was actually
+    # removed. The tester ran undeploy twice in a row: the second run had no
+    # namespace left to delete and the summary still said "and the gate
+    # namespace". Harmless in itself, and the same class of defect as the "✓
+    # removed" that shipped a 500 — a summary claiming work it did not do.
+    - name: "04c Was the gate namespace still there?"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig={{ kubeconfig_file }}
+          - get
+          - namespace
+          - "{{ gate_namespace }}"
+          - -o
+          - name
+      register: gate_ns
+      changed_when: false
+      failed_when: false
+
     - name: "05 Remove the gate namespace and everything in it"
       kubernetes.core.k8s:
         kind: Namespace
@@ -124,13 +161,36 @@
     # which assumed a protected host is never .localhost. Gating dagster.localhost
     # is exactly what the tester was asked to do, so the claim was false in the
     # case being tested. Say what was removed instead of asserting what was not.
+    # 🔴 TWO TASKS, NOT A TERNARY.
+    #
+    # `x == y | ternary(a, b)` is the precedence bug that broke the setup
+    # playbook on 2026-09-18, and no Jinja renderer exists on the maintainer's
+    # host to prove a replacement expression before it ships. A `when` is
+    # plain Ansible semantics that reads the same to everyone.
+    - name: "05b The namespace was there and has been removed"
+      ansible.builtin.set_fact:
+        gate_ns_phrase: " and the gate namespace"
+      when: (gate_ns.rc | default(1)) == 0
+
+    - name: "05c The namespace was already gone before this run"
+      ansible.builtin.set_fact:
+        gate_ns_phrase: ", and the gate namespace was already gone"
+      when: (gate_ns.rc | default(1)) != 0
+
     - name: "06 Summary"
       ansible.builtin.debug:
         msg:
-          - "✓ oauth2-proxy removed: {{ (generated.stdout_lines | default([])) | length }} route(s)/middleware(s) and the gate namespace."
+          - "✓ oauth2-proxy removed: {{ (generated.stdout_lines | default([])) | length }} route(s)/middleware(s){{ gate_ns_phrase }}."
+          - ""
+          - "The namespace reads Terminating for a minute or two afterwards. That is"
+          - "ordinary Kubernetes finalisation, not a failed removal — it is empty"
+          - "throughout and disappears on its own."
           - ""
           - "Every host that was behind the gate is now reachable WITHOUT a login."
-          - "That is the opposite of failing closed, and it is deliberate: leaving a"
-          - "route pointing at a deleted gate returns 500, which is worse than open."
+          - "That is deliberate. The gate added a route in front of each service's own"
+          - "route; deleting it uncovers the original, so the host is anonymous again"
+          - "exactly as it was before the gate existed. Leaving the route in place"
+          - "instead would point ForwardAuth at a deleted gate and return 500, which"
+          - "is a broken service rather than a closed one."
           - ""
           - "Hosts not listed above were never gated and are unaffected."

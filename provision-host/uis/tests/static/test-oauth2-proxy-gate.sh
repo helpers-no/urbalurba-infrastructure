@@ -386,4 +386,86 @@ else
     fail_test "an empty first deploy would silently do nothing"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.126: a summary must not claim work it did not do.
+#
+# The tester ran undeploy twice; the second run had no namespace left to delete
+# and the summary still said "and the gate namespace". Cosmetic on its own, and
+# the same class as the "✓ oauth2-proxy removed" that shipped a 500 — a report
+# asserting an action the code did not take.
+# ---------------------------------------------------------------------------
+
+start_test "the summary's namespace claim is conditional, not hardcoded"
+if _code_only "$REMOVE" | grep -q 'route(s)/middleware(s){{ gate_ns_phrase }}'; then
+    pass_test
+else
+    fail_test "the summary states the namespace outcome unconditionally"
+fi
+
+start_test "both namespace outcomes are actually populated"
+# One assertion for the interpolation is not enough: {{ gate_ns_phrase }} with
+# no set_fact behind it renders empty on one path and says nothing at all. The
+# weak-assertion lesson from 1.6.125 — check the definition AND the reference.
+if grep -q 'when: (gate_ns.rc | default(1)) == 0' "$REMOVE" \
+   && grep -q 'when: (gate_ns.rc | default(1)) != 0' "$REMOVE" \
+   && [[ "$(grep -c 'gate_ns_phrase:' "$REMOVE")" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "gate_ns_phrase is referenced but not set on both paths"
+fi
+
+start_test "the namespace is queried BEFORE it is deleted"
+# Asked after the delete, the answer is always "gone" and the summary is always
+# wrong in the same direction.
+_q=$(grep -n '04c Was the gate namespace still there' "$REMOVE" | cut -d: -f1)
+_d=$(grep -n '05 Remove the gate namespace' "$REMOVE" | cut -d: -f1)
+if [[ -n "$_q" && -n "$_d" && "$_q" -lt "$_d" ]]; then
+    pass_test
+else
+    fail_test "the namespace check does not precede the deletion (query=$_q delete=$_d)"
+fi
+
+start_test "the summary warns that Terminating is not a failure"
+if _code_only "$REMOVE" | grep -q 'Terminating'; then
+    pass_test
+else
+    fail_test "an operator checking immediately sees Terminating and reads it as a failed removal"
+fi
+
+# --- negative assertions, each with a positive control ---
+#
+# An empty grep is not evidence. On 2026-09-18 `strings` was absent from the
+# maintainer's host and 0 hits were read as proof of absence, twice. So every
+# absence check below first proves its own pattern can match.
+
+start_test "no ternary filter in either oauth2 playbook"
+_tern='[|][[:space:]]*ternary[[:space:]]*[(]'
+if ! printf '%s\n' 'msg: "{{ x == 1 | ternary(a, b) }}"' | grep -qE "$_tern"; then
+    fail_test "positive control failed: the ternary pattern matches nothing, so its absence proves nothing"
+elif _code_only "$SETUP" "$REMOVE" 2>/dev/null | grep -qE "$_tern"; then
+    fail_test "a ternary is back: $(_code_only "$SETUP" "$REMOVE" | grep -nE "$_tern" | head -1)"
+else
+    pass_test
+fi
+
+start_test "undeploy does not claim the hosts fail closed"
+# It does not, and the tester measured 200 after an undeploy. The gate adds a
+# route in FRONT of each service's own route, so deleting it uncovers the
+# original. This assertion reads the header, so it cannot use _code_only.
+_claim='stop being reachable|fail closed|FAIL CLOSED'
+if ! printf '%s\n' '# protected services fail closed, not open' | grep -qE "$_claim"; then
+    fail_test "positive control failed: the claim pattern matches nothing"
+elif grep -qE "$_claim" "$REMOVE"; then
+    fail_test "the header claims a safety property the code does not have: $(grep -nE "$_claim" "$REMOVE" | head -1)"
+else
+    pass_test
+fi
+
+start_test "undeploy states the measured behaviour instead"
+if grep -q 'REOPENS THE HOSTS' "$REMOVE"; then
+    pass_test
+else
+    fail_test "removing the false claim is half the fix; the true one has to be written down"
+fi
+
 print_summary
