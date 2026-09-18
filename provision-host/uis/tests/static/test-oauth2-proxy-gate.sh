@@ -293,4 +293,33 @@ for f in "$DEPLOY" "$MW"; do
     fi
 done
 
+# ---------------------------------------------------------------------------
+# 🔴 NO JINJA STATEMENT TAG IN A YAML COMMENT, IN ANY TEMPLATE IN THE REPO.
+#
+# A `#` line is a YAML comment, not a Jinja one: Ansible renders the file as
+# text and parses every line. A quoted loop-open tag with no loop expression
+# broke 1.6.123 at line 5, before any real tag was reached.
+#
+# 🔵 EXPRESSION tags ({{ }}) in comments are deliberate and must stay — four
+# shipped templates interpolate a service name into the rendered comment. Only
+# STATEMENT tags ({%) are forbidden, and no shipped template has one, so this
+# forbids the mistake without touching working code.
+#
+# ⚠️ This is a cheap guard, not the real one. The real one is
+# test-jinja-templates-render.sh, which renders the templates. A static check
+# has now twice passed on a template that could not be parsed.
+# ---------------------------------------------------------------------------
+start_test "no template has a Jinja statement tag inside a YAML comment"
+offenders=""
+for t in "$REPO"/manifests/*.j2; do
+    if grep -qE '^[[:space:]]*#.*\{%' "$t" 2>/dev/null; then
+        offenders="$offenders $(basename "$t")"
+    fi
+done
+if [[ -z "$offenders" ]]; then
+    pass_test
+else
+    fail_test "Jinja parses # lines — these will fail to render:$offenders"
+fi
+
 print_summary

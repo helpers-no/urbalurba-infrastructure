@@ -1,20 +1,31 @@
 # 072-oauth2-proxy-middleware.yaml.j2
 #
-# 🔴 NO JINJA BLOCK TAG MAY END A LINE IN THIS FILE.
+# 🔴 NEVER WRITE JINJA SYNTAX IN A COMMENT IN THIS FILE.
 #
-# The host match was a {% for %}…{% endfor %} loop. Ansible's template module
-# sets trim_blocks=yes by default, which swallows the newline after a block tag —
-# so a line ending in {% endfor %} merged with the line below it and YAML saw
-# `kind: Rule` as a second mapping value on the match line. The tester found it
-# on 2026-09-18 and isolated it exactly: the other route used the same loop but
-# was followed by plain text (` && PathPrefix(...)`), so its newline survived and
-# it did not error. One line ended with a block tag; there was exactly one error.
+# A `#` line is a YAML comment. It is NOT a Jinja comment. Ansible renders this
+# file as text and never sees YAML, so Jinja parses every line including the
+# ones starting with `#`.
 #
-# Fixed with a single expression rather than {% endfor +%}. The whitespace-control
-# modifier would also work, but it leaves correctness depending on a Jinja option
-# that cannot be rendered or tested on a dev host — no Jinja2, no docker, no
-# cluster. `join` is plain semantics that can be unit-tested, and an expression
-# is not a block tag, so trim_blocks never applies.
+# On 2026-09-18 the header here explained a previous bug by quoting the loop it
+# had replaced. The quoted loop-open tag had no loop expression, so Jinja failed
+# on line 5 with "Expected an expression, got 'end of statement block'" and never
+# reached line 37. A comment describing a Jinja bug was itself a Jinja bug, and
+# it broke the release that fixed the first one.
+#
+# Describe template constructs in prose. If syntax must be shown, use a Jinja
+# comment block, not a YAML one.
+#
+# 🔴 AND NO JINJA BLOCK TAG MAY END A LINE.
+#
+# Ansible sets trim_blocks=yes, which swallows the newline after a block tag, so
+# such a line merges with the one below it. That produced "mapping values are not
+# allowed here" when the host match was built with a loop. The tester isolated it
+# exactly: the other route used the same construct but was followed by plain
+# text, so its newline survived and it did not error.
+#
+# The host match is therefore a single expression using `join`, not a loop. An
+# expression is not a block tag, so trim_blocks cannot apply to it, and `join`
+# is plain semantics that can be unit-tested without Jinja.
 #
 # The Traefik ForwardAuth middleware that puts a service behind the gate, plus
 # the unauthenticated route that lets the sign-in round trip complete.
