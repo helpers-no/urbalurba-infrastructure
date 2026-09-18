@@ -77,8 +77,26 @@ spec:
           # conformance C9 (version parity in dev/test).
           image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4-alpine
           args:
-            # Auth-only: no --upstream. Traefik carries the traffic.
             - --http-address=0.0.0.0:4180
+            # 🔴 THE GATE MUST ANSWER 302, NOT 401, OR NOBODY IS EVER OFFERED A LOGIN.
+            #
+            # Measured by the tester on 2026-09-18: an unauthenticated request got
+            # a bare 401 with no Location. The cause was the middleware's address,
+            # not Traefik. In oauthproxy.go's normal-path handler:
+            #
+            #   ErrNeedsLogin -> if isAjax || isAPIPath -> 401 JSON
+            #                 -> else if SkipProviderButton -> doOAuthStart()  = 302
+            #
+            # /oauth2/auth is a DIFFERENT handler whose entire purpose is to answer
+            # 401 — it exists for nginx's auth_request, where nginx turns the 401
+            # into a redirect via error_page. Traefik has no error_page, so it
+            # relays the 401 verbatim. Correct behaviour on a wrong address.
+            #
+            # So the middleware now asks for the ROOT, which is the normal-path
+            # handler, and this static upstream is what an AUTHENTICATED request
+            # gets: 202, a 2xx, which Traefik accepts as "allowed". Without it the
+            # root would have no upstream to proxy to.
+            - --upstream=static://202
             - --reverse-proxy=true
             - --provider={{ oauth2_provider }}
 {% if oauth2_provider == 'oidc' %}

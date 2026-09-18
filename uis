@@ -1017,6 +1017,32 @@ pull_container() {
             *)          log_warn "Launcher: could not be updated. The image is new; this file is not." ;;
         esac
 
+        # 🔴 THE PULL RESTARTS WITH THE OLD LAUNCHER AND INSTALLS THE NEW ONE
+        # AFTERWARDS, SO THE NEW START PATH NEVER RUNS DURING THE PULL.
+        #
+        # Read the order above: stop, start, cleanup, update_launcher. The
+        # restart uses whichever start_container the CURRENT file has, and the
+        # replacement lands after it. So anything a release adds to the start
+        # path is skipped on the very pull that delivers it, and only appears on
+        # the next `./uis restart`.
+        #
+        # The tester hit this on 2026-09-18 pulling 1.6.122: the structural
+        # secrets-template sync and a new .uis.extend default both failed to
+        # appear, and only a manual restart produced them (#1226). ⚠️ That is the
+        # same class as the defect 1.6.122 fixed — correct in the image,
+        # unreachable on the path an operator takes. I shipped the fix behind the
+        # same kind of seam it was fixing.
+        #
+        # Run the container's own init here rather than restarting a second time.
+        # The container is already on the NEW image, so this is the new init; it
+        # is idempotent (every copy is guarded, the template sync diffs first)
+        # and far cheaper than another stop/start. Not silenced — a sync that
+        # cannot complete should say so.
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
+            docker exec "$CONTAINER_NAME" /mnt/urbalurbadisk/provision-host/uis/manage/uis-cli.sh init || \
+                log_warn "Post-pull init did not complete; new config defaults or secrets keys may be missing. Try: ./uis restart"
+        fi
+
         # 🔴 A SUCCESSFUL PULL IS NOT THE SAME AS GETTING THE VERSION YOU WERE
         # TOLD ABOUT, and until now this said "Image updated successfully" and
         # printed the OLD version either way.

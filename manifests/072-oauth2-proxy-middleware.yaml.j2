@@ -1,5 +1,21 @@
 # 072-oauth2-proxy-middleware.yaml.j2
 #
+# 🔴 NO JINJA BLOCK TAG MAY END A LINE IN THIS FILE.
+#
+# The host match was a {% for %}…{% endfor %} loop. Ansible's template module
+# sets trim_blocks=yes by default, which swallows the newline after a block tag —
+# so a line ending in {% endfor %} merged with the line below it and YAML saw
+# `kind: Rule` as a second mapping value on the match line. The tester found it
+# on 2026-09-18 and isolated it exactly: the other route used the same loop but
+# was followed by plain text (` && PathPrefix(...)`), so its newline survived and
+# it did not error. One line ended with a block tag; there was exactly one error.
+#
+# Fixed with a single expression rather than {% endfor +%}. The whitespace-control
+# modifier would also work, but it leaves correctness depending on a Jinja option
+# that cannot be rendered or tested on a dev host — no Jinja2, no docker, no
+# cluster. `join` is plain semantics that can be unit-tested, and an expression
+# is not a block tag, so trim_blocks never applies.
+#
 # The Traefik ForwardAuth middleware that puts a service behind the gate, plus
 # the unauthenticated route that lets the sign-in round trip complete.
 #
@@ -33,7 +49,12 @@ metadata:
 spec:
   forwardAuth:
     # A URL, not an object reference — this is why no allowCrossNamespace is needed.
-    address: http://oauth2-proxy.oauth2-proxy.svc.cluster.local:4180/oauth2/auth
+    # 🔴 THE ROOT, NOT /oauth2/auth. See the long note in
+    # 072-oauth2-proxy-deployment.yaml.j2: /oauth2/auth answers 401 by design and
+    # Traefik relays it, so an anonymous visitor was never offered a login. The
+    # root is the normal-path handler, which answers 302 to the provider when
+    # unauthenticated and 202 (from the static upstream) when authenticated.
+    address: http://oauth2-proxy.oauth2-proxy.svc.cluster.local:4180/
     trustForwardHeader: true
     authResponseHeaders:
       - X-Auth-Request-User
@@ -58,7 +79,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: {% for h in svc.hosts %}Host(`{{ h }}`){% if not loop.last %} || {% endif %}{% endfor %}
+    - match: Host(`{{ svc.hosts | join('`) || Host(`') }}`)
       kind: Rule
       priority: 20
       middlewares:
@@ -99,7 +120,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: {% for h in svc.hosts %}Host(`{{ h }}`){% if not loop.last %} || {% endif %}{% endfor %} && PathPrefix(`/oauth2/`)
+    - match: Host(`{{ svc.hosts | join('`) || Host(`') }}`) && PathPrefix(`/oauth2/`)
       kind: Rule
       priority: 30
       services:

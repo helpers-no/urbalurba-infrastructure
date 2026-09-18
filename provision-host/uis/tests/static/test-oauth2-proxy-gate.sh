@@ -39,6 +39,9 @@ print_test_section "oauth2-proxy gate Tests"
 # the manifest that must never contain it — so an assertion that cannot tell
 # code from commentary fails on its own documentation. Hit three times on
 # 2026-09-18 before being factored out.
+# EVERY pattern assertion in this file goes through here. Six separate
+# assertions matched their own commentary on 2026-09-18 before this became the
+# rule rather than a fix applied one at a time.
 _code_only() { grep -vE '^[[:space:]]*#' "$@"; }
 
 # --- the files exist at all ---
@@ -49,14 +52,14 @@ done
 
 # --- image pinning ---
 start_test "the gate image is pinned, not :latest"
-if grep -qE 'image: quay\.io/oauth2-proxy/oauth2-proxy:v[0-9]+\.[0-9]+\.[0-9]+' "$DEPLOY"; then
+if _code_only "$DEPLOY" | grep -qE 'image: quay\.io/oauth2-proxy/oauth2-proxy:v[0-9]+\.[0-9]+\.[0-9]+'; then
     pass_test
 else
     fail_test "image is not pinned to an explicit version: $(grep -m1 'image:' "$DEPLOY")"
 fi
 
 start_test "the gate image is not :latest"
-if grep -qE 'oauth2-proxy:latest|oauth2-proxy:.*-latest' "$DEPLOY"; then
+if _code_only "$DEPLOY" | grep -qE 'oauth2-proxy:latest|oauth2-proxy:.*-latest'; then
     fail_test ":latest re-pulls on every restart and drifts between clusters (conformance C9)"
 else
     pass_test
@@ -71,7 +74,7 @@ else
 fi
 
 start_test "the gate uses an explicit allowlist file"
-if grep -q -- '--authenticated-emails-file=' "$DEPLOY"; then
+if _code_only "$DEPLOY" | grep -q -- '--authenticated-emails-file='; then
     pass_test
 else
     fail_test "no --authenticated-emails-file — what is restricting access?"
@@ -98,16 +101,30 @@ else
     pass_test
 fi
 
-start_test "the forwardAuth address is a URL, not an object reference"
-if grep -qE 'address: http://oauth2-proxy\.oauth2-proxy\.svc\.cluster\.local:4180/oauth2/auth' "$MW"; then
+# The address is cluster DNS (so it may cross namespaces where an object
+# reference may not) AND it must be the ROOT, not /oauth2/auth. /oauth2/auth
+# answers 401 by design — it exists for nginx's auth_request, where nginx turns
+# the 401 into a redirect. Traefik has no error_page and relays the 401, so an
+# anonymous visitor was never offered a login (measured, urb-agents#1226).
+start_test "the forwardAuth address is cluster DNS at the ROOT, not /oauth2/auth"
+if _code_only "$MW" | grep -qE 'address: http://oauth2-proxy\.oauth2-proxy\.svc\.cluster\.local:4180/$'; then
     pass_test
 else
-    fail_test "the middleware no longer points at the gate by cluster DNS"
+    fail_test "address is not the root: $(_code_only "$MW" | grep -m1 'address:')"
+fi
+
+start_test "the gate serves a 2xx to an authenticated caller"
+# Without a static upstream the root has nothing to proxy to, so an
+# authenticated request would not produce the 2xx Traefik needs to allow it.
+if _code_only "$DEPLOY" | grep -q -- '--upstream=static://202'; then
+    pass_test
+else
+    fail_test "no static upstream — an authenticated request has no 2xx to return"
 fi
 
 # --- the /oauth2/ path must be reachable without a session ---
 start_test "an unauthenticated /oauth2/ route is generated"
-if grep -q 'PathPrefix(`/oauth2/`)' "$MW"; then
+if _code_only "$MW" | grep -q 'PathPrefix(`/oauth2/`)'; then
     pass_test
 else
     fail_test "without it the callback needs a session to obtain a session"
@@ -153,7 +170,7 @@ fi
 
 # --- no ansible-only filters, so the template stays renderable/testable ---
 start_test "the templates use no ansible-only Jinja filters"
-if grep -qE 'regex_replace|ansible\.builtin\.' "$DEPLOY" "$MW" 2>/dev/null; then
+if _code_only "$DEPLOY" "$MW" 2>/dev/null | grep -qE 'regex_replace|ansible\.builtin\.'; then
     fail_test "an ansible-only filter cannot be rendered outside the container"
 else
     pass_test
@@ -162,10 +179,12 @@ fi
 # --- balanced Jinja blocks (the cheapest real check available without a renderer) ---
 for f in "$DEPLOY" "$MW"; do
     start_test "$(basename "$f") has balanced Jinja for/if blocks"
-    fors=$(grep -oE '\{%-? *for ' "$f" | wc -l)
-    endfors=$(grep -oE '\{%-? *endfor *-?%\}' "$f" | wc -l)
-    ifs=$(grep -oE '\{%-? *if ' "$f" | wc -l)
-    endifs=$(grep -oE '\{%-? *endif *-?%\}' "$f" | wc -l)
+    # _code_only, because these files document the very tags they contain —
+    # the sixth time on 2026-09-18 that an assertion matched its own commentary.
+    fors=$(_code_only "$f" | grep -oE '\{%-? *for ' | wc -l)
+    endfors=$(_code_only "$f" | grep -oE '\{%-? *endfor *-?%\}' | wc -l)
+    ifs=$(_code_only "$f" | grep -oE '\{%-? *if ' | wc -l)
+    endifs=$(_code_only "$f" | grep -oE '\{%-? *endif *-?%\}' | wc -l)
     if [[ "$fors" -eq "$endfors" && "$ifs" -eq "$endifs" ]]; then
         pass_test
     else
@@ -227,7 +246,7 @@ start_test "the structural template sync is not gated on first_run alone"
 # for an `else` after a marker — the first version of this check set a flag and
 # then matched ANY later `else` in a 1400-line file, so it could never fail. The
 # mutation harness caught that; a reader would not have.
-if grep -q 'could not sync the structural secrets template' "$REPO/uis"; then
+if _code_only "$REPO/uis" | grep -q 'could not sync the structural secrets template'; then
     pass_test
 else
     fail_test "no non-first-run sync branch — new image keys never reach an existing install"
@@ -247,5 +266,31 @@ if grep -A1 'copy_defaults_if_missing || true' \
 else
     fail_test "cmd_init's already-initialized branch does not seed new .uis.extend files"
 fi
+
+# ---------------------------------------------------------------------------
+# 🔴 NO LINE MAY END WITH A JINJA BLOCK TAG.
+#
+# Ansible's template module sets trim_blocks=yes, so the newline after a block
+# tag is swallowed and the line merges with the one below. That produced
+# "mapping values are not allowed here" on the tester's first render
+# (urb-agents#1226) — `kind: Rule` became a second mapping value on the match
+# line. The other route used the identical loop but was followed by plain text,
+# so its newline survived and it did not error.
+#
+# This asserts the INVARIANT rather than simulating Jinja. I tried the
+# simulation: it could not render the constructs the original used, crashed, and
+# the YAML parser then happily accepted the traceback — a check that could not
+# fail for the reason it claimed. The invariant needs no renderer and forbids
+# the whole class.
+# ---------------------------------------------------------------------------
+for f in "$DEPLOY" "$MW"; do
+    start_test "$(basename "$f") has no line ending in a Jinja block tag"
+    offenders=$(grep -nE '\{%[^}]*%\}[[:space:]]*$' "$f" | grep -vE '^\s*[0-9]+:\s*\{%-?\s*(end)?(for|if)\b' || true)
+    if [[ -z "$offenders" ]]; then
+        pass_test
+    else
+        fail_test "trim_blocks will swallow the newline: $(echo "$offenders" | head -1)"
+    fi
+done
 
 print_summary
