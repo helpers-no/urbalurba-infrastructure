@@ -119,16 +119,34 @@ CTX='{"oauth2_protected":[{"name":"a","namespace":"ans","service":"a-web","port"
 OUT="$(_render 072-oauth2-proxy-middleware.yaml.j2 "$CTX")"
 if [[ "$OUT" == \{* ]]; then pass_test; else fail_test "$OUT"; fi
 
-# --- the rendered output must contain what it is for ---
-start_test "the rendered middleware produces the expected objects"
+# --- api_routes: the SPA case, which is why the second middleware exists ---
+start_test "072-oauth2-proxy-middleware.yaml.j2 renders api_routes"
+CTX='{"oauth2_protected":[{"name":"svc","namespace":"svcns","service":"svc-web","port":80,"hosts":["svc.localhost"],"api_routes":["^/graphql"]}]}'
+OUT="$(_render 072-oauth2-proxy-middleware.yaml.j2 "$CTX")"
+if [[ "$OUT" == \{* ]]; then pass_test; else fail_test "$OUT"; fi
+
+# A service with no api_routes at all must still render — the default([]) path.
+start_test "072-oauth2-proxy-middleware.yaml.j2 renders with api_routes absent"
 CTX='{"oauth2_protected":[{"name":"svc","namespace":"svcns","service":"svc-web","port":80,"hosts":["svc.localhost"]}]}'
 OUT="$(_render 072-oauth2-proxy-middleware.yaml.j2 "$CTX")"
+if [[ "$OUT" == \{* ]]; then pass_test; else fail_test "$OUT"; fi
+
+start_test "two api_routes produce two rules"
+CTX='{"oauth2_protected":[{"name":"svc","namespace":"svcns","service":"svc-web","port":80,"hosts":["svc.localhost"],"api_routes":["^/graphql","^/api/"]}]}'
+OUT="$(_render 072-oauth2-proxy-middleware.yaml.j2 "$CTX")"
+if [[ "$OUT" == \{* ]]; then pass_test; else fail_test "$OUT"; fi
+
+# --- the rendered output must contain what it is for ---
+start_test "the rendered middleware produces the expected objects"
+CTX='{"oauth2_protected":[{"name":"svc","namespace":"svcns","service":"svc-web","port":80,"hosts":["svc.localhost"],"api_routes":["^/graphql"]}]}'
+OUT="$(_render 072-oauth2-proxy-middleware.yaml.j2 "$CTX")"
 if [[ "$OUT" == *'Middleware/oauth2-forward-auth'* \
+   && "$OUT" == *'Middleware/oauth2-forward-auth-api'* \
    && "$OUT" == *'IngressRoute/svc-oauth2-protected'* \
    && "$OUT" == *'IngressRoute/svc-oauth2-callback'* ]]; then
     pass_test
 else
-    fail_test "expected three objects, got: $OUT"
+    fail_test "expected four objects including the api middleware, got: $OUT"
 fi
 
 print_summary

@@ -322,4 +322,68 @@ else
     fail_test "Jinja parses # lines — these will fail to render:$offenders"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.125 — the three defects from the round that finally got a 302.
+# ---------------------------------------------------------------------------
+start_test "an SPA path gets its own middleware pointed at /oauth2/auth"
+# The root answers 302; only /oauth2/auth answers 401. And ForwardAuth sends its
+# own subrequest, so the gate always sees `GET /` and --api-route can never match
+# the real path — measured by the tester. The distinction has to live in Traefik.
+# Assert BOTH halves: the Middleware object AND a route that references it. A
+# first attempt checked only that the name appeared somewhere — and the name
+# appears twice, so renaming one occurrence left the assertion passing on a
+# template where the route referenced a middleware that no longer existed.
+api_mw_defined=$(_code_only "$MW" | grep -cE '^  name: oauth2-forward-auth-api$')
+api_mw_used=$(_code_only "$MW" | grep -cE '^ *- name: oauth2-forward-auth-api$')
+if [[ "$api_mw_defined" -ge 1 && "$api_mw_used" -ge 1 ]] \
+   && _code_only "$MW" | grep -q 'local:4180/oauth2/auth'; then
+    pass_test
+else
+    fail_test "API middleware defined=$api_mw_defined used=$api_mw_used — an SPA's XHR gets a 302 it cannot follow"
+fi
+
+start_test "api_routes rules outrank the protected route"
+if [[ "$(_code_only "$MW" | grep -c 'priority: 25')" -ge 1 ]]; then
+    pass_test
+else
+    fail_test "an api_routes rule at or below priority 20 would never win"
+fi
+
+start_test "every generated object carries the cleanup label"
+# Cleanup deletes by label across all namespaces. Without the label on all of
+# them, undeploy leaves a route pointing at a deleted gate -> the host 500s.
+if [[ "$(_code_only "$MW" | grep -c 'urbalurba.io/generated-by: oauth2-proxy')" -ge 4 ]]; then
+    pass_test
+else
+    fail_test "only $(_code_only "$MW" | grep -c 'urbalurba.io/generated-by: oauth2-proxy') of 4 objects labelled"
+fi
+
+start_test "undeploy finds objects by label, not from the declaration"
+if _code_only "$REMOVE" | grep -q 'urbalurba.io/generated-by=oauth2-proxy'; then
+    pass_test
+else
+    fail_test "cleanup still trusts the declaration, which may have been emptied"
+fi
+
+start_test "undeploy fails rather than reporting a clean removal with leftovers"
+if grep -q '04b Fail if anything survived' "$REMOVE"; then
+    pass_test
+else
+    fail_test "a surviving route points ForwardAuth at a deleted Service -> 500"
+fi
+
+start_test "an empty protected list un-gates instead of being refused"
+if grep -q '06c Remove the gating, because an empty list is a deliberate un-gate' "$SETUP"; then
+    pass_test
+else
+    fail_test "no supported way to un-gate a host — the documented revert is refused"
+fi
+
+start_test "a first deploy with nothing declared is still refused"
+if grep -q '06b Refuse a first deploy that would protect nothing' "$SETUP"; then
+    pass_test
+else
+    fail_test "an empty first deploy would silently do nothing"
+fi
+
 print_summary
