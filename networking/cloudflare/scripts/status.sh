@@ -56,6 +56,34 @@ _deployment_present() {
     _kubectl -n default get deployment cloudflare-tunnel >/dev/null 2>&1
 }
 
+# A RUNNING POD IS NOT A WORKING TUNNEL.
+#
+# cloudflared's liveness/readiness probe hits /ready on :2000, which reports
+# whether it is connected to Cloudflare's EDGE. It says nothing about whether the
+# origin named in the dashboard route is reachable. So a pod can sit Running and
+# Ready forever while every request returns 502 — which is exactly what happened
+# in testing (2026-09-18), where this script printed "1/1 cloudflared running" as its
+# verdict on a tunnel that served nothing.
+#
+# The connector logs the origin it is using as `originService=`, and logs an
+# "Unable to reach the origin service" error when it cannot connect. Both are in
+# the logs of a RUNNING pod, which is why reading logs only when no pod is running
+# looked at the one state where the answer cannot be.
+#
+# Echoes "<reported-origin>" when the connector is failing to reach its origin,
+# or nothing when it is not.
+_origin_failure() {
+    local logs
+    logs=$(_kubectl -n default logs -l app=cloudflared --tail=100 2>/dev/null || echo "")
+    [[ -z "$logs" ]] && return 0
+    printf '%s\n' "$logs" | grep -q 'Unable to reach the origin service' || return 0
+    printf '%s\n' "$logs" \
+        | grep -oE 'originService=[^ ]+' \
+        | sed 's/^originService=//' \
+        | sort -u \
+        | paste -sd', ' -
+}
+
 # ----- Summary path (C-1 contract for `uis network list`) -----
 if (( SUMMARY )); then
     if [[ ! -f "$ENV_FILE" ]]; then
@@ -70,7 +98,12 @@ if (( SUMMARY )); then
     running="${counts%/*}"
     total="${counts#*/}"
     if [[ "$running" -gt 0 ]]; then
-        printf 'running\t%s/%s cloudflared pods up\n' "$running" "$total"
+        bad_origin="$(_origin_failure)"
+        if [[ -n "$bad_origin" ]]; then
+            printf 'degraded\tpods up but the origin is unreachable (%s); run '\''./uis network verify cloudflare'\''\n' "$bad_origin"
+        else
+            printf 'running\t%s/%s cloudflared pods up\n' "$running" "$total"
+        fi
     else
         printf 'unreachable\tdeployment exists but no Running pods; check '\''kubectl -n default logs -l app=cloudflared'\''\n'
     fi
@@ -93,7 +126,13 @@ fi
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 echo "  Config:    $ENV_FILE_REL"
-echo "  Token:     set (${CLOUDFLARE_TUNNEL_TOKEN:+${#CLOUDFLARE_TUNNEL_TOKEN} chars})"
+# ${VAR:+...} suppressed the length for an empty token but left the literal
+# word "set", so an empty value rendered as "Token:     set ()".
+if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+    echo "  Token:     set (${#CLOUDFLARE_TUNNEL_TOKEN} chars)"
+else
+    echo "  Token:     not set — run './uis network init cloudflare'"
+fi
 echo "  Domain:    ${BASE_DOMAIN_CLOUDFLARE:-not set}"
 
 if ! _deployment_present; then
@@ -117,6 +156,24 @@ if [[ "$running" -eq 0 ]]; then
     exit 0
 fi
 
+bad_origin="$(_origin_failure)"
+if [[ -n "$bad_origin" ]]; then
+    echo "  Origin:    ✗ UNREACHABLE"
+    echo
+    echo "  The pod is connected to Cloudflare, but the connector cannot reach the"
+    echo "  origin named in your dashboard route, so every request fails:"
+    echo
+    echo "    connector reports:  $bad_origin"
+    echo "    this cluster has:   http://traefik.kube-system.svc.cluster.local:80"
+    echo
+    echo "  If those differ, fix the Service URL on both published application"
+    echo "  routes in Zero Trust > Networks > Tunnels. The connector reloads from"
+    echo "  the edge within seconds — no redeploy needed."
+    echo
+    echo "  Confirm Traefik:  kubectl get svc -A | grep -i traefik"
+else
+    echo "  Origin:    reachable (no origin errors in recent logs)"
+fi
 echo
 echo "  Verify e2e: ./uis network verify cloudflare"
 echo "  Remove:     ./uis network down cloudflare"

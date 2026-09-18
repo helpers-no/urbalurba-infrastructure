@@ -143,21 +143,109 @@
       failed_when: false
       when: cf_domain != "" and "your-domain" not in cf_domain
 
-    - name: "15 Final deployment summary"
+    # THE PROBE KNEW THE STATUS CODE AND THE SUMMARY THREW IT AWAY.
+    #
+    # Task 14 sets `failed_when: false`, so a failing probe leaves the play green
+    # and the old summary collapsed three different outcomes into one string:
+    # "SKIP - domain not configured or test failed". In testing (2026-09-18) that
+    # printed after twelve consecutive 502s, on a run where the domain WAS
+    # configured — so the only true word in the line was "failed", and it sat
+    # behind an "or" next to a false claim. `up.sh` then printed
+    # "✓ Cloudflare tunnel is up" on top of it.
+    #
+    # The three states are distinct and worth separate words: nothing to probe,
+    # probe passed, probe failed. `tunnel_test.status` holds the code in the
+    # failing case too, so there is no reason not to print it.
+    - name: "15 Classify the end-to-end probe outcome"
+      ansible.builtin.set_fact:
+        probe_skipped: "{{ cf_domain == '' or 'your-domain' in cf_domain }}"
+        probe_status: "{{ tunnel_test.status | default(0) | int }}"
+        probe_passed: "{{ tunnel_test.status is defined and tunnel_test.status in [200, 301, 302, 404] }}"
+
+    # A 502 on this path means the connector reached Cloudflare's edge but could
+    # not reach the origin named in the dashboard route. cloudflared logs that
+    # origin verbatim as `originService=`, so read it back rather than making the
+    # operator go find it. PLAN-012 root-caused this exact failure once already
+    # (routes pointing at traefik.default instead of traefik.kube-system) and it
+    # recurred anyway, because the value lives in Cloudflare's dashboard where no
+    # manifest or test can reach it. Naming it at the moment of failure is the
+    # only guard available.
+    - name: "16 Read the origin the connector is actually using"
+      kubernetes.core.k8s_log:
+        name: "{{ cf_pods_status.resources[0].metadata.name }}"
+        namespace: "{{ tunnel_namespace }}"
+        kubeconfig: "{{ kubeconfig_file }}"
+        tail_lines: 200
+      register: cf_origin_log
+      when: not probe_skipped | bool and not probe_passed | bool
+      ignore_errors: true
+
+    - name: "17 Extract the reported origin"
+      ansible.builtin.set_fact:
+        reported_origin: >-
+          {{ (cf_origin_log.log | default('') | regex_findall('originService=(\S+)')) | unique | join(', ') }}
+      when: not probe_skipped | bool and not probe_passed | bool
+
+    - name: "18 Final deployment summary"
       ansible.builtin.debug:
         msg:
           - "==================================================="
           - "Cloudflare Tunnel Deployment"
           - "==================================================="
           - ""
-          - "Status: DEPLOYED"
+          - "Status: {{ 'DEPLOYED' if probe_skipped | bool or probe_passed | bool else 'DEPLOYED BUT NOT SERVING TRAFFIC' }}"
           - "Pods: {{ cf_pods_status.resources | length }} running"
           - "Namespace: {{ tunnel_namespace }}"
-          - "Domain: {{ cf_domain if cf_domain != '' and 'your-domain' not in cf_domain else 'not configured' }}"
-          - "Connectivity: {{ 'PASS - HTTP ' + (tunnel_test.status | string) if tunnel_test.status is defined and tunnel_test.status in [200, 301, 302, 404] else 'SKIP - domain not configured or test failed' }}"
+          - "Domain: {{ cf_domain if not probe_skipped | bool else 'not configured' }}"
+          - >-
+            Connectivity: {{
+              'SKIP - no BASE_DOMAIN_CLOUDFLARE set, nothing to probe' if probe_skipped | bool
+              else 'PASS - HTTP ' ~ probe_status if probe_passed | bool
+              else 'FAIL - HTTP ' ~ probe_status if probe_status | int > 0
+              else 'FAIL - no response from the tunnel'
+            }}
           - ""
           - "Cloudflare dashboard: Zero Trust > Networks > Tunnels"
           - ""
           - "To verify: uis network verify cloudflare"
           - "To remove: uis network down cloudflare"
           - "==================================================="
+
+    - name: "19 Diagnose a failed end-to-end probe"
+      ansible.builtin.debug:
+        msg:
+          - "==================================================="
+          - "The tunnel is connected but not serving"
+          - "==================================================="
+          - ""
+          - "The cloudflared pod is Running and registered with Cloudflare, so the"
+          - "token and the network path are fine. The request reached the tunnel and"
+          - "failed on the way to the origin."
+          - ""
+          - "Origin the connector reports: {{ reported_origin if reported_origin | default('', true) | length > 0 else '(not named in the last 200 log lines)' }}"
+          - "Origin this cluster expects:  http://traefik.kube-system.svc.cluster.local:80"
+          - ""
+          - "Traefik runs in kube-system on Rancher Desktop, not in default. If the"
+          - "two lines above differ, fix the Service URL on BOTH published"
+          - "application routes (the wildcard and the apex) in the Cloudflare"
+          - "dashboard. The connector pulls its config from the edge, so the change"
+          - "takes effect in seconds and nothing needs redeploying."
+          - ""
+          - "Confirm this cluster's Traefik Service with:"
+          - "  kubectl get svc -A | grep -i traefik"
+          - ""
+          - "Note: saving a route whose origin is a .cluster.local address triggers a"
+          - "Cloudflare One device-profile popup. Clicking Cancel aborts the save and"
+          - "silently keeps the old value, so read the URL back after saving."
+          - "==================================================="
+      when: not probe_skipped | bool and not probe_passed | bool
+
+    # Deploying a connector that cannot serve traffic is not a success. Exit
+    # non-zero so `up.sh` reports it as a failure instead of printing a tick.
+    - name: "20 Fail because the tunnel is deployed but not serving"
+      ansible.builtin.fail:
+        msg: >-
+          Cloudflare tunnel deployed, but the end-to-end probe to
+          https://{{ cf_domain }} failed with HTTP {{ probe_status }}
+          after 12 attempts. See the diagnosis above.
+      when: not probe_skipped | bool and not probe_passed | bool

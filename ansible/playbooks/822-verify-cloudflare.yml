@@ -68,7 +68,7 @@
         secrets_result: >-
           {% if urbalurba_secrets.resources | length == 0 %}FAIL: Secrets - urbalurba-secrets not found in cluster
           {% elif not token_valid %}FAIL: Secrets - CLOUDFLARE_TUNNEL_TOKEN is a placeholder value
-          {% else %}PASS: Secrets - CLOUDFLARE_TUNNEL_TOKEN is configured ({{ cf_tunnel_token[:8] }}...){% endif %}
+          {% else %}PASS: Secrets - CLOUDFLARE_TUNNEL_TOKEN is configured ({{ cf_tunnel_token | length }} chars){% endif %}
 
     # ============================================================
     # Check 2: Network connectivity
@@ -127,7 +127,13 @@
         name: "{{ cf_pods.resources[0].metadata.name }}"
         namespace: "{{ tunnel_namespace }}"
         kubeconfig: "{{ kubeconfig_file }}"
-        tail_lines: 10
+        # tail_lines alone has no time bound. cloudflared logs errors but not
+        # successes, so with no traffic the last N lines stay error-y forever and
+        # the WARN never clears — in testing (2026-09-18) verify warned about 502s
+        # from before the route was fixed, on a tunnel that was working. Bound
+        # the window so the check reports the tunnel's current state.
+        since_seconds: 600
+        tail_lines: 50
       register: cf_logs
       when: cf_pods.resources | default([]) | length > 0
       ignore_errors: true
@@ -180,8 +186,25 @@
           - "==================================================="
           - ""
           - "Configuration:"
-          - "  Tunnel Token: {{ cf_tunnel_token[:8] + '...' if cf_tunnel_token | length > 8 else 'not set' }}"
-          - "  DNS Token: {{ 'configured' if cf_dns_token != 'not set' and cf_dns_token != '' else 'not set' }}"
+          # Every Cloudflare tunnel token begins eyJhIjoi — that is base64 of
+          # {"a":" — so the old 8-char prefix was identical for every token and
+          # identified nothing. Report length instead, which at least tells the
+          # operator whether the paste was truncated.
+          - "  Tunnel Token: {{ 'set (' ~ (cf_tunnel_token | length) ~ ' chars)' if cf_tunnel_token | length > 0 else 'not set' }}"
+          # The old test was `!= 'not set' and != ''`, and the template ships
+          # CLOUDFLARE_DNS_TOKEN=your-cloudflare-dns-token-here — neither of
+          # those — so an untouched placeholder reported as "configured". In testing
+          # (2026-09-18) verify told an operator who had never set a DNS token
+          # that one was configured. Task 04 above already does placeholder
+          # detection properly for the tunnel token; apply the same idea here.
+          # This token is optional: only utility/u01-add-domains-to-tunnel.yml
+          # reads it, so "not set" is the normal, correct state.
+          - >-
+            DNS Token: {{
+              'not set (optional — only u01-add-domains-to-tunnel.yml uses it)'
+              if cf_dns_token in ['', 'not set'] or 'your-cloudflare-dns-token' in cf_dns_token
+              else 'configured'
+            }}
           - "  Domain: {{ cf_domain if domain_valid | default(false) | bool else 'not configured' }}"
           - ""
           - "Checks:"

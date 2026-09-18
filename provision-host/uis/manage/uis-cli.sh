@@ -1803,6 +1803,7 @@ _print_network_provider_row() {
     hint="${line#*	}"
     case "$state" in
         running)                icon="✓"; state_label="running" ;;
+        degraded)               icon="⚠"; state_label="running, not serving" ;;
         configured-not-running) icon="·"; state_label="configured, not running" ;;
         not-initialized)        icon="·"; state_label="not initialized" ;;
         unreachable)            icon="✗"; state_label="unreachable" ;;
