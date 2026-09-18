@@ -155,6 +155,32 @@ never delivered.
 - [ ] **3.3** Delete the intent-only annotations, or make them generated from the
   declaration. Leaving both means two sources of truth, one of which does nothing.
 
+## The test ladder — Terje, 2026-09-18
+
+Three rungs, each isolating one layer, so a failure names its own cause:
+
+| rung | state | what it proves |
+|---|---|---|
+| **1** | `.localhost`, no tunnel, no gate | the app and Traefik alone |
+| **2** | tunnel up, open, no gate | the tunnel path alone |
+| **3** | tunnel up **and** gate | the gate on a real https host |
+
+Terje's words: *"a test should first test .localhost, then bring up the tunnel and test it when it is open, and then finally add the oauth2-proxy and test again."*
+
+**Adopted, because skipping a rung already cost three rounds.** The oauth2-proxy gate was tested at rung 1 for three releases, and one limitation could not be found there at all: on plain-http `.localhost` the sign-in is *structurally* incapable of completing — `--cookie-secure=true` issues a `Secure` CSRF cookie the browser discards, and the derived `redirect_uri` is an `https://…localhost/…` URL nothing serves. That sat as an unresolved caveat for three rounds and became obvious the moment the gate ran at rung 3.
+
+### ⚠️ Rung 2 is the condition this plan exists to prevent, and that tension is not resolved by ignoring it
+
+Rung 2 — tunnel up, no gate — **is** an anonymous admin UI on the internet. That is `urb-agents#1224`, and the maintainer's standing order is the opposite: gate first, tunnel second, so that state never exists.
+
+Both are right, and the resolution is not to pick one:
+
+- **Rung 2 must be short, deliberate and announced.** It is a measurement, not a deployment. Someone is watching it, it is entered on purpose, and it is closed by moving to rung 3 rather than by being forgotten.
+- **It must never be the resting state.** The failure mode is not "twenty minutes of exposure", it is "nobody remembered to climb to rung 3".
+- 🔵 **`expose_on` makes rung 2 cheap and safe to leave** — with opt-in exposure, a host reaches rung 2 only because a declaration says so, and rung 2 for one service is not rung 2 for the other twenty-four. **That is an argument for this plan, not an exception to it.**
+
+On 2026-09-18 rung 2 lasted about twenty minutes on one host, was entered by the operator knowingly, and was closed by the operator asking for the gate. That is the shape it should always have.
+
 ## Phase 4 — verification
 
 - [ ] **4.1** With a wildcard tunnel active and one service declared

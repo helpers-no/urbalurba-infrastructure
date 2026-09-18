@@ -468,4 +468,47 @@ else
     fail_test "removing the false claim is half the fix; the true one has to be written down"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.126: a guard must make every check its refusal message describes.
+#
+# The refusal text loops over all three credential keys looking for ''/
+# placeholder/your-. The condition tested that for CLIENT_ID only, so
+# CLIENT_SECRET="your-client-secret" passed the guard while the message it would
+# have printed named it. And nothing checked the cookie secret's LENGTH, though
+# the tester credited the playbook with refusing bad ones.
+# ---------------------------------------------------------------------------
+
+start_test "the credential guard checks all three keys for a placeholder"
+if [[ "$(_code_only "$SETUP" | grep -c "'placeholder' in (urbalurba_secrets")" -eq 3 ]]; then
+    pass_test
+else
+    fail_test "only $(_code_only "$SETUP" | grep -c "'placeholder' in (urbalurba_secrets") of 3 keys tested for 'placeholder'"
+fi
+
+start_test "the credential guard checks all three keys for an unedited your- value"
+if [[ "$(_code_only "$SETUP" | grep -c "'your-' in (urbalurba_secrets")" -eq 3 ]]; then
+    pass_test
+else
+    fail_test "only $(_code_only "$SETUP" | grep -c "'your-' in (urbalurba_secrets") of 3 keys tested for 'your-'"
+fi
+
+start_test "a cookie secret oauth2-proxy cannot use is refused, not crashlooped"
+# 16, 24 or 32 bytes — AES-128/192/256. Any other length is a pod that will not
+# start, surfacing as a later assertion timing out on /oauth2/auth: the symptom,
+# not the cause.
+if _code_only "$SETUP" | grep -qE 'not in \[16, 24, 32\]'; then
+    pass_test
+else
+    fail_test "no length check — a truncated secret becomes a crashloop with a misleading error"
+fi
+
+start_test "the length refusal names all three valid lengths, not just 32"
+# 32 is what the documented recipe produces, but 16 and 24 are equally valid and
+# a guard that names only 32 teaches the wrong rule.
+if _code_only "$SETUP" | grep -q 'exactly 16, 24 or 32 bytes'; then
+    pass_test
+else
+    fail_test "the refusal message does not state the real rule"
+fi
+
 print_summary

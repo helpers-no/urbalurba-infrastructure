@@ -81,8 +81,21 @@
           {% endif %}
           {% endfor %}
           To fix:
-          1. Register an OAuth application with your provider. Its redirect URI
-             must be exactly  https://<host>/oauth2/callback
+          1. Register an OAuth application with your provider. Its callback URL
+             must be exactly  https://<host>/oauth2/callback  for EVERY host you
+             gate — oauth2-proxy derives the redirect_uri from the request's own
+             hostname, so each gated host needs its own entry.
+
+             GitHub accepts up to 10 callback URLs on one OAuth app (changed
+             2026-08-14), so one app covers up to ten gated hosts. Add a URL per
+             host rather than enabling wildcard matching: a wildcard lets an
+             authorization code be delivered to ANY subdomain of the callback
+             URL, and this platform is normally fronted by a wildcard tunnel, so
+             "do you control every subdomain" is exactly the question
+             PLAN-service-exposure-opt-in exists because of.
+
+             Prefer an ORG-OWNED app over a personal one, or the secret can only
+             be rotated by whoever created it.
           2. Put the client id and secret into
              .uis.secrets/secrets-config/00-common-values.env.template
           3. Generate an INDEPENDENT cookie secret — do not derive it from the
@@ -91,12 +104,55 @@
                  openssl rand -base64 32 | head -c 32
           4. ./uis secrets generate && ./uis secrets apply
           5. Re-run this deploy.
+      # 🔴 NINE CLAUSES, ONE PER KEY PER PATTERN, MATCHING THE MESSAGE'S LOOP.
+      #
+      # The message above loops over all three keys looking for '', 'placeholder'
+      # and 'your-'. This condition used to test that for CLIENT_ID only, plus a
+      # bare emptiness check on the other two. So a CLIENT_SECRET of
+      # "your-client-secret" PASSED the guard while the refusal text it would
+      # have printed named it as the problem — a message describing a check the
+      # condition did not make.
+      #
+      # Written out rather than folded into a map/select one-liner on purpose: no
+      # Jinja renderer exists on a dev host, so a clever expression here cannot
+      # be proven to cover every key before it ships. These can be read.
       when: >-
         urbalurba_secrets.resources | length == 0 or
-        (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode) in ['', 'placeholder'] or
+        (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode) == '' or
         (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_SECRET'] | default('') | b64decode) == '' or
         (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode) == '' or
-        'your-' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode)
+        'placeholder' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode) or
+        'placeholder' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_SECRET'] | default('') | b64decode) or
+        'placeholder' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode) or
+        'your-' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode) or
+        'your-' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_SECRET'] | default('') | b64decode) or
+        'your-' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode)
+
+    # 🔴 A COOKIE SECRET OF THE WRONG LENGTH IS A CRASHLOOP, NOT A REFUSAL.
+    #
+    # oauth2-proxy needs the cookie secret to be exactly 16, 24 or 32 bytes —
+    # AES-128/192/256 — and fails at startup otherwise. Nothing here checked it.
+    # The tester credited this playbook with refusing other lengths on
+    # 2026-09-18; it did not, and 32 is not the only valid length either.
+    #
+    # Without this task the failure surfaces as a pod that will not start and a
+    # later assertion timing out on /oauth2/auth, which names the symptom and
+    # not the cause. `openssl rand -base64 32 | head -c 32` gives 32, so the
+    # documented recipe is right — this is for a hand-typed or truncated value.
+    - name: "04b Refuse a cookie secret oauth2-proxy cannot use"
+      ansible.builtin.fail:
+        msg: |
+          OAUTH2_PROXY_COOKIE_SECRET is {{ (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode) | length }} bytes.
+
+          oauth2-proxy requires exactly 16, 24 or 32 bytes (AES-128/192/256) and
+          will not start with any other length. Generate one:
+
+              openssl rand -base64 32 | head -c 32
+
+          Then: ./uis secrets generate && ./uis secrets apply
+      when: >-
+        ((urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode) | length)
+        not in [16, 24, 32]
 
     # 🔵 THE DECLARATION IS OPERATOR CONFIG AND LIVES IN .uis.extend/.
     #

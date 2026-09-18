@@ -32,6 +32,16 @@ issuer: ""                # required for provider: oidc only
 
 # The parent domain session cookies are scoped to, so one sign-in covers every
 # protected host beneath it.
+#
+# ⚠️ IT MUST BE THE APEX OF THE HOSTS BELOW, AND IT CHANGES WITH THEM. Gating
+# dagster.example.com needs cookie_domain: "example.com" — a value left at
+# "localhost" while the hosts moved to a real domain issues cookies the browser
+# discards, and the sign-in loops with no error to explain it. Measured on
+# 2026-09-18: moving one host from .localhost to a public domain required this
+# line to change too.
+#
+# 🔵 One gate instance therefore covers ONE apex. Hosts under two different
+# apex domains need two instances, or Authentik.
 cookie_domain: ""
 
 # Who may pass the gate. Their address must be the PRIMARY VERIFIED email on the
