@@ -88,6 +88,8 @@ Save it somewhere safe — you'll put it in the UIS secrets config in Step 4.
 
 After saving the tunnel, you'll be on the tunnel configuration page. Click the **Hostname routes** tab.
 
+> **Console naming (current UI).** The tunnels page is titled **"Tunnels & Mesh"**, and *Create a tunnel* asks for a **Tunnel type**: pick **`cloudflared`**. **Mesh** is a different product for bidirectional connectivity and will not give you a public hostname. The route form labels the first field **Hostname** (hint `e.g., www, blog, api`) rather than "Subdomain", and shows a **Full hostname** preview — read that preview back before saving, since a hostname that silently didn't register leaves you routing the apex instead.
+
 > **Important: the Beta "Hostname routes" tab has TWO sections.** Scroll down to **"Published application routes"** (the lower section). The upper section, titled "Your hostname routes", is for **Cloudflare One / WARP-client private access** — it has a simpler form (just hostname + description) and is **not** what UIS needs. Adding a route in the upper section will trigger a "Cloudflare One Client device profile" popup and will *not* create the public DNS record you need. If you see a form without Service Type / URL fields, you're in the wrong section.
 
 ### Add wildcard route (all subdomains)
@@ -105,6 +107,8 @@ In the **Published application routes** section, click **"Add a published applic
 Click **Save**.
 
 > **If a "Cloudflare One Client device profile" popup appears** asking about Split Tunnels and the `100.64.0.0/10` CGNAT range — click **Confirm**. This is a generic Zero Trust warning that fires whenever you point a route at a `.cluster.local` origin. It does **not** apply to UIS's public-tunnel use case (no WARP client involved). Clicking Cancel will abort the save.
+>
+> ⚠️ **This applies when you EDIT an existing route, not only when you create one — and there it is far more dangerous.** Cancelling leaves the route holding its previous origin, with no error and a form that looks like it saved. On 2026-09-18 that cost an operator a 502 on every request while the Cloudflare dashboard showed the tunnel as Healthy and `uis network status` showed the pod as Running. **Always re-open the route and read the Service URL back after saving.**
 
 ### Add root domain route
 
@@ -226,6 +230,8 @@ curl https://urbalurba.no
 The tunnel status in the Cloudflare dashboard should change from **Inactive** to **Healthy**.
 
 > **Common mistake**: the whoami service's IngressRoute matches `HostRegexp(whoami-public.*)`, **not** `whoami.*`. A curl to `https://whoami.urbalurba.no` will return 404 because no IngressRoute matches that exact hostname. Same applies to other services — check the actual IngressRoute pattern (`kubectl get ingressroutes -A`) before forming URLs.
+>
+> **And a 404 here is a PASS, not a failure.** It means the request crossed the whole chain and Traefik had nothing matching that hostname — the tunnel works. Traefik's 404 is 19 bytes of `text/plain` reading `404 page not found`; Cloudflare's errors are HTML. What is *not* a pass: **502** (connector registered, origin unreachable — check the Service URL's namespace) and **530** (Cloudflare cannot reach the tunnel at all).
 
 ---
 

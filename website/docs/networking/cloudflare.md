@@ -50,15 +50,24 @@ The sections below walk through what each command does and what output to expect
 
 Before running any UIS command, create the tunnel in Cloudflare. UIS doesn't talk to the Cloudflare API — it deploys the in-cluster connector that points at a tunnel you created in the dashboard.
 
-1. Go to [Zero Trust dashboard → Networks → Tunnels](https://one.dash.cloudflare.com).
-2. **Create a tunnel** → Cloudflared connector type → pick a name.
+1. Go to the [Zero Trust dashboard](https://one.dash.cloudflare.com) → **Networks** → **Tunnels**. The page is titled **"Tunnels & Mesh"** in the current console.
+2. **Create a tunnel** → tunnel type **`cloudflared`** → pick a name.
+   - ⚠️ **Not Mesh.** The console now offers `cloudflared` and **Mesh** side by side. Mesh is for bidirectional connectivity and is a different product; UIS deploys the `cloudflared` connector.
 3. Skip the install instructions for Linux/macOS/Windows — UIS deploys the connector for you. **Copy the tunnel token** (the long string starting with `ey...`) from the install command shown on the page.
-4. Add a **Public Hostname** routing rule:
-   - Subdomain: `*` (or a specific name like `whoami`)
-   - Domain: pick your domain (e.g. `skryter.no`)
-   - Service: `HTTP → traefik.kube-system.svc.cluster.local:80`
+   - The wizard's **Continue** button stays disabled with *"No connection detected yet"*. That's expected: the connector is the pod you haven't deployed yet. The tunnel is already saved, so you can leave the install screen and configure routing from the tunnel's own page.
+4. Add a **Public Hostname** routing rule. The field is labelled **Hostname** (hint: `e.g., www, blog, api`) and the page shows you the **Full hostname** it will create — check that line reads what you expect before saving:
+   - Hostname: `*` (or a specific name like `whoami-public`)
+   - Domain: pick your domain
+   - Path: **leave empty** — the `^/blog` shown is placeholder text, and empty means "all paths"
+   - Service: Type `HTTP`, URL `traefik.kube-system.svc.cluster.local:80`
 
 Routing happens server-side at Cloudflare; the cluster only needs to know the token.
+
+:::danger Read the Service URL back after saving
+Saving a route whose origin is a `.cluster.local` address triggers a **"Cloudflare One Client device profile"** popup about Split Tunnels and the `100.64.0.0/10` range. Click **Confirm** — **Cancel aborts the save and silently keeps the previous value**, with no error and a form that looks like it worked.
+
+This applies to **editing an existing route**, not just creating one, and it is the single most expensive mistake on this page: a route that still holds the old origin produces a 502 on every request while the tunnel itself reports Healthy. After saving, re-open the route and read the URL back.
+:::
 
 ### 2. Run the init wizard
 
@@ -108,6 +117,27 @@ Runs five checks:
 
 A `PASS` on every line means traffic is flowing through the tunnel.
 
+:::tip A 404 is a pass
+Check 5 accepts **200, 301, 302 and 404**, and a `404` is the *normal* result on a fresh cluster. It means the request travelled the whole chain — Cloudflare edge → tunnel → connector → Traefik — and Traefik had no IngressRoute matching that hostname. The tunnel is working; there is simply nothing deployed to answer yet.
+
+You can tell whose 404 it is. Traefik's is 19 bytes of `text/plain`:
+
+```
+404 page not found
+```
+
+Cloudflare's own errors are HTML pages. So a plain-text `404 page not found` is proof the origin was reached.
+
+**What is not a pass:**
+
+| Response | Meaning |
+|---|---|
+| **502** | The connector is registered but cannot reach the origin. Almost always the Service URL on the dashboard route — check the namespace |
+| **530** | Cloudflare cannot reach the tunnel at all — no connector running, or no published application route for that hostname |
+
+To get a real page rather than a 404, deploy a service and use its hostname. Check what is actually routable with `kubectl get ingressroute -A` — the pattern in the IngressRoute is the hostname that will answer, and it is not always the service's name (`whoami` answers on `whoami-public.*`).
+:::
+
 ### 5. Day-2 commands
 
 ```
@@ -153,14 +183,29 @@ If the master template still has the placeholder, re-run `./uis network init clo
 
 **Pods come up but the domain returns 502**
 
-The cloudflared pods are connected to Cloudflare's edge but the routing rule in the dashboard points at a service that isn't ready. Check the Traefik route:
+The connector is registered with Cloudflare and receiving traffic, and cannot reach the origin named in your dashboard route. **Don't guess — the connector logs the origin it is using:**
 
 ```
-kubectl get ingressroute -A
-kubectl -n kube-system get svc traefik
+kubectl -n default logs -l app=cloudflared --tail=50
 ```
 
-The dashboard rule should send traffic to `traefik.kube-system.svc.cluster.local:80` (or `:443` if you're terminating TLS in the cluster).
+Look for `originService=`. That is the URL Cloudflare is sending it to, verbatim:
+
+```
+ERR error="Unable to reach the origin service … dial tcp: lookup
+    traefik.default.svc.cluster.local on <cluster-dns>:53: no such host"
+    ingressRule=0 originService=http://traefik.default.svc.cluster.local:80
+```
+
+`no such host` from the cluster's DNS means the Service in that URL does not exist. Compare it with what the cluster actually has:
+
+```
+kubectl get svc -A | grep -i traefik
+```
+
+**By far the most common cause is the namespace.** Traefik runs in `kube-system` on Rancher Desktop, not in `default`, so the route must read `traefik.kube-system.svc.cluster.local:80` (or `:443` if you terminate TLS in the cluster). Check **every** published application route — the wildcard and the apex are separate rules, and `ingressRule=0` / `ingressRule=1` in the log tells you both are affected.
+
+Fix it in the dashboard, not in the cluster: the connector pulls its config from Cloudflare's edge and picks the change up within seconds. **No redeploy is needed** — and re-read the Service URL afterwards, because the Cloudflare One popup aborts the save if you cancel it.
 
 **`./uis network verify cloudflare` says port 7844 is blocked**
 
