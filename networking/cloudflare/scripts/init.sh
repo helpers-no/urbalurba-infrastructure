@@ -151,20 +151,58 @@ if [[ ! -f "$COMMON_VALUES" ]]; then
     exit 1
 fi
 
-# In-place sed update for the two CLOUDFLARE_* lines. Use a delimiter (|) that
-# doesn't appear in JWT tokens. Escape any | that *do* appear, defensively.
-token_esc=${token//|/\\|}
-domain_esc=${domain//|/\\|}
-cv_tmp="$COMMON_VALUES.tmp.$$"
-trap 'rm -f "$tmp_file" "$cv_tmp"' EXIT
-cp "$COMMON_VALUES" "$cv_tmp"
-sed -i.bak "s|^CLOUDFLARE_TUNNEL_TOKEN=.*|CLOUDFLARE_TUNNEL_TOKEN=$token_esc|" "$cv_tmp"
+# SET-OR-APPEND, BECAUSE `sed s|^KEY=.*|...|` SUCCEEDS WHEN IT MATCHES NOTHING.
+#
+# This used to be two in-place seds. `sed` exits 0 whether or not the pattern
+# matched, so when a key was absent from the file the edit silently did nothing
+# and the wizard still printed "✓ Cloudflare config ready" with the value it had
+# just accepted at the prompt. The operator saw their domain echoed back in the
+# summary and had no way to know it had been dropped.
+#
+# That is reachable today, not hypothetical. There are two seed paths for
+# 00-common-values.env.template and they do not agree:
+#
+#   first-run.sh::copy_secrets_templates   copies templates/secrets-templates/
+#                                          → HAS BASE_DOMAIN_CLOUDFLARE
+#   secrets-management.sh::init_secrets    copies templates/default-secrets.env
+#                                          → HAS NO BASE_DOMAIN_CLOUDFLARE
+#
+# On a machine seeded by the second path the domain went in at the prompt and
+# never reached the file, so `uis network verify cloudflare` skipped its
+# end-to-end probe with no explanation. This release also adds the missing keys
+# to default-secrets.env so the two paths agree — but the append is the real
+# fix, because it holds however the file was produced and whatever the templates
+# drift to next.
+#
+# Using bash rather than sed also removes the replacement-side metacharacter
+# problem: `&` and `\` are special to sed's RHS and were never escaped here
+# (only `|` was, by hand). Tunnel tokens are base64url so they do not contain
+# them, but a value that did would have been silently corrupted.
+_set_kv() {
+    local file="$1" key="$2" value="$3"
+    local tmp="$file.kv.$$"
+    local found=0 line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == "$key="* ]]; then
+            printf '%s=%s\n' "$key" "$value"
+            found=1
+        else
+            printf '%s\n' "$line"
+        fi
+    done < "$file" > "$tmp"
+    if (( ! found )); then
+        printf '%s=%s\n' "$key" "$value" >> "$tmp"
+    fi
+    chmod 600 "$tmp"
+    mv "$tmp" "$file"
+}
+
+trap 'rm -f "$tmp_file" "$COMMON_VALUES".kv.$$' EXIT
+
+_set_kv "$COMMON_VALUES" CLOUDFLARE_TUNNEL_TOKEN "$token"
 if [[ -n "$domain" ]]; then
-    sed -i.bak "s|^BASE_DOMAIN_CLOUDFLARE=.*|BASE_DOMAIN_CLOUDFLARE=$domain_esc|" "$cv_tmp"
+    _set_kv "$COMMON_VALUES" BASE_DOMAIN_CLOUDFLARE "$domain"
 fi
-rm -f "$cv_tmp.bak"
-chmod 600 "$cv_tmp"
-mv "$cv_tmp" "$COMMON_VALUES"
 
 # ----- Summary -----
 echo
