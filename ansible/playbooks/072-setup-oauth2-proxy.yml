@@ -132,14 +132,39 @@
       ansible.builtin.set_fact:
         gate_config: "{{ lookup('file', declaration_file) | from_yaml | default({}, true) }}"
 
-    - name: "06 Fail if no service is declared for protection"
+    # 🔴 AN EMPTY `protected:` MEANS UN-GATE, NOT "YOU MADE A MISTAKE".
+    #
+    # This used to refuse outright, and the documented way to remove a gate was
+    # to empty the list and re-deploy — so the instruction and the guard
+    # contradicted each other and there was NO supported way to un-gate a host.
+    # The tester hit it on 2026-09-18 following the instruction verbatim.
+    #
+    # The two cases are distinguishable: if generated objects exist, an empty
+    # list is a deliberate removal; if none exist, it is a first deploy with
+    # nothing declared, which is the useless outcome worth refusing.
+    - name: "06 Find any objects a previous deploy generated"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig={{ kubeconfig_file }}
+          - get
+          - ingressroute,middleware
+          - --all-namespaces
+          - -l
+          - urbalurba.io/generated-by=oauth2-proxy
+          - -o
+          - name
+      register: existing_objects
+      changed_when: false
+      failed_when: false
+
+    - name: "06b Refuse a first deploy that would protect nothing"
       ansible.builtin.fail:
         msg: |
-          {{ declaration_file }} declares no services under `protected:`.
+          {{ declaration_file }} declares no services under `protected:`, and
+          nothing is currently gated — so this deploy would change nothing.
 
-          The gate would deploy and protect nothing, which is a silently useless
-          outcome — it would look like a success and change nothing. Declare at
-          least one service, for example:
+          Declare at least one service, for example:
 
             protected:
               - name: dagster
@@ -147,6 +172,40 @@
                 service: dagster-dagster-webserver
                 port: 80
                 hosts: ["dagster.example.com"]
+                api_routes: ["^/graphql"]
+      when:
+        - gate_config.protected | default([]) | length == 0
+        - (existing_objects.stdout | default('') | trim) == ''
+
+    - name: "06c Remove the gating, because an empty list is a deliberate un-gate"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig={{ kubeconfig_file }}
+          - delete
+          - ingressroute,middleware
+          - --all-namespaces
+          - -l
+          - urbalurba.io/generated-by=oauth2-proxy
+      register: ungate
+      when:
+        - gate_config.protected | default([]) | length == 0
+        - (existing_objects.stdout | default('') | trim) != ''
+
+    - name: "06d Report the un-gate and stop"
+      ansible.builtin.debug:
+        msg:
+          - "✓ Gating removed. The services below are reachable again without a login:"
+          - "{{ existing_objects.stdout_lines | default([]) }}"
+          - ""
+          - "The gate pod is still deployed and protects nothing. Remove it with"
+          - "'./uis undeploy oauth2-proxy', or declare services and re-deploy."
+      when:
+        - gate_config.protected | default([]) | length == 0
+        - (existing_objects.stdout | default('') | trim) != ''
+
+    - name: "06e End the play after an un-gate"
+      ansible.builtin.meta: end_play
       when: gate_config.protected | default([]) | length == 0
 
     - name: "07 Render and apply the gate"

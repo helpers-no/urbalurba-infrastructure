@@ -55,6 +55,7 @@ metadata:
   labels:
     app: oauth2-proxy
     component: forward-auth-middleware
+    urbalurba.io/generated-by: oauth2-proxy
   annotations:
     urbalurba.io/description: "Requires an oauth2-proxy session; generated, do not hand-edit"
 spec:
@@ -66,6 +67,45 @@ spec:
     # root is the normal-path handler, which answers 302 to the provider when
     # unauthenticated and 202 (from the static upstream) when authenticated.
     address: http://oauth2-proxy.oauth2-proxy.svc.cluster.local:4180/
+    trustForwardHeader: true
+    authResponseHeaders:
+      - X-Auth-Request-User
+      - X-Auth-Request-Email
+---
+# The API gate. Same check, different answer.
+#
+# 🔴 A SINGLE-PAGE APP MUST GET 401, NOT 302, AND THE ROOT CANNOT GIVE IT ONE.
+#
+# The tester measured this on 2026-09-18: with the middleware pointing at the
+# root, the gate logs every check as `GET /` regardless of what the visitor
+# asked for, because ForwardAuth sends its own subrequest. So the gate cannot
+# see the real path and --api-route can never match it. The fix that made an
+# anonymous page load redirect correctly is the same thing that makes an
+# oauth2-proxy flag unable to distinguish API paths.
+#
+# So the distinction moves to Traefik, where the path IS known, and uses the two
+# endpoints the gate already offers:
+#
+#   /            normal-path handler  -> 302 to the provider   (a human)
+#   /oauth2/auth auth-check handler   -> 401 with no Location   (an XHR)
+#
+# A browser cannot follow a cross-origin redirect to a login page, so an XHR
+# that receives a 302 fails opaquely or parses the provider's HTML as JSON.
+# Dagster's UI is a single-page app talking to /graphql and hit exactly that.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: oauth2-forward-auth-api
+  namespace: {{ svc.namespace }}
+  labels:
+    app: oauth2-proxy
+    component: forward-auth-middleware-api
+    urbalurba.io/generated-by: oauth2-proxy
+  annotations:
+    urbalurba.io/description: "Requires a session and answers 401 rather than redirecting; generated, do not hand-edit"
+spec:
+  forwardAuth:
+    address: http://oauth2-proxy.oauth2-proxy.svc.cluster.local:4180/oauth2/auth
     trustForwardHeader: true
     authResponseHeaders:
       - X-Auth-Request-User
@@ -84,12 +124,24 @@ metadata:
     app: {{ svc.name }}
     type: protected
     protection: oauth2-proxy
+    urbalurba.io/generated-by: oauth2-proxy
   annotations:
     urbalurba.io/description: "{{ svc.name }} behind oauth2-proxy; generated, do not hand-edit"
 spec:
   entryPoints:
     - web
   routes:
+{% for pattern in svc.api_routes | default([]) %}
+    - match: Host(`{{ svc.hosts | join('`) || Host(`') }}`) && PathRegexp(`{{ pattern }}`)
+      kind: Rule
+      priority: 25
+      middlewares:
+        - name: oauth2-forward-auth-api
+          namespace: {{ svc.namespace }}
+      services:
+        - name: {{ svc.service }}
+          port: {{ svc.port }}
+{% endfor %}
     - match: Host(`{{ svc.hosts | join('`) || Host(`') }}`)
       kind: Rule
       priority: 20
@@ -125,6 +177,7 @@ metadata:
     app: oauth2-proxy
     component: callback-route
     protects: {{ svc.name }}
+    urbalurba.io/generated-by: oauth2-proxy
   annotations:
     urbalurba.io/description: "Unauthenticated /oauth2/ path for {{ svc.name }}; generated, do not hand-edit"
 spec:

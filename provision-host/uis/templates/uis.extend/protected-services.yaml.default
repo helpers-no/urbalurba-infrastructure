@@ -6,6 +6,11 @@
 # Edit it, then apply:
 #     ./uis deploy oauth2-proxy
 #
+# To remove a login from everything, set `protected: []` and apply. That is a
+# supported un-gate: the generated routes are deleted and the hosts are reachable
+# again without a login. The gate pod stays; remove it with
+# `./uis undeploy oauth2-proxy`.
+#
 # 🔴 THE ALLOWLIST IS WHAT MAKES THIS A CONTROL.
 # oauth2-proxy accepts --email-domain=* which upstream documents as "Use * to
 # authenticate any email", and most quickstart guides show exactly that. With *
@@ -42,9 +47,16 @@ allowed_emails: []
 #   hosts      the EXTERNAL hostnames to gate. Named hosts, never a wildcard —
 #              a regex matching every domain is how a wildcard tunnel publishes
 #              services nobody declared.
-#   api_routes optional, and required for any single-page app: paths that must
-#              receive a 401 rather than a redirect, because browser JavaScript
-#              cannot follow a cross-origin redirect to a login page.
+#   api_routes optional, and required for any single-page app: path patterns
+#              (regexes) that must receive a 401 rather than a redirect, because
+#              browser JavaScript cannot follow a cross-origin redirect to a
+#              login page — an XHR that gets a 302 fails opaquely or parses the
+#              provider's HTML as JSON.
+#
+#              These become their own higher-priority Traefik rules using a
+#              second middleware, because the gate itself cannot tell API paths
+#              apart: ForwardAuth sends its own subrequest, so the gate always
+#              sees `GET /` regardless of what the visitor asked for.
 #
 # Example — a Dagster webserver gated on its public hostname while
 # dagster.localhost stays open:
