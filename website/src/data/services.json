@@ -341,6 +341,25 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "oauth2-proxy",
+    "name": "oauth2-proxy",
+    "description": "Login gate using an external identity provider",
+    "category": "IDENTITY",
+    "tags": ["authentication", "oauth", "oidc", "sso", "gate", "forward-auth"],
+    "abstract": "Authentication gate that delegates identity to an external provider",
+    "logo": "",
+    "website": "https://oauth2-proxy.github.io/oauth2-proxy/"
+    ,"summary": "oauth2-proxy authenticates visitors against an external identity provider (GitHub, Google, or any OIDC issuer) and allows through only the people on a configured list. It runs as a Traefik ForwardAuth gate, holds no user records and no persistent state, so it fits the case where the user directory belongs to someone else. It provides authentication only — everyone admitted is equal, with no groups or per-service permissions."
+    ,"docs": "/docs/services/identity/oauth2-proxy"
+    ,"playbook": "072-setup-oauth2-proxy.yml"
+    ,"priority": 35
+    ,"checkCommand": "kubectl get pods -n oauth2-proxy -l app=oauth2-proxy --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "072-remove-oauth2-proxy.yml"
+    ,"namespace": "oauth2-proxy"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "enonic",
     "name": "Enonic XP",
     "description": "Headless CMS platform for content management and delivery",
