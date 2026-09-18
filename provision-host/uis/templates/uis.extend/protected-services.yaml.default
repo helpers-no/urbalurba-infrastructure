@@ -1,0 +1,59 @@
+# protected-services.yaml — which services require a login, and who may pass.
+#
+# THIS FILE IS YOURS. It is copied here once if missing and never overwritten by
+# an image update, unlike the templates under .uis.secrets/secrets-config/.
+#
+# Edit it, then apply:
+#     ./uis deploy oauth2-proxy
+#
+# 🔴 THE ALLOWLIST IS WHAT MAKES THIS A CONTROL.
+# oauth2-proxy accepts --email-domain=* which upstream documents as "Use * to
+# authenticate any email", and most quickstart guides show exactly that. With *
+# and a public provider, a gate converts "anonymous" into "anyone with an
+# account" and is close to no protection at all. UIS does not offer *; name the
+# addresses.
+#
+# 🔵 The credentials do NOT go here — they are secrets and belong in
+# .uis.secrets/secrets-config/00-common-values.env.template:
+#     OAUTH2_PROXY_CLIENT_ID, OAUTH2_PROXY_CLIENT_SECRET, OAUTH2_PROXY_COOKIE_SECRET
+#
+# Docs: /docs/services/identity/oauth2-proxy
+
+# Which provider authenticates people. One provider per installation —
+# oauth2-proxy cannot offer a choice of several (upstream issue #926). If you
+# need that, use Authentik.
+provider: github          # github | google | oidc
+issuer: ""                # required for provider: oidc only
+
+# The parent domain session cookies are scoped to, so one sign-in covers every
+# protected host beneath it.
+cookie_domain: ""
+
+# Who may pass the gate. Their address must be the PRIMARY VERIFIED email on the
+# provider account — that is the one the provider returns.
+allowed_emails: []
+
+# Which services sit behind it. A service not listed here is not gated.
+#
+#   name       the service's UIS name, used to name the generated objects
+#   namespace  where its Kubernetes Service lives
+#   service    the Kubernetes Service name (not always the same as `name`)
+#   port       that Service's port
+#   hosts      the EXTERNAL hostnames to gate. Named hosts, never a wildcard —
+#              a regex matching every domain is how a wildcard tunnel publishes
+#              services nobody declared.
+#   api_routes optional, and required for any single-page app: paths that must
+#              receive a 401 rather than a redirect, because browser JavaScript
+#              cannot follow a cross-origin redirect to a login page.
+#
+# Example — a Dagster webserver gated on its public hostname while
+# dagster.localhost stays open:
+#
+# protected:
+#   - name: dagster
+#     namespace: dagster
+#     service: dagster-dagster-webserver
+#     port: 80
+#     hosts: ["dagster.example.com"]
+#     api_routes: ["^/graphql"]
+protected: []

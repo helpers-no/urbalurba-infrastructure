@@ -173,4 +173,79 @@ for f in "$DEPLOY" "$MW"; do
     fi
 done
 
+# ---------------------------------------------------------------------------
+# 1.6.122: the declaration is operator config, not a structural template key.
+# ---------------------------------------------------------------------------
+DECL="$REPO/provision-host/uis/templates/uis.extend/protected-services.yaml.default"
+MASTER_T="$REPO/provision-host/uis/templates/secrets-templates/00-master-secrets.yml.template"
+REMOVE="$REPO/ansible/playbooks/072-remove-oauth2-proxy.yml"
+
+start_test "the operator-owned declaration default is shipped"
+assert_file_exists "$DECL" && pass_test
+
+start_test "the declaration is NOT a key in the structural template"
+# It was, in 1.6.121. That template is re-synced from the image on every start
+# as of 1.6.122, so a user edit there is destroyed — and before that fix it was
+# never synced at all, which is how 1.6.121 shipped undeployable.
+if _code_only "$MASTER_T" | grep -q 'OAUTH2_PROXY_CONFIG:'; then
+    fail_test "OAUTH2_PROXY_CONFIG is back in a template that gets overwritten"
+else
+    pass_test
+fi
+
+start_test "both playbooks read the declaration from .uis.extend"
+if grep -q 'declaration_file: "/mnt/urbalurbadisk/.uis.extend/protected-services.yaml"' "$SETUP" \
+   && grep -q 'declaration_file: "/mnt/urbalurbadisk/.uis.extend/protected-services.yaml"' "$REMOVE"; then
+    pass_test
+else
+    fail_test "a playbook still reads the declaration from the secrets pipeline"
+fi
+
+start_test "the shipped declaration gates nothing by default"
+if grep -qE '^protected: \[\]' "$DECL"; then
+    pass_test
+else
+    fail_test "the default must protect nothing — deploying it should change no access"
+fi
+
+start_test "the shipped declaration offers no wildcard"
+if _code_only "$DECL" | grep -qE "^allowed_emails:.*\*|email-domain=\*"; then
+    fail_test "a wildcard in the shipped default would make every install open"
+else
+    pass_test
+fi
+
+start_test "a playbook failure is not reported as a Kubernetes error"
+if _code_only "$REPO/provision-host/uis/lib/service-deployment.sh" | grep -q 'die_k8s "Playbook failed'; then
+    fail_test "a deliberate refusal would again be buried under 'Is the cluster running?'"
+else
+    pass_test
+fi
+
+start_test "the structural template sync is not gated on first_run alone"
+# Assert the else-branch by its own distinctive message rather than by looking
+# for an `else` after a marker — the first version of this check set a flag and
+# then matched ANY later `else` in a 1400-line file, so it could never fail. The
+# mutation harness caught that; a reader would not have.
+if grep -q 'could not sync the structural secrets template' "$REPO/uis"; then
+    pass_test
+else
+    fail_test "no non-first-run sync branch — new image keys never reach an existing install"
+fi
+
+start_test "an existing install also receives new .uis.extend defaults"
+# Without this, a file a release introduces appears only on machines installed
+# after that release — so protected-services.yaml would be missing on every
+# existing host while the playbook that reads it shipped in the same version.
+# Assert the ADJACENT PAIR I added, not "the string appears somewhere after a
+# marker". That looser form has now been vacuous twice in one release: there are
+# two call sites, so matching anywhere-after-the-marker found the other one and
+# the assertion could not fail. Distinctive strings, not positional flags.
+if grep -A1 'copy_defaults_if_missing || true' \
+        "$REPO/provision-host/uis/manage/uis-cli.sh" | grep -q 'copy_secrets_templates || true'; then
+    pass_test
+else
+    fail_test "cmd_init's already-initialized branch does not seed new .uis.extend files"
+fi
+
 print_summary

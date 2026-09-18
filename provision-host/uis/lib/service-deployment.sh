@@ -329,8 +329,31 @@ deploy_single_service() {
             done < "$defaults_file"
         fi
 
+        # 🔴 A PLAYBOOK THAT REFUSED ON PURPOSE IS NOT A KUBERNETES PROBLEM.
+        #
+        # This was `die_k8s "Playbook failed: ..."`, which prints
+        #     ✗ Kubernetes error: Playbook failed: <playbook>
+        #     ✗ Is the cluster running? Try: kubectl cluster-info
+        # on top of whatever the playbook just said. Reported by the tester on
+        # 2026-09-18: 072-setup-oauth2-proxy refused because no OAuth credentials
+        # were configured, printed the five steps to fix it, and the launcher
+        # then buried those five steps under a wrong diagnosis pointing at an
+        # unrelated subsystem. The cluster was healthy throughout.
+        #
+        # An operator follows the last line they see, so that line sent them to
+        # debug Kubernetes. Same class as the three Cloudflare commands fixed in
+        # 1.6.118: the tool had the right information and reported something
+        # else.
+        #
+        # A non-zero exit from ansible-playbook means the playbook failed. It
+        # does NOT tell us why, and we must not guess — say what happened, point
+        # at the playbook's own output, and leave the diagnosis to the lines
+        # above rather than overwriting them.
         if ! ansible-playbook "$playbook_path" "${ansible_args[@]}"; then
-            die_k8s "Playbook failed: $SCRIPT_PLAYBOOK"
+            log_error "Playbook failed: $SCRIPT_PLAYBOOK"
+            log_error "The reason is in the playbook output above — a failed task, or a"
+            log_error "deliberate refusal with instructions. Read that, not this line."
+            exit "$EXIT_GENERAL_ERROR"
         fi
 
     elif [[ -n "$SCRIPT_MANIFEST" ]]; then
