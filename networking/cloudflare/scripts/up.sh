@@ -70,7 +70,40 @@ echo
 
 # ----- 2/2 Apply manifest + wait for cloudflared to register -----
 echo "▶ 2/2 Deploying cloudflared (ansible-playbook 820-deploy-network-cloudflare-tunnel.yml)..."
+
+# DO NOT PRINT A TICK FOR A FAILED DEPLOY.
+#
+# This used to be a bare `ansible-playbook "$PLAYBOOK"` followed by an
+# unconditional "✓ Cloudflare tunnel is up". In testing (2026-09-18) the playbook's
+# end-to-end probe failed twelve times against a correctly-configured domain and
+# this banner still claimed success — so the operator believed the tunnel worked
+# and spent the next half hour debugging the wrong layer.
+#
+# The playbook now exits non-zero when it deployed a connector that cannot serve
+# traffic (820 task 20), having first printed which origin the connector is
+# actually using. `set -e` would abort here and swallow the follow-up commands,
+# so capture the status and branch on it.
+set +e
 ansible-playbook "$PLAYBOOK"
+PLAYBOOK_RC=$?
+set -e
+
+if [[ "$PLAYBOOK_RC" -ne 0 ]]; then
+    echo
+    echo "═══════════════════════════════════════════════════════════"
+    echo " ✗ Cloudflare tunnel deployed, but it is NOT serving traffic"
+    echo "═══════════════════════════════════════════════════════════"
+    echo "  The pod is running and connected to Cloudflare. The failure is"
+    echo "  between the connector and the origin — see the diagnosis above."
+    echo
+    echo "  Check this cluster's Traefik:  kubectl get svc -A | grep -i traefik"
+    echo "  Connector logs:               kubectl -n default logs -l app=cloudflared --tail=50"
+    echo "  Re-check after fixing:        ./uis network verify cloudflare"
+    echo
+    echo "  If the origin URL on the dashboard route is wrong, fix it there —"
+    echo "  the connector picks up the change in seconds. No redeploy needed."
+    exit "$PLAYBOOK_RC"
+fi
 
 # ----- Summary -----
 echo
