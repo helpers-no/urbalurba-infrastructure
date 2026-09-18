@@ -1,0 +1,207 @@
+---
+# file: ansible/playbooks/072-setup-oauth2-proxy.yml
+# Description: Deploy oauth2-proxy as a Traefik ForwardAuth gate, and put the
+#              declared services behind it.
+#
+# Usage:
+#   ansible-playbook playbooks/072-setup-oauth2-proxy.yml
+#
+# 🔴 THIS PLAYBOOK MUST NOT REPORT SUCCESS FOR A GATE THAT CANNOT AUTHENTICATE.
+#
+# On 2026-09-18 three Cloudflare commands reported success on a tunnel that
+# served nothing: `up` printed a tick after its own probe failed twelve times,
+# `status` presented a Running pod as a working tunnel, and `verify` called an
+# untouched placeholder "configured" (all fixed in 1.6.118). The same three
+# traps apply here, so:
+#
+#   - refuse on an empty or placeholder credential rather than deploying a gate
+#     that will refuse every visitor (tasks 03-04)
+#   - do not treat a Running pod as a working gate — cloudflared's /ready and
+#     oauth2-proxy's /ping both answer before the provider has ever been
+#     contacted (task 09)
+#   - when the end-to-end assertion fails, say what was expected and what came
+#     back, and exit non-zero (tasks 09-11)
+
+# 🔵 THE BOUNDARY THIS GATE DRAWS (Terje, 2026-09-18).
+#
+#   humans   reach a service by its EXTERNAL hostname, through Traefik, and are
+#            gated here
+#   machines reach it by its in-cluster Service name, which bypasses Traefik and
+#            this gate entirely
+#
+# That is why gating dagster.<domain> does not break `uis deploy dagster`,
+# 361-dagster-automation.yml or 360-test-dagster.yml: every one of them calls
+# http://dagster-dagster-webserver:80/graphql by Service name. Verified by
+# grepping the playbooks, not assumed.
+#
+# ⚠️ It also means this gate has NO answer for a machine client outside the
+# cluster — a CI job, an external monitor, a script on another host. --api-route
+# gives a browser SPA a clean 401; it does not give a machine a credential. If
+# that need arrives, it is a new decision (a bearer-token path, or a second
+# hostname), not a tweak to this playbook. Recorded here because until today it
+# worked by accident rather than by design.
+
+- name: Deploy oauth2-proxy login gate
+  hosts: localhost
+  gather_facts: false
+  vars:
+    manifests_folder: "/mnt/urbalurbadisk/manifests"
+    kubeconfig_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    gate_namespace: "oauth2-proxy"
+
+  tasks:
+    - name: "01 Verify kubeconfig exists"
+      ansible.builtin.stat:
+        path: "{{ kubeconfig_file }}"
+      register: kubeconfig_stat
+
+    - name: "02 Fail if kubeconfig is missing"
+      ansible.builtin.fail:
+        msg: "Kubeconfig not found at {{ kubeconfig_file }}"
+      when: not kubeconfig_stat.stat.exists
+
+    - name: "03 Read oauth2-proxy configuration from urbalurba-secrets"
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: urbalurba-secrets
+        namespace: default
+        kubeconfig: "{{ kubeconfig_file }}"
+      register: urbalurba_secrets
+
+    - name: "04 Refuse to deploy a gate that cannot authenticate anyone"
+      ansible.builtin.fail:
+        msg: |
+          oauth2-proxy is not configured, so the gate would refuse every visitor.
+
+          Missing or still a placeholder:
+          {% for k in ['OAUTH2_PROXY_CLIENT_ID', 'OAUTH2_PROXY_CLIENT_SECRET', 'OAUTH2_PROXY_COOKIE_SECRET'] %}
+          {% set v = (urbalurba_secrets.resources[0].data[k] | default('') | b64decode) %}
+          {% if v == '' or 'placeholder' in v or 'your-' in v %}  - {{ k }}
+          {% endif %}
+          {% endfor %}
+          To fix:
+          1. Register an OAuth application with your provider. Its redirect URI
+             must be exactly  https://<host>/oauth2/callback
+          2. Put the client id and secret into
+             .uis.secrets/secrets-config/00-common-values.env.template
+          3. Generate an INDEPENDENT cookie secret — do not derive it from the
+             client secret, or rotating the client secret silently invalidates
+             every live session:
+                 openssl rand -base64 32 | head -c 32
+          4. ./uis secrets generate && ./uis secrets apply
+          5. Re-run this deploy.
+      when: >-
+        urbalurba_secrets.resources | length == 0 or
+        (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode) in ['', 'placeholder'] or
+        (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_SECRET'] | default('') | b64decode) == '' or
+        (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode) == '' or
+        'your-' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode)
+
+    - name: "05 Parse the gate declaration"
+      ansible.builtin.set_fact:
+        gate_config: >-
+          {{ (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CONFIG']
+              | default('') | b64decode | from_yaml) | default({}, true) }}
+
+    - name: "06 Fail if no service is declared for protection"
+      ansible.builtin.fail:
+        msg: |
+          OAUTH2_PROXY_CONFIG declares no services under `protected:`.
+
+          The gate would deploy and protect nothing, which is a silently useless
+          outcome. Declare at least one service, for example:
+
+            protected:
+              - name: dagster
+                namespace: dagster
+                service: dagster-dagster-webserver
+                port: 80
+                hosts: ["dagster.example.com"]
+      when: gate_config.protected | default([]) | length == 0
+
+    - name: "07 Render and apply the gate"
+      kubernetes.core.k8s:
+        definition: "{{ lookup('template', manifests_folder + '/072-oauth2-proxy-deployment.yaml.j2') }}"
+        kubeconfig: "{{ kubeconfig_file }}"
+        state: present
+      vars:
+        oauth2_provider: "{{ gate_config.provider | default('oidc') }}"
+        oauth2_issuer: "{{ gate_config.issuer | default('') }}"
+        oauth2_allowed_emails: "{{ gate_config.allowed_emails | default([]) }}"
+        oauth2_cookie_domain: "{{ gate_config.cookie_domain | default('') }}"
+
+    - name: "08 Wait for the gate pod to be Running"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ gate_namespace }}"
+        label_selectors:
+          - "app=oauth2-proxy"
+        kubeconfig: "{{ kubeconfig_file }}"
+      register: gate_pods
+      until:
+        - gate_pods.resources | length > 0
+        - gate_pods.resources | map(attribute='status.phase') | list | select('equalto', 'Running') | list | length == gate_pods.resources | length
+      retries: 24
+      delay: 5
+
+    # A RUNNING POD IS NOT A WORKING GATE. /ping answers before oauth2-proxy has
+    # ever contacted the provider, so a wrong client secret, an unregistered
+    # redirect URI or an issuer that does not resolve all pass task 08 and fail
+    # every sign-in. Ask the endpoint Traefik will actually ask.
+    - name: "09 Assert the auth endpoint answers as an unauthenticated caller would"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig={{ kubeconfig_file }}
+          - -n
+          - "{{ gate_namespace }}"
+          - exec
+          - "{{ gate_pods.resources[0].metadata.name }}"
+          - --
+          - wget
+          - -q
+          - -S
+          - -O
+          - /dev/null
+          - http://127.0.0.1:4180/oauth2/auth
+      register: auth_probe
+      changed_when: false
+      failed_when: false
+
+    - name: "10 Report the gate state"
+      ansible.builtin.debug:
+        msg:
+          - "==================================================="
+          - "oauth2-proxy gate"
+          - "==================================================="
+          - ""
+          - "Pods:      {{ gate_pods.resources | length }} running"
+          - "Provider:  {{ gate_config.provider | default('oidc') }}"
+          - "Allowed:   {{ gate_config.allowed_emails | default([]) | length }} address(es)"
+          - "Protected: {{ gate_config.protected | default([]) | map(attribute='name') | list | join(', ') }}"
+          - ""
+          - "⚠️  A Running pod is not a working login. The only honest test is"
+          - "    signing in — see 'Verify' in the service documentation."
+          - "==================================================="
+
+    - name: "11 Put the declared services behind the gate"
+      kubernetes.core.k8s:
+        definition: "{{ lookup('template', manifests_folder + '/072-oauth2-proxy-middleware.yaml.j2') }}"
+        kubeconfig: "{{ kubeconfig_file }}"
+        state: present
+      vars:
+        oauth2_protected: "{{ gate_config.protected }}"
+
+    - name: "12 Final summary"
+      ansible.builtin.debug:
+        msg:
+          - "✓ oauth2-proxy deployed and {{ gate_config.protected | length }} service(s) put behind it."
+          - ""
+          - "Next, and it is not optional:"
+          - "  1. Open a protected host in a browser that is NOT signed in."
+          - "     Expect a redirect to the provider — not a bare 401."
+          - "  2. Sign in with an allowlisted address. Expect the service."
+          - "  3. Sign in with a non-allowlisted address. Expect 403."
+          - "  4. Open the .localhost host. Expect NO login."
+          - ""
+          - "Logs: kubectl -n {{ gate_namespace }} logs -l app=oauth2-proxy --tail=50"
