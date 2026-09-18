@@ -1,0 +1,91 @@
+---
+# file: ansible/playbooks/072-remove-oauth2-proxy.yml
+# Description: Remove the oauth2-proxy gate and every route it fronts.
+#
+# ⚠️ PROTECTED SERVICES FAIL CLOSED, NOT OPEN.
+# Removing the gate removes the protected IngressRoutes with it, so those hosts
+# stop being reachable rather than becoming anonymous. That is the safe
+# direction and it is deliberate — the alternative would silently republish an
+# admin UI, which is the incident this whole mechanism exists to prevent.
+#
+# To keep a service serving without a login, remove it from OAUTH2_PROXY_CONFIG
+# and re-run the setup playbook. Do not reach for this one.
+
+- name: Remove oauth2-proxy login gate
+  hosts: localhost
+  gather_facts: false
+  vars:
+    kubeconfig_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    gate_namespace: "oauth2-proxy"
+
+  tasks:
+    - name: "01 Read the declaration so the generated routes can be found"
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: urbalurba-secrets
+        namespace: default
+        kubeconfig: "{{ kubeconfig_file }}"
+      register: urbalurba_secrets
+      failed_when: false
+
+    - name: "02 Parse it"
+      ansible.builtin.set_fact:
+        gate_config: >-
+          {{ (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CONFIG']
+              | default('') | b64decode | from_yaml) | default({}, true) }}
+      when: urbalurba_secrets.resources | default([]) | length > 0
+
+    # Delete the per-namespace objects by name. Label-selector deletion would be
+    # tidier but leaves anything whose labels drifted, and a route left behind
+    # after the gate is gone is a route pointing at nothing.
+    # Two tasks rather than one product() loop with a ternary. The compact
+    # version read `item.1 == 'Middleware' | ternary(...)`, which Jinja parses as
+    # `item.1 == ('Middleware' | ternary(...))` because a filter binds tighter
+    # than `==` — so it would have failed at runtime on the first removal.
+    - name: "03 Remove each protected IngressRoute"
+      kubernetes.core.k8s:
+        kind: IngressRoute
+        api_version: traefik.io/v1alpha1
+        name: "{{ item.name }}-oauth2-protected"
+        namespace: "{{ item.namespace }}"
+        kubeconfig: "{{ kubeconfig_file }}"
+        state: absent
+      loop: "{{ gate_config.protected | default([]) }}"
+      failed_when: false
+
+    - name: "03b Remove each forward-auth Middleware"
+      kubernetes.core.k8s:
+        kind: Middleware
+        api_version: traefik.io/v1alpha1
+        name: oauth2-forward-auth
+        namespace: "{{ item.namespace }}"
+        kubeconfig: "{{ kubeconfig_file }}"
+        state: absent
+      loop: "{{ gate_config.protected | default([]) }}"
+      failed_when: false
+
+    - name: "04 Remove the callback routes (they live in the gate namespace)"
+      kubernetes.core.k8s:
+        kind: IngressRoute
+        api_version: traefik.io/v1alpha1
+        name: "{{ item.name }}-oauth2-callback"
+        namespace: "{{ gate_namespace }}"
+        kubeconfig: "{{ kubeconfig_file }}"
+        state: absent
+      loop: "{{ gate_config.protected | default([]) }}"
+      failed_when: false
+
+    - name: "05 Remove the gate namespace and everything in it"
+      kubernetes.core.k8s:
+        kind: Namespace
+        name: "{{ gate_namespace }}"
+        kubeconfig: "{{ kubeconfig_file }}"
+        state: absent
+
+    - name: "06 Summary"
+      ansible.builtin.debug:
+        msg:
+          - "✓ oauth2-proxy removed."
+          - "⚠️ The services it fronted are no longer reachable on their protected"
+          - "   hosts — they failed closed, which is the intended direction."
+          - "   Their .localhost routes are untouched."

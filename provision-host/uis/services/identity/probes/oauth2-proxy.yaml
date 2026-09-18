@@ -1,0 +1,19 @@
+# The Kubernetes Service is oauth2-proxy in the oauth2-proxy namespace.
+service: oauth2-proxy
+# Availability probe shipped with the oauth2-proxy service.
+#
+# ⚠️ A HEALTHY /ping PROVES THE GATE IS SERVING, NOT THAT ANYONE CAN LOG IN.
+# oauth2-proxy answers /ping before it has ever spoken to the identity provider.
+# A wrong client secret, an unregistered redirect URI, an issuer that does not
+# resolve, or a provider that returns no groups claim all pass this probe and
+# fail every actual sign-in. The honest test is signing in; this is the cheap one.
+#
+# The same gap in `uis network status cloudflare` — reporting a Running pod as a
+# working tunnel — is what let a broken Cloudflare route look healthy for half an
+# hour on 2026-09-18 (fixed in 1.6.118). Do not let this probe become the verdict.
+probes:
+  - id: gateway
+    type: http
+    path: /ping
+    interval: 60
+    maxretries: 2

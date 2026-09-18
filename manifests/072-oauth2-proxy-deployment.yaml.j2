@@ -1,0 +1,175 @@
+# 072-oauth2-proxy-deployment.yaml.j2
+#
+# The login gate. Runs in AUTH-ONLY mode: it answers "is this request from
+# someone we allow?" and carries no traffic. Traefik's ForwardAuth middleware
+# (072-oauth2-proxy-middleware) asks it, and Traefik routes the request itself.
+#
+# Template variables (from kubernetes-secrets.yml via the setup playbook):
+#   oauth2_provider        oidc | github | google
+#   oauth2_issuer          OIDC issuer URL (oidc provider only)
+#   oauth2_allowed_emails  list of addresses permitted through
+#   oauth2_cookie_domain   the parent domain cookies are scoped to
+#
+# 🔴 THE ALLOWLIST IS WHAT MAKES THIS A CONTROL.
+# oauth2-proxy accepts --email-domain=* which upstream documents as "Use * to
+# authenticate any email", and most quickstarts on the internet show exactly
+# that. With * and a public provider this gate converts "anonymous" into "anyone
+# with a Google account" and is close to no protection at all. UIS therefore
+# configures an explicit list and never offers *.
+#
+# 🔵 WHERE THE LIST SHOULD LIVE, EVENTUALLY. Email addresses are not secrets and
+# do not belong in the secrets pipeline; PLAN-service-exposure-opt-in and
+# PLAN-service-oauth2-proxy both put the declaration in .uis.extend/, which is
+# user-owned and never overwritten by an image update. That move is its own
+# change — 00-master-secrets.yml.template is RE-SYNCED FROM THE IMAGE on every
+# run (first-run.sh::copy_secrets_templates), so a list edited there is silently
+# replaced by `./uis pull`. Until the move lands, treat the list as
+# generated-from-the-pipeline, not hand-edited in the cluster.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: oauth2-proxy
+  labels:
+    app: oauth2-proxy
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oauth2-proxy-allowlist
+  namespace: oauth2-proxy
+  labels:
+    app: oauth2-proxy
+data:
+  # One address per line — the format --authenticated-emails-file expects.
+  #
+  # ✅ oauth2-proxy WATCHES this file (validator.go calls
+  # watcher.WatchFileForUpdates), so adding a person does not need a restart.
+  # ⚠️ A ConfigMap update reaches the pod as a symlink swap, which fsnotify-based
+  # watchers sometimes miss. Verify on a real cluster before relying on it; if it
+  # does not reload, say so in the docs rather than leaving operators to find out.
+  authenticated-emails: |
+{% for email in oauth2_allowed_emails %}
+    {{ email }}
+{% endfor %}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth2-proxy
+  namespace: oauth2-proxy
+  labels:
+    app: oauth2-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oauth2-proxy
+  template:
+    metadata:
+      labels:
+        app: oauth2-proxy
+    spec:
+      containers:
+        - name: oauth2-proxy
+          # Pinned deliberately. An unpinned tag re-pulls on every restart and
+          # drifts between clusters — the cloudflared:latest finding, and
+          # conformance C9 (version parity in dev/test).
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4-alpine
+          args:
+            # Auth-only: no --upstream. Traefik carries the traffic.
+            - --http-address=0.0.0.0:4180
+            - --reverse-proxy=true
+            - --provider={{ oauth2_provider }}
+{% if oauth2_provider == 'oidc' %}
+            - --oidc-issuer-url={{ oauth2_issuer }}
+{% endif %}
+            # An explicit list of people. NOT --email-domain=*; see the header.
+            - --authenticated-emails-file=/etc/oauth2-proxy/authenticated-emails
+            # One provider per instance, so a provider-selection page would have
+            # exactly one button on it.
+            - --skip-provider-button=true
+            # Cookies must be readable by every gate on this domain, so that one
+            # sign-in covers all of them rather than bouncing the user per host.
+            - --cookie-domain={{ oauth2_cookie_domain }}
+            - --whitelist-domain=.{{ oauth2_cookie_domain }}
+            - --cookie-secure=true
+            - --cookie-expire=8h
+            # /ping must answer without a session or the probe never passes.
+            - --ping-path=/ping
+          env:
+            - name: OAUTH2_PROXY_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: urbalurba-secrets
+                  key: OAUTH2_PROXY_CLIENT_ID
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: urbalurba-secrets
+                  key: OAUTH2_PROXY_CLIENT_SECRET
+            # 🔴 ONE COOKIE SECRET FOR THE WHOLE INSTALLATION, shared by every
+            # gate. If a second gate cannot decrypt the cookie this one issued, a
+            # user who is already signed in gets bounced back to the provider on
+            # crossing into the other gate's paths — and if both write the same
+            # cookie name with different secrets they overwrite each other, which
+            # is a login loop that presents as a permissions problem.
+            #
+            # ⚠️ And it must be INDEPENDENT, not derived from the client secret.
+            # Deriving it couples them, so rotating the client secret silently
+            # invalidates every live session with no error to explain it.
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: urbalurba-secrets
+                  key: OAUTH2_PROXY_COOKIE_SECRET
+          ports:
+            - containerPort: 4180
+              name: http
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 4180
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 4180
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          volumeMounts:
+            - name: allowlist
+              mountPath: /etc/oauth2-proxy
+              readOnly: true
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "25m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+      volumes:
+        - name: allowlist
+          configMap:
+            name: oauth2-proxy-allowlist
+            items:
+              - key: authenticated-emails
+                path: authenticated-emails
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oauth2-proxy
+  namespace: oauth2-proxy
+  labels:
+    app: oauth2-proxy
+spec:
+  selector:
+    app: oauth2-proxy
+  ports:
+    - name: http
+      port: 4180
+      targetPort: 4180
+      protocol: TCP

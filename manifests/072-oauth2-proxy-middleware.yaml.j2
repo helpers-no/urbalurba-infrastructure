@@ -1,0 +1,108 @@
+# 072-oauth2-proxy-middleware.yaml.j2
+#
+# The Traefik ForwardAuth middleware that puts a service behind the gate, plus
+# the unauthenticated route that lets the sign-in round trip complete.
+#
+# Template variables (from the setup playbook):
+#   oauth2_protected  list of {name, namespace, service, port, hosts}
+#
+# 🔵 ONE MIDDLEWARE PER NAMESPACE, AND THAT IS DELIBERATE.
+#
+# Traefik's `allowCrossNamespace` defaults to false and this repo does not set
+# it, so an IngressRoute in namespace `dagster` cannot REFERENCE a Middleware
+# object in `default`. PLAN-service-oauth2-proxy Phase 2.4 left three options
+# open; this is option 3, and it needs no global switch.
+#
+# What crosses namespaces freely is the forwardAuth ADDRESS, because that is a
+# URL resolved by cluster DNS rather than a Traefik object reference — exactly
+# how 077-authentik-forward-auth-middleware.yaml already points at
+# authentik-server.authentik.svc.cluster.local from the `default` namespace.
+# So: the Middleware lives beside the service it protects, and points across.
+{% for svc in oauth2_protected %}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: oauth2-forward-auth
+  namespace: {{ svc.namespace }}
+  labels:
+    app: oauth2-proxy
+    component: forward-auth-middleware
+  annotations:
+    urbalurba.io/description: "Requires an oauth2-proxy session; generated, do not hand-edit"
+spec:
+  forwardAuth:
+    # A URL, not an object reference — this is why no allowCrossNamespace is needed.
+    address: http://oauth2-proxy.oauth2-proxy.svc.cluster.local:4180/oauth2/auth
+    trustForwardHeader: true
+    authResponseHeaders:
+      - X-Auth-Request-User
+      - X-Auth-Request-Email
+---
+# The protected route. Host-specific on purpose: HostRegexp(`name\..+`) matches
+# EVERY domain, which is how a wildcard tunnel publishes services nobody
+# declared — see PLAN-service-exposure-opt-in. Listing the hosts means an
+# undeclared hostname matches nothing.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ svc.name }}-oauth2-protected
+  namespace: {{ svc.namespace }}
+  labels:
+    app: {{ svc.name }}
+    type: protected
+    protection: oauth2-proxy
+  annotations:
+    urbalurba.io/description: "{{ svc.name }} behind oauth2-proxy; generated, do not hand-edit"
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: {% for h in svc.hosts %}Host(`{{ h }}`){% if not loop.last %} || {% endif %}{% endfor %}
+      kind: Rule
+      priority: 20
+      middlewares:
+        - name: oauth2-forward-auth
+          namespace: {{ svc.namespace }}
+      services:
+        - name: {{ svc.service }}
+          port: {{ svc.port }}
+{% endfor %}
+{% for svc in oauth2_protected %}
+---
+# 🔴 /oauth2/ MUST NOT BE AUTHENTICATED, or the sign-in cannot complete — the
+# callback would itself require a session. Priority 30 beats the protected rule's
+# 20, so it wins for these paths.
+#
+# ⚠️ AND IT LIVES IN THE oauth2-proxy NAMESPACE, NOT THE SERVICE'S.
+# An earlier draft put it beside the protected route and pointed it at
+# `services: {name: oauth2-proxy, namespace: oauth2-proxy}` — which is exactly
+# the cross-namespace OBJECT reference that allowCrossNamespace forbids, and so
+# contradicted the reason this file uses per-namespace middlewares at all.
+#
+# Traefik aggregates IngressRoutes from every namespace into one routing table,
+# so a route may live anywhere and still match this host. Putting it here makes
+# the Service reference local, and no object reference crosses a namespace
+# anywhere in this file.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ svc.name }}-oauth2-callback
+  namespace: oauth2-proxy
+  labels:
+    app: oauth2-proxy
+    component: callback-route
+    protects: {{ svc.name }}
+  annotations:
+    urbalurba.io/description: "Unauthenticated /oauth2/ path for {{ svc.name }}; generated, do not hand-edit"
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: {% for h in svc.hosts %}Host(`{{ h }}`){% if not loop.last %} || {% endif %}{% endfor %} && PathPrefix(`/oauth2/`)
+      kind: Rule
+      priority: 30
+      services:
+        - name: oauth2-proxy
+          port: 4180
+{% endfor %}
