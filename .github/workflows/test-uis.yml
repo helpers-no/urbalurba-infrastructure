@@ -102,6 +102,23 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
+      - name: Install jinja2 and pyyaml (for the real template render)
+        # 🔴 WITHOUT THIS, test-jinja-templates-render.sh SKIPS — and skipping is
+        # exactly how two unparseable templates shipped with every test green.
+        #
+        # 1.6.121 shipped a template whose match line ended with a block tag;
+        # trim_blocks merged it with the next line and YAML rejected it.
+        # 1.6.123 fixed that and shipped one whose YAML comment quoted a
+        # loop-open tag with no expression — Jinja parses `#` lines, so it failed
+        # on line 5. Static assertions passed both times, including one written
+        # to catch the first bug: it forbade that bug's shape, not the class.
+        #
+        # ⚠️ The test HARD FAILS rather than skipping when $CI is set, so a
+        # missing dependency here breaks the build instead of quietly disarming
+        # the only check that has ever caught either bug. Same reasoning as the
+        # yq step below, which exists because three assertions skipped for months.
+        run: python3 -m pip install --quiet jinja2 pyyaml
+
       - name: Install yq (mikefarah v4)
         # 🔴 WITHOUT THIS, EVERY yq-DEPENDENT ASSERTION SKIPS AND NOBODY NOTICES.
         # Three prometheus assertions have skipped on every run since they were
