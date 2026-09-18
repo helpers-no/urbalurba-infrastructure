@@ -48,6 +48,7 @@
     manifests_folder: "/mnt/urbalurbadisk/manifests"
     kubeconfig_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
     gate_namespace: "oauth2-proxy"
+    declaration_file: "/mnt/urbalurbadisk/.uis.extend/protected-services.yaml"
 
   tasks:
     - name: "01 Verify kubeconfig exists"
@@ -97,19 +98,48 @@
         (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode) == '' or
         'your-' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode)
 
-    - name: "05 Parse the gate declaration"
+    # 🔵 THE DECLARATION IS OPERATOR CONFIG AND LIVES IN .uis.extend/.
+    #
+    # It was briefly a key in 00-master-secrets.yml.template. That was wrong
+    # twice over: the file is structural and re-synced from the image on every
+    # start as of 1.6.122, so an edit there is destroyed — and before that fix it
+    # was never synced at all, so a key a new release added could not reach an
+    # existing install. The tester found the second half on 2026-09-18 with two
+    # mtimes, which is how 1.6.121 turned out to be undeployable.
+    #
+    # .uis.extend/ is copied once if missing and never overwritten, like
+    # enabled-services.conf and dagster-code-locations.yaml.
+    - name: "05 Read the gate declaration"
+      ansible.builtin.stat:
+        path: "{{ declaration_file }}"
+      register: declaration_stat
+
+    - name: "05b Fail with the file to create if it is absent"
+      ansible.builtin.fail:
+        msg: |
+          No gate declaration at {{ declaration_file }}
+
+          That file says which services require a login and who may pass. It is
+          normally created for you; if it is missing, copy the shipped default:
+
+            cp /mnt/urbalurbadisk/provision-host/uis/templates/uis.extend/protected-services.yaml.default \
+               {{ declaration_file }}
+
+          Then edit it and re-run this deploy.
+      when: not declaration_stat.stat.exists
+
+    - name: "05c Parse it"
       ansible.builtin.set_fact:
-        gate_config: >-
-          {{ (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CONFIG']
-              | default('') | b64decode | from_yaml) | default({}, true) }}
+        gate_config: "{{ lookup('file', declaration_file) | from_yaml | default({}, true) }}"
 
     - name: "06 Fail if no service is declared for protection"
       ansible.builtin.fail:
         msg: |
-          OAUTH2_PROXY_CONFIG declares no services under `protected:`.
+          {{ declaration_file }} declares no services under `protected:`.
 
           The gate would deploy and protect nothing, which is a silently useless
-          outcome. Declare at least one service, for example:
+          outcome — it would look like a success and change nothing. Declare at
+          least one service, for example:
 
             protected:
               - name: dagster

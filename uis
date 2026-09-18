@@ -404,10 +404,38 @@ start_container() {
 
     log_info "Container started"
 
-    # Initialize config files on first run
+    # 🔴 THE STRUCTURAL TEMPLATE SYNC HAS NEVER RUN ON AN EXISTING INSTALL.
+    #
+    # `uis-cli.sh init` is the only path to copy_secrets_templates(), which is
+    # what picks up keys a new image adds to 00-master-secrets.yml.template.
+    # Its own comment says so: "master template is structural — new image
+    # versions may add keys". But this block only ran it when first_run was
+    # true, so on every existing host the structural template stayed frozen at
+    # whatever shipped when the install was created.
+    #
+    # Found by the tester on 2026-09-18 with two mtimes: after pulling 1.6.121,
+    # the active master template was still dated four days earlier and did not
+    # contain the keys that release added — so a new service's secrets could
+    # never reach the cluster, and the release was undeployable on any existing
+    # install. I had reasoned the opposite from the code and been wrong; a
+    # measurement beat a reading.
+    #
+    # The sync is idempotent (it diffs first) and the master template is
+    # structural by design, so running it on every start is what the code always
+    # intended. User values live in 00-common-values.env.template, which
+    # copy_secrets_templates deliberately leaves alone once it exists.
+    #
+    # ⚠️ Not silenced. `2>/dev/null || true` hid every failure of this path,
+    # which is part of why it went unnoticed for so long. A sync failure is now
+    # visible, and still non-fatal — a container that cannot sync a template
+    # should start anyway and say so.
     if [ "$first_run" = "true" ]; then
-        docker exec "$CONTAINER_NAME" /mnt/urbalurbadisk/provision-host/uis/manage/uis-cli.sh init 2>/dev/null || true
+        docker exec "$CONTAINER_NAME" /mnt/urbalurbadisk/provision-host/uis/manage/uis-cli.sh init || \
+            log_info "WARNING: first-run init did not complete; see the output above"
         show_welcome
+    else
+        docker exec "$CONTAINER_NAME" /mnt/urbalurbadisk/provision-host/uis/manage/uis-cli.sh init || \
+            log_info "WARNING: could not sync the structural secrets template; a new service's keys may be missing"
     fi
 }
 

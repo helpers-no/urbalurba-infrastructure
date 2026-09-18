@@ -8,7 +8,7 @@
 # direction and it is deliberate — the alternative would silently republish an
 # admin UI, which is the incident this whole mechanism exists to prevent.
 #
-# To keep a service serving without a login, remove it from OAUTH2_PROXY_CONFIG
+# To keep a service serving without a login, remove it from protected-services.yaml
 # and re-run the setup playbook. Do not reach for this one.
 
 - name: Remove oauth2-proxy login gate
@@ -17,23 +17,33 @@
   vars:
     kubeconfig_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
     gate_namespace: "oauth2-proxy"
+    declaration_file: "/mnt/urbalurbadisk/.uis.extend/protected-services.yaml"
 
   tasks:
+    # The declaration lives in .uis.extend/, not in the secrets pipeline — see
+    # the note in 072-setup-oauth2-proxy.yml.
     - name: "01 Read the declaration so the generated routes can be found"
-      kubernetes.core.k8s_info:
-        kind: Secret
-        name: urbalurba-secrets
-        namespace: default
-        kubeconfig: "{{ kubeconfig_file }}"
-      register: urbalurba_secrets
-      failed_when: false
+      ansible.builtin.stat:
+        path: "{{ declaration_file }}"
+      register: declaration_stat
 
     - name: "02 Parse it"
       ansible.builtin.set_fact:
-        gate_config: >-
-          {{ (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CONFIG']
-              | default('') | b64decode | from_yaml) | default({}, true) }}
-      when: urbalurba_secrets.resources | default([]) | length > 0
+        gate_config: "{{ lookup('file', declaration_file) | from_yaml | default({}, true) }}"
+      when: declaration_stat.stat.exists
+
+    # ⚠️ Without the declaration the generated route names are unknown, so the
+    # namespace deletion below is all that can be done. Say so rather than
+    # reporting a clean removal: a protected IngressRoute left behind points at
+    # a gate that no longer exists, and every request to that host then fails
+    # with no explanation.
+    - name: "02b Warn that per-service objects cannot be identified"
+      ansible.builtin.debug:
+        msg:
+          - "⚠️ {{ declaration_file }} is missing, so the per-service routes and"
+          - "   middlewares cannot be named and will NOT be removed."
+          - "   Find them with:  kubectl get ingressroute,middleware -A | grep oauth2"
+      when: not declaration_stat.stat.exists
 
     # Delete the per-namespace objects by name. Label-selector deletion would be
     # tidier but leaves anything whose labels drifted, and a route left behind

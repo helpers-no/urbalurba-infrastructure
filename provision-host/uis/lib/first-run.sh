@@ -114,6 +114,19 @@ copy_defaults_if_missing() {
         fi
     done
 
+    # Copy protected-services.yaml — operator config for the oauth2-proxy gate.
+    # Only if missing: this file holds who may reach which service, so an image
+    # update must never overwrite it. That is exactly why the declaration lives
+    # here and not in 00-master-secrets.yml.template, which IS re-synced.
+    if [[ ! -f "$EXTEND_DIR/protected-services.yaml" ]]; then
+        if [[ -f "$templates_extend/protected-services.yaml.default" ]]; then
+            cp "$templates_extend/protected-services.yaml.default" "$EXTEND_DIR/protected-services.yaml"
+            log_info "Created protected-services.yaml (nothing is gated until you edit it)"
+        else
+            log_warn "Template protected-services.yaml.default not found"
+        fi
+    fi
+
     # Copy secrets templates, generate, and apply Kubernetes secrets.
     # Non-fatal (|| true) because these depend on external tools (envsubst, kubectl)
     # and a running cluster, which won't be available in CI or on a fresh checkout.

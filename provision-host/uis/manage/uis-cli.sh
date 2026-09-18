@@ -2017,7 +2017,20 @@ cmd_init() {
         echo ""
         echo "To reconfigure, remove .uis.extend/ and run 'uis init' again"
 
-        # Self-healing: ensure secrets templates exist even if .uis.secrets/ was recreated
+        # Self-healing on every start, not only on a fresh install.
+        #
+        # copy_secrets_templates re-syncs the STRUCTURAL secrets template so keys
+        # a new image adds reach an existing install — the thing that silently
+        # never happened until 1.6.122.
+        #
+        # copy_defaults_if_missing creates .uis.extend/ files that a new release
+        # introduces. Every copy in it is guarded by `if [[ ! -f ]]`, so this is
+        # idempotent and never overwrites operator config. Without it, a file
+        # added by a new release only ever appears on a machine installed after
+        # that release — which is how protected-services.yaml would have been
+        # missing on every existing host while the playbook that reads it
+        # shipped in the same version.
+        copy_defaults_if_missing || true
         copy_secrets_templates || true
 
         return 0
