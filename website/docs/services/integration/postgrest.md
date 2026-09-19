@@ -297,6 +297,34 @@ No per-domain configuration in PostgREST or its IngressRoute.
 
 ## Limitations and gotchas
 
+### 🔴 `db-max-rows` is unset, and its absence is part of the contract
+
+UIS sets nine PostgREST settings and **`db-max-rows` is not one of them**. That is not an oversight, and it is not safe to "tidy up" later.
+
+With it unset, a client asking for 100,000 rows gets 100,000 rows. **Set it, and that client gets the first N — with a `200`, a well-formed body and no error.** A consumer computing coverage from the result reports plausible numbers that are quietly wrong, and nothing anywhere says so. It is the same shape as a check that cannot distinguish *all the rows* from *the first N rows*.
+
+:::danger The interaction that will catch someone acting in good faith
+`db-aggregates-enabled` is a reasonable request — server-side `count`, `sum`, `avg` instead of pulling the table. The usual mitigation for the load it invites is **exactly `db-max-rows` plus a statement timeout**, and it is what a requester will propose, because it is the correct mitigation for *that* risk.
+
+**Granting the aggregates request with that mitigation silently caps every unpaged consumer.** Two sensible decisions, made separately, combine into a data-integrity bug. If you enable aggregates, solve the load some other way, or find and fix every unpaged consumer first — and treat "nobody has complained" as unmeasured rather than as evidence.
+:::
+
+**Removing one consumer's exposure is not the same as it being safe to set.** A known consumer can be migrated to a summary view by agreement; the next one will not have written a contract with anyone, and will find out in production.
+
+#### If you decide to set it anyway
+
+That is a legitimate call — an unbounded row limit is a real availability risk on a public API. But it changes an API contract, so:
+
+1. **Announce it before setting it**, not in the release notes afterwards.
+2. **Publish a summary or aggregate view first**, so unpaged consumers have somewhere to go.
+3. **Update this page in the same change** — the claim above must never be stale. A static test asserts that UIS really does not set it, so the page and the code cannot drift apart silently.
+
+#### What UIS does set
+
+`db-uri`, `db-schemas`, `db-anon-role`, `db-pool`, `server-cors-allowed-origins`, the admin server port, and the error-file plumbing. **Everything else is PostgREST's default**, and a default that consumers have built on is a contract whether or not anyone wrote it down.
+
+⚠️ **An application cannot change any of this.** A `template-info.yaml` `postgrest:` block carries `schemas` and `url_prefix` and nothing else — no environment or config passthrough — so these settings are a UIS-operator decision, not an application one. An application that needs different behaviour has to ask for it here.
+
 ### Embedded resources require real FK constraints
 
 The `?select=*,kommune(*)` embed pattern relies on PostgREST reading `pg_constraint` for actual `FOREIGN KEY` constraints on the underlying tables. PostgREST's `@source` and `@references` comment hints are *navigation aids* that point at existing FK metadata — they don't synthesise it. Wrapper views over fact-style tables (e.g. dbt-built marts, where `relationships:` tests are SQL assertions, not DDL) typically lack FK constraints, so embeds won't work out of the box. Three workarounds, in order of decreasing effort to maintain:
