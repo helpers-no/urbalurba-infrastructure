@@ -13,7 +13,7 @@
     },
     "id": {
       "type": "string",
-      "description": "Unique identifier for the service (lowercase, hyphenated)",
+      "description": "Unique identifier for the service (lowercase, hyphenated). RESERVED PREFIXES: an id beginning api- (or a hostname api.) is matched by the Cloudflare CORS Transform Rule, which sets Access-Control-Allow-Origin: * on its responses, so any website's JavaScript may read them. Use it only for a public, browser-facing API that needs no credentials. The wildcard cannot carry credentials (browsers refuse cookies to a wildcard origin), so the risk is not a credential leak - it is anything private that is readable WITHOUT credentials. See /docs/networking/cloudflare-setup.",
       "pattern": "^[a-z0-9-]+$"
     },
     "name": {
