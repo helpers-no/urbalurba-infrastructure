@@ -155,6 +155,46 @@ never delivered.
 - [ ] **3.3** Delete the intent-only annotations, or make them generated from the
   declaration. Leaving both means two sources of truth, one of which does nothing.
 
+## The gate/service desync — ops-dev, 2026-09-19, and it dates this plan
+
+Found by reading a running ingress before any second domain existed, which makes it the first evidence for this plan that is neither hypothetical nor historical:
+
+```
+ungated   atlas-postgrest            HostRegexp(`api-atlas\..+`)      pattern
+ungated   dagster                    HostRegexp(`dagster\..+`)        pattern   priority 10
+GATED     dagster-oauth2-protected   Host(`dagster.urbalurba.com`)    literal   priority 20
+GATED     dagster-oauth2-callback    Host(`dagster.urbalurba.com`)    literal   priority 30
+```
+
+**The services that are open match patterns. The objects that protect them match literal hosts.** Today the gate outranks the pattern for the host it names, so the gated host is gated — verified. Point a **second apex domain** at the cluster and `dagster.<new-domain>` matches the pattern, does *not* match the gate, and is served **unauthenticated**.
+
+🔴 **The property that makes this dangerous is not the exposure, it is the silence.** The declared host stays correctly gated, so every check, monitor and runbook entry keeps passing. A new door opens beside the locked one. And the trigger — pointing another domain at the cluster — would be done for an unrelated reason by someone with no cause to think about this service.
+
+### Two candidate fixes, and only one of them is free
+
+**A — broaden the gate** (`Host(...)` → `HostRegexp(`dagster\..+`)`), so the gate follows the service wherever it is served. Architecturally attractive: *"point any domain at the cluster and Traefik will route."*
+
+⚠️ **A does fail closed, but it does not work.** The gate wins on priority, so nothing is served anonymously — and then:
+
+- **oauth2-proxy derives `redirect_uri` from the request's own hostname** (measured: the same config produced `dagster.localhost` and `dagster.urbalurba.com` callbacks). GitHub requires the redirect to match a **registered callback URL**, so a new host gets `redirect_uri_mismatch` at the provider.
+- **`cookie_domain` is a single apex.** A session cookie scoped to `urbalurba.com` is never sent to another apex, so even with the callback registered the sign-in cannot complete.
+
+So A converts a silent exposure into a **broken service on every new domain**, until someone registers a callback URL (max 10 per app) *and* runs a gate instance per apex. That is a real answer to the architectural wish: **routing is domain-agnostic; a gated service is not, and cannot be without multi-apex gate support.**
+
+**B — narrow the service** (`HostRegexp(`dagster\..+`)` → declared hosts). A new domain then serves **nothing** until a human opts in. **This is simply what this plan already proposes**, arrived at independently from the other direction.
+
+🔵 **B is the fix. A is a thing to know about**, because it is the obvious move and it looks free.
+
+### ⚠️ Do not "fix" `api-atlas` by symmetry
+
+It has the same pattern and **no gate to desynchronise from**. A published API reachable under a second name is the intent. The defect is the *disagreement between two matchers*, not the pattern itself.
+
+### Shipped ahead of the plan: detection, in 1.6.126
+
+`072-setup-oauth2-proxy.yml` task 11b queries the live ingress after gating and warns when a **pattern** route serves a service the gate matches **literally**, naming the route and the hosts actually covered.
+
+It **warns rather than refuses**, deliberately: the broad route belongs to the service, and every gated service has one today, so refusing would make the gate undeployable for the only thing it gates. **It becomes a refusal when this plan narrows those routes** — at which point a broad route beside a gate is a bug rather than the norm. It loops over the declaration, so an ungated service is never examined.
+
 ## The test ladder — Terje, 2026-09-18
 
 Three rungs, each isolating one layer, so a failure names its own cause:

@@ -605,11 +605,19 @@ for _pb in "$SETUP" "$REMOVE"; do
     _regs=$(_code_only "$_pb" | sed -n 's/^[[:space:]]*register:[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' | sort -u)
     # names dereferenced as a registered result: x.stdout / x.rc / x.resources
     _refs=$(_code_only "$_pb" \
-        | grep -oE '[A-Za-z_][A-Za-z0-9_]*\.(stdout|stdout_lines|rc|resources)' \
+        | grep -oE '[A-Za-z_][A-Za-z0-9_]*\.(stdout|stdout_lines|rc|resources|results)' \
         | cut -d. -f1 | sort -u)
     for _r in $_refs; do
         # play vars and facts are legitimate non-register sources; only flag a
         # name that looks like a task result and has no register anywhere here.
+        #
+        # `item` is Ansible's loop variable and carries .stdout when looping over
+        # a registered result's .results — legitimate, and never registered. The
+        # lint flagged it the first time a task did that, which is the lint
+        # finding its own boundary rather than a bug in the playbook.
+        # ⚠️ This does NOT check that a task using `item` has a `loop:`; that is
+        # a different lint and is not claimed here.
+        [[ "$_r" == "item" ]] && continue
         if ! printf '%s\n' "$_regs" | grep -qx "$_r"; then
             _missing="$_missing $(basename "$_pb"):$_r"
         fi
@@ -619,6 +627,52 @@ if [[ -z "$_missing" ]]; then
     pass_test
 else
     fail_test "read but never registered —$_missing"
+fi
+
+# ---------------------------------------------------------------------------
+# 1.6.126: the gate matches literal hosts; the services match patterns.
+#
+# HostRegexp(`dagster\..+`) at priority 10 serves ANY dagster.* hostname. The
+# gate's Host(`dagster.urbalurba.com`) at priority 20 wins only for the host it
+# names. Point a second apex domain at the cluster and the service is reachable
+# there ungated — while every check on the declared host keeps passing.
+# Found by ops-dev reading a running ingress, before a second domain existed.
+# ---------------------------------------------------------------------------
+
+start_test "the deploy looks for a broader route to each service it gates"
+if grep -q '11b Look for a broader route to a service we just gated' "$SETUP"; then
+    pass_test
+else
+    fail_test "nothing notices the gate and the service disagreeing about which hosts exist"
+fi
+
+start_test "the desync check is driven by the declaration, so ungated services are never flagged"
+# api-atlas has the same pattern and no gate — a published API reachable under a
+# second name is the intent. Looping over the declaration means it is never
+# examined, which is the design, not an omission.
+if _code_only "$SETUP" | grep -A24 '11b Look for a broader route' | grep -qF 'loop: "{{ gate_config.protected }}"'; then
+    pass_test
+else
+    fail_test "the check does not iterate the declaration — it may flag services nothing gates"
+fi
+
+start_test "the desync check ignores the gate's own generated routes"
+# Without this it reports the gate's own IngressRoute as the broader route, every
+# run, for every service — a warning that is always wrong is a warning nobody
+# reads, which is how the original finding stayed invisible.
+if _code_only "$SETUP" | grep -A24 '11b Look for a broader route' | grep -qF 'urbalurba.io/generated-by"] != "oauth2-proxy"'; then
+    pass_test
+else
+    fail_test "the check would flag itself and become noise"
+fi
+
+start_test "the warning names the hosts that ARE gated, not just the pattern"
+# "a pattern is broader than a literal" is not actionable. The operator needs to
+# see which hosts are covered today to know what a new domain would add.
+if _code_only "$SETUP" | grep -A20 '11c Say so, loudly' | grep -qF 'item.item.hosts | join'; then
+    pass_test
+else
+    fail_test "the warning does not say which hosts the gate actually covers"
 fi
 
 print_summary

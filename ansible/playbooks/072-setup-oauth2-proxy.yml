@@ -407,6 +407,79 @@
       vars:
         oauth2_protected: "{{ gate_config.protected }}"
 
+    # 🔴 THE GATE AND THE SERVICE CAN DISAGREE ABOUT WHICH HOSTS EXIST.
+    #
+    # The gate matches LITERAL hosts, from `hosts:` in the declaration. Most UIS
+    # services match a PATTERN — HostRegexp(`dagster\..+`) at priority 10, so the
+    # same route works on .localhost, a tailnet name, or whatever a given
+    # installation puts in front of Traefik. 23 manifests are written that way.
+    #
+    # Today the gate outranks the pattern (priority 20 vs 10) for the hosts it
+    # names, so a gated host is gated. But a SECOND apex domain pointed at this
+    # cluster serves `<service>.<new-domain>` through the pattern route, which
+    # the gate's literal match does not cover — the service is reachable and
+    # ungated under a name nobody put in a runbook.
+    #
+    # ⚠️ AND EVERY EXISTING CHECK STILL PASSES. The declared host stays correctly
+    # gated; a new door opens beside the locked one. The DNS change that triggers
+    # it would be made for an unrelated reason by someone with no reason to think
+    # about this service. Found by ops-dev reading a running ingress
+    # (urb-agents#1243), before any second domain existed.
+    #
+    # 🔵 This WARNS rather than refusing, deliberately. The broad route belongs to
+    # the service, not to the gate, and every gated service has one today — so
+    # refusing would make the gate undeployable for the only thing it gates. It
+    # becomes a refusal when PLAN-service-exposure-opt-in narrows those routes,
+    # at which point a broad route beside a gate is a bug rather than the norm.
+    #
+    # 🔵 Driven by the DECLARATION, so an ungated service is never examined. That
+    # is deliberate: api-atlas has the same pattern and no gate, and a published
+    # API being reachable under a second name is the intent, not a leak.
+    - name: "11b Look for a broader route to a service we just gated"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          kubectl --kubeconfig={{ kubeconfig_file }} get ingressroute -A -o json \
+            | jq -r --arg svc '{{ item.service }}' --arg ns '{{ item.namespace }}' '
+                .items[]
+                | select(.metadata.namespace == $ns)
+                | select((.metadata.labels // {})["urbalurba.io/generated-by"] != "oauth2-proxy")
+                | . as $ir
+                | .spec.routes[]
+                | select((.services // []) | any(.name == $svc))
+                | select(.match | test("HostRegexp"))
+                | "\($ir.metadata.namespace)/\($ir.metadata.name)  \(.match)  priority \(.priority // 0)"'
+      args:
+        executable: /bin/bash
+      loop: "{{ gate_config.protected }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: broader_routes
+      changed_when: false
+      failed_when: false
+
+    - name: "11c Say so, loudly, naming the hostname that would be ungated"
+      ansible.builtin.debug:
+        msg:
+          - "⚠️  {{ item.item.name }} is gated on a literal host, but a PATTERN route serves it:"
+          - "{{ item.stdout_lines }}"
+          - ""
+          - "    gated:  {{ item.item.hosts | join(', ') }}"
+          - "    served: any host matching the pattern above"
+          - ""
+          - "Point a second apex domain at this cluster and {{ item.item.name }} is"
+          - "reachable there WITHOUT a login, while every check on the host above"
+          - "keeps passing. Nothing is exposed today if the tunnel only carries the"
+          - "gated domain — this is about the next DNS change."
+          - ""
+          - "Fix: narrow the service's own route to declared hosts"
+          - "(PLAN-service-exposure-opt-in), or add the new host to BOTH the"
+          - "declaration and the provider's registered callback URLs."
+      loop: "{{ broader_routes.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: (item.stdout | default('') | trim) != ''
+
     - name: "12 Final summary"
       ansible.builtin.debug:
         msg:
