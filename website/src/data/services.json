@@ -347,7 +347,7 @@
     "category": "IDENTITY",
     "tags": ["authentication", "oauth", "oidc", "sso", "gate", "forward-auth"],
     "abstract": "Authentication gate that delegates identity to an external provider",
-    "logo": "",
+    "logo": "oauth2-proxy-logo.svg",
     "website": "https://oauth2-proxy.github.io/oauth2-proxy/"
     ,"summary": "oauth2-proxy authenticates visitors against an external identity provider (GitHub, Google, or any OIDC issuer) and allows through only the people on a configured list. It runs as a Traefik ForwardAuth gate, holds no user records and no persistent state, so it fits the case where the user directory belongs to someone else. It provides authentication only — everyone admitted is equal, with no groups or per-service permissions."
     ,"docs": "/docs/services/identity/oauth2-proxy"

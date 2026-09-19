@@ -230,4 +230,41 @@ fi
 # Summary
 # ============================================================
 
+# ---------------------------------------------------------------------------
+# A named logo must be a logo that exists.
+#
+# services.json carries SCRIPT_LOGO verbatim, and the site renders
+# /img/services/<logo>. A name with no file behind it is a broken image on the
+# catalogue — visible to every visitor and to nobody running tests. Added
+# 2026-09-19 when oauth2-proxy got its logo; it applies to every service.
+# ---------------------------------------------------------------------------
+
+_LOGO_DIR="$(cd "$DATA_DIR/../../static/img/services" 2>/dev/null && pwd || true)"
+
+start_test "the logo directory the site serves from exists"
+if [[ -n "$_LOGO_DIR" && -d "$_LOGO_DIR" ]]; then
+    pass_test
+else
+    fail_test "no static/img/services next to the data dir — the check below would vacuously pass"
+fi
+
+start_test "every service that names a logo has that file on disk"
+# Positive control first: an empty result here would otherwise be read as
+# "all logos fine" when it may mean "jq matched nothing".
+_named=$(jq -r '.services[] | select((.logo // "") != "") | "\(.id) \(.logo)"' "$DATA_DIR/services.json")
+if [[ -z "$_named" ]]; then
+    fail_test "no service names a logo at all — the query is wrong, not the data"
+else
+    _missing=""
+    while read -r _id _logo; do
+        [[ -z "$_id" ]] && continue
+        [[ -f "$_LOGO_DIR/$_logo" ]] || _missing="$_missing $_id:$_logo"
+    done <<< "$_named"
+    if [[ -z "$_missing" ]]; then
+        pass_test
+    else
+        fail_test "named but missing —$_missing"
+    fi
+fi
+
 print_summary

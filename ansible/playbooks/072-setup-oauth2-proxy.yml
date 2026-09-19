@@ -81,8 +81,21 @@
           {% endif %}
           {% endfor %}
           To fix:
-          1. Register an OAuth application with your provider. Its redirect URI
-             must be exactly  https://<host>/oauth2/callback
+          1. Register an OAuth application with your provider. Its callback URL
+             must be exactly  https://<host>/oauth2/callback  for EVERY host you
+             gate — oauth2-proxy derives the redirect_uri from the request's own
+             hostname, so each gated host needs its own entry.
+
+             GitHub accepts up to 10 callback URLs on one OAuth app (changed
+             2026-08-14), so one app covers up to ten gated hosts. Add a URL per
+             host rather than enabling wildcard matching: a wildcard lets an
+             authorization code be delivered to ANY subdomain of the callback
+             URL, and this platform is normally fronted by a wildcard tunnel, so
+             "do you control every subdomain" is exactly the question
+             PLAN-service-exposure-opt-in exists because of.
+
+             Prefer an ORG-OWNED app over a personal one, or the secret can only
+             be rotated by whoever created it.
           2. Put the client id and secret into
              .uis.secrets/secrets-config/00-common-values.env.template
           3. Generate an INDEPENDENT cookie secret — do not derive it from the
@@ -91,12 +104,55 @@
                  openssl rand -base64 32 | head -c 32
           4. ./uis secrets generate && ./uis secrets apply
           5. Re-run this deploy.
+      # 🔴 NINE CLAUSES, ONE PER KEY PER PATTERN, MATCHING THE MESSAGE'S LOOP.
+      #
+      # The message above loops over all three keys looking for '', 'placeholder'
+      # and 'your-'. This condition used to test that for CLIENT_ID only, plus a
+      # bare emptiness check on the other two. So a CLIENT_SECRET of
+      # "your-client-secret" PASSED the guard while the refusal text it would
+      # have printed named it as the problem — a message describing a check the
+      # condition did not make.
+      #
+      # Written out rather than folded into a map/select one-liner on purpose: no
+      # Jinja renderer exists on a dev host, so a clever expression here cannot
+      # be proven to cover every key before it ships. These can be read.
       when: >-
         urbalurba_secrets.resources | length == 0 or
-        (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode) in ['', 'placeholder'] or
+        (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode) == '' or
         (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_SECRET'] | default('') | b64decode) == '' or
         (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode) == '' or
-        'your-' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode)
+        'placeholder' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode) or
+        'placeholder' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_SECRET'] | default('') | b64decode) or
+        'placeholder' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode) or
+        'your-' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_ID'] | default('') | b64decode) or
+        'your-' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_CLIENT_SECRET'] | default('') | b64decode) or
+        'your-' in (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode)
+
+    # 🔴 A COOKIE SECRET OF THE WRONG LENGTH IS A CRASHLOOP, NOT A REFUSAL.
+    #
+    # oauth2-proxy needs the cookie secret to be exactly 16, 24 or 32 bytes —
+    # AES-128/192/256 — and fails at startup otherwise. Nothing here checked it.
+    # The tester credited this playbook with refusing other lengths on
+    # 2026-09-18; it did not, and 32 is not the only valid length either.
+    #
+    # Without this task the failure surfaces as a pod that will not start and a
+    # later assertion timing out on /oauth2/auth, which names the symptom and
+    # not the cause. `openssl rand -base64 32 | head -c 32` gives 32, so the
+    # documented recipe is right — this is for a hand-typed or truncated value.
+    - name: "04b Refuse a cookie secret oauth2-proxy cannot use"
+      ansible.builtin.fail:
+        msg: |
+          OAUTH2_PROXY_COOKIE_SECRET is {{ (urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode) | length }} bytes.
+
+          oauth2-proxy requires exactly 16, 24 or 32 bytes (AES-128/192/256) and
+          will not start with any other length. Generate one:
+
+              openssl rand -base64 32 | head -c 32
+
+          Then: ./uis secrets generate && ./uis secrets apply
+      when: >-
+        ((urbalurba_secrets.resources[0].data['OAUTH2_PROXY_COOKIE_SECRET'] | default('') | b64decode) | length)
+        not in [16, 24, 32]
 
     # 🔵 THE DECLARATION IS OPERATOR CONFIG AND LIVES IN .uis.extend/.
     #
@@ -218,8 +274,82 @@
         oauth2_issuer: "{{ gate_config.issuer | default('') }}"
         oauth2_allowed_emails: "{{ gate_config.allowed_emails | default([]) }}"
         oauth2_cookie_domain: "{{ gate_config.cookie_domain | default('') }}"
+        # Read in task 03, so this costs no extra call. See the annotation in the
+        # template: without it a credential rotation rolls nothing and the gate
+        # keeps using the old values while the deploy reports success.
+        oauth2_secret_version: "{{ urbalurba_secrets.resources[0].metadata.resourceVersion }}"
 
-    - name: "08 Wait for the gate pod to be Running"
+    # 🔴 WAIT FOR THE ROLLOUT, NOT FOR "A POD IS RUNNING".
+    #
+    # The old check asked whether every pod with app=oauth2-proxy was Running.
+    # During a rolling update the OLD pod is Running, so it passed instantly and
+    # the play went on to assert against a gate that had not been replaced. That
+    # is how "✓ deployed successfully" was printed over a pod still holding the
+    # previous credentials.
+    #
+    # `rollout status` waits for the new ReplicaSet to be available and returns
+    # non-zero on timeout, so a stuck roll fails the play instead of passing it.
+    - name: "08 Wait for the new gate pod to replace the old one"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig={{ kubeconfig_file }}
+          - rollout
+          - status
+          - deployment/oauth2-proxy
+          - -n
+          - "{{ gate_namespace }}"
+          - --timeout=180s
+      register: gate_rollout
+      changed_when: false
+
+    - name: "08b Confirm the running pod carries the secret version just applied"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig={{ kubeconfig_file }}
+          - get
+          - pods
+          - -n
+          - "{{ gate_namespace }}"
+          - -l
+          - app=oauth2-proxy
+          - -o
+          - jsonpath={.items[*].metadata.annotations.urbalurba\.io/secret-version}
+      register: running_secret_version
+      changed_when: false
+
+    # 🔵 The re-query the tester asked for, applied here: prove the pod that is
+    # actually serving is the one built from the credentials we just read, rather
+    # than trusting that the apply implied it.
+    - name: "08c Fail if a pod is still serving an older secret version"
+      ansible.builtin.fail:
+        msg: |
+          The gate is running a pod built from a different secret version.
+
+          expected: {{ urbalurba_secrets.resources[0].metadata.resourceVersion }}
+          serving:  {{ running_secret_version.stdout | default('(none)') }}
+
+          A credential rotation has not taken effect. The old values are still
+          in use and will keep working until they are revoked at the provider.
+      # A plain string comparison, deliberately. replicas is 1, so the jsonpath
+      # yields exactly one value; if an old pod lingers it yields two and the
+      # strings differ, which fails the play — wrong in the safe direction. A
+      # split/unique/difference chain would read better and cannot be rendered on
+      # a dev host to prove it.
+      when: >-
+        (running_secret_version.stdout | default('') | trim)
+        != urbalurba_secrets.resources[0].metadata.resourceVersion
+
+    # Read once for the report below. NO until-loop: `rollout status` above has
+    # already waited for the new ReplicaSet, and re-adding a wait here would
+    # restore the instant-pass this release removed.
+    #
+    # ⚠️ This register is load-bearing. Task 10 reads gate_pods, and deleting the
+    # until-loop took its `register:` with it — which left two references to an
+    # undefined variable and would have failed every deploy. Caught by a static
+    # assertion, not by review.
+    - name: "08d Read the gate pod for the report"
       kubernetes.core.k8s_info:
         kind: Pod
         namespace: "{{ gate_namespace }}"
@@ -227,11 +357,7 @@
           - "app=oauth2-proxy"
         kubeconfig: "{{ kubeconfig_file }}"
       register: gate_pods
-      until:
-        - gate_pods.resources | length > 0
-        - gate_pods.resources | map(attribute='status.phase') | list | select('equalto', 'Running') | list | length == gate_pods.resources | length
-      retries: 24
-      delay: 5
+      changed_when: false
 
     # A RUNNING POD IS NOT A WORKING GATE. /ping answers before oauth2-proxy has
     # ever contacted the provider, so a wrong client secret, an unregistered
@@ -280,6 +406,79 @@
         state: present
       vars:
         oauth2_protected: "{{ gate_config.protected }}"
+
+    # 🔴 THE GATE AND THE SERVICE CAN DISAGREE ABOUT WHICH HOSTS EXIST.
+    #
+    # The gate matches LITERAL hosts, from `hosts:` in the declaration. Most UIS
+    # services match a PATTERN — HostRegexp(`dagster\..+`) at priority 10, so the
+    # same route works on .localhost, a tailnet name, or whatever a given
+    # installation puts in front of Traefik. 23 manifests are written that way.
+    #
+    # Today the gate outranks the pattern (priority 20 vs 10) for the hosts it
+    # names, so a gated host is gated. But a SECOND apex domain pointed at this
+    # cluster serves `<service>.<new-domain>` through the pattern route, which
+    # the gate's literal match does not cover — the service is reachable and
+    # ungated under a name nobody put in a runbook.
+    #
+    # ⚠️ AND EVERY EXISTING CHECK STILL PASSES. The declared host stays correctly
+    # gated; a new door opens beside the locked one. The DNS change that triggers
+    # it would be made for an unrelated reason by someone with no reason to think
+    # about this service. Found by ops-dev reading a running ingress
+    # (urb-agents#1243), before any second domain existed.
+    #
+    # 🔵 This WARNS rather than refusing, deliberately. The broad route belongs to
+    # the service, not to the gate, and every gated service has one today — so
+    # refusing would make the gate undeployable for the only thing it gates. It
+    # becomes a refusal when PLAN-service-exposure-opt-in narrows those routes,
+    # at which point a broad route beside a gate is a bug rather than the norm.
+    #
+    # 🔵 Driven by the DECLARATION, so an ungated service is never examined. That
+    # is deliberate: api-atlas has the same pattern and no gate, and a published
+    # API being reachable under a second name is the intent, not a leak.
+    - name: "11b Look for a broader route to a service we just gated"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          kubectl --kubeconfig={{ kubeconfig_file }} get ingressroute -A -o json \
+            | jq -r --arg svc '{{ item.service }}' --arg ns '{{ item.namespace }}' '
+                .items[]
+                | select(.metadata.namespace == $ns)
+                | select((.metadata.labels // {})["urbalurba.io/generated-by"] != "oauth2-proxy")
+                | . as $ir
+                | .spec.routes[]
+                | select((.services // []) | any(.name == $svc))
+                | select(.match | test("HostRegexp"))
+                | "\($ir.metadata.namespace)/\($ir.metadata.name)  \(.match)  priority \(.priority // 0)"'
+      args:
+        executable: /bin/bash
+      loop: "{{ gate_config.protected }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: broader_routes
+      changed_when: false
+      failed_when: false
+
+    - name: "11c Say so, loudly, naming the hostname that would be ungated"
+      ansible.builtin.debug:
+        msg:
+          - "⚠️  {{ item.item.name }} is gated on a literal host, but a PATTERN route serves it:"
+          - "{{ item.stdout_lines }}"
+          - ""
+          - "    gated:  {{ item.item.hosts | join(', ') }}"
+          - "    served: any host matching the pattern above"
+          - ""
+          - "Point a second apex domain at this cluster and {{ item.item.name }} is"
+          - "reachable there WITHOUT a login, while every check on the host above"
+          - "keeps passing. Nothing is exposed today if the tunnel only carries the"
+          - "gated domain — this is about the next DNS change."
+          - ""
+          - "Fix: narrow the service's own route to declared hosts"
+          - "(PLAN-service-exposure-opt-in), or add the new host to BOTH the"
+          - "declaration and the provider's registered callback URLs."
+      loop: "{{ broader_routes.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: (item.stdout | default('') | trim) != ''
 
     - name: "12 Final summary"
       ansible.builtin.debug:

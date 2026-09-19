@@ -155,6 +155,127 @@ never delivered.
 - [ ] **3.3** Delete the intent-only annotations, or make them generated from the
   declaration. Leaving both means two sources of truth, one of which does nothing.
 
+## Terje's routing requirement — 2026-09-19, and it amends this plan
+
+> *"i want the uis system to work so that it routes on servicename.&lt;domain&gt;. it should do that no matter what domain is pointed at it. whether it is a cloudflared tunnel or a direct domain. it works like this on service.localhost now."*
+
+A requirement, not a question. **Read carelessly it contradicts this plan** — the plan narrows patterns so a new domain serves nothing; he is asking for a new domain to serve everything. Read carefully, the two are about different services, and reconciling them is the plan's real shape.
+
+### His sentence already contains the constraint people expect to have to explain
+
+*"no matter what domain is **pointed at it**"*. Pointing a domain at the cluster **is** the DNS record and, for a tunnel, the zone living in the Cloudflare account. No design removes that: Cloudflare forwards traffic only for names it holds a record for. **So the requirement is satisfiable exactly as written** — nobody has to be talked down from it.
+
+What it means concretely: **once an apex points at the cluster, every `servicename.<that-apex>` works with nothing further.** That is precisely the `.localhost` property he is comparing against.
+
+### The three layers, and which one is actually the gap
+
+| layer | today | satisfies the requirement? |
+|---|---|---|
+| **Traefik routing** | `HostRegexp(`dagster\..+`)` on 23 manifests | ✅ **already** — any apex matches |
+| **Tunnel ingress** | `<apex>` and `*.<apex>` routed, everything else `http_status:404` | 🔴 **the gap** |
+| **DNS** | a record per zone pointing at the tunnel | ⚠️ irreducible, and it is what "pointed at it" means |
+
+🔵 **The tunnel gap is not irreducible, which is the useful finding.** A cloudflared ingress list always ends in a catch-all, and the catch-all's service is configurable — it does not have to be `http_status:404`. Point the catch-all at Traefik and **every hostname that reaches the tunnel reaches Traefik, with no per-apex tunnel route ever again.**
+
+This is safe in the way that matters: the catch-all can only ever see traffic for names that already have a DNS record aimed at this tunnel. It cannot receive arbitrary internet traffic.
+
+⚠️ **Verified from the configuration-file documentation, where a catch-all may be any service; the API takes the same ingress structure. Not yet verified on a live tunnel** — that is a cheap test and it should be run before anyone commits to this.
+
+Two ways to reach it, and the cost differs:
+
+- **A — locally-managed config.** UIS ships the ingress list as a ConfigMap. The routing table becomes cluster configuration, versioned with everything else. Cost: tunnel credentials instead of a token, and the dashboard stops being the source of truth.
+- **B — keep the token, set the config via the API.** `PUT /accounts/{id}/cfd_tunnel/{id}/configurations` accepts the whole ingress array including the catch-all. Cost: an API token with tunnel-edit scope, and a UIS verb that writes it.
+
+🔵 **B preserves today's model and is the smaller change.** A is architecturally cleaner and is the one to choose if the tunnel's routing should be reviewable in git.
+
+### 🔴 The reconciliation: opt-in is per SERVICE, not per hostname
+
+This is the amendment. This plan was written to narrow `HostRegexp(name\..+)` because a wildcard tunnel publishes services nobody declared. **The defect was never the pattern — it was that every service had one by default.**
+
+So the unit of opt-in is the service, and the pattern is what "exposed" *means*:
+
+| the service | its route | on a new apex |
+|---|---|---|
+| **not exposed** (the default) | `Host(`name.localhost`)` | serves nothing |
+| **exposed, ungated** | `HostRegexp(`name\..+`)` | ✅ **works immediately — Terje's requirement** |
+| **exposed, gated** | the declared `hosts:`, explicitly | one apex per gate instance |
+
+**Both requirements hold at once.** A new apex serves exactly the services that opted in, on every apex, and nothing else — and the anonymous-Dagster incident becomes impossible not because patterns were banned but because Dagster would not have opted in.
+
+⚠️ **Gated services are the exception and cannot be fixed by wanting it.** `redirect_uri` derives from the request host and `cookie_domain` is a single apex, so a gate serves one apex. A gated service therefore declares its hosts and does **not** get the pattern. That is a real limit of delegated auth, not of this design.
+
+### What this costs
+
+- **Tunnel catch-all** — one-time, small, needs the live verification above and a choice between A and B.
+- **`expose_on`** — this plan, unchanged in size. What changes is the framing: it is not "narrow the patterns", it is **"make the pattern mean something"**.
+- **Gated services** — nothing. They already declare `hosts:`.
+
+## The gate/service desync — ops-dev, 2026-09-19, and it dates this plan
+
+Found by reading a running ingress before any second domain existed, which makes it the first evidence for this plan that is neither hypothetical nor historical:
+
+```
+ungated   atlas-postgrest            HostRegexp(`api-atlas\..+`)      pattern
+ungated   dagster                    HostRegexp(`dagster\..+`)        pattern   priority 10
+GATED     dagster-oauth2-protected   Host(`dagster.urbalurba.com`)    literal   priority 20
+GATED     dagster-oauth2-callback    Host(`dagster.urbalurba.com`)    literal   priority 30
+```
+
+**The services that are open match patterns. The objects that protect them match literal hosts.** Today the gate outranks the pattern for the host it names, so the gated host is gated — verified. Point a **second apex domain** at the cluster and `dagster.<new-domain>` matches the pattern, does *not* match the gate, and is served **unauthenticated**.
+
+🔴 **The property that makes this dangerous is not the exposure, it is the silence.** The declared host stays correctly gated, so every check, monitor and runbook entry keeps passing. A new door opens beside the locked one. And the trigger — pointing another domain at the cluster — would be done for an unrelated reason by someone with no cause to think about this service.
+
+### Two candidate fixes, and only one of them is free
+
+**A — broaden the gate** (`Host(...)` → `HostRegexp(`dagster\..+`)`), so the gate follows the service wherever it is served. Architecturally attractive: *"point any domain at the cluster and Traefik will route."*
+
+⚠️ **A does fail closed, but it does not work.** The gate wins on priority, so nothing is served anonymously — and then:
+
+- **oauth2-proxy derives `redirect_uri` from the request's own hostname** (measured: the same config produced `dagster.localhost` and `dagster.urbalurba.com` callbacks). GitHub requires the redirect to match a **registered callback URL**, so a new host gets `redirect_uri_mismatch` at the provider.
+- **`cookie_domain` is a single apex.** A session cookie scoped to `urbalurba.com` is never sent to another apex, so even with the callback registered the sign-in cannot complete.
+
+So A converts a silent exposure into a **broken service on every new domain**, until someone registers a callback URL (max 10 per app) *and* runs a gate instance per apex. That is a real answer to the architectural wish: **routing is domain-agnostic; a gated service is not, and cannot be without multi-apex gate support.**
+
+**B — narrow the service** (`HostRegexp(`dagster\..+`)` → declared hosts). A new domain then serves **nothing** until a human opts in. **This is simply what this plan already proposes**, arrived at independently from the other direction.
+
+🔵 **B is the fix. A is a thing to know about**, because it is the obvious move and it looks free.
+
+### ⚠️ Do not "fix" `api-atlas` by symmetry
+
+It has the same pattern and **no gate to desynchronise from**. A published API reachable under a second name is the intent. The defect is the *disagreement between two matchers*, not the pattern itself.
+
+### Shipped ahead of the plan: detection, in 1.6.126
+
+`072-setup-oauth2-proxy.yml` task 11b queries the live ingress after gating and warns when a **pattern** route serves a service the gate matches **literally**, naming the route and the hosts actually covered.
+
+It **warns rather than refuses**, deliberately: the broad route belongs to the service, and every gated service has one today, so refusing would make the gate undeployable for the only thing it gates. **It becomes a refusal when this plan narrows those routes** — at which point a broad route beside a gate is a bug rather than the norm. It loops over the declaration, so an ungated service is never examined.
+
+## The test ladder — Terje, 2026-09-18
+
+Three rungs, each isolating one layer, so a failure names its own cause:
+
+| rung | state | what it proves |
+|---|---|---|
+| **1** | `.localhost`, no tunnel, no gate | the app and Traefik alone |
+| **2** | tunnel up, open, no gate | the tunnel path alone |
+| **3** | tunnel up **and** gate | the gate on a real https host |
+
+Terje's words: *"a test should first test .localhost, then bring up the tunnel and test it when it is open, and then finally add the oauth2-proxy and test again."*
+
+**Adopted, because skipping a rung already cost three rounds.** The oauth2-proxy gate was tested at rung 1 for three releases, and one limitation could not be found there at all: on plain-http `.localhost` the sign-in is *structurally* incapable of completing — `--cookie-secure=true` issues a `Secure` CSRF cookie the browser discards, and the derived `redirect_uri` is an `https://…localhost/…` URL nothing serves. That sat as an unresolved caveat for three rounds and became obvious the moment the gate ran at rung 3.
+
+### ⚠️ Rung 2 is the condition this plan exists to prevent, and that tension is not resolved by ignoring it
+
+Rung 2 — tunnel up, no gate — **is** an anonymous admin UI on the internet. That is `urb-agents#1224`, and the maintainer's standing order is the opposite: gate first, tunnel second, so that state never exists.
+
+Both are right, and the resolution is not to pick one:
+
+- **Rung 2 must be short, deliberate and announced.** It is a measurement, not a deployment. Someone is watching it, it is entered on purpose, and it is closed by moving to rung 3 rather than by being forgotten.
+- **It must never be the resting state.** The failure mode is not "twenty minutes of exposure", it is "nobody remembered to climb to rung 3".
+- 🔵 **`expose_on` makes rung 2 cheap and safe to leave** — with opt-in exposure, a host reaches rung 2 only because a declaration says so, and rung 2 for one service is not rung 2 for the other twenty-four. **That is an argument for this plan, not an exception to it.**
+
+On 2026-09-18 rung 2 lasted about twenty minutes on one host, was entered by the operator knowingly, and was closed by the operator asking for the gate. That is the shape it should always have.
+
 ## Phase 4 — verification
 
 - [ ] **4.1** With a wildcard tunnel active and one service declared

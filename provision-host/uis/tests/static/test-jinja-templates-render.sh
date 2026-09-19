@@ -82,8 +82,20 @@ env = Environment(
 )
 out = env.get_template(tpl_path.name).render(**ctx)
 docs = [d for d in yaml.safe_load_all(out) if d is not None]
+
+# The pod template's annotations, when there is a Deployment in the render. This
+# is how the rotation annotation is asserted on its PARSED value rather than by
+# grepping the template text — a text match would pass on a template whose
+# annotation sat in the wrong place to trigger a roll.
+pod_ann = {}
+for d in docs:
+    if d.get("kind") == "Deployment":
+        pod_ann = (d.get("spec", {}).get("template", {})
+                    .get("metadata", {}).get("annotations") or {})
+
 print(json.dumps({"documents": len(docs),
-                  "kinds": [f"{d.get('kind')}/{d.get('metadata',{}).get('name')}" for d in docs]}))
+                  "kinds": [f"{d.get('kind')}/{d.get('metadata',{}).get('name')}" for d in docs],
+                  "podAnnotations": pod_ann}))
 PYEOF
 
 _render() {
@@ -93,12 +105,12 @@ _render() {
 
 # --- the oauth2-proxy gate: one host, and the provider conditional ---
 start_test "072-oauth2-proxy-deployment.yaml.j2 renders and parses (provider: github)"
-CTX='{"oauth2_provider":"github","oauth2_issuer":"","oauth2_cookie_domain":"example.org","oauth2_allowed_emails":["a@example.org"]}'
+CTX='{"oauth2_provider":"github","oauth2_issuer":"","oauth2_cookie_domain":"example.org","oauth2_allowed_emails":["a@example.org"],"oauth2_secret_version":"12345"}'
 OUT="$(_render 072-oauth2-proxy-deployment.yaml.j2 "$CTX")"
 if [[ "$OUT" == \{* ]]; then pass_test; else fail_test "$OUT"; fi
 
 start_test "072-oauth2-proxy-deployment.yaml.j2 renders the oidc branch too"
-CTX='{"oauth2_provider":"oidc","oauth2_issuer":"https://idp.example.org","oauth2_cookie_domain":"example.org","oauth2_allowed_emails":["a@example.org","b@example.org"]}'
+CTX='{"oauth2_provider":"oidc","oauth2_issuer":"https://idp.example.org","oauth2_cookie_domain":"example.org","oauth2_allowed_emails":["a@example.org","b@example.org"],"oauth2_secret_version":"12345"}'
 OUT="$(_render 072-oauth2-proxy-deployment.yaml.j2 "$CTX")"
 if [[ "$OUT" == \{* ]]; then pass_test; else fail_test "$OUT"; fi
 
@@ -147,6 +159,48 @@ if [[ "$OUT" == *'Middleware/oauth2-forward-auth'* \
     pass_test
 else
     fail_test "expected four objects including the api middleware, got: $OUT"
+fi
+
+# --- the rotation annotation: the pod must change when the Secret does ---
+#
+# Without this annotation a credential rotation rolls nothing: the three values
+# arrive via secretKeyRef, Kubernetes does not restart a pod when a Secret
+# changes, and the pod template is otherwise identical between runs. The tester
+# measured a deploy printing success while the gate kept the OLD credentials.
+
+start_test "the pod template carries the secret version, in the place that rolls it"
+CTX='{"oauth2_provider":"github","oauth2_issuer":"","oauth2_cookie_domain":"example.org","oauth2_allowed_emails":["a@example.org"],"oauth2_secret_version":"rv-11111"}'
+OUT="$(_render 072-oauth2-proxy-deployment.yaml.j2 "$CTX")"
+if python3 -c '
+import json,sys
+d = json.loads(sys.argv[1])
+sys.exit(0 if d["podAnnotations"].get("urbalurba.io/secret-version") == "rv-11111" else 1)
+' "$OUT" 2>/dev/null; then
+    pass_test
+else
+    fail_test "pod-template annotation absent or wrong: $OUT"
+fi
+
+start_test "a different secret version renders a different pod template"
+# The whole mechanism is that the rendered pod changes. Two renders that differ
+# only in the version must differ in output, or the Deployment has nothing to
+# roll and the rotation is silent again.
+CTX_A='{"oauth2_provider":"github","oauth2_issuer":"","oauth2_cookie_domain":"example.org","oauth2_allowed_emails":["a@example.org"],"oauth2_secret_version":"rv-11111"}'
+CTX_B='{"oauth2_provider":"github","oauth2_issuer":"","oauth2_cookie_domain":"example.org","oauth2_allowed_emails":["a@example.org"],"oauth2_secret_version":"rv-22222"}'
+A="$(_render 072-oauth2-proxy-deployment.yaml.j2 "$CTX_A")"
+B="$(_render 072-oauth2-proxy-deployment.yaml.j2 "$CTX_B")"
+if [[ "$A" != "$B" ]]; then pass_test; else fail_test "identical render for two secret versions — a rotation would roll nothing"; fi
+
+start_test "omitting the secret version is a hard render failure, not an empty annotation"
+# StrictUndefined is the contract: add a template variable and forget to pass it
+# from the playbook, and this fails here rather than shipping an annotation that
+# is empty on every run — which would peg the pod template constant again.
+CTX='{"oauth2_provider":"github","oauth2_issuer":"","oauth2_cookie_domain":"example.org","oauth2_allowed_emails":["a@example.org"]}'
+OUT="$(_render 072-oauth2-proxy-deployment.yaml.j2 "$CTX")"
+if [[ "$OUT" != \{* ]] && [[ "$OUT" == *oauth2_secret_version* ]]; then
+    pass_test
+else
+    fail_test "a missing secret version rendered anyway: $OUT"
 fi
 
 print_summary

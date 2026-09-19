@@ -386,4 +386,293 @@ else
     fail_test "an empty first deploy would silently do nothing"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.126: a summary must not claim work it did not do.
+#
+# The tester ran undeploy twice; the second run had no namespace left to delete
+# and the summary still said "and the gate namespace". Cosmetic on its own, and
+# the same class as the "✓ oauth2-proxy removed" that shipped a 500 — a report
+# asserting an action the code did not take.
+# ---------------------------------------------------------------------------
+
+start_test "the summary's namespace claim is conditional, not hardcoded"
+if _code_only "$REMOVE" | grep -q 'route(s)/middleware(s){{ gate_ns_phrase }}'; then
+    pass_test
+else
+    fail_test "the summary states the namespace outcome unconditionally"
+fi
+
+start_test "both namespace outcomes are actually populated"
+# One assertion for the interpolation is not enough: {{ gate_ns_phrase }} with
+# no set_fact behind it renders empty on one path and says nothing at all. The
+# weak-assertion lesson from 1.6.125 — check the definition AND the reference.
+if grep -q 'when: (gate_ns.rc | default(1)) == 0' "$REMOVE" \
+   && grep -q 'when: (gate_ns.rc | default(1)) != 0' "$REMOVE" \
+   && [[ "$(grep -c 'gate_ns_phrase:' "$REMOVE")" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "gate_ns_phrase is referenced but not set on both paths"
+fi
+
+start_test "the namespace is queried BEFORE it is deleted"
+# Asked after the delete, the answer is always "gone" and the summary is always
+# wrong in the same direction.
+_q=$(grep -n '04c Was the gate namespace still there' "$REMOVE" | cut -d: -f1)
+_d=$(grep -n '05 Remove the gate namespace' "$REMOVE" | cut -d: -f1)
+if [[ -n "$_q" && -n "$_d" && "$_q" -lt "$_d" ]]; then
+    pass_test
+else
+    fail_test "the namespace check does not precede the deletion (query=$_q delete=$_d)"
+fi
+
+start_test "the summary warns that Terminating is not a failure"
+if _code_only "$REMOVE" | grep -q 'Terminating'; then
+    pass_test
+else
+    fail_test "an operator checking immediately sees Terminating and reads it as a failed removal"
+fi
+
+# --- negative assertions, each with a positive control ---
+#
+# An empty grep is not evidence. On 2026-09-18 `strings` was absent from the
+# maintainer's host and 0 hits were read as proof of absence, twice. So every
+# absence check below first proves its own pattern can match.
+
+start_test "no ternary filter in either oauth2 playbook"
+_tern='[|][[:space:]]*ternary[[:space:]]*[(]'
+if ! printf '%s\n' 'msg: "{{ x == 1 | ternary(a, b) }}"' | grep -qE "$_tern"; then
+    fail_test "positive control failed: the ternary pattern matches nothing, so its absence proves nothing"
+elif _code_only "$SETUP" "$REMOVE" 2>/dev/null | grep -qE "$_tern"; then
+    fail_test "a ternary is back: $(_code_only "$SETUP" "$REMOVE" | grep -nE "$_tern" | head -1)"
+else
+    pass_test
+fi
+
+start_test "undeploy does not claim the hosts fail closed"
+# It does not, and the tester measured 200 after an undeploy. The gate adds a
+# route in FRONT of each service's own route, so deleting it uncovers the
+# original. This assertion reads the header, so it cannot use _code_only.
+_claim='stop being reachable|fail closed|FAIL CLOSED'
+if ! printf '%s\n' '# protected services fail closed, not open' | grep -qE "$_claim"; then
+    fail_test "positive control failed: the claim pattern matches nothing"
+elif grep -qE "$_claim" "$REMOVE"; then
+    fail_test "the header claims a safety property the code does not have: $(grep -nE "$_claim" "$REMOVE" | head -1)"
+else
+    pass_test
+fi
+
+start_test "undeploy states the measured behaviour instead"
+if grep -q 'REOPENS THE HOSTS' "$REMOVE"; then
+    pass_test
+else
+    fail_test "removing the false claim is half the fix; the true one has to be written down"
+fi
+
+# ---------------------------------------------------------------------------
+# 1.6.126: a guard must make every check its refusal message describes.
+#
+# The refusal text loops over all three credential keys looking for ''/
+# placeholder/your-. The condition tested that for CLIENT_ID only, so
+# CLIENT_SECRET="your-client-secret" passed the guard while the message it would
+# have printed named it. And nothing checked the cookie secret's LENGTH, though
+# the tester credited the playbook with refusing bad ones.
+# ---------------------------------------------------------------------------
+
+start_test "the credential guard checks all three keys for a placeholder"
+if [[ "$(_code_only "$SETUP" | grep -c "'placeholder' in (urbalurba_secrets")" -eq 3 ]]; then
+    pass_test
+else
+    fail_test "only $(_code_only "$SETUP" | grep -c "'placeholder' in (urbalurba_secrets") of 3 keys tested for 'placeholder'"
+fi
+
+start_test "the credential guard checks all three keys for an unedited your- value"
+if [[ "$(_code_only "$SETUP" | grep -c "'your-' in (urbalurba_secrets")" -eq 3 ]]; then
+    pass_test
+else
+    fail_test "only $(_code_only "$SETUP" | grep -c "'your-' in (urbalurba_secrets") of 3 keys tested for 'your-'"
+fi
+
+start_test "a cookie secret oauth2-proxy cannot use is refused, not crashlooped"
+# 16, 24 or 32 bytes — AES-128/192/256. Any other length is a pod that will not
+# start, surfacing as a later assertion timing out on /oauth2/auth: the symptom,
+# not the cause.
+if _code_only "$SETUP" | grep -qE 'not in \[16, 24, 32\]'; then
+    pass_test
+else
+    fail_test "no length check — a truncated secret becomes a crashloop with a misleading error"
+fi
+
+start_test "the length refusal names all three valid lengths, not just 32"
+# 32 is what the documented recipe produces, but 16 and 24 are equally valid and
+# a guard that names only 32 teaches the wrong rule.
+if _code_only "$SETUP" | grep -q 'exactly 16, 24 or 32 bytes'; then
+    pass_test
+else
+    fail_test "the refusal message does not state the real rule"
+fi
+
+# ---------------------------------------------------------------------------
+# 1.6.126: rotating a credential must actually roll the pod.
+#
+# The three credentials arrive as env.valueFrom.secretKeyRef. Kubernetes does
+# not restart a pod when a referenced Secret changes and the pod template was
+# otherwise byte-identical between runs, so `deploy` had nothing to roll: it
+# printed success while the gate carried on with the OLD credentials, and the
+# breakage would surface later when the old value was revoked at the provider.
+# ---------------------------------------------------------------------------
+
+start_test "the pod template carries a secret version, so a rotation rolls it"
+if _code_only "$DEPLOY" | grep -q 'urbalurba.io/secret-version: "{{ oauth2_secret_version }}"'; then
+    pass_test
+else
+    fail_test "no secret version on the pod template — a credential rotation would roll nothing"
+fi
+
+start_test "the secret version sits on the POD template, not the Deployment metadata"
+# An annotation on the Deployment's own metadata changes nothing about the pod,
+# so it would look like this fix and roll nothing. Assert it appears after the
+# pod template opens. The render suite checks the parsed position too; this one
+# runs on a dev host, where no Jinja renderer exists.
+_tpl=$(grep -n '^  template:' "$DEPLOY" | head -1 | cut -d: -f1)
+_ann=$(grep -n 'urbalurba.io/secret-version' "$DEPLOY" | grep -v '^\s*#' | head -1 | cut -d: -f1)
+if [[ -n "$_tpl" && -n "$_ann" && "$_ann" -gt "$_tpl" ]]; then
+    pass_test
+else
+    fail_test "secret version is not inside the pod template (template=$_tpl annotation=$_ann)"
+fi
+
+start_test "the playbook passes the secret version it just read"
+if _code_only "$SETUP" | grep -q 'oauth2_secret_version: "{{ urbalurba_secrets.resources\[0\].metadata.resourceVersion }}"'; then
+    pass_test
+else
+    fail_test "the template variable is never supplied, so the render fails or the annotation is constant"
+fi
+
+start_test "the deploy waits for the rollout, not for any pod being Running"
+# During a rolling update the OLD pod is Running, so an until-Running loop passes
+# instantly and the play asserts against a gate that was never replaced. That is
+# how "deployed successfully" was printed over the previous credentials.
+# 🔴 Match the ARGV, not the word. The first version grepped for 'rollout'
+# anywhere, which matched the register name `gate_rollout` — so replacing the
+# command with `kubectl get deployment` left the assertion passing. Found by
+# mutation, the same weak-assertion shape as 1.6.125's middleware-name check.
+if _code_only "$SETUP" | grep -qE '^\s+- rollout$' \
+   && _code_only "$SETUP" | grep -qE '^\s+- status$' \
+   && _code_only "$SETUP" | grep -qE '^\s+- deployment/oauth2-proxy$'; then
+    pass_test
+else
+    fail_test "no 'kubectl rollout status deployment/oauth2-proxy' — the play can continue against the pod it meant to replace"
+fi
+
+start_test "the old until-Running loop is gone rather than left beside it"
+# Leaving it is not harmless: it re-introduces the instant pass and makes the
+# rollout wait look redundant to the next reader.
+# 🔴 grep -F, not -E. The first version of this check used an ERE containing an
+# unescaped `|` and `(`, so it was an ALTERNATION and matched any mention of
+# gate_pods.resources at all. It failed — and the failure was real for a
+# different reason than the pattern claimed, which is how the undefined
+# gate_pods variable was found. A literal match cannot go wrong that way.
+_pat="gate_pods.resources | map(attribute='status.phase')"
+if ! printf '%s\n' "$_pat" | grep -qF "$_pat"; then
+    fail_test "positive control failed: the until-Running pattern matches nothing"
+elif _code_only "$SETUP" | grep -qF "$_pat"; then
+    fail_test "the until-Running loop is still there: $(_code_only "$SETUP" | grep -nF "$_pat" | head -1)"
+else
+    pass_test
+fi
+
+start_test "a pod serving an older secret version fails the deploy"
+if grep -q '08c Fail if a pod is still serving an older secret version' "$SETUP"; then
+    pass_test
+else
+    fail_test "nothing re-queries the running pod, so a silent non-rotation still reports success"
+fi
+
+# ---------------------------------------------------------------------------
+# A lint for the class of bug above, not just the instance.
+#
+# Deleting a task takes its `register:` with it, and any OTHER task still reading
+# that variable then fails at runtime with "'x' is undefined" — on every deploy,
+# for everyone. It is invisible to review because the reference and the register
+# are far apart, and no YAML check catches it. This found a real one in 1.6.126:
+# the until-Running loop was removed and two references in the report survived.
+# ---------------------------------------------------------------------------
+
+start_test "every registered variable these playbooks read is also registered"
+_missing=""
+for _pb in "$SETUP" "$REMOVE"; do
+    # names that are registered in this file
+    _regs=$(_code_only "$_pb" | sed -n 's/^[[:space:]]*register:[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' | sort -u)
+    # names dereferenced as a registered result: x.stdout / x.rc / x.resources
+    _refs=$(_code_only "$_pb" \
+        | grep -oE '[A-Za-z_][A-Za-z0-9_]*\.(stdout|stdout_lines|rc|resources|results)' \
+        | cut -d. -f1 | sort -u)
+    for _r in $_refs; do
+        # play vars and facts are legitimate non-register sources; only flag a
+        # name that looks like a task result and has no register anywhere here.
+        #
+        # `item` is Ansible's loop variable and carries .stdout when looping over
+        # a registered result's .results — legitimate, and never registered. The
+        # lint flagged it the first time a task did that, which is the lint
+        # finding its own boundary rather than a bug in the playbook.
+        # ⚠️ This does NOT check that a task using `item` has a `loop:`; that is
+        # a different lint and is not claimed here.
+        [[ "$_r" == "item" ]] && continue
+        if ! printf '%s\n' "$_regs" | grep -qx "$_r"; then
+            _missing="$_missing $(basename "$_pb"):$_r"
+        fi
+    done
+done
+if [[ -z "$_missing" ]]; then
+    pass_test
+else
+    fail_test "read but never registered —$_missing"
+fi
+
+# ---------------------------------------------------------------------------
+# 1.6.126: the gate matches literal hosts; the services match patterns.
+#
+# HostRegexp(`dagster\..+`) at priority 10 serves ANY dagster.* hostname. The
+# gate's Host(`dagster.urbalurba.com`) at priority 20 wins only for the host it
+# names. Point a second apex domain at the cluster and the service is reachable
+# there ungated — while every check on the declared host keeps passing.
+# Found by ops-dev reading a running ingress, before a second domain existed.
+# ---------------------------------------------------------------------------
+
+start_test "the deploy looks for a broader route to each service it gates"
+if grep -q '11b Look for a broader route to a service we just gated' "$SETUP"; then
+    pass_test
+else
+    fail_test "nothing notices the gate and the service disagreeing about which hosts exist"
+fi
+
+start_test "the desync check is driven by the declaration, so ungated services are never flagged"
+# api-atlas has the same pattern and no gate — a published API reachable under a
+# second name is the intent. Looping over the declaration means it is never
+# examined, which is the design, not an omission.
+if _code_only "$SETUP" | grep -A24 '11b Look for a broader route' | grep -qF 'loop: "{{ gate_config.protected }}"'; then
+    pass_test
+else
+    fail_test "the check does not iterate the declaration — it may flag services nothing gates"
+fi
+
+start_test "the desync check ignores the gate's own generated routes"
+# Without this it reports the gate's own IngressRoute as the broader route, every
+# run, for every service — a warning that is always wrong is a warning nobody
+# reads, which is how the original finding stayed invisible.
+if _code_only "$SETUP" | grep -A24 '11b Look for a broader route' | grep -qF 'urbalurba.io/generated-by"] != "oauth2-proxy"'; then
+    pass_test
+else
+    fail_test "the check would flag itself and become noise"
+fi
+
+start_test "the warning names the hosts that ARE gated, not just the pattern"
+# "a pattern is broader than a literal" is not actionable. The operator needs to
+# see which hosts are covered today to know what a new domain would add.
+if _code_only "$SETUP" | grep -A20 '11c Say so, loudly' | grep -qF 'item.item.hosts | join'; then
+    pass_test
+else
+    fail_test "the warning does not say which hosts the gate actually covers"
+fi
+
 print_summary

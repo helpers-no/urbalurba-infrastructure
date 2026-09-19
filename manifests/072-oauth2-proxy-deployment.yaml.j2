@@ -9,6 +9,8 @@
 #   oauth2_issuer          OIDC issuer URL (oidc provider only)
 #   oauth2_allowed_emails  list of addresses permitted through
 #   oauth2_cookie_domain   the parent domain cookies are scoped to
+#   oauth2_secret_version  urbalurba-secrets' resourceVersion, so a credential
+#                          rotation actually rolls the pod (see the annotation)
 #
 # 🔴 THE ALLOWLIST IS WHAT MAKES THIS A CONTROL.
 # oauth2-proxy accepts --email-domain=* which upstream documents as "Use * to
@@ -69,6 +71,36 @@ spec:
     metadata:
       labels:
         app: oauth2-proxy
+      annotations:
+        # 🔴 THIS IS THE ROTATION PATH. WITHOUT IT, ROTATING A CREDENTIAL DOES NOTHING.
+        #
+        # The three credentials arrive as env.valueFrom.secretKeyRef. Kubernetes
+        # does NOT restart a pod when a referenced Secret changes, and this pod
+        # template is otherwise byte-identical between runs — so `deploy` had
+        # nothing to roll. The tester measured it on 2026-09-18: the deploy
+        # printed "✓ oauth2-proxy deployed successfully" and the gate carried on
+        # using the OLD credentials.
+        #
+        # That is the worst shape a rotation can have: it appears to succeed, the
+        # old secret keeps working, and the gate breaks later when the old value
+        # is revoked at the provider — with nothing connecting the outage to the
+        # rotation that caused it.
+        #
+        # Putting the Secret's resourceVersion here makes the pod template change
+        # whenever the Secret does, so the Deployment rolls by itself.
+        #
+        # 🔵 WHY resourceVersion AND NOT A CHECKSUM OF THE VALUES.
+        # The Helm convention is sha256 of the secret's contents. That publishes a
+        # hash of a live credential to anyone who can read the pod, and one of
+        # these three is a cookie secret an operator may have typed by hand — low
+        # entropy, so the hash is an offline oracle. A salt cannot fix it: this
+        # repo is public. resourceVersion discloses nothing.
+        #
+        # ⚠️ The cost is that ANY update to urbalurba-secrets rolls this gate,
+        # including changes to unrelated keys. That is deliberate: it rolls too
+        # often rather than too rarely, and for an auth gate that is the correct
+        # direction to be wrong in.
+        urbalurba.io/secret-version: "{{ oauth2_secret_version }}"
     spec:
       containers:
         - name: oauth2-proxy

@@ -56,7 +56,7 @@ No interactive browser auth from the container. No generated credential files.
 
 1. Log in to [dash.cloudflare.com](https://dash.cloudflare.com)
 2. Click **"Add a domain"**
-3. Enter your domain (e.g., `urbalurba.no`)
+3. Enter your domain (e.g., `<your-domain>`)
 4. Select the **Free** plan
 5. Cloudflare will scan existing DNS records — review and confirm
 6. Update your domain registrar's nameservers to the Cloudflare nameservers shown (e.g., `sandy.ns.cloudflare.com` and `terry.ns.cloudflare.com`)
@@ -70,7 +70,7 @@ No interactive browser auth from the container. No generated credential files.
 2. In the left sidebar, click **Networks → Connectors**
 3. Under "Cloudflare Tunnels", click **"Create a tunnel"**
 4. Select **Cloudflared** as the connector type
-5. Give your tunnel a name (e.g., `urbalurba-no`) and click **Save tunnel**
+5. Give your tunnel a name (e.g., `my-cluster`) and click **Save tunnel**
 
 ### Copy the tunnel token
 
@@ -99,7 +99,7 @@ In the **Published application routes** section, click **"Add a published applic
 | Field | Value |
 |-------|-------|
 | **Subdomain** | `*` |
-| **Domain** | Select your domain (e.g., `urbalurba.no`) |
+| **Domain** | Select your domain (e.g., `<your-domain>`) |
 | **Path** | *(leave empty)* |
 | **Type** | HTTP |
 | **URL** | `traefik.kube-system.svc.cluster.local:80` |
@@ -117,7 +117,7 @@ Click **"Add a published application route"** again:
 | Field | Value |
 |-------|-------|
 | **Subdomain** | *(leave empty)* |
-| **Domain** | Select your domain (e.g., `urbalurba.no`) |
+| **Domain** | Select your domain (e.g., `<your-domain>`) |
 | **Path** | *(leave empty)* |
 | **Type** | HTTP |
 | **URL** | `traefik.kube-system.svc.cluster.local:80` |
@@ -152,8 +152,8 @@ Your tunnel should now show two published application routes:
 
 | # | Route | Path | Service |
 |---|-------|------|---------|
-| 1 | `*.urbalurba.no` | `*` | `http://traefik.kube-system.svc.cluster.local:80` |
-| 2 | `urbalurba.no` | `*` | `http://traefik.kube-system.svc.cluster.local:80` |
+| 1 | `*.<your-domain>` | `*` | `http://traefik.kube-system.svc.cluster.local:80` |
+| 2 | `<your-domain>` | `*` | `http://traefik.kube-system.svc.cluster.local:80` |
 
 …and matching `Type: Tunnel` rows in DNS → Records.
 
@@ -170,7 +170,7 @@ Run the interactive init wizard:
 The wizard prompts for two values:
 
 - **`CLOUDFLARE_TUNNEL_TOKEN`** — paste the long `eyJ...` string you copied in Step 2.
-- **`BASE_DOMAIN_CLOUDFLARE`** — your domain, e.g. `urbalurba.no` (used by `uis network verify cloudflare`'s end-to-end probe; press Enter to skip if you want to set it later).
+- **`BASE_DOMAIN_CLOUDFLARE`** — your domain, e.g. `<your-domain>` (used by `uis network verify cloudflare`'s end-to-end probe; press Enter to skip if you want to set it later).
 
 The wizard writes two files:
 
@@ -221,19 +221,84 @@ You can also test manually:
 
 ```bash
 # whoami's IngressRoute uses HostRegexp(whoami-public.*) — note the "-public" suffix
-curl https://whoami-public.urbalurba.no
+curl https://whoami-public.<your-domain>
 
 # Root domain hits Traefik's catch-all (typically the nginx landing page)
-curl https://urbalurba.no
+curl https://<your-domain>
 ```
 
 The tunnel status in the Cloudflare dashboard should change from **Inactive** to **Healthy**.
 
-> **Common mistake**: the whoami service's IngressRoute matches `HostRegexp(whoami-public.*)`, **not** `whoami.*`. A curl to `https://whoami.urbalurba.no` will return 404 because no IngressRoute matches that exact hostname. Same applies to other services — check the actual IngressRoute pattern (`kubectl get ingressroutes -A`) before forming URLs.
+> **Common mistake**: the whoami service's IngressRoute matches `HostRegexp(whoami-public.*)`, **not** `whoami.*`. A curl to `https://whoami.<your-domain>` will return 404 because no IngressRoute matches that exact hostname. Same applies to other services — check the actual IngressRoute pattern (`kubectl get ingressroutes -A`) before forming URLs.
 >
 > **And a 404 here is a PASS, not a failure.** It means the request crossed the whole chain and Traefik had nothing matching that hostname — the tunnel works. Traefik's 404 is 19 bytes of `text/plain` reading `404 page not found`; Cloudflare's errors are HTML. What is *not* a pass: **502** (connector registered, origin unreachable — check the Service URL's namespace) and **530** (Cloudflare cannot reach the tunnel at all).
 
 ---
+
+## Browser access to an API: CORS at the edge
+
+Skip this unless **browser JavaScript** calls an API through the tunnel. Everything else — `curl`, a server, a CLI — is unaffected, because CORS is a browser rule and nothing else enforces it.
+
+### The symptom
+
+The API works from `curl` and fails from a web page, with a console message about a missing `Access-Control-Allow-Origin` header. Measured on a PostgREST service through the tunnel:
+
+```
+GET  + Origin      200, NO access-control-allow-origin      <- the browser blocks it
+OPTIONS preflight  200, access-control-allow-origin: *
+                        NO access-control-allow-methods
+                        NO access-control-allow-headers
+```
+
+Both halves have to be right. Here the preflight answered but named no methods or headers, and the actual response carried no origin header at all — so even a request that survived the preflight was discarded after it arrived.
+
+### Fix it at the edge, not in the service
+
+**Cloudflare → Rules → Transform Rules → Modify Response Header → Create rule.**
+
+```
+If    starts_with(http.host, "api-")
+
+Then  Set static:
+      Access-Control-Allow-Origin     *
+      Access-Control-Allow-Methods    GET, HEAD, OPTIONS
+      Access-Control-Allow-Headers    Accept, Accept-Profile, Authorization,
+                                      Content-Type, Prefer, Range, Range-Unit
+      Access-Control-Expose-Headers   Content-Range, Content-Location
+      Access-Control-Max-Age          86400
+```
+
+The expression names **no domain and no service** — it matches any hostname starting with `api-`, in any zone. Adopt the prefix as a convention and every future API is covered by the rule that already exists.
+
+:::danger Use **Set**, not **Add**
+Cloudflare's *Add* operation *"adds a new HTTP response header … without removing any existing headers with the same name"*, while *Set* *"overwrit[es] its previous value"*. The preflight above **already** returns an `Access-Control-Allow-Origin`, so *Add* produces the header twice — and a browser rejects a response carrying two of them, which looks exactly like the failure you were fixing.
+:::
+
+:::warning The two lines everyone omits
+- **`Allow-Headers`** — PostgREST clients send non-simple headers (`Prefer`, `Range`, `Accept-Profile`). Omit this and the preflight fails, so **the real request is never sent**.
+- **`Expose-Headers: Content-Range`** — PostgREST returns row counts there, and **a browser cannot read a response header unless it is exposed**. Omit it and pagination breaks *silently*: the rows arrive, the total never does, and nothing errors.
+:::
+
+### Why the service does not do this
+
+Setting `PGRST_SERVER_CORS_ALLOWED_ORIGINS=*` on the deployment produces nothing here, and it is the wrong layer regardless: **an origin is a domain, and a service definition should not contain one.** The same manifest has to work on `.localhost`, on a tunnel and on a tailnet. The edge is where the domain is already known.
+
+:::danger `*` is safe here and is NOT a general recommendation
+This applies to an API that **takes no credentials** and is already world-readable to every non-browser client. **CORS is not an access control** — it decides whether a browser lets JavaScript *read* what anyone can already `curl`.
+
+On a service that **does** take credentials, or one behind a login, `*` is wrong: name the origins instead. Do not copy this rule onto a gated service.
+:::
+
+## One tunnel, one apex — what "any domain" does and does not mean
+
+Routing is domain-agnostic: Traefik matches on `HostRegexp(...)`, so `servicename.<your-domain>` reaches the right service with nothing added, whatever `<your-domain>` is.
+
+Two things are still per-apex, and both are easy to assume away:
+
+- **The tunnel's published hostnames.** `*.<your-domain>` covers subdomains of **that apex only**. A second apex needs its own routes and its own DNS records in that zone.
+- **Anything behind a login gate.** [oauth2-proxy](/docs/services/identity/oauth2-proxy) derives its callback URL from the request's hostname and scopes its session cookie to a single apex, so **one gate instance serves one apex.** A second apex needs a registered callback URL there *and* a second gate.
+
+So *"point any domain at the cluster and it routes"* is true — and it stops being true the moment the service is gated.
 
 ## Managing the Tunnel
 
@@ -373,18 +438,18 @@ User Request → Cloudflare Edge (CDN/WAF/TLS) → Tunnel Pod → Traefik → Se
 
 ### DNS Configuration
 When you add published application routes, Cloudflare automatically creates:
-- **Root domain**: `urbalurba.no` → Tunnel type DNS record
-- **Wildcard**: `*.urbalurba.no` → Tunnel type DNS record
+- **Root domain**: `<your-domain>` → Tunnel type DNS record
+- **Wildcard**: `*.<your-domain>` → Tunnel type DNS record
 - **Proxied**: Orange cloud enabled for CDN and security
 
 ### How Wildcard Routing Works
 
-With the wildcard route (`*.urbalurba.no`), ALL subdomains automatically reach your cluster:
+With the wildcard route (`*.<your-domain>`), ALL subdomains automatically reach your cluster:
 
 ```
-whoami-public.urbalurba.no  → Cloudflare → cloudflared pod → Traefik → whoami service
-openwebui.urbalurba.no       → Cloudflare → cloudflared pod → Traefik → openwebui service
-grafana.urbalurba.no         → Cloudflare → cloudflared pod → Traefik → grafana service
+whoami-public.<your-domain>  → Cloudflare → cloudflared pod → Traefik → whoami service
+openwebui.<your-domain>       → Cloudflare → cloudflared pod → Traefik → openwebui service
+grafana.<your-domain>         → Cloudflare → cloudflared pod → Traefik → grafana service
 ```
 
 Traefik routes to the correct service using its HostRegexp IngressRoute rules. Each service deployed via UIS defines its own HostRegexp pattern — `whoami` uses `HostRegexp(whoami-public.*)`, others use their own conventions. **The IngressRoute pattern is what determines the URL**, not the service name alone. Inspect with:
