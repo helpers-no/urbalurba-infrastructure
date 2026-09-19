@@ -155,6 +155,61 @@ never delivered.
 - [ ] **3.3** Delete the intent-only annotations, or make them generated from the
   declaration. Leaving both means two sources of truth, one of which does nothing.
 
+## Terje's routing requirement — 2026-09-19, and it amends this plan
+
+> *"i want the uis system to work so that it routes on servicename.&lt;domain&gt;. it should do that no matter what domain is pointed at it. whether it is a cloudflared tunnel or a direct domain. it works like this on service.localhost now."*
+
+A requirement, not a question. **Read carelessly it contradicts this plan** — the plan narrows patterns so a new domain serves nothing; he is asking for a new domain to serve everything. Read carefully, the two are about different services, and reconciling them is the plan's real shape.
+
+### His sentence already contains the constraint people expect to have to explain
+
+*"no matter what domain is **pointed at it**"*. Pointing a domain at the cluster **is** the DNS record and, for a tunnel, the zone living in the Cloudflare account. No design removes that: Cloudflare forwards traffic only for names it holds a record for. **So the requirement is satisfiable exactly as written** — nobody has to be talked down from it.
+
+What it means concretely: **once an apex points at the cluster, every `servicename.<that-apex>` works with nothing further.** That is precisely the `.localhost` property he is comparing against.
+
+### The three layers, and which one is actually the gap
+
+| layer | today | satisfies the requirement? |
+|---|---|---|
+| **Traefik routing** | `HostRegexp(`dagster\..+`)` on 23 manifests | ✅ **already** — any apex matches |
+| **Tunnel ingress** | `<apex>` and `*.<apex>` routed, everything else `http_status:404` | 🔴 **the gap** |
+| **DNS** | a record per zone pointing at the tunnel | ⚠️ irreducible, and it is what "pointed at it" means |
+
+🔵 **The tunnel gap is not irreducible, which is the useful finding.** A cloudflared ingress list always ends in a catch-all, and the catch-all's service is configurable — it does not have to be `http_status:404`. Point the catch-all at Traefik and **every hostname that reaches the tunnel reaches Traefik, with no per-apex tunnel route ever again.**
+
+This is safe in the way that matters: the catch-all can only ever see traffic for names that already have a DNS record aimed at this tunnel. It cannot receive arbitrary internet traffic.
+
+⚠️ **Verified from the configuration-file documentation, where a catch-all may be any service; the API takes the same ingress structure. Not yet verified on a live tunnel** — that is a cheap test and it should be run before anyone commits to this.
+
+Two ways to reach it, and the cost differs:
+
+- **A — locally-managed config.** UIS ships the ingress list as a ConfigMap. The routing table becomes cluster configuration, versioned with everything else. Cost: tunnel credentials instead of a token, and the dashboard stops being the source of truth.
+- **B — keep the token, set the config via the API.** `PUT /accounts/{id}/cfd_tunnel/{id}/configurations` accepts the whole ingress array including the catch-all. Cost: an API token with tunnel-edit scope, and a UIS verb that writes it.
+
+🔵 **B preserves today's model and is the smaller change.** A is architecturally cleaner and is the one to choose if the tunnel's routing should be reviewable in git.
+
+### 🔴 The reconciliation: opt-in is per SERVICE, not per hostname
+
+This is the amendment. This plan was written to narrow `HostRegexp(name\..+)` because a wildcard tunnel publishes services nobody declared. **The defect was never the pattern — it was that every service had one by default.**
+
+So the unit of opt-in is the service, and the pattern is what "exposed" *means*:
+
+| the service | its route | on a new apex |
+|---|---|---|
+| **not exposed** (the default) | `Host(`name.localhost`)` | serves nothing |
+| **exposed, ungated** | `HostRegexp(`name\..+`)` | ✅ **works immediately — Terje's requirement** |
+| **exposed, gated** | the declared `hosts:`, explicitly | one apex per gate instance |
+
+**Both requirements hold at once.** A new apex serves exactly the services that opted in, on every apex, and nothing else — and the anonymous-Dagster incident becomes impossible not because patterns were banned but because Dagster would not have opted in.
+
+⚠️ **Gated services are the exception and cannot be fixed by wanting it.** `redirect_uri` derives from the request host and `cookie_domain` is a single apex, so a gate serves one apex. A gated service therefore declares its hosts and does **not** get the pattern. That is a real limit of delegated auth, not of this design.
+
+### What this costs
+
+- **Tunnel catch-all** — one-time, small, needs the live verification above and a choice between A and B.
+- **`expose_on`** — this plan, unchanged in size. What changes is the framing: it is not "narrow the patterns", it is **"make the pattern mean something"**.
+- **Gated services** — nothing. They already declare `hosts:`.
+
 ## The gate/service desync — ops-dev, 2026-09-19, and it dates this plan
 
 Found by reading a running ingress before any second domain existed, which makes it the first evidence for this plan that is neither hypothetical nor historical:
