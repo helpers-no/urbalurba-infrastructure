@@ -178,6 +178,31 @@ templates provision, ArgoCD deploys workloads.
 | `./uis template install <id> [--dry-run] [--param k=v]...` | Deploy and configure every service the template declares |
 | `./uis template remove <id> [--app <name>] [--purge] [--yes]` | Remove an installed application. **Data is kept unless `--purge`.** `--app` picks one tenant when a template has several |
 
+### 🔴 Reinstalling an application does not re-run what it already ran
+
+`template install` provisions: it deploys services, applies configuration and runs the install-time steps the definition declares. **It does not re-run an application's own post-install jobs**, and several kinds of change live only in those.
+
+The case that produced this note, on 2026-09-19: a corrected text was fixed in an application's source and published in a new image, the new image was deployed successfully, and **the API kept serving the old text**. The correction was a database `COMMENT`, applied by the application's own publish job — the image had never carried it at runtime.
+
+So after installing or upgrading an application, re-run whatever the application uses to publish its schema. Anything that is **state in the database rather than content in the image** needs it:
+
+| changed | in the image? | needs the publish job? |
+|---|---|---|
+| application code, migrations run at install | ✅ | no |
+| a column or table `COMMENT` | ❌ state | ✅ **yes** |
+| a view definition, or a relationship an API exposes | ❌ state | ✅ **yes** |
+| anything an API reads from the catalogue to build its schema | ❌ state | ✅ **yes** |
+
+For Atlas that job is `publish_api_v1`, whose final statement is `NOTIFY pgrst, 'reload schema'`:
+
+```bash
+./uis dagster run publish_api_v1
+```
+
+:::warning Every signal is green when this is skipped
+The deploy succeeds, the pods are healthy, the image digest is the new one — and the API serves the previous schema. **Nothing reports a problem**, because nothing in the deploy is broken. It is the same shape as the stale-documentation window the install already warns about: correct components, an outcome nobody asked for.
+:::
+
 ### `--dry-run`
 
 Prints every `deploy`/`configure` the install would run, in order, with params
