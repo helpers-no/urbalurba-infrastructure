@@ -15,10 +15,10 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [---](PLAN-service-exposure-opt-in.md) | Make public reachability a property a service **declares**, instead of a | 2026-09-19 |
+| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-19 |
 | [---](PLAN-service-oauth2-proxy.md) | Ship `oauth2-proxy` as an ordinary UIS service — `uis enable | 2026-09-18 |
-| [---](PLAN-service-exposure-opt-in.md) | Make public reachability a property a service **declares**, instead of a | 2026-09-18 |
 | [Investigate: exposure is a property of the tunnel, not of the service — and exactly one service has a login](INVESTIGATE-service-exposure-and-auth.md) | Decide how a UIS service becomes reachable from the internet, and what | 2026-09-18 |
-| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-18 |
 | [Plan: a command that loads the data, and a command that reports on it](PLAN-cli-load-and-report-on-application-data.md) | — | 2026-09-14 |
 | [Plan: one deliberate pass over the error paths](PLAN-system-error-paths-audit.md) | Every path that runs only when something has already failed is | 2026-09-12 |
 | [Plan: the definition is pinned by digest, the code that runs is not](PLAN-dagster-code-location-digest.md) | `uis template install` must record, print, and — if the chart allows | 2026-09-12 |
