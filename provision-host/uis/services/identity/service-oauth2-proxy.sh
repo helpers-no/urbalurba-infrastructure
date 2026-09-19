@@ -54,7 +54,7 @@ SCRIPT_CONSUMES_APIS=""
 
 # === Website Metadata (Optional) ===
 SCRIPT_ABSTRACT="Authentication gate that delegates identity to an external provider"
-SCRIPT_LOGO=""
+SCRIPT_LOGO="oauth2-proxy-logo.svg"
 SCRIPT_WEBSITE="https://oauth2-proxy.github.io/oauth2-proxy/"
 SCRIPT_TAGS="authentication,oauth,oidc,sso,gate,forward-auth"
 SCRIPT_SUMMARY="oauth2-proxy authenticates visitors against an external identity provider (GitHub, Google, or any OIDC issuer) and allows through only the people on a configured list. It runs as a Traefik ForwardAuth gate, holds no user records and no persistent state, so it fits the case where the user directory belongs to someone else. It provides authentication only — everyone admitted is equal, with no groups or per-service permissions."
