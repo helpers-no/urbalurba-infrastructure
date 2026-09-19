@@ -257,7 +257,7 @@ Both halves have to be right. Here the preflight answered but named no methods o
 **Cloudflare → Rules → Transform Rules → Modify Response Header → Create rule.**
 
 ```
-If    starts_with(http.host, "api-")
+If    starts_with(http.host, "api-") or starts_with(http.host, "api.")
 
 Then  Set static:
       Access-Control-Allow-Origin     *
@@ -268,10 +268,30 @@ Then  Set static:
       Access-Control-Max-Age          86400
 ```
 
-The expression names **no domain and no service** — it matches any hostname starting with `api-`, in any zone. Adopt the prefix as a convention and every future API is covered by the rule that already exists.
+The expression names **no domain and no service** — it matches on the hostname's prefix alone. Adopt the convention and every future API is covered by the rule that already exists.
+
+:::warning Match `api-` and `api.`, never bare `api`
+Loosening this to `starts_with(http.host, "api")` looks tidier and is wrong: it also matches **`apidocs.`, `apiary.`, `apikeys.`** and anything else merely beginning with those three letters, each of which would silently receive `Access-Control-Allow-Origin: *`.
+
+Verified on a live zone:
+
+| hostname | CORS header |
+|---|---|
+| `api-atlas.<your-domain>` | ✅ yes |
+| `api.<your-domain>` | ✅ yes |
+| `apidocs.<your-domain>` | ❌ no — correctly excluded |
+:::
+
+:::tip The rule can exist before the service does
+A Transform Rule runs at Cloudflare's edge, so it applies to a hostname whether or not anything is deployed behind it. `api.<your-domain>` returned the headers before that endpoint existed. **A new API gets browser access on day one with nothing further to configure.**
+:::
 
 :::danger Use **Set**, not **Add**
 Cloudflare's *Add* operation *"adds a new HTTP response header … without removing any existing headers with the same name"*, while *Set* *"overwrit[es] its previous value"*. The preflight above **already** returns an `Access-Control-Allow-Origin`, so *Add* produces the header twice — and a browser rejects a response carrying two of them, which looks exactly like the failure you were fixing.
+:::
+
+:::info One rule per zone, and it counts against your quota
+Transform Rules are **zone-scoped**. This rule covers one domain; a second domain needs its own copy, and the Free plan has **no account-wide version**. The Free plan allows **10 transform rules per zone**, and this is one of them.
 :::
 
 :::warning The two lines everyone omits
@@ -288,6 +308,24 @@ This applies to an API that **takes no credentials** and is already world-readab
 
 On a service that **does** take credentials, or one behind a login, `*` is wrong: name the origins instead. Do not copy this rule onto a gated service.
 :::
+
+## 🔴 `api-` and `api.` are reserved prefixes
+
+Once the rule above exists, **the hostname prefix is a security decision, and it is made when a service is named.**
+
+Calling a service `api-something` gives it a hostname matching the rule, so **any website's JavaScript may read its responses.** Nobody choosing a service name will be reading this page, which is exactly why it is written down here and in the service schema.
+
+### What the risk is, and what it is not
+
+**It is not a credential leak.** `Access-Control-Allow-Origin: *` **cannot be combined with credentials** — a browser refuses to send cookies or HTTP auth to a wildcard origin, and rejects the response if it tries. A cookie-gated service caught by the prefix will not hand an authenticated response to a third-party page.
+
+🔴 **It is an exposure for anything private that needs no credentials to read.** A service protected only by being unadvertised, or one that answers any unauthenticated request with internal data, becomes readable by script from any page on the internet — not just by someone who knows the URL.
+
+### The rule to follow
+
+- **Name it `api-…` or `api.…` when it is a public, browser-facing, credential-free API.** That is what the prefix now means.
+- **Do not use the prefix otherwise** — and if an existing service needs renaming, that is cheaper than an exception in the Transform Rule.
+- **A gated API is fine under the prefix**: the gate answers `401` to an unauthenticated request, and the wildcard header on a 401 discloses nothing.
 
 ## One tunnel, one apex — what "any domain" does and does not mean
 

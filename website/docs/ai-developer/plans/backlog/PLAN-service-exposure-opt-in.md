@@ -204,6 +204,21 @@ So the unit of opt-in is the service, and the pattern is what "exposed" *means*:
 
 ⚠️ **Gated services are the exception and cannot be fixed by wanting it.** `redirect_uri` derives from the request host and `cookie_domain` is a single apex, so a gate serves one apex. A gated service therefore declares its hosts and does **not** get the pattern. That is a real limit of delegated auth, not of this design.
 
+### The per-new-domain list is four items, not three
+
+Updated 2026-09-19 after the CORS rule went live. This is the full cost of pointing a second apex at the cluster today:
+
+| # | per new domain | reducible? |
+|---|---|---|
+| 1 | **DNS record** aimed at the tunnel | ❌ irreducible — it is what "pointed at it" means |
+| 2 | **Tunnel route** | ✅ the catch-all change removes it (documented, not yet tested live) |
+| 3 | **CORS Transform Rule** | ❌ **zone-scoped**, one copy per domain, no account-wide form on the Free plan |
+| 4 | **A gate instance** per gated service | ❌ one apex per gate — a limit of delegated auth |
+
+🔵 **Item 3 arrived with the CORS work and belongs in this plan's scope, because it is the same shape as routing:** something repeated per domain, configured in a dashboard, that UIS could template and does not. The Free plan allows 10 transform rules per zone and this uses one.
+
+⚠️ **Item 3 also introduced a naming rule with a security consequence**, which is new surface this plan should own: `api-` and `api.` are now **reserved prefixes**, and naming a service with one grants any website's JavaScript read access to its responses. That is an exposure decision made at the moment a service is named — the same class of thing `expose_on` exists to make explicit, arrived at from a different direction.
+
 ### What this costs
 
 - **Tunnel catch-all** — one-time, small, needs the live verification above and a choice between A and B.
