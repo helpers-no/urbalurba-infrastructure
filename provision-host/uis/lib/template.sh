@@ -654,6 +654,81 @@ _warn_unrendered_operational() {
     return 0
 }
 
+# 🔴 AN INSTALL THAT CREATES A KNOWN-BAD STATE CLEANS UP AFTER ITSELF.
+#
+# urb-agents#1291, two for two across two days: `uis template install <app>`
+# rolls the code-location pod and does NOT roll the webserver or daemon, so the
+# handle is stale BY CONSTRUCTION after every install. Dagster resolves a run's
+# image from the webserver's cached code-location handle, so until those two
+# restart, a run can execute the PREVIOUS image and still report SUCCESS.
+#
+# ⚠️ THIS IS NOT THE `uis deploy dagster` CASE, and the difference is the whole
+# argument. On #1272 I declined to auto-restart there, because that command
+# merely FAILS TO FIX a condition it did not cause, and restarting would have
+# hidden it. This command CAUSES it. Repairing what you broke is not hiding.
+#
+# 🔵 And it re-queries: a repair that reports success without checking is the
+# defect this whole sequence has been about. If the handle is still stale after
+# the roll, say so and print the manual commands rather than exiting quietly.
+_refresh_dagster_handle_after_install() {
+    local info_file="$1"
+
+    # Only applies to a template that actually ships a Dagster code location.
+    local has_cl
+    has_cl="$(yq -r '[.provides.services[]?.config?.code_location] | map(select(. != null)) | length' \
+        "$info_file" 2>/dev/null || echo 0)"
+    [[ "${has_cl:-0}" -gt 0 ]] || return 0
+
+    command -v kubectl >/dev/null 2>&1 || return 0
+    kubectl get ns dagster >/dev/null 2>&1 || return 0
+
+    echo ""
+    echo "Refreshing Dagster's code-location handle..."
+    echo "  The install replaced the code location; the webserver and daemon cache"
+    echo "  a handle to it and would otherwise keep launching runs on the old image."
+
+    local d rolled=0 failed=""
+    for d in dagster-dagster-webserver dagster-daemon; do
+        kubectl get deploy "$d" -n dagster >/dev/null 2>&1 || continue
+        if kubectl rollout restart "deploy/$d" -n dagster >/dev/null 2>&1 \
+           && kubectl rollout status "deploy/$d" -n dagster --timeout=180s >/dev/null 2>&1; then
+            rolled=$((rolled + 1))
+        else
+            failed="$failed $d"
+        fi
+    done
+
+    if [[ -n "$failed" ]]; then
+        log_warn "Could not restart:$failed"
+        log_warn "  Runs may execute the PREVIOUS image and still report SUCCESS."
+        log_warn "  Do it by hand before trusting any run:"
+        for d in $failed; do
+            log_warn "    kubectl -n dagster rollout restart deploy/$d"
+        done
+        return 0
+    fi
+
+    [[ "$rolled" -eq 0 ]] && return 0
+
+    # The re-query. Not "we restarted them" — "the handle is now fresh".
+    local newest_loc oldest_srv ages
+    ages="$(kubectl get pods -n dagster \
+        -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.startTime}{"\n"}{end}' 2>/dev/null)"
+    newest_loc="$(printf '%s\n' "$ages" | grep -E 'code-location|user-deployments' | awk '{print $2}' | sort | tail -1)"
+    oldest_srv="$(printf '%s\n' "$ages" | grep -E 'webserver|daemon' | awk '{print $2}' | sort | head -1)"
+
+    if [[ -z "$newest_loc" || -z "$oldest_srv" ]]; then
+        log_info "  Restarted $rolled, but could not confirm the handle is fresh."
+        log_info "  Check with: ./uis dagster verify   (reports F. Code-location handle)"
+    elif [[ "$oldest_srv" < "$newest_loc" ]]; then
+        log_warn "  Restarted $rolled, and the handle is STILL stale."
+        log_warn "  Runs may execute the PREVIOUS image and still report SUCCESS."
+        log_warn "  Investigate with: ./uis dagster verify"
+    else
+        log_success "  Code-location handle is fresh — runs will execute what was just installed."
+    fi
+}
+
 _install_summary_operational() {
     local info="$1" _tid="${2:-}"
     [[ -f "$info" ]] || return 0
@@ -4323,6 +4398,10 @@ cmd_template_install() {
     # ⚠️ Immediately after Endpoints, deliberately. An install that says where
     # the API is and not that it is empty on purpose invites the reader to
     # conclude the install failed.
+    # Before the operational summary, so an operator reading "what to run next"
+    # is reading it about a deployment whose handle is already fresh.
+    _refresh_dagster_handle_after_install "$info_file"
+
     _install_summary_operational "$info_file" "$template_id"
     # Content that reaches no surface at all — the case the two-renderer
     # comparison is blind to by construction.

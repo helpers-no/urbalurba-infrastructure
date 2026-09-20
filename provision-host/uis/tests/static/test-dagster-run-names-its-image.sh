@@ -138,4 +138,68 @@ else
     fail_test "when the images match, the comparison is left to the reader"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.136: the install that CREATES the stale handle now repairs it.
+#
+# urb-agents#1291, two for two across two days: `uis template install <app>`
+# rolls the code-location pod and not the servers, so the handle is stale by
+# construction after every install and the operator repairs it by hand as
+# routine — which is how a step becomes folklore and then gets skipped.
+#
+# ⚠️ NOT the `uis deploy dagster` case. That command merely fails to fix a
+# condition it did not cause, and auto-restarting there would hide it. This one
+# causes it; repairing what you broke is not hiding.
+# ---------------------------------------------------------------------------
+
+TPL="$REPO/provision-host/uis/lib/template.sh"
+
+start_test "template install refreshes the handle it just invalidated"
+_def=$(_code_only "$TPL" | grep -c '^_refresh_dagster_handle_after_install()')
+_call=$(_code_only "$TPL" | grep -c '^[[:space:]]\+_refresh_dagster_handle_after_install "')
+if [[ "$_def" -eq 1 && "$_call" -ge 1 ]]; then
+    pass_test
+else
+    fail_test "definition=$_def call=$_call — a function nobody calls leaves every install stale"
+fi
+
+start_test "and only for a template that ships a code location"
+# A template with no Dagster code location must not restart Dagster at all.
+if _code_only "$TPL" | grep -qF 'code_location] | map(select(. != null)) | length'; then
+    pass_test
+else
+    fail_test "the refresh is unconditional — it would restart Dagster for unrelated installs"
+fi
+
+start_test "it re-queries rather than reporting the restart as the outcome"
+# "we restarted them" is not "the handle is fresh". The whole sequence this
+# came from is commands reporting an action instead of a result.
+_ok_line=$(_code_only "$TPL" | grep -c 'log_success.*handle is fresh')
+_requery=$(_code_only "$TPL" | grep -c 'oldest_srv.*<.*newest_loc')
+if [[ "$_ok_line" -ge 1 && "$_requery" -ge 1 ]]; then
+    pass_test
+else
+    fail_test "success=$_ok_line requery=$_requery — the repair reports the action, not the result"
+fi
+
+start_test "a failed restart is loud and prints the manual commands"
+if _code_only "$TPL" | grep -qF 'rollout restart deploy/'; then
+    pass_test
+else
+    fail_test "a restart that fails leaves the operator with nothing to do"
+fi
+
+start_test "the pod-matching patterns agree between template.sh and the verify playbook"
+# 🔴 THE DRIFT HAZARD. Two places now classify the same pods, in two languages.
+# 1.6.130 shipped an invented label and the comparison silently selected
+# nothing; two copies of a pattern is the same failure with an extra step.
+_a=$(_code_only "$TPL"    | grep -c "code-location|user-deployments")
+_b=$(_code_only "$VERIFY" | grep -c "code-location|user-deployments")
+_c=$(_code_only "$TPL"    | grep -c "webserver|daemon")
+_d=$(_code_only "$VERIFY" | grep -c "webserver|daemon")
+if [[ "$_a" -ge 1 && "$_b" -ge 1 && "$_c" -ge 1 && "$_d" -ge 1 ]]; then
+    pass_test
+else
+    fail_test "the two classifiers no longer use the same patterns (tpl=$_a/$_c verify=$_b/$_d)"
+fi
+
 print_summary
