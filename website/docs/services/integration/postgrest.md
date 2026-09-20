@@ -319,6 +319,19 @@ That is a legitimate call — an unbounded row limit is a real availability risk
 2. **Publish a summary or aggregate view first**, so unpaged consumers have somewhere to go.
 3. **Update this page in the same change** — the claim above must never be stale. A static test asserts that UIS really does not set it, so the page and the code cannot drift apart silently.
 
+### 🔴 `openapi-mode` is unset, and unset is already the safe value
+
+PostgREST's default is **`follow-privileges`** — the spec shows only what the requesting role may actually do. UIS does not set this option, so that default is what runs.
+
+⚠️ **This matters because the wrong fix is tempting.** If the published spec advertises `POST`, `PATCH` and `DELETE` on relations the database refuses, the intuitive move is to *set* `openapi-mode`. **Setting it to `follow-privileges` changes nothing — that is already the value.** Setting it to `ignore-privileges` makes the problem *permanent*: the spec then advertises every exposed relation's methods regardless of grants, by design.
+
+🔵 **So a spec that over-advertises writes is not an `openapi-mode` problem.** On PostgREST v14.10 with this option at its default, look instead at:
+
+- **A stale schema cache.** PostgREST caches the schema, including privileges. Grants tightened after the cache was built are not reflected until it reloads — `NOTIFY pgrst, 'reload schema'`, which an application's publish job is what normally issues. Reload, then re-read `GET /`: if the write methods disappear, that was it.
+- **Structural writability.** An auto-updatable view or a plain table is structurally writable whether or not the role may write it. If the methods survive a reload, the advertisement is upstream behaviour rather than our configuration, and documenting the spec is then the right layer.
+
+**Those two are distinguished by one reload**, so nobody needs to guess which it is.
+
 #### What UIS does set
 
 `db-uri`, `db-schemas`, `db-anon-role`, `db-pool`, `server-cors-allowed-origins`, the admin server port, and the error-file plumbing. **Everything else is PostgREST's default**, and a default that consumers have built on is a contract whether or not anyone wrote it down.

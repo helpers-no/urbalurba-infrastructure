@@ -34,7 +34,7 @@ print_test_section "PostgREST settings UIS deliberately leaves unset"
 # docs and this test both NAME these settings, and a repo-wide grep would match
 # its own explanation — the comment-matching lesson from the oauth2 suite.
 _SEARCH=("$REPO/manifests" "$REPO/provision-host/uis/lib" "$REPO/ansible")
-_PAT='PGRST_DB_MAX_ROWS|db-max-rows|PGRST_DB_AGGREGATES_ENABLED|db-aggregates-enabled'
+_PAT='PGRST_DB_MAX_ROWS|db-max-rows|PGRST_DB_AGGREGATES_ENABLED|db-aggregates-enabled|PGRST_OPENAPI_MODE|openapi-mode'
 
 start_test "the search pattern can match a PostgREST setting at all"
 # An empty grep is not evidence. Prove the pattern and the paths work together
@@ -45,13 +45,24 @@ else
     fail_test "positive control failed: no PGRST_DB_* found in the searched paths, so absence proves nothing"
 fi
 
-start_test "UIS does not set db-max-rows or db-aggregates-enabled"
+start_test "UIS does not set db-max-rows, db-aggregates-enabled or openapi-mode"
 _hits=$(grep -rniE "$_PAT" "${_SEARCH[@]}" 2>/dev/null || true)
 if [[ -z "$_hits" ]]; then
     pass_test
 else
     fail_test "one of these is now set — postgrest.md says it is not, and that page must be updated in the same change:
 $_hits"
+fi
+
+start_test "the page says openapi-mode's DEFAULT is the safe value"
+# urb-agents#1287: a spec over-advertising writes makes setting openapi-mode
+# look like the fix. follow-privileges IS the default, so setting it changes
+# nothing — and setting ignore-privileges makes the over-advertisement
+# permanent by design. The page has to say which way is which.
+if grep -qF 'unset is already the safe value' "$DOC" && grep -qF 'ignore-privileges' "$DOC"; then
+    pass_test
+else
+    fail_test "nothing stops someone 'fixing' this by setting ignore-privileges"
 fi
 
 start_test "the page still carries the warning that makes the absence deliberate"
