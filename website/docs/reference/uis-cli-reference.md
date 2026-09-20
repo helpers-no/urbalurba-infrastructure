@@ -259,6 +259,37 @@ For Atlas that job is `publish_api_v1`, whose final statement is `NOTIFY pgrst, 
 The deploy succeeds, the pods are healthy, the image digest is the new one — and the API serves the previous schema. **Nothing reports a problem**, because nothing in the deploy is broken. It is the same shape as the stale-documentation window the install already warns about: correct components, an outcome nobody asked for.
 :::
 
+### 🔴 There is no per-application verb, and there will not be one
+
+**Decision, 2026-09-20** (Terje delegated it; urb-agents#923, #1285).
+
+A tenant asked for `uis atlas status`. **Refused, and the refusal is a product position rather than a judgement about that tenant:** a verb named after an application is that application's name compiled into the platform, and the second application to want one arrives as a second special case.
+
+⚠️ **The decision is not "no mechanism either".** The mechanism exists and is generic:
+
+```yaml
+# template-info.yaml, shipped inside the application's own artifact
+commands:
+  check:
+    description: "Does the output reflect the input? …"
+    run: /app/atlas-status.py
+    in: code-location
+```
+
+```bash
+./uis template check <id>     # execs `run` inside the code location
+```
+
+🔵 **And the request was already satisfied when it was made.** The consumer's question was *"does the output reflect the input?"* — which is the help text for `template check` almost verbatim, and **the first sentence of the description the tenant had already written on its own check.** Nobody found it.
+
+**So the defect was discoverability, not capability**, and that is the platform's fault rather than the tenant's. An install that declares a check now ends by naming the command and quoting the application's own description of what it covers.
+
+:::info Why `check` stays the only executable slot
+Other declared commands are **shown** by `uis template info` and not run. `check` has a contract the platform understands — *does the output reflect the input?* — so its answer means something everywhere.
+
+⚠️ A generic runner for arbitrary command names would make UIS execute an arbitrary path, inside a pod, from a definition fetched out of a registry, with no contract about what the answer means. **That is a remote-execution surface with no semantics attached.** If a second command ever earns a defined meaning across applications, it can have a slot of its own — one at a time, each with a contract.
+:::
+
 ### `--dry-run`
 
 Prints every `deploy`/`configure` the install would run, in order, with params

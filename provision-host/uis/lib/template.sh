@@ -729,6 +729,22 @@ _refresh_dagster_handle_after_install() {
     fi
 }
 
+_install_summary_check_hint() {
+    local info_file="$1" template_id="$2"
+    command -v yq >/dev/null 2>&1 || return 0
+
+    local desc
+    desc="$(yq -r '.commands.check.description // ""' "$info_file" 2>/dev/null)"
+    [[ -n "$desc" && "$desc" != "null" ]] || return 0
+
+    echo ""
+    echo "To ask whether it is actually working:"
+    echo "  ./uis template check $template_id"
+    # The application's own words, not a generic sentence — it is the one that
+    # says what this particular check does and does not cover.
+    printf '    %s\n' "$(printf '%s' "$desc" | tr '\n' ' ' | sed 's/  */ /g' | cut -c1-200)"
+}
+
 _install_summary_operational() {
     local info="$1" _tid="${2:-}"
     [[ -f "$info" ]] || return 0
@@ -4398,6 +4414,24 @@ cmd_template_install() {
     # ⚠️ Immediately after Endpoints, deliberately. An install that says where
     # the API is and not that it is empty on purpose invites the reader to
     # conclude the install failed.
+    # 🔴 NAME THE VERB THAT ANSWERS "IS IT WORKING?", HERE.
+    #
+    # urb-agents#1285/#923: a tenant asked for `uis atlas status` because a
+    # consumer needed to answer "does the output reflect the input?" — and that
+    # capability ALREADY EXISTED, generically, as `uis template check <id>`,
+    # whose one-line help is that question almost verbatim. The tenant had even
+    # declared its own `commands.check` and still asked for a new verb.
+    #
+    # ⚠️ So the gap was never a missing feature. Nobody could find the one that
+    # shipped. A capability nobody can find is indistinguishable from one that
+    # does not exist, and the second application to not find it arrives as a
+    # second request for a per-tenant verb.
+    #
+    # 🔵 Printed at the end of the install because that is the one moment the
+    # operator is certainly reading — the same reasoning the troubleshooting
+    # pointer above is built on.
+    _install_summary_check_hint "$info_file" "$template_id"
+
     # Before the operational summary, so an operator reading "what to run next"
     # is reading it about a deployment whose handle is already fresh.
     _refresh_dagster_handle_after_install "$info_file"

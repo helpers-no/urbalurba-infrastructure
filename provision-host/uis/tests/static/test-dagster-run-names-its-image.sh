@@ -202,4 +202,53 @@ else
     fail_test "the two classifiers no longer use the same patterns (tpl=$_a/$_c verify=$_b/$_d)"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.139: the capability existed; nobody could find it.
+#
+# urb-agents#1285/#923. A tenant asked for a per-tenant verb `uis atlas status`
+# to answer "does the output reflect the input?" — and `uis template check <id>`
+# already answered exactly that, generically, with that question as its own
+# one-line help. The tenant had even declared its own commands.check and still
+# asked for a new verb.
+#
+# 🔴 A capability nobody can find is indistinguishable from one that does not
+# exist, and the second application to not find it arrives as a second request
+# for a per-tenant verb. The install now names it.
+# ---------------------------------------------------------------------------
+
+start_test "the install names the verb that answers 'is it working?'"
+if _code_only "$TPL" | grep -qF '_install_summary_check_hint'; then
+    pass_test
+else
+    fail_test "an operator finishing an install is not told how to test it"
+fi
+
+start_test "the hint is called, not merely defined"
+# A name is not a call site — third time this week, so it is asserted by default now.
+_d=$(_code_only "$TPL" | grep -c '^_install_summary_check_hint()')
+_c=$(_code_only "$TPL" | grep -c '^[[:space:]]\+_install_summary_check_hint "')
+if [[ "$_d" -eq 1 && "$_c" -ge 1 ]]; then
+    pass_test
+else
+    fail_test "definition=$_d call=$_c"
+fi
+
+start_test "it prints the application's OWN description, not a generic sentence"
+# Every check covers something different; a generic line would teach the reader
+# that running it proves more than it does.
+if _code_only "$TPL" | grep -qF 'commands.check.description'; then
+    pass_test
+else
+    fail_test "the hint does not say what this particular check covers"
+fi
+
+start_test "a template with no check prints nothing"
+# Offering a command that will report "declares no check" is worse than silence
+# at the end of an install.
+if _code_only "$TPL" | grep -A6 '_install_summary_check_hint()' | grep -qF 'return 0'; then
+    pass_test
+else
+    fail_test "the hint would fire for applications that declare no check"
+fi
+
 print_summary
