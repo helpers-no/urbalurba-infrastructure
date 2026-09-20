@@ -109,6 +109,28 @@ _workload_fingerprint() {
         2>/dev/null | sort || true
 }
 
+# Decide what a deploy actually did, from two fingerprints.
+#
+# 🔵 EXTRACTED SO IT CAN BE TESTED. urb-agents#1278: only the "nothing changed"
+# branch was ever exercised on a cluster, because the tester could not make a
+# deploy roll something without manufacturing a config change and would not
+# invent one on a live host to exercise a message. That was the right call — so
+# the decision lives here, where all three branches are unit-tested instead.
+#
+# Echoes exactly one of: rolled | unchanged | unknown
+_deploy_change_verdict() {
+    local before="$1" after="$2"
+    # "could not tell" is its own answer. A service with no namespace, or one
+    # kubectl cannot reach, must never be reported as rolled OR as unchanged.
+    if [[ -z "$before" || -z "$after" ]]; then
+        echo "unknown"
+    elif [[ "$before" == "$after" ]]; then
+        echo "unchanged"
+    else
+        echo "rolled"
+    fi
+}
+
 # Usage: deploy_single_service <service_id> [<app_name> [<url_prefix>]]
 # For multi-instance services (multiInstance: true in services.json), app_name is
 # required and gets translated into Ansible extra-vars (_app_name, _url_prefix)
@@ -432,19 +454,13 @@ deploy_single_service() {
         if [[ "$_check_ok" -eq 1 ]]; then
             local _fp_after _rolled
             _fp_after="$(_workload_fingerprint "${SCRIPT_NAMESPACE:-}" "${_UIS_FP_CTX:-}")"
-            if [[ -z "${_UIS_FP_BEFORE:-}" || -z "$_fp_after" ]]; then
-                _rolled="unknown"
-            elif [[ "${_UIS_FP_BEFORE}" == "$_fp_after" ]]; then
-                _rolled="no"
-            else
-                _rolled="yes"
-            fi
+            _rolled="$(_deploy_change_verdict "${_UIS_FP_BEFORE:-}" "$_fp_after")"
 
             case "$_rolled" in
-                yes)
+                rolled)
                     log_success "$SCRIPT_NAME deployed successfully"
                     ;;
-                no)
+                unchanged)
                     # Not a warning and not an error: this is usually right.
                     log_success "$SCRIPT_NAME is deployed and healthy — nothing changed"
                     log_info "  No pod was replaced or restarted: the desired state already matched."

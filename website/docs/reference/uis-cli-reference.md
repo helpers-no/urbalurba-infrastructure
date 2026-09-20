@@ -185,10 +185,19 @@ A green Dagster job does **not** answer this, and on 2026-09-19 it answered it w
 **The code location was correct.** Its pod carried the new image and its `DAGSTER_CURRENT_IMAGE` agreed. Dagster resolves a run's image from the **webserver's cached code-location handle**, not from the live Deployment, and the webserver pod was two days old.
 
 ```bash
-./uis dagster verify
+./uis dagster verify            # advisory: reports the handle, exits 0
+./uis dagster verify --strict   # exits non-zero when the handle is STALE
 ```
 
-now compares the webserver and daemon pods' start times against the code location's, and says so when they predate it. And:
+compares the webserver and daemon pods' start times against the code location's, reports the verdict as **`F. Code-location handle: STALE / FRESH / UNREADABLE`** in the summary, and says what to do when they predate it.
+
+:::info Why plain `verify` exits 0 under `STALE`, and how to change that
+Checks A–E genuinely pass: the cluster is healthy, the locations are loaded, nothing is broken **yet** — a stale handle is a warning about the *next* run. Failing by default would break every `uis deploy && uis dagster verify` chain over that.
+
+⚠️ **That is a decision, not an oversight**, so the command says it in its own output. Scripts that need to gate on it use `--strict`.
+
+🔵 The verdict reaching the **summary** matters as much as the check: when F3 first fired on a real cluster the exit code was 0 *and the summary was identical to a healthy one*, so the only evidence sat 27 tasks up-scroll — in a stream anyone running `| tail -20` has already piped away.
+::: And:
 
 ```bash
 ./uis dagster run <job> --wait

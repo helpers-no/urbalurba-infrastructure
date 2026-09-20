@@ -86,4 +86,56 @@ else
     fail_test "only $_n of 2 surfaces tell the operator how to fix it"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.133: a warning nobody sees is not a warning.
+#
+# urb-agents#1278. F3 fired correctly on a real cluster and was still unusable:
+# the exit code was 0 and THE SUMMARY WAS IDENTICAL TO A HEALTHY ONE, so the
+# only evidence lived 27 tasks up-scroll in a stream an operator running
+# `./uis dagster verify | tail -20` has already piped away.
+# ---------------------------------------------------------------------------
+
+start_test "the handle verdict reaches the SUMMARY, not only the task stream"
+if _code_only "$VERIFY" | grep -qF '"F. Code-location handle:'; then
+    pass_test
+else
+    fail_test "a stale handle leaves the summary indistinguishable from healthy"
+fi
+
+start_test "the summary verdict is computed once, so it cannot disagree with the gate"
+# Two independent reads of _handle_age could print FRESH and fail as STALE.
+if _code_only "$VERIFY" | grep -qF '_handle_verdict'; then
+    pass_test
+else
+    fail_test "the summary and the exit code derive the verdict separately"
+fi
+
+start_test "the advisory exit code is stated in the output, not just chosen"
+# "If advisory is deliberate, saying so is the difference between a decision and
+# an omission." An operator must learn it from the output, not the source.
+if _code_only "$VERIFY" | grep -qF 'ADVISORY'; then
+    pass_test
+else
+    fail_test "exiting 0 under STALE is silent, which is how #1278 described the defect"
+fi
+
+start_test "--strict can turn a stale handle into a failure"
+_n=0
+_code_only "$VERIFY" | grep -qF 'strict | default(false)' && _n=$((_n+1))
+grep -qF -- '--strict' "$REPO/provision-host/uis/manage/uis-cli.sh" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 2 — a script cannot gate on a stale handle"
+fi
+
+start_test "the agreeing path prints a verdict, not two strings to eyeball"
+# The whole reason the comparison is the machine's job: it reads fine with short
+# tags that differ visibly, and does not with sha256: digests.
+if _code_only "$RUN" | grep -qF 'they agree'; then
+    pass_test
+else
+    fail_test "when the images match, the comparison is left to the reader"
+fi
+
 print_summary
