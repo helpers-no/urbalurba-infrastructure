@@ -179,7 +179,7 @@ Uptime Kuma:
                                  (all three take [--from CTX] [--to CTX])
 
 Dagster:
-  dagster verify                 Prove the daemon can fire schedules
+  dagster verify [--strict]      Prove the daemon can fire schedules; --strict fails on a stale code-location handle
   dagster automation             Report whether schedules and sensors are switched ON
                                  --start / --stop switches them, then RE-READS and
                                  refuses success on a partial change
@@ -2518,8 +2518,31 @@ cmd_browserless_verify() {
 }
 
 cmd_dagster_verify() {
+    # 🔴 --strict exists because F is ADVISORY by default.
+    #
+    # A stale code-location handle leaves A-E passing and nothing broken yet, so
+    # the command exits 0 and says so — failing would break every
+    # `uis deploy && uis dagster verify` chain over a warning about future runs.
+    # Scripts that want to gate on it need a way to, or "the exit code says
+    # fine" becomes the defect (urb-agents#1278).
+    local strict=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --strict) strict=true; shift ;;
+            -*) log_error "Unknown option: $1"
+                echo "Usage: uis dagster verify [--strict]" >&2
+                return "$EXIT_GENERAL_ERROR" ;;
+            *)  log_error "Unexpected argument: $1"
+                echo "Usage: uis dagster verify [--strict]" >&2
+                return "$EXIT_GENERAL_ERROR" ;;
+        esac
+    done
     print_section "Verifying Dagster Data Orchestrator"
-    run_verify_playbook "360-test-dagster.yml"
+    if [[ "$strict" == true ]]; then
+        run_verify_playbook "360-test-dagster.yml" -e strict=true
+    else
+        run_verify_playbook "360-test-dagster.yml"
+    fi
 }
 
 # ⚠️ `verify` passes whether automation is RUNNING or STOPPED, and that is correct
@@ -3159,7 +3182,7 @@ main() {
             shift 2>/dev/null || true
             case "$subcmd" in
                 verify)
-                    cmd_dagster_verify
+                    cmd_dagster_verify "$@"
                     ;;
                 automation)
                     cmd_dagster_automation "$@"

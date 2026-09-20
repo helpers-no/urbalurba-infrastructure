@@ -638,6 +638,8 @@
         msg: >-
           {{ ["executed image:      " ~ (_ran | default('(could not read — the run pod may already be gone)')),
               "code location image: " ~ (_adv | default('(could not read)'))]
+           + (["✓ they agree — this run executed the code the location advertises."]
+              if (_ran != '' and _adv != '' and _ran == _adv) else [])
            + (["",
                "🔴 THESE DISAGREE. The run executed an OLDER image than the code",
                "    location advertises, so anything added in the newer build did",

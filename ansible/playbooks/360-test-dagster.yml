@@ -601,6 +601,22 @@
           is exactly what a renamed chart label would produce.
       when: _handle_age.stdout | default('') is search('UNREADABLE')
 
+    - name: "F5. Reduce the handle check to one word the summary can carry"
+      ansible.builtin.set_fact:
+        _handle_verdict: >-
+          {{ 'STALE' if (_handle_age.stdout | default('') is search('STALE'))
+             else ('UNREADABLE' if (_handle_age.stdout | default('') is search('UNREADABLE'))
+             else 'FRESH') }}
+
+    - name: "F6. And one sentence that says what to do about it"
+      ansible.builtin.set_fact:
+        _handle_detail: >-
+          {{ '   🔴 Runs may execute an OLDER image than the code location, and still report SUCCESS. Remedy above (task F3).'
+             if _handle_verdict == 'STALE'
+             else ('   ⚠️ Could not compare pod start times — this is "could not look", not "not stale".'
+             if _handle_verdict == 'UNREADABLE'
+             else '   The webserver and daemon are at least as new as the code location.') }}
+
     - name: "SUMMARY"
       ansible.builtin.debug:
         msg:
@@ -615,7 +631,49 @@
           - ""
           - "{{ ((_ok | default([]) | length) > 0) | ternary('   All can hydrate run storage (D5) — runs will execute.', '') }}"
           - ""
+          # 🔴 F BELONGS IN THE SUMMARY, NOT ONLY IN THE TASK STREAM.
+          #
+          # F3 fired correctly on a real cluster on 2026-09-20 and was still
+          # unusable: the exit code was 0 and THE SUMMARY WAS IDENTICAL TO A
+          # HEALTHY ONE. The only evidence was 27 tasks up-scroll, in a stream an
+          # operator running `./uis dagster verify | tail -20` has already piped
+          # away (urb-agents#1278).
+          #
+          # ⚠️ A surface reporting healthy while the thing underneath is not is
+          # the exact defect this check was built to catch. It does not get to
+          # have that shape itself.
+          - "F. Code-location handle: {{ _handle_verdict }}"
+          - "{{ _handle_detail }}"
+          - ""
           - "A Dagster that passes A and B but fails C looks healthy and runs nothing."
           - "A tenant that passes D4 but fails D5 loads perfectly and executes nothing."
           - "D asks the orchestrator whether locations LOADED — a Deployment that exists"
           - "and serves nothing is a failure, not a registration."
+
+    # 🔴 STALE IS ADVISORY BY DEFAULT, AND THAT IS A DECISION.
+    #
+    # A-E genuinely pass under STALE: the cluster is healthy, the locations are
+    # loaded, and nothing is broken YET. Failing the command would break every
+    # `uis deploy && uis dagster verify` chain for a condition about FUTURE runs.
+    #
+    # ⚠️ But "the exit code says fine" is how #1278 described the problem, so the
+    # choice cannot be silent. `--strict` is the gate for anyone scripting this,
+    # and the summary says the flag exists so it is discoverable from the output
+    # rather than only from the docs.
+    - name: "F7. Say that the exit code is advisory, and how to make it not be"
+      ansible.builtin.debug:
+        msg:
+          - "⚠️ F is ADVISORY: this command exits 0 under STALE, because A-E pass"
+          - "   and nothing is broken yet — it is a warning about the NEXT run."
+          - "   To gate a script on it:  ./uis dagster verify --strict"
+      when: _handle_verdict == 'STALE'
+
+    - name: "F8. --strict turns a stale handle into a failure"
+      ansible.builtin.fail:
+        msg: >-
+          Code-location handle is STALE and --strict was given. Runs launched now
+          may execute an older image and still report SUCCESS. Restart the
+          webserver and daemon (task F3 names the commands), then re-run.
+      when:
+        - _handle_verdict == 'STALE'
+        - (strict | default(false)) | bool
