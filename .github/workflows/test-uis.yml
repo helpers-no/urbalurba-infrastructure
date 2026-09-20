@@ -102,6 +102,41 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
+      - name: Ansible syntax-check every playbook
+        # 🔴 THIS EXISTS BECAUSE 1.6.130 SHIPPED A PLAYBOOK THAT DOES NOT PARSE.
+        #
+        # 360-test-dagster.yml used the free-form `shell: |` spelling, which
+        # makes Ansible split the block looking for key=value module arguments.
+        # A jsonpath containing quoted spaces broke that splitter, so
+        # `uis dagster verify` exited 4 in EVERY cluster state and took checks
+        # A, B, C and D down with it (urb-agents#1276).
+        #
+        # ⚠️ Nothing here could catch it. yq validated the YAML — and the YAML
+        # was valid; the failure is in Ansible's own argument parsing, a layer
+        # below. Only Ansible can answer that question, and no maintainer host
+        # has Ansible installed.
+        #
+        # 🔵 The failure was LOUD — exit 4, a parse error — and still reached a
+        # release, because nobody runs `uis dagster verify` routinely. A loud
+        # failure in a command nobody invokes is undetected. The reporter's
+        # suggestion, and it is the right one: make CI invoke it.
+        run: |
+          python3 -m pip install --quiet ansible-core
+          rc=0
+          for pb in ansible/playbooks/*.yml; do
+            if ! out="$(ansible-playbook --syntax-check "$pb" 2>&1)"; then
+              # A playbook whose syntax is fine but whose inventory/vars are not
+              # available is not a syntax error. Only report parse failures.
+              case "$out" in
+                *"failed at splitting arguments"*|*"Syntax Error"*|*"could not be found"*|*"unbalanced"*)
+                  echo "::error file=$pb::$out"; rc=1 ;;
+                *)
+                  echo "note: $pb — $(printf '%s' "$out" | head -1)" ;;
+              esac
+            fi
+          done
+          exit $rc
+
       - name: Install jinja2 and pyyaml (for the real template render)
         # 🔴 WITHOUT THIS, test-jinja-templates-render.sh SKIPS — and skipping is
         # exactly how two unparseable templates shipped with every test green.

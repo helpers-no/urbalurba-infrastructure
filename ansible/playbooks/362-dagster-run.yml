@@ -610,11 +610,23 @@
 
     # What the code location ADVERTISES, for comparison. These agreeing is the
     # normal case; them disagreeing is the defect above, and it is silent.
+    #
+    # 🔴 `component=user-deployments`, MEASURED, not guessed. 1.6.130 shipped
+    # `dagster/code-location`, which is not a label this chart sets: it selected
+    # nothing, so the comparison could never run. The real labels are
+    # component=user-deployments, deployment=<name>, and
+    # app.kubernetes.io/name=dagster-user-deployments; `component` is the
+    # chart-stable one and matches every code location rather than one by name.
+    #
+    # ⚠️ THE SIBLING PLAYBOOK WARNS ABOUT EXACTLY THIS — "a label that no longer
+    # matches returns empty, which would read as 'not stale'" — and this task
+    # walked into it the same day. The guard below is why that was survivable:
+    # an unreadable image is reported as unread, never as agreement.
     - name: "11c. Read the image the code location advertises"
       ansible.builtin.shell: |
         kubectl get deployment -n {{ dagster_ns }} --context {{ _target }} \
           --kubeconfig {{ merged_kubeconf_file }} \
-          -l dagster/code-location \
+          -l component=user-deployments \
           -o jsonpath='{.items[*].spec.template.spec.containers[0].image}' 2>/dev/null \
           | tr ' ' '\n' | grep -v '^$' | head -1
       register: _loc_image
