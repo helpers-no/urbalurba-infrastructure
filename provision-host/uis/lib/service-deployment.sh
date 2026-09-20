@@ -83,6 +83,32 @@ _is_service_multi_instance() {
     [[ "$val" == "true" ]]
 }
 
+# 🔴 A DEPLOY THAT ROLLED NOTHING MUST NOT SAY "deployed successfully".
+#
+# urb-agents#1275, the second instance of one sentence: `./uis deploy dagster`
+# printed "✓ Dagster deployed successfully" while the webserver and daemon pods
+# stayed two days old, because the Helm values were unchanged and there was
+# nothing to roll. The tester restarted both by hand after two green Dagster
+# runs had already executed a stale image.
+#
+# ⚠️ "Nothing to do" is frequently the CORRECT outcome of a deploy, so this must
+# not turn a healthy no-op red. The fix is the message, not the exit code.
+#
+# 🔵 THREE ANSWERS, NOT TWO. "rolled", "nothing changed" and "could not tell"
+# are different facts, and collapsing the third into either of the others is how
+# the original defect reads as success. A service with no namespace, or one
+# kubectl cannot reach, returns the empty string and is reported as unknown.
+_workload_fingerprint() {
+    local ns="$1" ctx="$2"
+    [[ -z "$ns" ]] && return 0
+    command -v kubectl >/dev/null 2>&1 || return 0
+    # Pod identity AND start time: a pod that was replaced gets a new name, and a
+    # pod restarted in place keeps its name but not its start time.
+    kubectl get pods -n "$ns" ${ctx:+--context "$ctx"} \
+        -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.startTime}{"\n"}{end}' \
+        2>/dev/null | sort || true
+}
+
 # Usage: deploy_single_service <service_id> [<app_name> [<url_prefix>]]
 # For multi-instance services (multiInstance: true in services.json), app_name is
 # required and gets translated into Ansible extra-vars (_app_name, _url_prefix)
@@ -349,6 +375,10 @@ deploy_single_service() {
         # does NOT tell us why, and we must not guess — say what happened, point
         # at the playbook's own output, and leave the diagnosis to the lines
         # above rather than overwriting them.
+        # Snapshot before, so the message afterwards can say what changed.
+        _UIS_FP_BEFORE="$(_workload_fingerprint "${SCRIPT_NAMESPACE:-}" "$target_host")"
+        _UIS_FP_CTX="$target_host"
+
         if ! ansible-playbook "$playbook_path" "${ansible_args[@]}"; then
             log_error "Playbook failed: $SCRIPT_PLAYBOOK"
             log_error "The reason is in the playbook output above — a failed task, or a"
@@ -363,6 +393,8 @@ deploy_single_service() {
             die_config "Manifest not found: $SCRIPT_MANIFEST"
         fi
         log_info "Applying manifest: $SCRIPT_MANIFEST"
+        _UIS_FP_BEFORE="$(_workload_fingerprint "${SCRIPT_NAMESPACE:-}" "")"
+        _UIS_FP_CTX=""
         if ! kubectl apply -f "$manifest_path"; then
             die_k8s "Manifest apply failed: $SCRIPT_MANIFEST"
         fi
@@ -398,7 +430,34 @@ deploy_single_service() {
             if check_service_deployed "$service_id"; then _check_ok=1; break; fi
         done
         if [[ "$_check_ok" -eq 1 ]]; then
-            log_success "$SCRIPT_NAME deployed successfully"
+            local _fp_after _rolled
+            _fp_after="$(_workload_fingerprint "${SCRIPT_NAMESPACE:-}" "${_UIS_FP_CTX:-}")"
+            if [[ -z "${_UIS_FP_BEFORE:-}" || -z "$_fp_after" ]]; then
+                _rolled="unknown"
+            elif [[ "${_UIS_FP_BEFORE}" == "$_fp_after" ]]; then
+                _rolled="no"
+            else
+                _rolled="yes"
+            fi
+
+            case "$_rolled" in
+                yes)
+                    log_success "$SCRIPT_NAME deployed successfully"
+                    ;;
+                no)
+                    # Not a warning and not an error: this is usually right.
+                    log_success "$SCRIPT_NAME is deployed and healthy — nothing changed"
+                    log_info "  No pod was replaced or restarted: the desired state already matched."
+                    log_info "  ⚠️ If you expected a new image to take effect, it did NOT."
+                    log_info "     A chart whose values are unchanged rolls nothing, even when the"
+                    log_info "     image behind a tag has moved. Restart the workload to pick it up:"
+                    log_info "       kubectl -n ${SCRIPT_NAMESPACE:-default} rollout restart deploy/<name>"
+                    ;;
+                *)
+                    log_success "$SCRIPT_NAME deployed successfully"
+                    log_info "  (could not tell whether anything rolled — no namespace to compare)"
+                    ;;
+            esac
         else
             log_warn "$SCRIPT_NAME deployed, but it is still not reporting ready after 12s."
             log_warn "  The rollout completed, so this is not a scheduling failure."
