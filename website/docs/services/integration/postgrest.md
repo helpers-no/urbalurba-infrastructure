@@ -334,7 +334,36 @@ PostgREST's default is **`follow-privileges`** — the spec shows only what the 
 
 #### What UIS does set
 
-`db-uri`, `db-schemas`, `db-anon-role`, `db-pool`, `server-cors-allowed-origins`, the admin server port, and the error-file plumbing. **Everything else is PostgREST's default**, and a default that consumers have built on is a contract whether or not anyone wrote it down.
+`db-uri`, `db-schemas`, `db-anon-role`, `db-pool`, `server-cors-allowed-origins`, the admin server port, and the error-file plumbing. Everything else is left at PostgREST's default, and a default that consumers have built on is a contract whether or not anyone wrote it down.
+
+:::warning "Not in the manifest" is not "running the default" — there are three sources
+PostgREST reads configuration from **three** places, and this page can only speak for the first:
+
+| source | where to look |
+|---|---|
+| the pod spec | `kubectl get deploy <app>-postgrest -n postgrest -o yaml` |
+| the running process | its env, which a rolled-out change may not yet match |
+| **the database** | `pg_roles.rolconfig` and `pg_db_role_setting`, keys under `pgrst.*` |
+
+🔴 **The third is the one that gets missed.** A setting can live in the database and override what any manifest says, and nothing in this repository would show it. On 2026-09-20 a chain of reasoning concluded "unset in the manifest, therefore default" — **the conclusion was right, and the step was not.** Both database sources happened to be empty, which is why it held.
+
+PostgREST's own log says when it cannot read them: `Failed to query database settings for the config parameters`.
+
+```sql
+SELECT rolname, rolconfig FROM pg_roles WHERE rolconfig IS NOT NULL;
+SELECT * FROM pg_db_role_setting;
+```
+:::
+
+:::info Reading the version from a running instance
+`postgrest --version` needs `kubectl debug --target` sharing the PID namespace — **the image has no shell**, and the admin server serves `/live`, `/ready` and `/metrics` but **not** `/config`.
+
+⚠️ And PostgREST is deployed **per application**: the Deployment is `<app>-postgrest`, not `postgrest`. `kubectl -n postgrest get deploy postgrest` returns `NotFound`, which reads as *"PostgREST is not deployed"* — **a worse answer than no answer.** List them instead:
+
+```bash
+kubectl get deploy -n postgrest
+```
+:::
 
 ⚠️ **An application cannot change any of this.** A `template-info.yaml` `postgrest:` block carries `schemas` and `url_prefix` and nothing else — no environment or config passthrough — so these settings are a UIS-operator decision, not an application one. An application that needs different behaviour has to ask for it here.
 

@@ -54,6 +54,19 @@ else
 $_hits"
 fi
 
+start_test "the page says a repo grep is not sufficient to know the running config"
+# 🔴 THIS SUITE PROVES A NECESSARY CONDITION, NOT A SUFFICIENT ONE. It can only
+# see this repository. PostgREST also reads settings from pg_roles.rolconfig and
+# pg_db_role_setting, which no grep here would ever show — urb-agents#1300,
+# where "unset in the manifest, therefore default" was a right conclusion
+# reached through a wrong step. A green suite must not read as "the default is
+# running".
+if grep -qF 'pg_db_role_setting' "$DOC" && grep -qF 'three' "$DOC"; then
+    pass_test
+else
+    fail_test "the page does not warn that in-database settings override the manifest"
+fi
+
 start_test "the page says openapi-mode's DEFAULT is the safe value"
 # urb-agents#1287: a spec over-advertising writes makes setting openapi-mode
 # look like the fix. follow-privileges IS the default, so setting it changes
