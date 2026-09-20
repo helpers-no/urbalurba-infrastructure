@@ -166,6 +166,29 @@ Claude will:
 
 ---
 
+## The docs build is bounded, and why the number is what it is
+
+`npm run build` in `website/` runs under `node --max-old-space-size=3072`.
+
+🔴 **The bound is insurance, not a limit.** On 2026-09-20 a docs build held **2.4 GB inside a 4 GB container cap** for **3 h 40 m** — `memory.events high` reached **34.6 million**, `oom_kill` stayed at **0**, and the container spent 63% of wall time with nothing runnable. It was never killed; it was throttled forever. From outside it looked like a dead host.
+
+**The memory was normal.** Measured on a healthy run: **36–79 s wall, 2356–2581 MiB peak RSS** across the node tree. The 220 minutes were that same work, stalled. **The cap was the bug** and is now 5120 MiB.
+
+:::warning `--max-old-space-size` bounds V8's heap, not RSS
+They are different numbers and confusing them gives you a bound that either never fires or fires on a healthy build. Peak **RSS** here is ~2.5 GB; the **heap** inside it is smaller. 3072 sits above the heap a healthy build needs and below the point where total RSS would threaten the container.
+
+**Verified in both directions, because a guard nobody has seen fire is a guard on paper:**
+
+| bound | outcome |
+|---|---|
+| 3072 | healthy build completes, 79 s, rc 0 |
+| 192 | `FATAL ERROR: Reached heap limit … JavaScript heap out of memory`, rc 134, **5 s** |
+
+**Five seconds and a legible message, instead of 220 minutes and a wedged container.** That is the whole point: the cap makes the build possible, the bound makes its failure honest.
+:::
+
+⚠️ **Raise the number rather than removing it** if a genuine build ever needs more. Measured peaks already vary by ~225 MiB between runs, so treat a single measurement as a floor.
+
 ## Version Management (MANDATORY)
 
 **Before creating a pull request, set the version yourself.** Do not ask.
