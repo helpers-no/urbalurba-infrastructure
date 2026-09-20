@@ -230,12 +230,21 @@ Every symptom below has been seen on a real cluster.
 | A rotated credential **has no effect** | The pod was not rolled — see *Rotating a credential* |
 | `undeploy` printed success, host returns **500** | Fixed in 1.6.125. An orphaned route pointed ForwardAuth at a deleted gate |
 | Namespace stuck at `Terminating` after undeploy | Ordinary Kubernetes finalisation. It is empty throughout and clears in a few minutes |
+| The `state` parameter carries `http://…` for an https host | **Expected behind a tunnel, and not a downgrade.** See below |
 
 ```bash
 kubectl -n oauth2-proxy logs -l app=oauth2-proxy --tail=50
 ```
 
 The gate logs each check. `No valid authentication in request. Initiating login.` is a visitor being sent to the provider — the normal path, not an error.
+
+:::info `state` carrying `http://` is not a finding
+On a tunnelled host the post-login return target inside the `state` parameter reads `http://<host>/` even though the visitor arrived over https. **It has been reported once as a security finding and it is not one** — Cloudflare upgrades the final redirect, so nothing travels in clear.
+
+The cause is which hop the gate can see: TLS terminates at Cloudflare's edge, and the connection from the tunnel connector to Traefik is plain http. `--reverse-proxy=true` is set, so the gate honours `X-Forwarded-*` where it receives them, but the ForwardAuth subrequest reflects that inner hop.
+
+🔵 Written down so nobody rediscovers it. ⚠️ **It would matter on an ingress that is genuinely plain http end to end** — there the return target is accurate rather than cosmetic, and the sign-in should not be exposed that way in the first place.
+:::
 
 :::warning Removing the gate reopens the hosts. It does not close them.
 `./uis undeploy oauth2-proxy` deletes the routes the gate added, which **uncovers each service's own route** — so those hosts are anonymous again, exactly as before the gate existed. To drop a login while keeping the gate running, set `protected: []` and re-deploy instead.
