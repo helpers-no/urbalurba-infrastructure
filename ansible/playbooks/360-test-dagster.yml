@@ -527,33 +527,48 @@
     # rolls nothing and still reports success. Restarting the two pods is what
     # picks up the new handle.
     - name: "F1. When did the webserver, daemon and code locations last start?"
-      ansible.builtin.shell: |
-        set -o pipefail
-        # Ask by pod name prefix: the chart's label keys have moved between
-        # versions, and a label that no longer matches returns empty, which would
-        # read as "not stale" — the failure this task exists to prevent.
-        kubectl get pods -n {{ dagster_ns }} --context {{ _target }} \
-          --kubeconfig {{ merged_kubeconf_file }} \
-          -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.startTime}{"\n"}{end}' 2>/dev/null \
-          | grep -E 'webserver|daemon|code-location|user-deployments' || true
+      # 🔴 `cmd:`, NOT the free-form `shell: |`.
+      #
+      # The free-form spelling makes Ansible split the block looking for
+      # key=value module arguments. A jsonpath containing quoted spaces broke
+      # that splitter in 1.6.130 and the WHOLE PLAYBOOK stopped parsing — so
+      # checks A, B, C and D were lost with it, and `uis dagster verify` exited
+      # 4 in every cluster state. The working sibling in
+      # 072-setup-oauth2-proxy.yml already used `cmd:`; this one did not.
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          # Ask by pod NAME, not by label: the chart's label keys have moved
+          # between versions, and a label that no longer matches returns empty,
+          # which would read as "not stale" — the failure this task exists to
+          # prevent.
+          kubectl get pods -n {{ dagster_ns }} --context {{ _target }} \
+            --kubeconfig {{ merged_kubeconf_file }} \
+            -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.startTime}{"\n"}{end}' 2>/dev/null \
+            | grep -E 'webserver|daemon|code-location|user-deployments' || true
+      args:
+        executable: /bin/bash
       register: _pod_ages
       changed_when: false
       failed_when: false
 
     - name: "F2. Is the webserver older than the code location it must serve?"
-      ansible.builtin.shell: |
-        set -o pipefail
-        newest_loc=$(printf '%s\n' "{{ _pod_ages.stdout }}" \
-          | grep -E 'code-location|user-deployments' | awk '{print $2}' | sort | tail -1)
-        oldest_srv=$(printf '%s\n' "{{ _pod_ages.stdout }}" \
-          | grep -E 'webserver|daemon' | awk '{print $2}' | sort | head -1)
-        if [ -z "$newest_loc" ] || [ -z "$oldest_srv" ]; then
-          echo "UNREADABLE"
-        elif [ "$oldest_srv" \< "$newest_loc" ]; then
-          echo "STALE $oldest_srv $newest_loc"
-        else
-          echo "FRESH $oldest_srv $newest_loc"
-        fi
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          newest_loc=$(printf '%s\n' "{{ _pod_ages.stdout }}" \
+            | grep -E 'code-location|user-deployments' | awk '{print $2}' | sort | tail -1)
+          oldest_srv=$(printf '%s\n' "{{ _pod_ages.stdout }}" \
+            | grep -E 'webserver|daemon' | awk '{print $2}' | sort | head -1)
+          if [ -z "$newest_loc" ] || [ -z "$oldest_srv" ]; then
+            echo "UNREADABLE"
+          elif [ "$oldest_srv" \< "$newest_loc" ]; then
+            echo "STALE $oldest_srv $newest_loc"
+          else
+            echo "FRESH $oldest_srv $newest_loc"
+          fi
+      args:
+        executable: /bin/bash
       register: _handle_age
       changed_when: false
       failed_when: false
