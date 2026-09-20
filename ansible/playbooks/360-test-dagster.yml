@@ -591,6 +591,12 @@
           - ""
           - "    ⚠️ `./uis deploy dagster` will NOT do this — with Helm values"
           - "       unchanged it rolls nothing and still reports success."
+          - ""
+          - "    🔵 A run that reports '✓ they agree' while this says STALE is NOT"
+          - "       a contradiction. They answer different questions: this says a"
+          - "       FUTURE run may execute the wrong image, that says the run you"
+          - "       just watched did not. Both can be true — and are, whenever only"
+          - "       one image is in play."
       when: _handle_age.stdout | default('') is search('STALE')
 
     - name: "F4. Say so when the comparison could not be made"
