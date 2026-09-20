@@ -191,6 +191,22 @@ A green Dagster job does **not** answer this, and on 2026-09-19 it answered it w
 
 compares the webserver and daemon pods' start times against the code location's, reports the verdict as **`F. Code-location handle: STALE / FRESH / UNREADABLE`** in the summary, and says what to do when they predate it.
 
+:::tip `F: STALE` and `✓ they agree` together is not a contradiction
+They answer different questions. **F is about the *next* run** — the webserver's cached handle is old, so a run launched now *may* resolve an older image. **The run line is about the run you just watched** — it read that run pod's own image and compared it.
+
+Both are true whenever only one image is in play, which is exactly the situation while you are testing the detector. Seeing them together means both checks are working, not that one is wrong.
+:::
+
+### Recreating a STALE handle safely, to test the detector
+
+```bash
+kubectl -n dagster rollout restart deploy/<the code-location deployment>
+```
+
+🔴 **Roll the code location, never the servers.** Rolling the webserver or daemon makes *them* the newer pods — which is the healthy state — and you will sit there wondering why the check will not fire.
+
+Because the code location comes back on the **same image**, no run can execute different code while you are testing: the condition is real, the risk is not. Repair it afterwards by restarting the webserver and daemon.
+
 :::info Why plain `verify` exits 0 under `STALE`, and how to change that
 Checks A–E genuinely pass: the cluster is healthy, the locations are loaded, nothing is broken **yet** — a stale handle is a warning about the *next* run. Failing by default would break every `uis deploy && uis dagster verify` chain over that.
 

@@ -638,7 +638,9 @@
         msg: >-
           {{ ["executed image:      " ~ (_ran | default('(could not read — the run pod may already be gone)')),
               "code location image: " ~ (_adv | default('(could not read)'))]
-           + (["✓ they agree — this run executed the code the location advertises."]
+           + (["✓ they agree — this run executed the code the location advertises.",
+               "   (`uis dagster verify` reporting F: STALE at the same time is not a",
+               "    contradiction — that is about the NEXT run, this is about this one.)"]
               if (_ran != '' and _adv != '' and _ran == _adv) else [])
            + (["",
                "🔴 THESE DISAGREE. The run executed an OLDER image than the code",
