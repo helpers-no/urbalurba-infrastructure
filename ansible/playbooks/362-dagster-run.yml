@@ -481,7 +481,11 @@
                "    without looking."]
               if _launch_status == 'unreadable' else [])
            + [(_wait | ternary("Waiting for it to finish...",
-                "Not waiting. Follow it with: uis dagster run " ~ _job ~ " --wait"))] }}
+                "Not waiting. Follow it with: uis dagster run " ~ _job ~ " --wait"))]
+           + ([] if _wait else
+              ["⚠️  --wait also reports WHICH IMAGE executed the run. Without it",
+               "    there is no run pod to read yet, so a run that succeeds on a",
+               "    stale image is indistinguishable from one that does not."]) }}
 
     # 🔴 --timeout IS SECONDS OF WALL CLOCK, and it did not used to be.
     #
@@ -575,6 +579,76 @@
         - _poll.rc == 0
         - (_poll.stdout | length) > 0
         - not (_poll.stdout is search('uis":"deadline-exceeded'))
+
+    # 🔴 WHICH IMAGE ACTUALLY EXECUTED THIS RUN. SUCCESS DOES NOT MEAN CURRENT.
+    #
+    # Measured on 2026-09-19 (urb-agents#1272): two consecutive runs reported
+    # SUCCESS in 136.3 s and 129.5 s and executed the PREVIOUS build. dbt built
+    # the model, the tests passed, the job was green — and the release's
+    # post-hooks were not in the image that ran, so they did not execute and
+    # nothing said why.
+    #
+    # The code location pod was CORRECT and so was its DAGSTER_CURRENT_IMAGE.
+    # Dagster resolves a run's image from the webserver's cached code-location
+    # handle, NOT from the live Deployment — and those pods were two days old.
+    # So the code location can be entirely right while every run it launches is
+    # not, and the run pod's own spec is the only honest place to read it.
+    #
+    # ⚠️ Read on a best-effort basis. The pod may already be gone, and an
+    # unreadable image must say "could not read" rather than silently print
+    # nothing — an absent line would be indistinguishable from agreement.
+    - name: "11b. Read the image the run pod actually executed"
+      ansible.builtin.shell: |
+        kubectl get pods -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} \
+          -l dagster/run-id={{ _run_id }} \
+          -o jsonpath='{.items[*].spec.containers[0].image}' 2>/dev/null \
+          | tr ' ' '\n' | grep -v '^$' | head -1
+      register: _run_image
+      changed_when: false
+      failed_when: false
+
+    # What the code location ADVERTISES, for comparison. These agreeing is the
+    # normal case; them disagreeing is the defect above, and it is silent.
+    - name: "11c. Read the image the code location advertises"
+      ansible.builtin.shell: |
+        kubectl get deployment -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} \
+          -l dagster/code-location \
+          -o jsonpath='{.items[*].spec.template.spec.containers[0].image}' 2>/dev/null \
+          | tr ' ' '\n' | grep -v '^$' | head -1
+      register: _loc_image
+      changed_when: false
+      failed_when: false
+
+    - name: "11d. Say which image ran, always — not only when it disagrees"
+      ansible.builtin.debug:
+        msg: >-
+          {{ ["executed image:      " ~ (_ran | default('(could not read — the run pod may already be gone)')),
+              "code location image: " ~ (_adv | default('(could not read)'))]
+           + (["",
+               "🔴 THESE DISAGREE. The run executed an OLDER image than the code",
+               "    location advertises, so anything added in the newer build did",
+               "    NOT run — and the job still reports SUCCESS.",
+               "",
+               "    Dagster resolves a run's image from the webserver's cached",
+               "    code-location handle, not from the live Deployment. A stale",
+               "    webserver or daemon pod holds the old handle indefinitely.",
+               "",
+               "    Remedy:",
+               "      kubectl -n " ~ dagster_ns ~ " rollout restart deploy/dagster-dagster-webserver",
+               "      kubectl -n " ~ dagster_ns ~ " rollout restart deploy/dagster-daemon",
+               "    then re-run this job and check these two lines agree."]
+              if (_ran != '' and _adv != '' and _ran != _adv) else [])
+           + (["",
+               "⚠️  One of these could not be read, so they were NOT compared.",
+               "    A run pod is removed after completion on some configurations.",
+               "    Do not read a missing line as agreement."]
+              if (_ran == '' or _adv == '') else []) }}
+      vars:
+        _ran: "{{ _run_image.stdout | default('') | trim }}"
+        _adv: "{{ _loc_image.stdout | default('') | trim }}"
+      when: _wait
 
     - name: "12. A wait that never reached a terminal state is not a success"
       ansible.builtin.fail:

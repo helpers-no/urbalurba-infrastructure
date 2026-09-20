@@ -178,6 +178,37 @@ templates provision, ArgoCD deploys workloads.
 | `./uis template install <id> [--dry-run] [--param k=v]...` | Deploy and configure every service the template declares |
 | `./uis template remove <id> [--app <name>] [--purge] [--yes]` | Remove an installed application. **Data is kept unless `--purge`.** `--app` picks one tenant when a template has several |
 
+### 🔴 "Is the running code the code I installed?"
+
+A green Dagster job does **not** answer this, and on 2026-09-19 it answered it wrongly twice: two consecutive runs reported `SUCCESS` in 136 s and 129 s while **executing the previous build**. dbt built the model, the tests passed, the job was green — and the new build's post-hooks were not in the image that ran, so they never executed.
+
+**The code location was correct.** Its pod carried the new image and its `DAGSTER_CURRENT_IMAGE` agreed. Dagster resolves a run's image from the **webserver's cached code-location handle**, not from the live Deployment, and the webserver pod was two days old.
+
+```bash
+./uis dagster verify
+```
+
+now compares the webserver and daemon pods' start times against the code location's, and says so when they predate it. And:
+
+```bash
+./uis dagster run <job> --wait
+```
+
+prints the image the run pod **actually executed** beside the one the code location advertises, and shouts when they disagree.
+
+:::warning `./uis deploy dagster` will not fix this
+With Helm values unchanged it **rolls nothing and still reports success** — which is exactly the state after a template install bumps only the code location. Restart the two pods that hold the handle:
+
+```bash
+kubectl -n dagster rollout restart deploy/dagster-dagster-webserver
+kubectl -n dagster rollout restart deploy/dagster-daemon
+```
+:::
+
+:::tip Verify by what the change *did*, not by the job going green
+Every atlas deploy that week was verified by an observable effect — `Heap Fetches: 0`, an index marked `valid`, a string appearing in the live OpenAPI, a `last_vacuum` timestamp. **That is why this was a report and not an incident:** nothing rested on a green run, so nothing was believed that was not true.
+:::
+
 ### 🔴 Reinstalling an application does not re-run what it already ran
 
 `template install` provisions: it deploys services, applies configuration and runs the install-time steps the definition declares. **It does not re-run an application's own post-install jobs**, and several kinds of change live only in those.

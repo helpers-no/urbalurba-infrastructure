@@ -510,6 +510,82 @@
         - (_running_digests.stdout | default('') is search('UNKNOWN could-not-read')) or
           (_running_digests.stdout | default('') | trim | length) == 0
 
+    # 🔴 A CORRECT CODE LOCATION IS NOT ENOUGH. THE WEBSERVER MUST HAVE SEEN IT.
+    #
+    # Measured on 2026-09-19 (urb-agents#1272): every check above PASSED. The
+    # code location pod carried the newly installed image and its
+    # DAGSTER_CURRENT_IMAGE agreed. Two consecutive jobs then reported SUCCESS
+    # in 136 s and 129 s while EXECUTING THE PREVIOUS BUILD.
+    #
+    # Dagster resolves a run's image from the webserver's cached code-location
+    # handle, not from the live Deployment. The webserver and daemon pods were
+    # two days old and held the old handle. So the checks above answer "is the
+    # code location the one I installed?" — correctly — and cannot answer "will
+    # a run execute it?", which is the question an operator actually has.
+    #
+    # ⚠️ `uis deploy dagster` does not fix this: with Helm values unchanged it
+    # rolls nothing and still reports success. Restarting the two pods is what
+    # picks up the new handle.
+    - name: "F1. When did the webserver, daemon and code locations last start?"
+      ansible.builtin.shell: |
+        set -o pipefail
+        # Ask by pod name prefix: the chart's label keys have moved between
+        # versions, and a label that no longer matches returns empty, which would
+        # read as "not stale" — the failure this task exists to prevent.
+        kubectl get pods -n {{ dagster_ns }} --context {{ _target }} \
+          --kubeconfig {{ merged_kubeconf_file }} \
+          -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.startTime}{"\n"}{end}' 2>/dev/null \
+          | grep -E 'webserver|daemon|code-location|user-deployments' || true
+      register: _pod_ages
+      changed_when: false
+      failed_when: false
+
+    - name: "F2. Is the webserver older than the code location it must serve?"
+      ansible.builtin.shell: |
+        set -o pipefail
+        newest_loc=$(printf '%s\n' "{{ _pod_ages.stdout }}" \
+          | grep -E 'code-location|user-deployments' | awk '{print $2}' | sort | tail -1)
+        oldest_srv=$(printf '%s\n' "{{ _pod_ages.stdout }}" \
+          | grep -E 'webserver|daemon' | awk '{print $2}' | sort | head -1)
+        if [ -z "$newest_loc" ] || [ -z "$oldest_srv" ]; then
+          echo "UNREADABLE"
+        elif [ "$oldest_srv" \< "$newest_loc" ]; then
+          echo "STALE $oldest_srv $newest_loc"
+        else
+          echo "FRESH $oldest_srv $newest_loc"
+        fi
+      register: _handle_age
+      changed_when: false
+      failed_when: false
+
+    - name: "F3. A webserver that predates the code location serves a stale handle"
+      ansible.builtin.debug:
+        msg:
+          - "🔴 The webserver or daemon started BEFORE the current code location."
+          - ""
+          - "    oldest webserver/daemon pod: {{ (_handle_age.stdout | trim).split(' ')[1] | default('?') }}"
+          - "    newest code-location pod:    {{ (_handle_age.stdout | trim).split(' ')[2] | default('?') }}"
+          - ""
+          - "    Dagster resolves a run's image from the webserver's CACHED handle,"
+          - "    not from the live Deployment — so runs can execute the PREVIOUS"
+          - "    build and still report SUCCESS. Measured twice on 2026-09-19."
+          - ""
+          - "    Remedy:"
+          - "      kubectl -n {{ dagster_ns }} rollout restart deploy/dagster-dagster-webserver"
+          - "      kubectl -n {{ dagster_ns }} rollout restart deploy/dagster-daemon"
+          - ""
+          - "    ⚠️ `./uis deploy dagster` will NOT do this — with Helm values"
+          - "       unchanged it rolls nothing and still reports success."
+      when: _handle_age.stdout | default('') is search('STALE')
+
+    - name: "F4. Say so when the comparison could not be made"
+      ansible.builtin.debug:
+        msg: >-
+          ⚠️ Could not compare pod start times, so the webserver's handle was NOT
+          checked. This is "could not look", not "not stale" — an empty read here
+          is exactly what a renamed chart label would produce.
+      when: _handle_age.stdout | default('') is search('UNREADABLE')
+
     - name: "SUMMARY"
       ansible.builtin.debug:
         msg:
