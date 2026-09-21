@@ -57,6 +57,25 @@ allowed_emails: []
 #   hosts      the EXTERNAL hostnames to gate. Named hosts, never a wildcard —
 #              a regex matching every domain is how a wildcard tunnel publishes
 #              services nobody declared.
+#   accept_unauthenticated_pattern
+#              optional, and it is a security decision rather than a setting.
+#
+#              🔴 A UIS service usually ships its own IngressRoute matching a
+#              PATTERN — HostRegexp(`name\..+`) — so that one route works on
+#              .localhost, a tailnet name, or whatever an installation puts in
+#              front of Traefik. The gate matches the LITERAL hosts below.
+#
+#              ⚠️ Measured on a live cluster 2026-09-22: with both routes
+#              present, the gated host redirects to the provider and
+#              <name>.localhost and <name>.anything-else return the full UI
+#              with NO LOGIN. Any Host header matching the pattern walks around
+#              the gate, and nothing downstream says so.
+#
+#              The deploy REFUSES that by default. Set this to true only when
+#              the pattern is open on purpose — a local development host, for
+#              instance — and write down why beside it. It accepts that hosts
+#              you have not listed reach this service unauthenticated.
+#
 #   api_routes optional, and required for any single-page app: path patterns
 #              (regexes) that must receive a 401 rather than a redirect, because
 #              browser JavaScript cannot follow a cross-origin redirect to a
@@ -78,4 +97,7 @@ allowed_emails: []
 #     port: 80
 #     hosts: ["dagster.example.com"]
 #     api_routes: ["^/graphql"]
+#     # dagster.localhost stays open for local development, and the pattern
+#     # route that serves it also serves any other unlisted host:
+#     accept_unauthenticated_pattern: true
 protected: []
