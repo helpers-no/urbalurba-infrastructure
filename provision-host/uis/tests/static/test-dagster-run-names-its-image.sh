@@ -251,4 +251,47 @@ else
     fail_test "the hint would fire for applications that declare no check"
 fi
 
+# ---------------------------------------------------------------------------
+# The pull failure must name the repository it tried.
+#
+# urb-agents#1357: a tester passed the application IMAGE digest where --version
+# wants the /uis DEFINITION digest — two repositories, two digests, never equal.
+# The error read "not found ... If the artifact is private, this installation
+# needs a package credential", which is an AUTH-SHAPED MESSAGE FOR A
+# WRONG-REPOSITORY PROBLEM, and it sent them looking the wrong way.
+# ---------------------------------------------------------------------------
+
+start_test "a failed pull names the repository it actually tried"
+if _code_only "$TPL" | grep -qF 'tried:  ${artifact}'; then
+    pass_test
+else
+    fail_test "the operator cannot see which repository was queried"
+fi
+
+start_test "and says the two digests are different things"
+# Without this the reader has no reason to suspect the digest rather than auth.
+if _code_only "$TPL" | grep -qF 'never equal'; then
+    pass_test
+else
+    fail_test "nothing tells the reader an image digest is not a definition digest"
+fi
+
+start_test "and points at the field that carries the right one"
+if _code_only "$TPL" | grep -qF 'artifact_digest'; then
+    pass_test
+else
+    fail_test "the message diagnoses without saying where the correct value lives"
+fi
+
+start_test "auth is still offered, but not first"
+# It is a real cause; it was just the wrong one to lead with.
+_blk=$(_code_only "$TPL" | sed -n '/oras pull failed for/,/^    fi$/p')
+_auth=$(printf '%s\n' "$_blk" | grep -n 'The artifact is private' | head -1 | cut -d: -f1)
+_repo=$(printf '%s\n' "$_blk" | grep -n 'DIFFERENT REPOSITORY' | head -1 | cut -d: -f1)
+if [[ -n "$_auth" && -n "$_repo" && "$_repo" -lt "$_auth" ]]; then
+    pass_test
+else
+    fail_test "auth is still the first explanation offered (repo=$_repo auth=$_auth)"
+fi
+
 print_summary

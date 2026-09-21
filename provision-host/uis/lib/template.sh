@@ -1255,7 +1255,19 @@ _resolve_definition() {
 
     if ! oras "${oras_args[@]}" >&2; then
         log_error "oras pull failed for ${artifact}@${digest}"
-        echo "  If the artifact is private, this installation needs a package credential." >&2
+        echo "" >&2
+        echo "  Two things produce this, and the second is the common one:" >&2
+        echo "" >&2
+        echo "  1. The digest belongs to a DIFFERENT REPOSITORY." >&2
+        echo "     A release publishes two artifacts with two digests that are" >&2
+        echo "     never equal — the application image, and the /uis install" >&2
+        echo "     definition. --version wants the definition's." >&2
+        echo "       tried:  ${artifact}" >&2
+        echo "       expect: a digest from that repository, not from the image" >&2
+        echo "     The release's uis-artifact.json names it as 'artifact_digest'." >&2
+        echo "" >&2
+        echo "  2. The artifact is private and this installation has no package" >&2
+        echo "     credential." >&2
         rm -rf "$dest"
         return 1
     fi
