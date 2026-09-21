@@ -458,27 +458,86 @@
       changed_when: false
       failed_when: false
 
-    - name: "11c Say so, loudly, naming the hostname that would be ungated"
-      ansible.builtin.debug:
-        msg:
-          - "⚠️  {{ item.item.name }} is gated on a literal host, but a PATTERN route serves it:"
-          - "{{ item.stdout_lines }}"
-          - ""
-          - "    gated:  {{ item.item.hosts | join(', ') }}"
-          - "    served: any host matching the pattern above"
-          - ""
-          - "Point a second apex domain at this cluster and {{ item.item.name }} is"
-          - "reachable there WITHOUT a login, while every check on the host above"
-          - "keeps passing. Nothing is exposed today if the tunnel only carries the"
-          - "gated domain — this is about the next DNS change."
-          - ""
-          - "Fix: narrow the service's own route to declared hosts"
-          - "(PLAN-service-exposure-opt-in), or add the new host to BOTH the"
-          - "declaration and the provider's registered callback URLs."
+    # 🔴 A REFUSAL, NOT A WARNING — CHANGED 2026-09-22 ON MEASURED EVIDENCE.
+    #
+    # 1.6.126 made this a warning, and my reason was that the broad route
+    # belongs to the SERVICE, that every gated service has one, and that
+    # refusing would make the gate undeployable for the only thing it gates.
+    # The deployability argument was true. The trade was wrong.
+    #
+    # imac measured the consequence on a live host (urb-agents#1364):
+    #
+    #   Host: dagster.urbalurba.com          -> 302 to the provider   GATED
+    #   Host: dagster.localhost              -> 200, the full UI      NO AUTH
+    #   Host: dagster.anything-at-all.example -> 200, the full UI     NO AUTH
+    #
+    # ⚠️ ANY host matching the service's own pattern that is not exactly a gated
+    # host reaches the service unauthenticated. The warning printed once at
+    # deploy time; the cluster then sat bypassable indefinitely with every
+    # signal green — pod up, middleware present, IngressRoute present, and a
+    # browser on the real hostname still getting a login page.
+    #
+    # 🔵 So it refuses, and the opt-out is a key the operator must write. That
+    # keeps the gate deployable — which was the whole objection — while making
+    # a silent bypass impossible to create. Someone who wants the pattern open
+    # now says so in the declaration, where the next reader will find it.
+    - name: "11c Refuse to report a gate that a Host header walks around"
+      ansible.builtin.fail:
+        msg: |
+          {{ item.item.name }} is gated on named hosts, but a PATTERN route serves
+          the same service:
+
+          {{ item.stdout_lines | join('\n') }}
+
+              gated:  {{ item.item.hosts | join(', ') }}
+              served: any host matching the pattern above
+
+          🔴 ANY Host header matching that pattern, other than the gated ones,
+          reaches {{ item.item.name }} WITHOUT a login. Measured on a live
+          cluster: the declared host redirects to the provider, and
+          <name>.localhost and <name>.anything-else both return the full UI.
+
+          Nothing downstream reports this. The pod is up, the middleware exists,
+          the route exists, and a browser on the gated host still gets a login.
+
+          Fix it, in the order that actually removes the hole:
+
+            1. Narrow the service's own route to the hosts it should serve.
+               See PLAN-service-exposure-opt-in — this is what it is for.
+            2. Or gate the pattern too, by adding those hosts to `hosts:`.
+
+          If the pattern is open ON PURPOSE — a local development host, say —
+          say so in .uis.extend/protected-services.yaml and this will proceed:
+
+            - name: {{ item.item.name }}
+              accept_unauthenticated_pattern: true   # and WHY, in a comment
+
+          ⚠️ That key accepts that hosts you have not listed reach this service
+          with no login. It is not a way to silence a check; it is a record that
+          someone decided.
       loop: "{{ broader_routes.results | default([]) }}"
       loop_control:
         label: "{{ item.item.name }}"
-      when: (item.stdout | default('') | trim) != ''
+      when:
+        - (item.stdout | default('') | trim) != ''
+        - not (item.item.accept_unauthenticated_pattern | default(false) | bool)
+
+    # 🔵 Acknowledged is not the same as absent. An operator who accepted the
+    # pattern still gets told, every deploy, what they accepted — otherwise the
+    # key becomes a way to stop thinking about it.
+    - name: "11d An accepted open pattern is still reported"
+      ansible.builtin.debug:
+        msg:
+          - "⚠️  {{ item.item.name }}: a PATTERN route serves this service and you have"
+          - "    accepted that hosts outside `hosts:` reach it WITHOUT a login."
+          - "{{ item.stdout_lines | default([]) }}"
+          - "    gated: {{ item.item.hosts | join(', ') }}"
+      loop: "{{ broader_routes.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when:
+        - (item.stdout | default('') | trim) != ''
+        - (item.item.accept_unauthenticated_pattern | default(false) | bool)
 
     - name: "12 Final summary"
       ansible.builtin.debug:

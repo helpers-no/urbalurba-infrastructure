@@ -666,13 +666,74 @@ else
     fail_test "the check would flag itself and become noise"
 fi
 
-start_test "the warning names the hosts that ARE gated, not just the pattern"
+start_test "both the refusal and the accepted-pattern notice name the gated hosts"
 # "a pattern is broader than a literal" is not actionable. The operator needs to
-# see which hosts are covered today to know what a new domain would add.
-if _code_only "$SETUP" | grep -A20 '11c Say so, loudly' | grep -qF 'item.item.hosts | join'; then
+# see which hosts are covered today. Re-anchored in 1.6.141: the task this used
+# to read was replaced when the warning became a refusal, and an assertion
+# anchored on a task NAME goes quiet when the name changes — so it checks both
+# surfaces by count rather than one by title.
+if [[ "$(_code_only "$SETUP" | grep -c "item.item.hosts | join")" -ge 2 ]]; then
     pass_test
 else
-    fail_test "the warning does not say which hosts the gate actually covers"
+    fail_test "only $(_code_only "$SETUP" | grep -c "item.item.hosts | join") of 2 surfaces say which hosts the gate actually covers"
+fi
+
+# ---------------------------------------------------------------------------
+# 1.6.141: a Host header must not walk around the gate silently.
+#
+# urb-agents#1364, measured on a live cluster:
+#
+#   Host: dagster.urbalurba.com            -> 302 to the provider   GATED
+#   Host: dagster.localhost                -> 200, the full UI      NO AUTH
+#   Host: dagster.anything-at-all.example  -> 200, the full UI      NO AUTH
+#
+# The service's own route is a pattern; the gate matches literal hosts. 1.6.126
+# detected that and WARNED. The warning printed once and the cluster then sat
+# bypassable indefinitely with every signal green. The deployability argument
+# for warning was right; the trade was wrong.
+# ---------------------------------------------------------------------------
+
+start_test "a broader route now REFUSES the deploy rather than warning"
+if _code_only "$SETUP" | grep -A2 '11c Refuse to report a gate' | grep -qF 'ansible.builtin.fail'; then
+    pass_test
+else
+    fail_test "the bypass is still only a warning, and a warning printed once does not survive the week"
+fi
+
+start_test "and the refusal can be accepted deliberately, so the gate stays deployable"
+# Refusing with no way through would make the gate undeployable for every
+# service that has a pattern route — which is all of them today. That was the
+# correct half of the original objection.
+if _code_only "$SETUP" | grep -qF 'accept_unauthenticated_pattern'; then
+    pass_test
+else
+    fail_test "no opt-out — the gate cannot be deployed at all"
+fi
+
+start_test "accepting it does NOT silence it"
+# An opt-out that stops the message becomes a way to stop thinking. The
+# operator who accepted the pattern is told what they accepted, every deploy.
+if _code_only "$SETUP" | grep -qF '11d An accepted open pattern is still reported'; then
+    pass_test
+else
+    fail_test "the key silences the finding instead of recording it"
+fi
+
+start_test "the refusal says what to do before it offers the escape hatch"
+# Ordering matters: an operator who meets the escape hatch first will take it.
+_fix=$(_code_only "$SETUP" | grep -n 'Narrow the service' | head -1 | cut -d: -f1)
+_esc=$(_code_only "$SETUP" | grep -n 'accept_unauthenticated_pattern: true' | head -1 | cut -d: -f1)
+if [[ -n "$_fix" && -n "$_esc" && "$_fix" -lt "$_esc" ]]; then
+    pass_test
+else
+    fail_test "the escape hatch is offered before the fix (fix=$_fix escape=$_esc)"
+fi
+
+start_test "the declaration documents the key as a security decision"
+if grep -qF 'accept_unauthenticated_pattern' "$DECL" && grep -qF 'NO LOGIN' "$DECL"; then
+    pass_test
+else
+    fail_test "an operator meets the key with no statement of what it accepts"
 fi
 
 print_summary
