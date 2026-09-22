@@ -90,4 +90,60 @@ else
     fail_test "only $_ok of 2 — the documented reason is gone, so the setting looks free to change"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.142: the published spec named PostgREST's bind address.
+#
+# urb-agents#1403. Swagger 2.0 builds request URLs from host + schemes +
+# basePath, so a spec carrying the listen address sends every generated client,
+# every Scalar "try it" and every Redoc reader somewhere unreachable. It blocks
+# a public docs page that has already been approved.
+# ---------------------------------------------------------------------------
+
+_LIB="$REPO/provision-host/uis/lib/configure-postgrest.sh"
+_TPL="$REPO/ansible/playbooks/templates/088-postgrest-config.yml.j2"
+
+start_test "the deployment passes PostgREST a public URI to rewrite the spec with"
+if grep -qF 'PGRST_OPENAPI_SERVER_PROXY_URI' "$_TPL"; then
+    pass_test
+else
+    fail_test "nothing sets openapi-server-proxy-uri, so the spec keeps the bind address"
+fi
+
+start_test "and it is optional, so a localhost-only install still deploys"
+# An install with no public domain stores an empty value. Without optional:true
+# the Deployment would fail to start on a missing key — turning a cosmetic spec
+# defect into a broken service.
+if grep -A6 'PGRST_OPENAPI_SERVER_PROXY_URI' "$_TPL" | grep -qF 'optional: true'; then
+    pass_test
+else
+    fail_test "a missing key would stop the pod rather than leave PostgREST as it was"
+fi
+
+start_test "the URI is derived, not asked of the tenant"
+# url_prefix plus the installation's public domain already determine the public
+# name. A tenant that had to declare it could declare it wrong.
+if grep -qF '_pgrst_openapi_proxy_uri' "$_LIB"; then
+    pass_test
+else
+    fail_test "no derivation — every application would have to be told to set it"
+fi
+
+start_test "and it is derived at BOTH secret-writing call sites"
+# One call site covers a fresh configure and the other a reconfigure. Missing
+# either leaves half the installations publishing the wrong host.
+if [[ "$(grep -c '_pgrst_create_secret "\$secret_name" "\$db_uri" .* "\$url_prefix"' "$_LIB")" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $(grep -c '_pgrst_create_secret "\$secret_name" "\$db_uri" .* "\$url_prefix"' "$_LIB") of 2 call sites pass url_prefix"
+fi
+
+start_test "the shipped placeholder domain never reaches the spec"
+# BASE_DOMAIN_CLOUDFLARE ships as your-domain.com. Publishing a spec that points
+# there would be a second wrong answer wearing a more plausible face.
+if grep -qE '^\s*""\|your-domain\.com\|localhost\|\*\.localhost\)' "$_LIB"; then
+    pass_test
+else
+    fail_test "the guard arm is gone — an unconfigured install would publish https://<prefix>.your-domain.com"
+fi
+
 print_summary
