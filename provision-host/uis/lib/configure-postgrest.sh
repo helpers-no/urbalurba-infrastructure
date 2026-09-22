@@ -230,16 +230,68 @@ _pgrst_ensure_namespace() {
 # keys (idempotent). PGRST_DB_SCHEMAS holds the comma-separated, normalized
 # schema list that PostgREST exposes; the deploy template reads it via
 # valueFrom.secretKeyRef.
+# 🔴 THE PUBLISHED SPEC MUST NAME THE PUBLIC HOST, NOT THE BIND ADDRESS.
+#
+# urb-agents#1403. PostgREST's OpenAPI document carried its own listen address
+# as `host` and `["http"]` as `schemes`. In Swagger 2.0 those two fields plus
+# basePath are HOW A CLIENT BUILDS THE REQUEST URL, so everything generated
+# from the document pointed at an address no client can reach:
+#
+#   Scalar / Swagger UI   every "try it" goes to the wrong place
+#   Redoc                 the wrong base URL is the reader's first concrete fact
+#   openapi-generator     it is compiled into the generated client
+#
+# PostgREST rewrites both from `openapi-server-proxy-uri`, so the fix is to give
+# it one. UIS derives it rather than adding a key to the template vocabulary:
+# url_prefix plus the installation's public domain already determine the public
+# name, and a tenant that had to declare it could get it wrong.
+#
+# ⚠️ DERIVED ONLY WHEN THE PLATFORM ACTUALLY KNOWS. BASE_DOMAIN_CLOUDFLARE ships
+# with the placeholder `your-domain.com`, and an unconfigured install must not
+# publish a spec pointing at that — it would be a second wrong answer wearing a
+# plausible face. No public domain, no override: PostgREST keeps its own
+# behaviour and the spec is no worse than before.
+#
+# 🔵 The service's IngressRoute matches HostRegexp(`<prefix>\..+`) — every
+# domain at once, deliberately. Swagger 2.0's `host` is singular, so publishing
+# one means choosing one, and the public domain is the only one an external
+# reader of the spec can use.
+_pgrst_openapi_proxy_uri() {
+    local url_prefix="$1"
+    local kubeconf="${KUBECONF:-/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all}"
+    local domain
+
+    domain="$(kubectl get secret urbalurba-secrets -n default \
+        --kubeconfig="$kubeconf" \
+        -o jsonpath='{.data.BASE_DOMAIN_CLOUDFLARE}' 2>/dev/null | base64 -d 2>/dev/null)"
+    domain="$(printf '%s' "${domain:-}" | tr -d '[:space:]')"
+
+    # The shipped placeholder, an empty value, or a bare "localhost" are all
+    # "this installation has no public name".
+    case "$domain" in
+        ""|your-domain.com|localhost|*.localhost) return 0 ;;
+    esac
+
+    printf 'https://%s.%s' "$url_prefix" "$domain"
+}
+
 _pgrst_create_secret() {
     local secret_name="$1"
     local db_uri="$2"
     local schemas="$3"
+    local url_prefix="${4:-}"
     local kubeconf="${KUBECONF:-/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all}"
+
+    # Empty when the installation has no public domain. The Deployment marks the
+    # env var optional, so an empty value simply leaves PostgREST as it was.
+    local proxy_uri=""
+    [[ -n "$url_prefix" ]] && proxy_uri="$(_pgrst_openapi_proxy_uri "$url_prefix")"
 
     kubectl create secret generic "$secret_name" \
         --namespace="$PGRST_NAMESPACE" \
         --from-literal=PGRST_DB_URI="$db_uri" \
         --from-literal=PGRST_DB_SCHEMAS="$schemas" \
+        --from-literal=PGRST_OPENAPI_SERVER_PROXY_URI="$proxy_uri" \
         --kubeconfig="$kubeconf" \
         --dry-run=client -o yaml 2>/dev/null \
         | kubectl apply --kubeconfig="$kubeconf" -f - >/dev/null 2>&1
@@ -569,7 +621,7 @@ EOF
         # Update the secret with the new password; preserve schemas verbatim.
         local db_uri="postgresql://${authenticator_role}:${new_password}@${PG_CLUSTER_HOST}:${PG_INTERNAL_PORT}/${database_name}"
         _pgrst_ensure_namespace "$PGRST_NAMESPACE"
-        _pgrst_create_secret "$secret_name" "$db_uri" "$existing_schemas"
+        _pgrst_create_secret "$secret_name" "$db_uri" "$existing_schemas" "$url_prefix"
 
         if [[ "$json_output" == true ]]; then
             cat <<EOF
@@ -888,7 +940,7 @@ EOF
     fi
 
     echo "Writing secret '$secret_name' in namespace $PGRST_NAMESPACE..." >&2
-    _pgrst_create_secret "$secret_name" "$db_uri" "$schemas"
+    _pgrst_create_secret "$secret_name" "$db_uri" "$schemas" "$url_prefix"
 
     # ---- PHASE 8: NOTIFY pgrst, 'reload schema' ----
 

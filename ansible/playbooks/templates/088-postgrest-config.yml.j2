@@ -66,6 +66,22 @@ spec:
                 secretKeyRef:
                   name: "{{ _app_name }}-postgrest"
                   key: PGRST_DB_SCHEMAS
+            # 🔴 WITHOUT THIS THE PUBLISHED SPEC NAMES PostgREST'S BIND ADDRESS.
+            #
+            # Swagger 2.0 builds request URLs from host + schemes + basePath, so
+            # a spec carrying the listen address sends every generated client,
+            # every Scalar "try it" and every Redoc reader to an address that
+            # cannot be reached (urb-agents#1403).
+            #
+            # ⚠️ optional: true on purpose. An installation with no public
+            # domain stores an empty value, and PostgREST then behaves exactly
+            # as it did — this must not make a localhost-only install fail.
+            - name: PGRST_OPENAPI_SERVER_PROXY_URI
+              valueFrom:
+                secretKeyRef:
+                  name: "{{ _app_name }}-postgrest"
+                  key: PGRST_OPENAPI_SERVER_PROXY_URI
+                  optional: true
             - name: PGRST_DB_ANON_ROLE
               value: "{{ _app_name | replace('-', '_') }}_web_anon"
             - name: PGRST_DB_POOL
