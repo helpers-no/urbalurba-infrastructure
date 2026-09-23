@@ -15,10 +15,11 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [---](PLAN-declared-postgres-extensions.md) | — | 2026-09-24 |
+| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-24 |
 | [---](PLAN-secret-version-propagation.md) | nine pod templates read `urbalurba-secrets` through a `secretKeyRef` and carry nothing that changes when that secret does. Give them the same treatment oauth2-proxy and PostgREST already have — or a better, single mechanism. | 2026-09-23 |
 | [---](PLAN-install-reports-disarmed-schedules.md) | — | 2026-09-23 |
 | [---](PLAN-api-docs-link-header.md) | — | 2026-09-23 |
-| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-23 |
 | [---](PLAN-postgres-observability-and-blast-radius.md) | — | 2026-09-21 |
 | [---](PLAN-service-exposure-opt-in.md) | Make public reachability a property a service **declares**, instead of a | 2026-09-19 |
 | [---](PLAN-service-oauth2-proxy.md) | Ship `oauth2-proxy` as an ordinary UIS service — `uis enable | 2026-09-18 |
