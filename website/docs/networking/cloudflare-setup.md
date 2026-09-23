@@ -286,6 +286,32 @@ Verified on a live zone:
 A Transform Rule runs at Cloudflare's edge, so it applies to a hostname whether or not anything is deployed behind it. `api.<your-domain>` returned the headers before that endpoint existed. **A new API gets browser access on day one with nothing further to configure.**
 :::
 
+### Pointing an API at its documentation, in the same rule
+
+An API that answers `406` to `Accept: text/html` and `404` with a PostgREST error object gives a reader nowhere to go. A **response header** reaches all of those, because it survives where a body is not read:
+
+```
+Link: <https://docs.example.com/>; rel="help"
+```
+
+🔵 **`rel="help"` is the registered IANA relation** for *documentation about this resource*. Not `rel="describedby"` — that means a machine-readable description **of the resource itself**, which a human docs site is not.
+
+Add it to the **same** Modify Response Header rule as the CORS headers above. One rule, one expression, and it applies to every response the API produces — including the ones with no body worth parsing:
+
+| request | status | does `Link` arrive? |
+|---|---|---|
+| `Accept: text/html` | `406`, a PostgREST error object | ✅ |
+| `GET /nonexistent_relation` | `404`, `PGRST205` | ✅ |
+| a browser's full `Accept` | `200`, raw JSON | ✅ |
+
+:::info Why the edge and not the service
+PostgREST emits no `Link` header and has no setting for one — its three OpenAPI options are `openapi-mode`, `openapi-security-active` and `openapi-server-proxy-uri`, and its `externalDocs` is hardcoded in the source. So it is the edge or the ingress.
+
+⚠️ **The edge is where this API's response headers already live.** The CORS rule above uses the same expression for the same hostnames; putting the documentation pointer beside it keeps one place to look.
+
+🔵 **The ingress is the better long-term home** — it works on `.localhost` and a tailnet too, and it is versioned in git rather than in a dashboard. It needs UIS to learn a per-application `docs_url`, because the platform cannot derive a tenant's documentation site the way it derives the API's own hostname. Tracked as `PLAN-api-docs-link-header`.
+:::
+
 :::danger Use **Set**, not **Add**
 Cloudflare's *Add* operation *"adds a new HTTP response header … without removing any existing headers with the same name"*, while *Set* *"overwrit[es] its previous value"*. The preflight above **already** returns an `Access-Control-Allow-Origin`, so *Add* produces the header twice — and a browser rejects a response carrying two of them, which looks exactly like the failure you were fixing.
 :::
