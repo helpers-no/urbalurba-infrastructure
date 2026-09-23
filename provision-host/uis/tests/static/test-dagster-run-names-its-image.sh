@@ -294,4 +294,53 @@ else
     fail_test "auth is still the first explanation offered (repo=$_repo auth=$_auth)"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.148: `info` described the right object and answered the wrong question.
+#
+# urb-agents#1439. An operator counting crons to confirm a pin landed saw six
+# before the install and six after. The pin HAD landed — `info` describes the
+# CATALOGUE's version, and said so, in digests. Two sha256 prefixes do not tell
+# someone counting crons which build the six belong to.
+#
+# 🔴 The notice was already there (1.6.109, whose own lesson was placement).
+# What it lacked was the one field a human can act on: the TAG.
+# ---------------------------------------------------------------------------
+
+start_test "the catalogue notice names the TAG, not only digests"
+if _code_only "$TPL" | grep -qF 'catalogue   $catalogue_tag'; then
+    pass_test
+else
+    fail_test "a reader comparing builds is given two sha256 prefixes and no version"
+fi
+
+start_test "the tag is passed in, not read from an install-path global"
+# 🔴 CATALOGUE_TAG is set on the install path and is EMPTY in `info`. Reading
+# it there would have printed nothing — a silent no-op inside the very notice
+# that exists because a reader could not tell which build they were seeing.
+if _code_only "$TPL" | grep -qF '_template_info_describes_pin "$template_id" "$digest" "$tag"'; then
+    pass_test
+else
+    fail_test "the notice takes its tag from a global that is unset on this path"
+fi
+
+start_test "the notice says when the catalogue itself came from a cache"
+# The registry is cached for an hour. Someone checking whether their just-
+# published pin landed can be reading a copy that predates their own publish,
+# and the top-of-output cache line is far from the block it governs — the
+# placement mistake 1.6.109 already paid for.
+if _code_only "$TPL" | grep -qF 'not even the current catalogue'; then
+    pass_test
+else
+    fail_test "a stale catalogue reads as a current one at the point it is used"
+fi
+
+start_test "the install warns that an upgrade can add a disarmed schedule"
+# On a fresh install everything is stopped and the operator knows. On an
+# upgrade one new schedule is stopped among five running, and nothing says so.
+if _code_only "$TPL" | grep -qF 'can add a schedule that ships STOPPED'; then
+    pass_test
+else
+    fail_test "a newly introduced schedule stays disarmed with no mention at install"
+fi
+
 print_summary

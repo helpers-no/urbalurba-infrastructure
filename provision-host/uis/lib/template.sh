@@ -815,6 +815,22 @@ _install_summary_operational() {
         # 🔵 Both verbs named, because an asset driven by an automation
         # condition has no schedule to switch on — someone told to "enable the
         # schedules" would enable every schedule and still not be running it.
+        # ⚠️ AN UPGRADE CAN INTRODUCE A SCHEDULE THAT SHIPS STOPPED, on a host
+        # where every existing one is RUNNING — and the operator has no reason
+        # to expect it, because the host's posture was already "switched on".
+        #
+        # Measured on 2026-09-23 (urb-agents#1439): an install added a seventh
+        # cron and left 6 declared / 5 RUNNING / 1 STOPPED. Nothing said so.
+        # The 06:00 run did not happen and no surface reported its absence.
+        #
+        # 🔵 UIS cannot tell "fresh install, nothing running yet" from "upgrade,
+        # one new thing disarmed" without asking Dagster, and that query is the
+        # `automation` verb's job rather than a second implementation here. So
+        # this names the hazard and points at the verb that answers it —
+        # PLAN-install-reports-disarmed-schedules is the version that counts.
+        echo "    ⚠️ An UPGRADE can add a schedule that ships STOPPED even when"
+        echo "       this host's other schedules are already running. Re-check"
+        echo "       after every install, not only the first."
         echo "    Switch it on when you are ready to go live:"
         echo "      ./uis dagster automation           what is running now"
         echo "      ./uis dagster automation --start   switch every schedule AND"
@@ -987,7 +1003,11 @@ _template_info_commands() {
 # was CORRECT and fired, and the reader accepted it and still misread the block.
 # The warning was about the host; the confusion was about the text.
 _template_info_describes_pin() {
-    local id="$1" catalogue_digest="$2" file pins n=0
+    # ⚠️ The tag is PASSED, not read from CATALOGUE_TAG. That global is set on
+    # the install path and is empty here, so relying on it would have printed
+    # nothing — a silent no-op inside the very notice that exists because a
+    # reader could not tell which build they were looking at.
+    local id="$1" catalogue_digest="$2" catalogue_tag="${3:-}" file pins n=0
     [[ -n "$catalogue_digest" ]] || return 0
     file="$(_applications_file)"
     [[ -f "$file" ]] || return 0
@@ -1002,7 +1022,18 @@ _template_info_describes_pin() {
     [[ -z "$pins" ]] && return 0
     echo ""
     echo "  ⚠️  WHAT FOLLOWS DESCRIBES THE CATALOGUE'S PIN, NOT THIS HOST'S."
-    echo "        catalogue   $catalogue_digest"
+    # 🔴 THE TAG, NOT ONLY THE DIGEST — urb-agents#1439.
+    #
+    # A reader asking "did my new build land?" is counting crons, not comparing
+    # sha256 prefixes. imac read six crons where it expected seven, and two
+    # digests on screen did not tell it which build the six belonged to. A tag
+    # answers that question in one glance; a digest requires looking it up.
+    if [[ -n "$catalogue_tag" ]]; then
+        echo "        catalogue   $catalogue_tag"
+        echo "                    $catalogue_digest"
+    else
+        echo "        catalogue   $catalogue_digest"
+    fi
     # ⚠️ A `while read` loop, not `printf '%s\n' $pins`. The record is keyed on
     # app_name, so one template id can hold several tenants at several pins, and
     # an unquoted expansion would also split on any space one of them contains.
@@ -1016,6 +1047,19 @@ _template_info_describes_pin() {
     echo "      schedule. Read it as a description of this host only once those"
     echo "      digests agree."
     echo "      './uis template install $id' moves this host to the catalogue pin."
+    # ⚠️ AND SAY WHERE THE CATALOGUE ITSELF CAME FROM.
+    #
+    # The registry is cached for an hour. A reader who has just published a
+    # build and is checking whether it landed can be reading a copy that
+    # predates their own publish — and the top-of-output "Registry: cached"
+    # line is far from the block it governs, which is the placement mistake
+    # 1.6.109 already paid for once.
+    if [[ "${REGISTRY_FROM_CACHE:-false}" == true ]]; then
+        echo ""
+        echo "      ⚠️  And the catalogue above came from a ${REGISTRY_CACHE_AGE_MIN}-minute-old"
+        echo "          cache, not the network. If the pin moved since, this is"
+        echo "          not even the current catalogue:  uis template info $id --refresh"
+    fi
     return 0
 }
 
@@ -1042,7 +1086,7 @@ _template_info_operational() {
     # 🔴 BEFORE EVERYTHING THIS FUNCTION PRINTS, including the commands block —
     # a `commands.check` read out of the catalogue's version is as wrong about
     # this host as a cadence table is.
-    _template_info_describes_pin "$template_id" "$digest"
+    _template_info_describes_pin "$template_id" "$digest" "$tag"
 
     # 🔴 BEFORE the operational gate. An artifact may declare `commands:` and no
     # `operational:`, and gating both on the second would hide the first.
