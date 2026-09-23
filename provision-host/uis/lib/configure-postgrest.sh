@@ -275,6 +275,51 @@ _pgrst_openapi_proxy_uri() {
     printf 'https://%s.%s' "$url_prefix" "$domain"
 }
 
+# Bring the OpenAPI proxy URI up to date WITHOUT touching the other keys.
+#
+# 🔴 THE no-op PATH RETURNS BEFORE THE SECRET IS WRITTEN, so 1.6.142's fix could
+# not reach any steady-state installation (urb-agents#1411). Measured on a real
+# host: pull to 1.6.142, configure, deploy — all exit 0, and the secret still
+# had two keys. Re-running configure is the first thing an operator tries, and
+# it reported success while changing nothing.
+#
+# ⚠️ AND THE BLOCK'S OWN COMMENT ALREADY DESCRIBED THIS BUG. The same early
+# return made the documented remediation for the FOR ROLE defect a no-op on
+# urb-agents#330. The SQL half was fixed then; the secret write was left behind
+# it. `no-op` means THERE IS NO SQL TO APPLY — it has been read as "there is
+# nothing to do at all", and anything added after it inherits that.
+#
+# 🔵 A patch, not a create: _pgrst_create_secret would rewrite PGRST_DB_URI, and
+# on this path the existing URI is the live credential. Merge-patching one key
+# leaves the others untouched, and writing an empty value is meaningful — it
+# CLEARS a stale URI if the installation's public domain was removed.
+_pgrst_sync_openapi_uri() {
+    local secret_name="$1" url_prefix="$2"
+    local kubeconf="${KUBECONF:-/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all}"
+    local want
+    want="$(_pgrst_openapi_proxy_uri "$url_prefix")"
+
+    local have
+    have="$(kubectl get secret "$secret_name" -n "$PGRST_NAMESPACE" \
+        --kubeconfig="$kubeconf" \
+        -o jsonpath='{.data.PGRST_OPENAPI_SERVER_PROXY_URI}' 2>/dev/null | base64 -d 2>/dev/null)"
+
+    # Already right — say nothing and change nothing.
+    [[ "${have:-}" == "$want" ]] && return 0
+
+    kubectl patch secret "$secret_name" -n "$PGRST_NAMESPACE" \
+        --kubeconfig="$kubeconf" --type=merge \
+        -p "{\"stringData\":{\"PGRST_OPENAPI_SERVER_PROXY_URI\":\"${want}\"}}" >/dev/null 2>&1 || return 1
+
+    if [[ -n "$want" ]]; then
+        echo "Updated the published API address in the spec to ${want}." >&2
+        echo "  Redeploy for it to take effect: ./uis deploy postgrest --app <app>" >&2
+    else
+        echo "Cleared the published API address: this installation has no public domain." >&2
+    fi
+    return 0
+}
+
 _pgrst_create_secret() {
     local secret_name="$1"
     local db_uri="$2"
@@ -822,6 +867,13 @@ COMMIT;" "$admin_pass" "$database_name") || noop_rc=$?
             log_error "$msg"
             return 1
         fi
+        # 🔴 BEFORE THE EARLY RETURN. Everything added to PHASE 7 is unreachable
+        # from here, so a converging value has to be written on this path too.
+        # Failing to sync is reported and does not fail the command: the grants
+        # above did converge, and a wrong spec is not worth discarding that.
+        _pgrst_sync_openapi_uri "$secret_name" "$url_prefix" || \
+            log_warn "Could not update the published API address; the spec may still name the bind address."
+
         echo "PostgREST already configured for '$app_name' with schemas '$schemas'; grants reapplied." >&2
         if [[ "$json_output" == true ]]; then
             cat <<EOF
