@@ -187,4 +187,54 @@ else
     fail_test "caching reads as tuning, and a measured 0.01% cached stays unexplained"
 fi
 
+# ---------------------------------------------------------------------------
+# The Cache Rule's two invisible failures.
+#
+# urb-agents#1437, deployed and measured: a Cache Rule can be Active, correctly
+# scoped, and cache exactly nothing — because Cloudflare's default Edge TTL
+# defers to a `Cache-Control` header that PostgREST never sends. And fixing
+# that exposes the second one: the zone's default Browser Cache TTL of 4 hours
+# starts applying, and browser caches cannot be purged.
+#
+# 🔴 Neither is visible from the rules list. Both need `curl -D -`. A doc that
+# says "add a Cache Rule" and stops produces one of the two failures.
+# ---------------------------------------------------------------------------
+
+start_test "the Cache Rule is documented as three settings, not one"
+if grep -qF 'three settings, and two of them fail invisibly' "$_CF"; then
+    pass_test
+else
+    fail_test "'add a Cache Rule' on its own yields a rule that caches nothing"
+fi
+
+start_test "the Edge TTL trap names the default that causes it"
+# "set Edge TTL" is not enough: the reader must know the DEFAULT is the failure,
+# and why — PostgREST sends no Cache-Control for it to defer to.
+_n=0
+grep -qF 'Ignore cache-control header' "$_CF" && _n=$((_n+1))
+grep -qF 'silent no-op' "$_CF" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 2 — the reader can set Edge TTL and still cache nothing"
+fi
+
+start_test "the Browser TTL trap says purge does not reach browsers"
+# This is the one that turns a fix into a worse problem: 4 hours of staleness
+# that no purge can clear, on an API people are building against.
+if grep -qF 'does not purge browser caches' "$_CF"; then
+    pass_test
+else
+    fail_test "enabling caching would introduce unpurgeable staleness with no warning"
+fi
+
+start_test "turning off a security setting comes with a blast-radius check"
+# A Configuration Rule disabling BIC is a security control being switched off.
+# Scoping is the entire safety argument, so the doc has to say prove it.
+if grep -qF 'entire safety argument' "$_CF"; then
+    pass_test
+else
+    fail_test "BIC can be disabled with nothing telling the operator to verify the scope"
+fi
+
 print_summary
