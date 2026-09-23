@@ -460,6 +460,58 @@ cache-control: no-store          <- with Browser TTL: Bypass cache
 
 🔴 **Cache purge does not purge browser caches.** Four hours of unpurgeable staleness on an API developers are actively building against is worse than the problem being solved. **Bypass cache is the right answer for a developer-facing API**: the edge absorbs the load, browsers hold nothing, and everything stays purgeable.
 
+### ⚠️ What these two settings look like from outside, and why it reads as a bug
+
+Settings 2 and 3 together produce a response that looks like a violated control:
+
+```
+cf-cache-status: HIT
+cache-control: no-store
+```
+
+🔵 **Nothing is being ignored here.** Those are the two halves of this one rule, talking to two different caches:
+
+| header | which setting | what it means |
+|---|---|---|
+| `cf-cache-status: HIT` | 2 | the **edge** stored it, deliberately disregarding the origin |
+| `cache-control: no-store` | 3 | the **browser** must not store it |
+
+**That `no-store` is Cloudflare's own instruction to the browser — it is not an origin `no-store` being overridden.** PostgREST never sent one; it sends no `Cache-Control` at all. Confirm from inside the cluster, where Cloudflare is not in the path:
+
+```bash
+kubectl -n <namespace> exec deploy/<app>-postgrest -- \
+  wget -S -O /dev/null "http://localhost:3000/<view>?limit=1" 2>&1 | grep -i cache-control
+# no output — the origin sets no Cache-Control at all
+```
+
+### 🔴 The precondition this rule now rests on: the hostname must stay public
+
+Setting 2 says *ignore cache-control*, and it means it.
+
+**The moment anything non-public is served through this hostname, an origin that sets `Cache-Control: no-store` will be ignored** — and a per-user response will be stored at the edge and handed to somebody else. `no-store` is exactly the header you would reach for to prevent that, and it is exactly the header this rule is configured to disregard.
+
+So **this rule is correct only while everything behind the hostname is public.** If that ever changes, setting 2 must change with it — back to *Respect origin*, or with identity in the cache key.
+
+⚠️ **It will not announce itself.** The headers look identical whether the cached body is public open data or somebody's account page. Nothing in the rules list mentions it either.
+
+🔴 **Never apply this rule to a hostname behind [oauth2-proxy](/docs/services/identity/oauth2-proxy)** — a gated hostname serves per-user responses by definition.
+
+### 🔴 Anything you measure through this hostname is the CDN, not the database
+
+A `HIT` returns in tens of milliseconds no matter what the database is doing.
+
+🔵 Two agents once spent an hour reconciling a 103 s reading against an 18 s one. Both had taken "repeat" measurements to check themselves — 0.15 s and 8.37 s — and both repeats were the edge serving a stored copy. Busting the cache, they agreed to within 3%.
+
+**Vary the query string on every request, and confirm you actually missed:**
+
+```bash
+curl -s -D - -o /dev/null "https://api-<name>.<your-domain>/<view>?limit=$RANDOM" \
+  | grep -i cf-cache-status
+# want: MISS (or DYNAMIC) on every single request
+```
+
+Distinct query strings are distinct cache entries, which is why a varying `limit` works. **A timing taken without checking `cf-cache-status` is not a measurement of the origin.**
+
 ### What it buys, measured
 
 ```
