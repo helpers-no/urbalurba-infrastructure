@@ -91,6 +91,11 @@
         state: present
         kubeconfig: "{{ merged_kubeconf_file }}"
         definition: "{{ lookup('template', 'templates/088-postgrest-config.yml.j2') | from_yaml_all | list }}"
+      vars:
+        # Read in task 4, so this costs no extra call. It puts the secret's
+        # identity into the pod template, which is what makes a secret-only
+        # change roll the pods — see the annotation in the template.
+        _pgrst_secret_version: "{{ pgrst_secret_check.resources[0].metadata.resourceVersion }}"
 
     - name: 7. Apply per-app IngressRoute (HostRegexp covers every domain Traefik knows)
       kubernetes.core.k8s:
