@@ -45,6 +45,30 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "3001"
         prometheus.io/path: "/metrics"
+        # 🔴 WITHOUT THIS, A SECRET CHANGE REACHES NO RUNNING POD.
+        #
+        # urb-agents#1413, measured: configure patched the secret, the operator
+        # ran the redeploy configure told them to run, and NOTHING happened —
+        # generation unchanged, no new ReplicaSet, pods 28 minutes older than
+        # the secret, zero disruption. The tester's line is the diagnosis:
+        # "a deploy that restarts nothing interrupts nothing".
+        #
+        # A secretKeyRef env var is bound at CONTAINER START. Once the podspec
+        # carries the reference, changing the secret changes nothing about the
+        # podspec — so Kubernetes correctly does nothing, and the pods keep the
+        # value they were started with.
+        #
+        # ⚠️ IT ONLY FAILS ON THE UPGRADE PATH. On a fresh install the podspec
+        # gains the env ref in the same deploy, so the pod starts after the
+        # secret and the sequence works. That is exactly why testing would not
+        # have caught it, and why the installed base is the population at risk.
+        #
+        # 🔵 Same fix as the oauth2-proxy gate (1.6.126), and the same reason to
+        # use resourceVersion rather than a hash of the contents: this secret
+        # holds a live database URI, and a digest of a credential readable by
+        # anyone with `kubectl get pod` is an offline oracle. resourceVersion
+        # discloses nothing and changes exactly when the secret does.
+        urbalurba.io/secret-version: "{{ _pgrst_secret_version }}"
     spec:
       containers:
         - name: postgrest

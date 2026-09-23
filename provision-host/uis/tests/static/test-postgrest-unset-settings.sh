@@ -196,4 +196,60 @@ else
     fail_test "a spec-sync failure aborts a configure whose grants already converged"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.144: the redeploy that configure tells you to run did nothing.
+#
+# urb-agents#1413, measured: configure patched the secret, the operator ran
+# `uis deploy postgrest --app <app>`, and generation stayed 2/2, no new
+# ReplicaSet appeared, the pods were 28 minutes older than the secret, and an
+# API sampler saw zero disruption across 34 samples. "A deploy that restarts
+# nothing interrupts nothing."
+#
+# 🔴 A secretKeyRef env var binds at CONTAINER START. Once the podspec carries
+# the reference, changing the secret does not change the podspec — so
+# Kubernetes correctly does nothing.
+#
+# ⚠️ It fails ONLY on the upgrade path: a fresh install gains the env ref in
+# the same deploy, so the pod starts after the secret. Testing would not have
+# caught it, and the installed base is the population at risk.
+# ---------------------------------------------------------------------------
+
+_PBTPL="$REPO/ansible/playbooks/templates/088-postgrest-config.yml.j2"
+_PB="$REPO/ansible/playbooks/088-setup-postgrest.yml"
+
+start_test "the postgrest pod template carries the secret's version"
+if grep -qF 'urbalurba.io/secret-version: "{{ _pgrst_secret_version }}"' "$_PBTPL"; then
+    pass_test
+else
+    fail_test "a secret-only change rolls nothing, and the printed remediation stays a no-op"
+fi
+
+start_test "and the playbook supplies it from the secret it already read"
+if grep -qF 'pgrst_secret_check.resources[0].metadata.resourceVersion' "$_PB"; then
+    pass_test
+else
+    fail_test "the template variable is never set — the render fails or the annotation is constant"
+fi
+
+start_test "the annotation is on the POD template, not the Deployment metadata"
+# On the Deployment's own metadata it changes nothing about the pod, so it
+# would look like this fix and roll nothing — the defect, wearing the fix.
+_tpl=$(grep -n '^  template:' "$_PBTPL" | head -1 | cut -d: -f1)
+_ann=$(grep -n 'urbalurba.io/secret-version:' "$_PBTPL" | grep -v '^\s*#' | head -1 | cut -d: -f1)
+if [[ -n "$_tpl" && -n "$_ann" && "$_ann" -gt "$_tpl" ]]; then
+    pass_test
+else
+    fail_test "secret-version is outside the pod template (template=$_tpl annotation=$_ann)"
+fi
+
+start_test "there is exactly ONE annotations block on that pod template"
+# 🔴 Found while writing this: adding a second `annotations:` key is valid-
+# looking YAML whose later block silently wins, so the new annotation vanished
+# with no error. Caught by parsing the template, not by reading the diff.
+if [[ "$(grep -c '^      annotations:' "$_PBTPL")" -eq 1 ]]; then
+    pass_test
+else
+    fail_test "$(grep -c '^      annotations:' "$_PBTPL") annotations blocks — one silently overrides the other"
+fi
+
 print_summary
