@@ -15,8 +15,9 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [---](PLAN-secret-version-propagation.md) | nine pod templates read `urbalurba-secrets` through a `secretKeyRef` and carry nothing that changes when that secret does. Give them the same treatment oauth2-proxy and PostgREST already have — or a better, single mechanism. | 2026-09-23 |
+| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-23 |
 | [---](PLAN-postgres-observability-and-blast-radius.md) | — | 2026-09-21 |
-| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-21 |
 | [---](PLAN-service-exposure-opt-in.md) | Make public reachability a property a service **declares**, instead of a | 2026-09-19 |
 | [---](PLAN-service-oauth2-proxy.md) | Ship `oauth2-proxy` as an ordinary UIS service — `uis enable | 2026-09-18 |
 | [Investigate: exposure is a property of the tunnel, not of the service — and exactly one service has a login](INVESTIGATE-service-exposure-and-auth.md) | Decide how a UIS service becomes reachable from the internet, and what | 2026-09-18 |
