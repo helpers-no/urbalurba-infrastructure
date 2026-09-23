@@ -146,4 +146,54 @@ else
     fail_test "the guard arm is gone — an unconfigured install would publish https://<prefix>.your-domain.com"
 fi
 
+# ---------------------------------------------------------------------------
+# 1.6.143: 1.6.142's fix could not reach an existing installation.
+#
+# urb-agents#1411, measured on a real host: pull to 1.6.142, configure, deploy —
+# every step exit 0, and the secret still had two keys. `configure` dispatches
+# to `no-op` when roles exist, the secret exists and the schemas match, and that
+# path RETURNS BEFORE the phase that writes the secret.
+#
+# 🔴 The block's own comment already described this bug in another form: the
+# same early return made the documented remediation for the FOR ROLE defect a
+# no-op on urb-agents#330. `no-op` means THERE IS NO SQL TO APPLY; it has been
+# read as "nothing to do at all", and everything added after it inherits that.
+# ---------------------------------------------------------------------------
+
+start_test "the no-op path syncs the published API address before returning"
+if grep -B25 "already configured for '\$app_name' with schemas" "$_LIB" | grep -qF '_pgrst_sync_openapi_uri'; then
+    pass_test
+else
+    fail_test "a steady-state install can never receive the fix — and re-running configure reports success"
+fi
+
+_sync_fn() { awk '/^_pgrst_sync_openapi_uri\(\) \{/,/^\}/' "$_LIB"; }
+
+start_test "it patches one key rather than rewriting the secret"
+# _pgrst_create_secret would rewrite PGRST_DB_URI, which on this path is the
+# live credential. Merge-patching leaves the other keys alone.
+if _sync_fn | grep -qF -- '--type=merge'; then
+    pass_test
+else
+    fail_test "the sync rewrites the whole secret and would touch the live database URI"
+fi
+
+start_test "an empty derivation CLEARS a stale address rather than skipping"
+# If the public domain is removed, the spec must stop advertising it. Skipping
+# on empty would leave the old host published forever.
+if _sync_fn | grep -qF 'Cleared the published API address'; then
+    pass_test
+else
+    fail_test "removing the public domain would leave the old address in the spec"
+fi
+
+start_test "a sync failure warns and does not discard the grants that converged"
+# The grants on this path DID apply. Failing the command over the spec would
+# throw away work that succeeded.
+if grep -A6 '_pgrst_sync_openapi_uri "\$secret_name"' "$_LIB" | grep -qF 'log_warn'; then
+    pass_test
+else
+    fail_test "a spec-sync failure aborts a configure whose grants already converged"
+fi
+
 print_summary
