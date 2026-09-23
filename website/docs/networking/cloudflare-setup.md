@@ -434,10 +434,63 @@ Measured on a live zone: **0.01% cached** — 14 kB of 108 MB over 24 hours. **E
 
 | | Rule | Why |
 |---|---|---|
-| 1 | **Cache Rule**, scoped to the API hostname, Edge TTL override | without it the tunnel carries every byte |
+| 1 | **Cache Rule**, scoped to the API hostname | without it the tunnel carries every byte — **three settings, below** |
 | 2 | **Configuration Rule**, if a hostname needs BIC off | the only per-hostname mechanism; BIC itself is zone-wide |
 | 3 | **Rate Limiting Rule** | one is included on the free plan |
 | 4 | **Response Header Transform** — CORS, and the docs `Link` | already covered above; its headers land on edge-blocked responses too |
+
+### 🔴 The Cache Rule is three settings, and two of them fail invisibly
+
+Deployed and measured on a live zone. **Neither failure is visible from the rules list — both need `curl -D -` to see.**
+
+| # | Setting | Value | What happens if you leave the default |
+|---|---|---|---|
+| 1 | Cache eligibility | **Eligible for cache** | nothing is cached |
+| 2 | Edge TTL | **Ignore cache-control header and use this TTL** → e.g. 5 min | 🔴 **a silent no-op** |
+| 3 | Browser TTL | **Bypass cache** | ⚠️ **unpurgeable staleness** |
+
+**Setting 2 — the default is a trap here.** Cloudflare defaults to *"Use cache-control header if present, bypass cache if not"*, and **PostgREST sends no `Cache-Control` at all**. So a rule can be Active, correctly scoped, and cache exactly nothing. It must be told to ignore the origin and use its own TTL.
+
+**Setting 3 — fixing setting 2 creates this one.** The moment responses become cacheable, Cloudflare applies the zone default **Browser Cache TTL of 4 hours**:
+
+```
+cache-control: max-age=14400     <- after enabling caching, before fixing Browser TTL
+cache-control: no-store          <- with Browser TTL: Bypass cache
+```
+
+🔴 **Cache purge does not purge browser caches.** Four hours of unpurgeable staleness on an API developers are actively building against is worse than the problem being solved. **Bypass cache is the right answer for a developer-facing API**: the edge absorbs the load, browsers hold nothing, and everything stays purgeable.
+
+### What it buys, measured
+
+```
+try1  MISS  0.699s     <- origin
+try2  HIT   0.036s     <- edge
+try3  HIT   0.045s
+try4  HIT   0.039s
+```
+
+🔵 ~18× faster, and more to the point **zero origin requests after the first**. Distinct query strings are separate cache entries.
+
+### ⚠️ Scoping to one hostname is the entire safety argument, so verify it
+
+A Configuration Rule turning BIC off is a security setting being disabled. **Prove it applies to one hostname and nothing else**, from outside:
+
+| check | want |
+|---|---|
+| the website host with a blocked User-Agent | still `403` — BIC still on there |
+| the website host's `cf-cache-status` | `DYNAMIC` — no cache rule bleeding over |
+| the API host with a Training-category bot | still `403` — bot policies untouched |
+| the API host with an Agent-category client | `200` — live fetches still work |
+| the API host's CORS header | still `*` — the transform rule intact |
+
+🔵 **And the case the whole thread started from**, using the real standard library rather than a spoofed header:
+
+```python
+>>> urllib.request.urlopen("https://api-<name>.<your-domain>/...")
+200
+```
+
+
 
 ## One tunnel, one apex — what "any domain" does and does not mean
 
