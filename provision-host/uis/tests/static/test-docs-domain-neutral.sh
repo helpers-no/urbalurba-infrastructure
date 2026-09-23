@@ -115,4 +115,76 @@ else
     fail_test "only $_ok of 2 halves present — the risk is stated as safer or scarier than it is"
 fi
 
+# ---------------------------------------------------------------------------
+# The Cloudflare 403 mechanisms, and the one that cannot be fixed the obvious way.
+#
+# urb-agents#1437, measured by Terje against the live zone. Three separate
+# comments — all mine — sent readers to Security → WAF → Managed rules, where
+# there is nothing relevant. The 403s come from Browser Integrity Check and the
+# AI bot policies, on two other screens.
+#
+# 🔴 And the remedy I proposed was not merely mislocated: BIC is ZONE-WIDE.
+# There is no per-hostname exception on the setting, so "add an exception for
+# this hostname" describes something that does not exist. A Configuration Rule
+# is the only per-hostname mechanism.
+# ---------------------------------------------------------------------------
+
+_CF="$REPO/website/docs/networking/cloudflare-setup.md"
+
+start_test "the page says WAF is usually the wrong screen for these 403s"
+if grep -qF 'wrong place to look' "$_CF"; then
+    pass_test
+else
+    fail_test "a reader still starts at the screen where three reports found nothing"
+fi
+
+start_test "it gives the discriminator, not just the conclusion"
+# "check somewhere else" is not actionable. The response body is what tells
+# the three mechanisms apart, and it is the only thing a reader has.
+_n=0
+grep -qF 'error code: 1010' "$_CF" && _n=$((_n+1))
+grep -qF 'Your request was blocked' "$_CF" && _n=$((_n+1))
+grep -qF '1020' "$_CF" && _n=$((_n+1))
+if [[ "$_n" -eq 3 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 3 response bodies named — the reader cannot tell which mechanism fired"
+fi
+
+start_test "it records that BIC is zone-wide, so the obvious remedy is unavailable"
+if grep -qF 'no per-hostname exception' "$_CF"; then
+    pass_test
+else
+    fail_test "someone will propose a per-hostname BIC exception again — it does not exist"
+fi
+
+start_test "the mapping is marked as inference rather than measurement"
+# Terje flagged it himself: consistent with every observation, but the
+# Security Events log is the authority and was not opened. A table that looks
+# measured and is not is how a strong guess becomes folklore.
+if grep -qF 'inference, not measurement' "$_CF"; then
+    pass_test
+else
+    fail_test "the body-to-mechanism table reads as established fact"
+fi
+
+start_test "blocking Training is distinguished from blocking AI tools"
+# "we block GPTBot" reads as "AI tools cannot reach us", and that is false:
+# a live fetch goes out as Claude-User / ChatGPT-User, which is the Agent
+# category and allowed.
+if grep -qF 'Claude-User' "$_CF" && grep -qF 'does not block live fetches' "$_CF"; then
+    pass_test
+else
+    fail_test "the page leaves 'Training disallowed' reading as 'AI blocked'"
+fi
+
+start_test "it says a Cache Rule is required rather than an optimisation"
+# PostgREST emits no Cache-Control, ETag or Last-Modified, so without an Edge
+# TTL override Cloudflare caches nothing AND conditional requests cannot help.
+if grep -qF 'required to get any caching at all' "$_CF"; then
+    pass_test
+else
+    fail_test "caching reads as tuning, and a measured 0.01% cached stays unexplained"
+fi
+
 print_summary
