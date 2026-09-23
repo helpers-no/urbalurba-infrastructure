@@ -1,6 +1,10 @@
 # 820-cloudflare-tunnel-base.yaml
 #
 # Token-based Cloudflare tunnel deployment.
+# SECRET-VERSION: pending — reads urbalurba-secrets, which `uis secrets apply`
+# re-syncs, so the value CAN change without this manifest changing. Needs the
+# pod-template annotation before a re-applied secret reaches a running pod.
+# See PLAN-secret-version-propagation.
 # The tunnel token is read from urbalurba-secrets via secretKeyRef.
 # All routing is configured in the Cloudflare dashboard, not here.
 #

@@ -131,6 +131,10 @@
                     env:
                       - name: BROWSERLESS_TOKEN
                         valueFrom:
+                          # SECRET-VERSION: none — this is a Job with
+                          # restartPolicy: Never. A one-shot pod reads the
+                          # secret at start and exits, so there is no
+                          # long-running process left holding a stale value.
                           secretKeyRef: { name: urbalurba-secrets, key: BROWSERLESS_TOKEN }
                       - name: BROWSERLESS_HOST
                         value: "browserless.{{ ns }}.svc.cluster.local:3000"
