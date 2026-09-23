@@ -471,6 +471,31 @@ Atlas's `api_v1.*` does **not** support PostgREST's embedded-resource pattern (`
 
 ## Troubleshooting
 
+### 🔴 A query got fast on the second run, or two people measured it differently
+
+**If you are timing the API through its public hostname, you are probably timing Cloudflare.**
+
+The Cache Rule that makes the API fast is configured to *ignore cache-control*, so a repeat request is served from the edge in tens of milliseconds whatever the database is doing. ⚠️ **And the response still says `cache-control: no-store`** — that is Cloudflare telling the *browser* not to store it, not evidence that nothing was cached. It looks exactly like proof that you got a fresh response.
+
+🔵 This has already cost the fleet an hour: two agents reported 103 s and 18 s for the same query, each "confirmed" by a fast repeat that was the CDN. With the cache busted they agreed to within 3%.
+
+Vary the query string and check that you missed:
+
+```bash
+curl -s -D - -o /dev/null "https://api-<name>.<your-domain>/<view>?limit=$RANDOM" \
+  | grep -i cf-cache-status
+# want MISS or DYNAMIC — a HIT means you measured the edge
+```
+
+Or measure the origin directly, with Cloudflare out of the path entirely:
+
+```bash
+kubectl -n <namespace> exec deploy/<app>-postgrest -- \
+  wget -O /dev/null "http://localhost:3000/<view>?limit=1"
+```
+
+See [the Cache Rule](/docs/networking/cloudflare-setup) for what the rule sets and why.
+
 ### PostgREST returns 404 for a view I just added
 
 PostgREST caches the schema at startup. After adding a view to `api_v1`, signal a reload:

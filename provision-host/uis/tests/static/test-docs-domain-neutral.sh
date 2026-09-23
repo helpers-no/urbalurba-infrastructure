@@ -237,4 +237,59 @@ else
     fail_test "BIC can be disabled with nothing telling the operator to verify the scope"
 fi
 
+# ---------------------------------------------------------------------------
+# The Cache Rule's third invisible failure: it reads as a violated control.
+#
+# urb-agents#1448 — a consumer and an agent both saw `cf-cache-status: HIT`
+# alongside `cache-control: no-store` and reasonably concluded Cloudflare was
+# ignoring the origin. It is not: PostgREST sends no Cache-Control at all, and
+# the no-store is setting 3 of this very rule talking to the BROWSER.
+#
+# 🔴 Two things must be on the page. That the pair is not a violation — or the
+# next reader files the same defect. And that setting 2 means what it says, so
+# the rule is only safe while the hostname is public: an origin no-store WILL
+# be ignored, which is the control you would reach for the day it matters.
+# ---------------------------------------------------------------------------
+
+start_test "the HIT + no-store pair is explained as one rule, not a violation"
+_n=0
+grep -qF 'cf-cache-status: HIT' "$_CF" && _n=$((_n+1))
+grep -qF "Cloudflare's own instruction to the browser" "$_CF" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 2 — the header pair keeps reading as an ignored no-store"
+fi
+
+start_test "the rule says an origin no-store will be ignored, and what that costs"
+_n=0
+grep -qF 'correct only while everything behind the hostname is public' "$_CF" && _n=$((_n+1))
+grep -qF 'handed to somebody else' "$_CF" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 2 — 'ignore cache-control' reads as tuning, not a precondition"
+fi
+
+start_test "it refuses the rule on a gated hostname"
+if grep -qF 'Never apply this rule to a hostname behind' "$_CF"; then
+    pass_test
+else
+    fail_test "nothing stops this rule landing on an oauth2-proxy hostname"
+fi
+
+start_test "both pages tell a measurer to bust the cache and verify the miss"
+# The Cloudflare page owns the rule; the PostgREST page is where someone
+# timing a slow query actually looks. #1448 cost an hour because neither said it.
+_PGR="$REPO/website/docs/services/integration/postgrest.md"
+_n=0
+grep -qF 'cf-cache-status' "$_CF" && _n=$((_n+1))
+grep -qF 'cf-cache-status' "$_PGR" && _n=$((_n+1))
+grep -qF 'is not a measurement of the origin' "$_CF" && _n=$((_n+1))
+if [[ "$_n" -eq 3 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 3 — a timing through the edge still reads as a database timing"
+fi
+
 print_summary
