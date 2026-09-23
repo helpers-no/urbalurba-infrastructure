@@ -48,6 +48,11 @@ spec:
               value: "true"
             - name: JWT_SECRET
               valueFrom:
+                # SECRET-VERSION: pending — reads urbalurba-secrets, which
+                # `uis secrets apply` re-syncs, so the value CAN change
+                # without this manifest changing. Needs the pod-template
+                # annotation before a re-applied secret reaches a running pod.
+                # See PLAN-secret-version-propagation.
                 secretKeyRef:
                   name: urbalurba-secrets
                   key: ONLYOFFICE_JWT_SECRET

@@ -21,6 +21,10 @@
 #
 # The schema list (PGRST_DB_SCHEMAS) is read from the per-app secret, not
 # passed as an extra-var — configure-postgrest.sh writes it on every
+# SECRET-VERSION: none — this playbook defines no pod template. It APPLIES
+# templates/088-postgrest-config.yml.j2, which carries the annotation, and
+# supplies the resourceVersion that fills it. The word appears here only in
+# prose.
 # successful run; the Deployment template reads it via valueFrom.secretKeyRef.
 #
 # Usage:
