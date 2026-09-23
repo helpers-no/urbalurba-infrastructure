@@ -353,6 +353,92 @@ Calling a service `api-something` gives it a hostname matching the rule, so **an
 - **Do not use the prefix otherwise** — and if an existing service needs renaming, that is cheaper than an exception in the Transform Rule.
 - **A gated API is fine under the prefix**: the gate answers `401` to an unauthenticated request, and the wildcard header on a 401 discloses nothing.
 
+## When Cloudflare returns 403 before your cluster sees the request
+
+An edge 403 never reaches the tunnel, Traefik or the application — **nothing in the cluster inspects User-Agent**, so if a request is refused on the basis of one, the refusal is Cloudflare's.
+
+:::danger The WAF screen is usually the wrong place to look
+The instinct is *Security → WAF → Managed rules*. **Three separate reports pointed a reader there and there was nothing on it** — the mechanisms that actually produce these 403s live on two other screens entirely, and a reader who checks WAF concludes the block is imaginary.
+:::
+
+### The response body tells you which mechanism it was
+
+```
+Python-urllib/3.11   403   "error code: 1010"            17 bytes, text/plain
+ClaudeBot/1.0        403   "Your request was blocked."   25 bytes, text/plain
+```
+
+| Body | Mechanism | Where it lives |
+|---|---|---|
+| `error code: 1010`, tiny `text/plain` | **Browser Integrity Check** | Security → Settings |
+| `Your request was blocked.` | **AI bot policies** | Security → Bots |
+| error **1020** with a full HTML block page | a WAF managed or custom rule | Security → WAF |
+
+⚠️ **Bot Fight Mode also emits 1010**, so check that it is off before reading a 1010 as Browser Integrity Check.
+
+:::info This mapping is inference, not measurement
+It is consistent with every observed response and with the dashboard's own settings, **but Cloudflare's Security Events log is the authority and it was not opened.** Treat it as a strong first guess that tells you which screen to open, not as proof.
+:::
+
+### 🔴 Browser Integrity Check is zone-wide — there is no per-hostname exception
+
+This is the structural fact that makes the obvious remedy impossible. **You cannot exempt one hostname from BIC in the BIC setting.** Cloudflare puts a *"Create configuration rule"* link directly on the setting for exactly this reason: a **Configuration Rule** scoped to the hostname is the only way to turn it off for one API and leave it on everywhere else.
+
+⚠️ So *"add a WAF exception for this hostname"* is not a smaller version of the right answer — **it is not available at all**, and proposing it sends someone to a screen where they will not find the setting they were told to change.
+
+### The AI bot policies are three categories, and blocking one is not blocking AI
+
+The setting most often re-diagnosed as an accident:
+
+| Category | Typical setting | What it covers |
+|---|---|---|
+| Search | Allow | bots that index for search results |
+| **Agent** | **Allow** | *bots that pull information from your site to answer a user's question* |
+| Training | **Disallow** | crawlers gathering content to train models |
+
+Measured against a live zone with that configuration:
+
+```
+Claude-User/1.0  200   Perplexity-User/1.0  200   ChatGPT-User/1.0  200    <- Agent
+Googlebot/2.1    200   OAI-SearchBot/1.0    200   PerplexityBot     200    <- Search
+ClaudeBot/1.0    403   GPTBot/1.1           403   CCBot/2.0         403    <- Training
+```
+
+🔵 **So disallowing Training does not block live fetches.** When someone asks an assistant to look at your API, the request goes out as `Claude-User` or `ChatGPT-User` — the **Agent** category — and is allowed. *"We block GPTBot"* reads like *"AI tools cannot reach us"*, and that is false.
+
+### Two edge behaviours that make reports contradict each other
+
+**The User-Agent match is case-sensitive and anchored at the start.**
+
+```
+Python-urllib/3.11          403      python-urllib/3.11        200   (lowercase)
+Python-urllib/3.11 extra    403      myapp Python-urllib/3.11  200   (not first)
+Python-urllib               403      PYTHON-URLLIB/3.11        200
+```
+
+⚠️ Anyone reproducing a report by retyping the agent string casually will get the opposite result and conclude the first report was wrong.
+
+**Edge-added response headers appear on the 403 too.** A blocked request never reaches the origin, yet the 403 carries `access-control-allow-origin: *` and the rest of the CORS set — because the transform rule runs at the edge.
+
+🔵 That makes a blocked response *look* like it came from the application. It is also positive proof that the CORS headers are the transform rule's work and not PostgREST's.
+
+## A baseline for an API hostname behind a tunnel
+
+A zone can reach production with **one** rule in it and nothing else — no Cache Rules, no Configuration Rules — and nothing will report that as a problem.
+
+:::warning An API behind a tunnel caches nothing by default, and it will not fix itself
+Measured on a live zone: **0.01% cached** — 14 kB of 108 MB over 24 hours. **Every one of those bytes crossed the tunnel and hit the origin machine.**
+
+🔴 **PostgREST emits no `Cache-Control`, no `ETag` and no `Last-Modified`.** With no cache headers from the origin, Cloudflare caches nothing by default *and* conditional requests cannot help either. A **Cache Rule with Edge TTL: override origin** is therefore **required to get any caching at all** — not a tuning step. That interaction between PostgREST and Cloudflare is not obvious from either side's documentation.
+:::
+
+| | Rule | Why |
+|---|---|---|
+| 1 | **Cache Rule**, scoped to the API hostname, Edge TTL override | without it the tunnel carries every byte |
+| 2 | **Configuration Rule**, if a hostname needs BIC off | the only per-hostname mechanism; BIC itself is zone-wide |
+| 3 | **Rate Limiting Rule** | one is included on the free plan |
+| 4 | **Response Header Transform** — CORS, and the docs `Link` | already covered above; its headers land on edge-blocked responses too |
+
 ## One tunnel, one apex — what "any domain" does and does not mean
 
 Routing is domain-agnostic: Traefik matches on `HostRegexp(...)`, so `servicename.<your-domain>` reaches the right service with nothing added, whatever `<your-domain>` is.
