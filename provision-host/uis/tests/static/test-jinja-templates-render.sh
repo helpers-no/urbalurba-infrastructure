@@ -93,14 +93,33 @@ for d in docs:
         pod_ann = (d.get("spec", {}).get("template", {})
                     .get("metadata", {}).get("annotations") or {})
 
+# Routes, parsed. A route's PRIORITY decides which rule wins when two match,
+# and asserting it by grepping the template text would pass on a priority that
+# landed in the wrong route. It has to come off the parsed document.
+routes = []
+for d in docs:
+    if d.get("kind") == "IngressRoute":
+        for r in (d.get("spec", {}).get("routes") or []):
+            routes.append({"priority": r.get("priority"),
+                           "match": r.get("match"),
+                           "middlewares": [m.get("name") for m in (r.get("middlewares") or [])]})
+
 print(json.dumps({"documents": len(docs),
                   "kinds": [f"{d.get('kind')}/{d.get('metadata',{}).get('name')}" for d in docs],
-                  "podAnnotations": pod_ann}))
+                  "podAnnotations": pod_ann,
+                  "routes": routes}))
 PYEOF
 
 _render() {
     local tpl="$1" ctx="$2"
     python3 "$TMP/render.py" "$MANIFESTS/$tpl" "$ctx" 2>&1
+}
+
+# The 088 templates live beside the playbooks, not in manifests/.
+PBT="$(cd "$MANIFESTS/../ansible/playbooks/templates" && pwd)"
+_render_pb() {
+    local tpl="$1" ctx="$2"
+    python3 "$TMP/render.py" "$PBT/$tpl" "$ctx" 2>&1
 }
 
 # --- the oauth2-proxy gate: one host, and the provider conditional ---
@@ -201,6 +220,80 @@ if [[ "$OUT" != \{* ]] && [[ "$OUT" == *oauth2_secret_version* ]]; then
     pass_test
 else
     fail_test "a missing secret version rendered anyway: $OUT"
+fi
+
+# ---------------------------------------------------------------------------
+# 088-postgrest-ingressroute: the spec alias, and the priority band it sits in.
+#
+# urb-agents#1490 — PostgREST serves its OpenAPI document at `/` and treats
+# every other path as a table name, so /openapi.json returns PGRST205 "Could
+# not find the table 'api_v1.openapi.json'". Real clients were measured asking
+# for it. The alias is routing only; there is no second document to drift.
+#
+# 🔴 The priority is the whole safety question. The alias carries no
+# ForwardAuth middleware, so if it ever outranks oauth2-proxy's route it
+# serves the full schema of every exposed view PAST AUTHENTICATION. The
+# assertion below derives the gate's lowest priority from 072's own template
+# rather than hardcoding it: lower the gate and this test fails instead of the
+# hole opening silently.
+# ---------------------------------------------------------------------------
+
+_PGRST_IR_CTX='{"_app_name":"atlas","_url_prefix":"api-atlas"}'
+
+start_test "088-postgrest-ingressroute.yml.j2 renders and parses (two documents)"
+OUT="$(_render_pb 088-postgrest-ingressroute.yml.j2 "$_PGRST_IR_CTX")"
+if [[ "$OUT" == \{* ]] && [[ "$(printf '%s' "$OUT" | jq -r '.documents')" == "2" ]]; then
+    pass_test
+else
+    fail_test "expected an IngressRoute and a Middleware: $OUT"
+fi
+
+start_test "the alias route outranks the catch-all, or it never fires"
+# Traefik's default priority is the rule's LENGTH, which for the catch-all is
+# about 27 — above anything safe for the alias. Both must be explicit.
+_alias_p="$(printf '%s' "$OUT" | jq -r '.routes[] | select(.match | contains("openapi.json")) | .priority')"
+_base_p="$(printf '%s' "$OUT" | jq -r '.routes[] | select(.match | contains("openapi.json") | not) | .priority')"
+if [[ "$_alias_p" =~ ^[0-9]+$ ]] && [[ "$_base_p" =~ ^[0-9]+$ ]] && (( _alias_p > _base_p )); then
+    pass_test
+else
+    fail_test "alias priority '$_alias_p' does not beat catch-all '$_base_p' (empty means unset)"
+fi
+
+start_test "the alias never outranks the gate, whose priority is read from 072"
+_gate_min="$(grep -oE '^\s*priority:\s*[0-9]+' "$MANIFESTS/072-oauth2-proxy-middleware.yaml.j2" \
+             | grep -oE '[0-9]+' | sort -n | head -1)"
+if [[ ! "$_gate_min" =~ ^[0-9]+$ ]]; then
+    fail_test "could not read any priority from 072's template — the coupling is unchecked"
+elif (( _alias_p < _gate_min )); then
+    pass_test
+else
+    fail_test "alias priority $_alias_p >= gate priority $_gate_min: /openapi.json would serve the full schema past the login"
+fi
+
+start_test "the alias route references a Middleware the template actually ships"
+_mw="$(printf '%s' "$OUT" | jq -r '.routes[] | select(.match | contains("openapi.json")) | .middlewares[0] // ""')"
+if [[ -n "$_mw" ]] && printf '%s' "$OUT" | jq -e --arg m "Middleware/$_mw" '.kinds | index($m)' >/dev/null; then
+    pass_test
+else
+    fail_test "alias references middleware '$_mw' which is not among: $(printf '%s' "$OUT" | jq -c '.kinds')"
+fi
+
+start_test "the playbook applies the template as multiple documents"
+# from_yaml parses ONE document and raises on the second. This template emits
+# two, so from_yaml would break the install at runtime, not here.
+_PB="$MANIFESTS/../ansible/playbooks/088-setup-postgrest.yml"
+if grep -q "088-postgrest-ingressroute.yml.j2') | from_yaml_all | list" "$_PB"; then
+    pass_test
+else
+    fail_test "the ingressroute template is not applied with from_yaml_all | list"
+fi
+
+start_test "removing the instance removes the Middleware too"
+_PBR="$MANIFESTS/../ansible/playbooks/088-remove-postgrest.yml"
+if grep -q 'kind: Middleware' "$_PBR" && grep -q 'postgrest-spec-alias' "$_PBR"; then
+    pass_test
+else
+    fail_test "undeploy leaves an orphaned Middleware in the namespace"
 fi
 
 print_summary
