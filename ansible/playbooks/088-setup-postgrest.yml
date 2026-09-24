@@ -101,11 +101,15 @@
         # change roll the pods — see the annotation in the template.
         _pgrst_secret_version: "{{ pgrst_secret_check.resources[0].metadata.resourceVersion }}"
 
-    - name: 7. Apply per-app IngressRoute (HostRegexp covers every domain Traefik knows)
+    - name: 7. Apply per-app IngressRoute and the spec-alias Middleware
+      # from_yaml_all | list, not from_yaml: this template emits TWO documents
+      # (the IngressRoute and the Middleware its alias route references).
+      # from_yaml parses a single document and raises on the second one.
+      # See templates/README.md.
       kubernetes.core.k8s:
         state: present
         kubeconfig: "{{ merged_kubeconf_file }}"
-        definition: "{{ lookup('template', 'templates/088-postgrest-ingressroute.yml.j2') | from_yaml }}"
+        definition: "{{ lookup('template', 'templates/088-postgrest-ingressroute.yml.j2') | from_yaml_all | list }}"
 
     # ============= PHASE 3: WAIT FOR ROLLOUT =============
 

@@ -295,6 +295,37 @@ A single IngressRoute per instance answers every domain Traefik knows, via `Host
 
 No per-domain configuration in PostgREST or its IngressRoute.
 
+### Where the OpenAPI spec is served, and the two aliases
+
+PostgREST serves its OpenAPI document at the **root**, `/`, as `application/openapi+json`.
+
+🔴 **Every other path is a table name to PostgREST**, so the conventional spec filenames do not 404 the way a reader expects:
+
+```
+GET /openapi.json   ->  404  PGRST205  "Could not find the table 'api_v1.openapi.json'"
+```
+
+That does not read as *"no spec here"* — it reads as a failed dataset lookup, and an agent parsing it concludes the API has no machine-readable description at all. The spec is several hundred KB away at `/`.
+
+**So UIS routes two conventional names to the root:**
+
+| path | served |
+|---|---|
+| `/` | the spec |
+| `/openapi.json` | the spec — Traefik `replacePath` to `/` |
+| `/swagger.json` | the spec — Traefik `replacePath` to `/` |
+
+🔵 **This is routing only.** There is no second document and no conversion step, so there is nothing that can drift out of date — the aliases cannot become stale because they serve the same bytes.
+
+:::warning The alias sits below the login gate on purpose
+The alias route carries **no ForwardAuth middleware**. Its Traefik priority (15) is deliberately **below oauth2-proxy's** (20), so on a gated instance the gate still wins.
+
+**Do not raise it.** An alias that outranked the gate would serve the full schema of every exposed view to anyone who asked, past authentication, and nothing downstream would report it.
+:::
+
+Note the spec still describes itself as `swagger: "2.0"`. Converting to OpenAPI 3.x is a separate question — a generated artefact that has to be published, versioned and kept in sync — and **the alias deliberately does not touch it**: the filename problem is routing, the version problem is not.
+
+
 ## Limitations and gotchas
 
 ### 🔴 `db-max-rows` is unset, and its absence is part of the contract

@@ -35,7 +35,7 @@
       ansible.builtin.debug:
         msg: |
           Removing PostgREST instance '{{ _app_name }}'
-          - Deletes:  Deployment, Service, IngressRoute in {{ postgrest_namespace }}
+          - Deletes:  Deployment, Service, IngressRoute, Middleware in {{ postgrest_namespace }}
           - Leaves:   Postgres roles ({{ _app_name | replace('-', '_') }}_web_anon,
                       {{ _app_name | replace('-', '_') }}_authenticator),
                       Secret '{{ _app_name }}-postgrest'
@@ -47,6 +47,18 @@
         api_version: traefik.io/v1alpha1
         kind: IngressRoute
         name: "{{ _app_name }}-postgrest"
+        namespace: "{{ postgrest_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: 3b. Delete the spec-alias Middleware
+      # The IngressRoute's alias route references this by name. Deleting the
+      # route and leaving the Middleware orphans it in the namespace, where
+      # nothing reports it and the next install silently reuses it.
+      kubernetes.core.k8s:
+        state: absent
+        api_version: traefik.io/v1alpha1
+        kind: Middleware
+        name: "{{ _app_name }}-postgrest-spec-alias"
         namespace: "{{ postgrest_namespace }}"
         kubeconfig: "{{ merged_kubeconf_file }}"
 

@@ -7,6 +7,31 @@
 # *.localhost wildcard, the Tailscale tunnel's *.<tailnet>.ts.net domain, and
 # any Cloudflare-tunnelled public domain — all via a single rule. See
 # `website/docs/contributors/rules/ingress-traefik.md` for the convention.
+#
+# ---------------------------------------------------------------------------
+# PRIORITIES ARE EXPLICIT ON BOTH ROUTES, AND THE BAND MATTERS.
+#
+# Traefik's default priority is the LENGTH of the rule string. The catch-all
+# below would default to about 27, which is above anything we could safely
+# give the alias — so leaving either route on its default silently decides
+# this for us. Both are stated.
+#
+#   10  catch-all          every path, this host pattern
+#   15  spec alias         /openapi.json, /swagger.json
+#   20  oauth2-proxy       the gate's protected route      <- 072
+#   25  oauth2-proxy       the gate's api routes (401)     <- 072
+#   30  oauth2-proxy       the gate's callback             <- 072
+#
+# 🔴 15 IS BELOW 20 ON PURPOSE. If this instance is gated, oauth2-proxy's
+# route must outrank the alias — otherwise `/openapi.json` would serve the
+# full 369 KB schema of every exposed view PAST AUTHENTICATION, and nothing
+# would report it. The alias carries no ForwardAuth middleware, so it must
+# never win against a route that does.
+#
+# ⚠️ That hazard is on the UPGRADE path, which is why it is written here and
+# not left to 072's check: gate first, then upgrade the platform, and the
+# alias arrives on an already-gated instance without 072 running again.
+# ---------------------------------------------------------------------------
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -21,8 +46,41 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: HostRegexp(`{{ _url_prefix }}\..+`)
+    # The spec's conventional filenames, aliased to what `/` already serves.
+    #
+    # PostgREST serves its OpenAPI document at `/` and treats any other path
+    # as a table name, so `/openapi.json` returns PGRST205 "Could not find the
+    # table 'api_v1.openapi.json'" — which reads as a failed dataset lookup
+    # rather than "no spec here", while the spec sits 369 KB away at `/`.
+    #
+    # This is routing only. There is no second document, so it cannot drift.
+    - match: HostRegexp(`{{ _url_prefix }}\..+`) && (Path(`/openapi.json`) || Path(`/swagger.json`))
       kind: Rule
+      priority: 15
+      middlewares:
+        - name: "{{ _app_name }}-postgrest-spec-alias"
       services:
         - name: "{{ _app_name }}-postgrest"
           port: 3000
+    - match: HostRegexp(`{{ _url_prefix }}\..+`)
+      kind: Rule
+      priority: 10
+      services:
+        - name: "{{ _app_name }}-postgrest"
+          port: 3000
+---
+# Same namespace as the IngressRoute deliberately: Traefik runs with
+# allowCrossNamespace: false, so a middleware referenced by bare name must
+# live beside the route that references it.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: "{{ _app_name }}-postgrest-spec-alias"
+  namespace: postgrest
+  labels:
+    app.kubernetes.io/name: postgrest
+    app.kubernetes.io/instance: "{{ _app_name }}"
+    app.kubernetes.io/managed-by: uis
+spec:
+  replacePath:
+    path: /
