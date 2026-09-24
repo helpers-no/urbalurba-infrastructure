@@ -555,6 +555,46 @@ Two things are still per-apex, and both are easy to assume away:
 
 So *"point any domain at the cluster and it routes"* is true — and it stops being true the moment the service is gated.
 
+## ⚠️ What a tunnel does not give you: availability
+
+A tunnel makes a machine **reachable**. It does nothing to make it **available**, and the two are easy to conflate once a public hostname resolves and returns 200.
+
+**Write the expectation down where consumers will see it.** Someone building against a hostname cannot tell from the outside whether it is backed by a region or by a Mac on a shelf.
+
+### What actually determines uptime here
+
+| what | in a typical self-hosted install |
+|---|---|
+| machines serving the app | **one** |
+| replicas of the pod | **one** — a restart is a gap, not a failover |
+| internet connections | **one**, usually residential |
+| power | **one** circuit, usually no UPS |
+| people on call | **nobody**, unless someone volunteered |
+
+Add Cloudflare itself as a dependency: the tunnel is a hop the request must survive. 🔵 In exchange you get no inbound ports open, which is the trade worth making — but it is a trade, not a free layer.
+
+### Planned gaps are the common case
+
+Every platform upgrade restarts pods. `./uis deploy` rolls a deployment; a single-replica service is **down for the duration of that roll** — seconds, but not zero. Machine reboots and OS updates are longer. None of this is a fault; it is what one replica means.
+
+### 🔵 The cache hides some of this, and specifically not the part you would want hidden
+
+With the [Cache Rule](#a-baseline-for-an-api-hostname-behind-a-tunnel) in place, repeated identical requests are served from the edge for up to the Edge TTL, so a short origin outage can be **invisible** to a client re-running the same query.
+
+🔴 **It will not cover anyone doing new work.** Distinct query strings are distinct cache entries, so a novel request goes to the origin and fails like any other. The cache protects repetition, not exploration — and a developer trying something new is exactly who notices the outage.
+
+### What to claim, honestly
+
+> **Best effort. No uptime guarantee, no SLA, no on-call.** The service is self-hosted on a single machine and a single home internet connection. Expect brief planned outages during upgrades and occasional unplanned ones from power, network or hardware. Build with retries and backoff, and do not put this service on the critical path of anything that carries its own availability commitment.
+
+⚠️ **Say where it runs, too.** "Home-hosted for now" is information a consumer can act on; "the API" is not.
+
+### Knowing when it is down
+
+Reachability is not monitored by default — nothing in the platform notices an outage on its own. UIS ships [Uptime Kuma](/docs/services/observability/uptime-kuma) for exactly this, and the useful property is that it runs **outside** the cluster it watches: a watchdog on the same machine goes down with the thing it is watching.
+
+**A monitor has to actually exist.** Deploying Kuma and not adding the hostname is the same as not having it.
+
 ## Managing the Tunnel
 
 ### Take down the tunnel (keep config for redeployment)

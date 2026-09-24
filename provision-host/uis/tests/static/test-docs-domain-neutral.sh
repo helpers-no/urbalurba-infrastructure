@@ -292,4 +292,52 @@ else
     fail_test "only $_n of 3 — a timing through the edge still reads as a database timing"
 fi
 
+# ---------------------------------------------------------------------------
+# The bullet that asks you to write down a limitation rather than remove one.
+#
+# Røde Kors brief, Priority 6: "Note in docs what the uptime expectation is
+# (home-hosted for now)." ops-dev: "the one most likely to be skipped."
+#
+# A tunnel makes a machine reachable, and a public hostname returning 200 makes
+# it look like infrastructure. A consumer cannot tell from outside whether it is
+# backed by a region or by a Mac on a shelf, so the page has to say.
+# ---------------------------------------------------------------------------
+
+start_test "the tunnel page states an availability expectation, not just reachability"
+_n=0
+grep -qF 'No uptime guarantee, no SLA, no on-call' "$_CF" && _n=$((_n+1))
+grep -qF 'does nothing to make it' "$_CF" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 2 — a 200 from a public hostname keeps reading as infrastructure"
+fi
+
+start_test "it names what is singular, so the claim is checkable rather than a mood"
+_n=0
+grep -qF 'a restart is a gap, not a failover' "$_CF" && _n=$((_n+1))
+grep -qF 'single home internet connection' "$_CF" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 2 — 'best effort' with nothing behind it"
+fi
+
+start_test "it says which outages the cache hides and which it does not"
+# The dangerous half: a cached repeat can make an outage invisible, while the
+# person doing new work sees it immediately. Stating only the first is worse
+# than stating neither.
+if grep -qF 'protects repetition, not exploration' "$_CF"; then
+    pass_test
+else
+    fail_test "the cache reads as outage protection it does not provide"
+fi
+
+start_test "it says a deployed watchdog with no monitor is not monitoring"
+if grep -qF 'A monitor has to actually exist' "$_CF"; then
+    pass_test
+else
+    fail_test "deploying Uptime Kuma reads as done"
+fi
+
 print_summary
