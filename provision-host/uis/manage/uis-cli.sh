@@ -185,6 +185,7 @@ Dagster:
                                  refuses success on a partial change
                                  [--expect running|stopped] asserts instead of reporting
   dagster run <job>              Launch one job now, rather than waiting for its cron
+                                 --location NAME picks the code location when two claim the job
                                  [--wait] polls the RUN to completion and reports
                                  its status and elapsed time
 
@@ -2563,13 +2564,17 @@ cmd_dagster_verify() {
 # job — three agents called it hung while being early by two minutes — and
 # atlas's 647 checks live inside ONE op, so any step count reads "1 of 1".
 cmd_dagster_run() {
-    local job="" do_wait=false timeout=""
+    local job="" do_wait=false timeout="" location=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --wait)    do_wait=true; shift ;;
             --timeout) timeout="${2:-}"; shift 2 ;;
+            # Which code location to launch from. Only needed when two of them
+            # define the same job name, which the playbook refuses rather than
+            # resolving arbitrarily — each location can carry a different image.
+            --location) location="${2:-}"; shift 2 ;;
             -*)        log_error "Unknown option: $1"
-                       echo "Usage: uis dagster run <job> [--wait] [--timeout SECONDS]" >&2
+                       echo "Usage: uis dagster run <job> [--wait] [--timeout SECONDS] [--location NAME]" >&2
                        return "$EXIT_GENERAL_ERROR" ;;
             *)         if [[ -z "$job" ]]; then job="$1"; else
                            log_error "Unexpected argument: $1 (job already given as '$job')"
@@ -2589,6 +2594,7 @@ cmd_dagster_run() {
     local args=(-e "job=$job")
     [[ "$do_wait" == true ]] && args+=(-e "wait=true")
     [[ -n "$timeout" ]] && args+=(-e "timeout=$timeout")
+    [[ -n "$location" ]] && args+=(-e "location=$location")
     run_verify_playbook "362-dagster-run.yml" "${args[@]}"
 }
 
@@ -3191,7 +3197,7 @@ main() {
                     cmd_dagster_run "$@"
                     ;;
                 *)
-                    echo "  Use: ./uis dagster verify | automation [--expect running|stopped] [--start|--stop] [--yes] | run <job> [--wait]" >&2
+                    echo "  Use: ./uis dagster verify | automation [--expect running|stopped] [--start|--stop] [--yes] | run <job> [--wait] [--location NAME]" >&2
                     ;;
             esac
             ;;

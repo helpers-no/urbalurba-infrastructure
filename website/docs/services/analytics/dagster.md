@@ -626,6 +626,56 @@ cannot be pulled still has a running Deployment — counting pods would call tha
 "registered" while none of its assets, jobs or schedules exist. An unreachable
 location is reported as a **failure**, not a count.
 
+## 🔴 A run executed the previous image and reported success
+
+This has two different causes with two different remedies, and **from outside they look identical**: same command, same shell, a build you did not ship. Tell them apart before fixing either.
+
+### What selects the image for a run pod
+
+UIS configures `K8sRunLauncher` with **no `job_image` key**, so the image is not pinned by the launcher. It comes from the code location's origin — and that origin is **snapshotted from the webserver's cached workspace at the moment the run is created**, not read from the live Deployment.
+
+🔵 So the authority is *the webserver's handle*, not the code-location pod. A pod can be healthy, on the right digest, with `DAGSTER_CURRENT_IMAGE` agreeing, while runs still execute the previous build.
+
+### Cause 1: a stale handle — the webserver predates the code location
+
+The usual one. The webserver and daemon are long-lived; a code-location bump rolls only the code-location Deployment, so the two servers keep serving the handle they cached.
+
+```bash
+./uis dagster verify        # summary line F: FRESH | STALE | UNREADABLE
+```
+
+⚠️ **F is advisory — the command exits 0 under STALE**, because everything else genuinely passes and it is a warning about the *next* run. Gate a script on it with `./uis dagster verify --strict`.
+
+```bash
+kubectl -n dagster rollout restart deploy/dagster-dagster-webserver
+kubectl -n dagster rollout restart deploy/dagster-daemon
+```
+
+🔴 **`./uis deploy dagster` does not fix this.** With Helm values unchanged it rolls nothing and reports success. Restarting the two pods is what picks up the new handle.
+
+### Cause 2: two code locations claim the same job name
+
+Distinguishable by one property: **cause 1 is consistent, cause 2 is not.** A stale handle gives the old image to *every* run until you restart. If one run gets the new image and a later one gets the old, the handle is not the explanation.
+
+```bash
+kubectl get pods -n dagster -l component=user-deployments \
+  -o custom-columns=NAME:.metadata.name,IMAGE:.spec.containers[0].image
+```
+
+More than one location defining the same job is usually one left behind by an earlier install. **Each carries its own image**, so which one you get decides which code runs.
+
+`uis dagster run` **refuses** this rather than picking, because Dagster promises no ordering and an arbitrary pick executes code you did not choose while reporting success:
+
+```bash
+./uis dagster run <job> --location <name>
+```
+
+:::warning Which question each command answers
+`uis deploy dagster` asks *did the Helm release apply*. `uis dagster verify` asks *are the locations loaded, and is the handle fresh*. **Neither asks "will the next run execute the image I just installed"**, and a run that succeeded is not evidence either — it may have executed the old one and passed.
+
+The honest check is the run's own image, after the fact.
+:::
+
 ## Troubleshooting
 
 ```bash
