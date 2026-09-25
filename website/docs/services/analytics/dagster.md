@@ -687,6 +687,17 @@ UIS configures `K8sRunLauncher` with **no `job_image` key**, so the image is not
 
 The usual one. The webserver and daemon are long-lived; a code-location bump rolls only the code-location Deployment, so the two servers keep serving the handle they cached.
 
+🔴 **It recurs on every bump. Restarting refreshes the handle once; it does not immunise the webserver.** Measured across three consecutive deploys on one cluster: a manual restart, then the next bump correct, then the bump after that stale again.
+
+```
+restart webserver + daemon
+deploy A   -> run executed A     ✅
+deploy B   -> run executed A     🔴 stale again, one bump later
+```
+
+⚠️ So *"I restarted it this afternoon"* is not a state you can rely on. **The refresh belongs to the bump, not to the incident** — which is why it is automatic below rather than a remedy you remember.
+
+
 ```bash
 ./uis dagster verify        # summary line F: FRESH | STALE | UNREADABLE
 ```
@@ -701,6 +712,8 @@ kubectl -n dagster rollout restart deploy/dagster-daemon
 ✅ **Since 1.6.153, `./uis deploy dagster` does this for you** — but only when the handle is actually stale, since restarting on every deploy would interrupt the UI and the run queue for a condition that is usually absent. It re-reads the verdict afterwards and says so if the refresh did not take.
 
 ⚠️ **On earlier versions it does not**, and the failure is silent: with Helm values unchanged the deploy rolls nothing and reports success while the handle stays stale.
+
+🔵 **The comparison is made after the rollout, not during it.** The Helm step runs with `--wait`, so the new code-location pod is Ready before its start time is compared against the servers'. A check that ran earlier would read the *old* pod, conclude FRESH, and skip the restart at exactly the moment it was needed.
 
 ### Cause 2: two code locations claim the same job name
 

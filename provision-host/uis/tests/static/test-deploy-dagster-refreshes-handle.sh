@@ -106,6 +106,31 @@ else
     fail "unreadable is distinguished from fresh" "a label rename would silently disable this"
 fi
 
+# --- the ordering that makes the check meaningful -------------------------
+# 🔴 The age comparison must happen AFTER the code location has rolled. Helm
+# runs with --wait, so the new pod is Ready before Z1 reads start times. A
+# check that ran earlier would read the OLD pod, conclude FRESH, and skip the
+# restart at exactly the moment it was needed (urb-agents#1554).
+_helm="$(grep -n 'helm upgrade' <<<"$pb" | head -1 | cut -d: -f1)"
+_z1="$(grep -n 'Is the webserver older than the code location' <<<"$pb" | head -1 | cut -d: -f1)"
+if [[ -n "$_helm" && -n "$_z1" ]] && (( _z1 > _helm )) && grep -q -- '--wait' <<<"$pb"; then
+    pass "the handle check runs after a --wait Helm step, not racing it"
+else
+    fail "the check follows the rollout" "helm@${_helm:-?} z1@${_z1:-?}; without --wait the check reads the old pod and skips"
+fi
+
+# --- and the docs must say the staleness RECURS ---------------------------
+# "I restarted it this afternoon" is not a state anyone can rely on.
+_DOC="$REPO_ROOT/website/docs/services/analytics/dagster.md"
+_n=0
+grep -qF 'It recurs on every bump' "$_DOC" && _n=$((_n+1))
+grep -qF 'does not immunise' "$_DOC" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass "the docs say a restart refreshes once rather than immunising"
+else
+    fail "recurrence is documented" "only $_n of 2 — a past restart reads as lasting protection"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
