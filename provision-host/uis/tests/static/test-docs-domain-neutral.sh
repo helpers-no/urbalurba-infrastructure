@@ -340,4 +340,56 @@ else
     fail_test "deploying Uptime Kuma reads as done"
 fi
 
+# ---------------------------------------------------------------------------
+# urb-agents#1542 — two merged changes that contradict each other.
+#
+# Atlas's published API description says `/openapi.json` "returns 404 today".
+# The alias shipped in 1.6.151 makes it 200. Whichever lands second silently
+# falsifies the first, and the word "today" had no mechanism behind it.
+#
+# 🔴 The ordering is the decidable part and it is NOT symmetric: text-first
+# leaves a description that merely stops promising a working path; alias-first
+# leaves an API actively telling machines a working path is broken — and the
+# edge cache extends that window past the correction.
+# ---------------------------------------------------------------------------
+
+_PGR="$REPO/website/docs/services/integration/postgrest.md"
+
+start_test "deploying the alias is documented as falsifying published text"
+_n=0
+grep -qF 'Change the text first, then deploy' "$_PGR" && _n=$((_n+1))
+grep -qF 'can never be simultaneous' "$_PGR" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 2 — the coupling stays unwritten, which is why it was missed"
+fi
+
+start_test "it says why the two orders are not interchangeable"
+if grep -qF 'actively misdirects' "$_PGR"; then
+    pass_test
+else
+    fail_test "'do them together' is not actionable — the cache makes it impossible"
+fi
+
+start_test "a documented limitation is told to carry its expiry condition"
+if grep -qF 'a claim with an expiry' "$_PGR"; then
+    pass_test
+else
+    fail_test "the next 'today' ships with no trigger behind it either"
+fi
+
+# ⚠️ Both pages prescribe the same cache-bust, so both must carry the trap.
+# An invented parameter is parsed as a column filter: PGRST100, a 400 from a
+# healthy endpoint, which reads as a broken API rather than a bad buster.
+start_test "both pages warn that the cache-bust parameter must be a real one"
+_n=0
+grep -qF 'PGRST100' "$_PGR" && _n=$((_n+1))
+grep -qF 'PGRST100' "$_CF" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 2 — a reader follows the advice and gets a 400 they misread"
+fi
+
 print_summary

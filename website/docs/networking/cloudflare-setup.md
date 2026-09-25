@@ -510,7 +510,7 @@ curl -s -D - -o /dev/null "https://api-<name>.<your-domain>/<view>?limit=$RANDOM
 # want: MISS (or DYNAMIC) on every single request
 ```
 
-Distinct query strings are distinct cache entries, which is why a varying `limit` works. **A timing taken without checking `cf-cache-status` is not a measurement of the origin.**
+Distinct query strings are distinct cache entries, which is why a varying `limit` works. ⚠️ **It must be a parameter PostgREST recognises** — an invented name like `?cachebust=` is parsed as a column filter and returns `PGRST100`, a 400 that reads as a broken endpoint. **A timing taken without checking `cf-cache-status` is not a measurement of the origin.**
 
 ### What it buys, measured
 

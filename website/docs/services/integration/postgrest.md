@@ -317,6 +317,21 @@ That does not read as *"no spec here"* — it reads as a failed dataset lookup, 
 
 🔵 **This is routing only.** There is no second document and no conversion step, so there is nothing that can drift out of date — the aliases cannot become stale because they serve the same bytes.
 
+':::warning Deploying this alias falsifies anything that documented the 404
+If a published artifact — an API description, a README, a data-catalogue entry — says these paths return 404, **that sentence becomes false the moment this deploys**, and the API starts telling machines not to use a path that works.
+
+🔴 **Change the text first, then deploy.** The two can never be simultaneous: the spec at `/` is edge-cached, so a description corrected *after* the fact keeps serving the old wording for up to the Edge TTL.
+
+🔵 **The two orders are not symmetric**, which is what makes this decidable:
+
+| order | the window it leaves |
+|---|---|
+| **text first** | the description merely stops promising a path that happens to work — **harmless** |
+| alias first | the API **actively misdirects**: a working path documented as broken, and the cache extends the window |
+
+⚠️ More generally: **a documented limitation is a claim with an expiry, and the expiry belongs beside it.** "Returns 404 today" has no mechanism behind the word *today*. Name what would falsify it — *"until the platform aliases these paths"* — so the sentence carries its own trigger.
+:::
+
 :::warning The alias sits below the login gate on purpose
 The alias route carries **no ForwardAuth middleware**. Its Traefik priority (15) is deliberately **below oauth2-proxy's** (20), so on a gated instance the gate still wins.
 
@@ -517,6 +532,14 @@ curl -s -D - -o /dev/null "https://api-<name>.<your-domain>/<view>?limit=$RANDOM
   | grep -i cf-cache-status
 # want MISS or DYNAMIC — a HIT means you measured the edge
 ```
+
+⚠️ **Vary a parameter PostgREST recognises** — `limit`, `offset`, `select`. An invented name like `?cachebust=` or the common `?_=` idiom is parsed as a **column filter**, not ignored:
+
+```
+{"code":"PGRST100","message":"failed to parse filter ..."}
+```
+
+🔵 That is a 400 from a healthy endpoint, and it reads as a broken API rather than a bad cache-buster.
 
 Or measure the origin directly, with Cloudflare out of the path entirely:
 
