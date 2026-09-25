@@ -651,7 +651,9 @@ kubectl -n dagster rollout restart deploy/dagster-dagster-webserver
 kubectl -n dagster rollout restart deploy/dagster-daemon
 ```
 
-🔴 **`./uis deploy dagster` does not fix this.** With Helm values unchanged it rolls nothing and reports success. Restarting the two pods is what picks up the new handle.
+✅ **Since 1.6.153, `./uis deploy dagster` does this for you** — but only when the handle is actually stale, since restarting on every deploy would interrupt the UI and the run queue for a condition that is usually absent. It re-reads the verdict afterwards and says so if the refresh did not take.
+
+⚠️ **On earlier versions it does not**, and the failure is silent: with Helm values unchanged the deploy rolls nothing and reports success while the handle stays stale.
 
 ### Cause 2: two code locations claim the same job name
 

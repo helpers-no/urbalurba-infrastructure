@@ -772,6 +772,106 @@
       delay: 2
       until: ingress_check.resources | length > 0
 
+    # ─── the code-location handle ────────────────────────────────────────
+    #
+    # 🔴 A DEPLOY THAT ROLLS THE CODE LOCATION AND NOT THE SERVERS SHIPS A LIE.
+    #
+    # Dagster resolves a run's image from the WEBSERVER's cached code-location
+    # handle, not from the live Deployment. Roll the code location and leave
+    # the webserver alone and every subsequent run executes the PREVIOUS image
+    # and reports SUCCESS (urb-agents#1272, #1540).
+    #
+    # The install path has done this since 1.6.x (_refresh_dagster_handle_after
+    # _install). The DEPLOY path never did — and `uis deploy dagster` is how a
+    # hand-edited code-location tag actually reaches a cluster, which is
+    # exactly how #1540 happened: ten commits, two agents, and a day lost to a
+    # job that ran yesterday's build while three commands reported success.
+    #
+    # ⚠️ Conditional, not unconditional. Restarting on every deploy would
+    # interrupt the UI and the run queue for a condition that is usually
+    # absent. The test is the same pod-age comparison `uis dagster verify`
+    # reports as summary line F, so the two cannot disagree.
+    - name: "Z1. Is the webserver older than the code location it must serve?"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          ages=$(kubectl get pods -n {{ dagster_namespace }} \
+            -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.startTime}{"\n"}{end}' 2>/dev/null)
+          newest_loc=$(printf '%s\n' "$ages" | grep -E 'code-location|user-deployments' | awk '{print $2}' | sort | tail -1)
+          oldest_srv=$(printf '%s\n' "$ages" | grep -E 'webserver|daemon' | awk '{print $2}' | sort | head -1)
+          if [ -z "$newest_loc" ] || [ -z "$oldest_srv" ]; then
+            echo "UNREADABLE"
+          elif [ "$oldest_srv" \< "$newest_loc" ]; then
+            echo "STALE"
+          else
+            echo "FRESH"
+          fi
+      args:
+        executable: /bin/bash
+      register: _deploy_handle
+      changed_when: false
+      failed_when: false
+
+    - name: "Z2. Refresh the handle when the deploy left it stale"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          rc=0
+          for d in dagster-dagster-webserver dagster-daemon; do
+            kubectl get deploy "$d" -n {{ dagster_namespace }} >/dev/null 2>&1 || continue
+            kubectl rollout restart "deploy/$d" -n {{ dagster_namespace }} >/dev/null 2>&1 || rc=1
+            kubectl rollout status  "deploy/$d" -n {{ dagster_namespace }} --timeout=180s >/dev/null 2>&1 || rc=1
+          done
+          exit $rc
+      args:
+        executable: /bin/bash
+      register: _handle_refresh
+      changed_when: true
+      failed_when: false
+      when: _deploy_handle.stdout | default('') is search('STALE')
+
+    # 🔵 Re-query rather than report the restart. "We restarted them" is an
+    # action; "the handle is fresh" is the outcome, and only the second is
+    # worth telling an operator who is about to trust a run.
+    - name: "Z3. Re-read the verdict after refreshing"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          ages=$(kubectl get pods -n {{ dagster_namespace }} \
+            -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.startTime}{"\n"}{end}' 2>/dev/null)
+          newest_loc=$(printf '%s\n' "$ages" | grep -E 'code-location|user-deployments' | awk '{print $2}' | sort | tail -1)
+          oldest_srv=$(printf '%s\n' "$ages" | grep -E 'webserver|daemon' | awk '{print $2}' | sort | head -1)
+          if [ -z "$newest_loc" ] || [ -z "$oldest_srv" ]; then
+            echo "UNREADABLE"
+          elif [ "$oldest_srv" \< "$newest_loc" ]; then
+            echo "STALE"
+          else
+            echo "FRESH"
+          fi
+      args:
+        executable: /bin/bash
+      register: _deploy_handle_after
+      changed_when: false
+      failed_when: false
+      when: _deploy_handle.stdout | default('') is search('STALE')
+
+    # ⚠️ Say it when the refresh did not take. Silence here is the whole defect
+    # reappearing one layer up: a deploy that reports success over a handle it
+    # failed to refresh is the same lie in a different place.
+    - name: "Z4. A refresh that did not take must be said out loud"
+      ansible.builtin.debug:
+        msg:
+          - "🔴 The code-location handle is STILL STALE after restarting the servers."
+          - ""
+          - "    Runs launched now may execute the PREVIOUS image and report SUCCESS."
+          - "    Do it by hand and confirm before trusting a run:"
+          - "      kubectl -n {{ dagster_namespace }} rollout restart deploy/dagster-dagster-webserver"
+          - "      kubectl -n {{ dagster_namespace }} rollout restart deploy/dagster-daemon"
+          - "      ./uis dagster verify --strict"
+      when:
+        - _deploy_handle.stdout | default('') is search('STALE')
+        - _deploy_handle_after.stdout | default('') is not search('FRESH')
+
     - name: "27. Success summary"
       ansible.builtin.debug:
         msg: |
