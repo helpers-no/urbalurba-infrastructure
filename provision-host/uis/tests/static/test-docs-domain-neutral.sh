@@ -392,4 +392,68 @@ else
     fail_test "only $_n of 2 — a reader follows the advice and gets a 400 they misread"
 fi
 
+# ---------------------------------------------------------------------------
+# urb-agents#1544 — three more deployed changes on a live zone.
+#
+# 🔴 A Managed Challenge returns 403, the SAME status as a block, and only
+# `cf-mitigated: challenge` tells them apart. Without it a reader goes hunting
+# for a blocking rule that does not exist.
+#
+# 🔴 And Bot Fight Mode is the switch everyone reaches for on a scanned zone.
+# It is zone-wide and unscopeable, so on a zone that also serves a scripted
+# open-data API it UNDOES the Configuration Rule this page spends a section
+# explaining. Naming the conflict is the point; a page that lists the remedy
+# without it invites someone to break the API fixing the scanners.
+# ---------------------------------------------------------------------------
+
+start_test "a challenge is distinguished from a block by cf-mitigated"
+_n=0
+grep -qF 'cf-mitigated: challenge' "$_CF" && _n=$((_n+1))
+grep -qF 'the same status as a block' "$_CF" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 2 — a 403 from a challenge reads as a block"
+fi
+
+start_test "Bot Fight Mode is named as conflicting with the scripted-client fix"
+_n=0
+grep -qF 'Bot Fight Mode' "$_CF" && _n=$((_n+1))
+grep -qF 're-breaks scripted clients' "$_CF" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $_n of 2 — the obvious remedy silently undoes the BIC exception"
+fi
+
+start_test "the Link header is documented as reaching edge-blocked responses"
+# The row that justifies putting it at the edge at all: it arrives on
+# refusals the origin never sees, which is where a reader has no other clue.
+if grep -qF 'responses the origin never sees' "$_CF"; then
+    pass_test
+else
+    fail_test "the edge placement reads as convenience rather than reach"
+fi
+
+start_test "a Link target is required to resolve before being set"
+if grep -qF 'aimed at a dead host is worse than no header' "$_CF"; then
+    pass_test
+else
+    fail_test "an authoritative pointer to nothing, on exactly the blocked responses"
+fi
+
+start_test "the Edge TTL is given as a cadence argument, not a number"
+if grep -qF "from how often the data actually changes" "$_CF"; then
+    pass_test
+else
+    fail_test "a copied number outlives the reasoning that chose it"
+fi
+
+start_test "a sampled figure is flagged as weaker than a preview estimate"
+if grep -qF 'Know which of your figures is sampled' "$_CF"; then
+    pass_test
+else
+    fail_test "a joined-by-hand number gets quoted as measurement"
+fi
+
 print_summary
