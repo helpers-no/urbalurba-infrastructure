@@ -588,6 +588,53 @@ kubectl exec -n default postgresql-0 -- \
 ```
 :::
 
+## 🔴 The webserver holds 21 database connections, and a read can exhaust them
+
+Dagster's webserver sizes its own pool in code — `optimize_for_webserver(...)` yields **`pool_size=1` with `max_overflow=20`**, a hard ceiling of 21. Past that, a request does not queue quietly: it is **denied after 30 seconds**.
+
+```
+sqlalchemy.exc.TimeoutError: QueuePool limit of size 1 overflow 20 reached,
+connection timed out, timeout 30.00
+```
+
+### ⚠️ You do not need a job running to hit it
+
+Measured twice, from opposite directions:
+
+| trigger | what was running |
+|---|---|
+| a check-heavy run launch | a job, writing hundreds of asset-check events |
+| **a single GraphQL query** | 🔴 **nothing at all** |
+
+The second is the one to plan around. A query that fans out per-asset — asking every asset for its checks in one request — **exhausts the pool on its own, with no job, no mutation and no write**:
+
+```graphql
+{ assetNodes { assetKey { path } assetChecksOrError { ... on AssetChecks { checks { name } } } } }
+```
+
+🔵 That is a query a person could reasonably build from the UI's own schema, and **anyone verifying a deploy through GraphQL can degrade the thing they are verifying.**
+
+**Page per-asset queries, or avoid the webserver entirely** — dbt writes `run_results.json`, which answers most "did the checks pass" questions without touching the metadata database.
+
+:::danger There is no platform setting for this
+`pool_size` and `poolclass` are SQLAlchemy **engine kwargs set at the call site**, while the chart's `postgresql.postgresqlParams` urlencodes into the connection URL — libpq territory, a different layer. **The two never meet**, so raising the ceiling is not something the platform can expose. Shaping the query is the only lever.
+:::
+
+### ⚠️ The aftermath is more alarming than the cause
+
+For some minutes after, the **first** query on an idle connection can return:
+
+```
+(psycopg2.OperationalError) server closed the connection unexpectedly
+  This probably means the server terminated abnormally before or while processing the request
+```
+
+🔴 **Nothing terminated.** Measured against that exact message: webserver and daemon at **0 restarts**, and the metadata Postgres last restarted **8 days** earlier. Retried three times — first failed, second and third succeeded. These are stale pooled connections being recycled, and the message names the wrong object.
+
+🔵 **`pool_size=1` is why it looks so consistent.** There is exactly **one** pooled connection, so a stale one is not a one-in-N chance you might dodge — it is the *next* request, and the retry that follows gets a freshly opened one. That is the "first fails, second succeeds" signature.
+
+⚠️ **Do not read this as a database crash during an incident.** Check `kubectl get pods -n dagster` for restart counts and the Postgres pod's age before going anywhere near the database — an accurate error about the wrong object has sent more than one person to the wrong screen this way.
+
 ## Security and exposure
 
 The Dagster UI is an **operator tool** and is internal-only on every
