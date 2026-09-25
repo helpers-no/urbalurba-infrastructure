@@ -303,6 +303,17 @@ Add it to the **same** Modify Response Header rule as the CORS headers above. On
 | `Accept: text/html` | `406`, a PostgREST error object | ✅ |
 | `GET /nonexistent_relation` | `404`, `PGRST205` | ✅ |
 | a browser's full `Accept` | `200`, raw JSON | ✅ |
+| 🔴 an **edge-blocked** request (AI-bot Training, BIC) | `403`, a 25-byte body | ✅ |
+
+🔴 **The last row is the one that justifies the edge placement.** A response-header transform runs before the request would ever reach your cluster, so the header arrives on **responses the origin never sees** — including Cloudflare's own refusals. A blocked reader gets somewhere to go instead of a bare `Your request was blocked.`
+
+:::danger Verify the target resolves before you set it
+The first proposed value pointed at a docs hostname that **did not resolve**. A `Link` header aimed at a dead host is worse than no header: it is an authoritative-looking pointer to nothing, and it arrives on exactly the responses where the reader has no other clue.
+
+```bash
+curl -sI "https://<your-docs-host>/" | head -1     # want a 2xx or a redirect, not a DNS failure
+```
+:::
 
 :::info Why the edge and not the service
 PostgREST emits no `Link` header and has no setting for one — its three OpenAPI options are `openapi-mode`, `openapi-security-active` and `openapi-server-proxy-uri`, and its `externalDocs` is hardcoded in the source. So it is the edge or the ingress.
@@ -373,8 +384,18 @@ ClaudeBot/1.0        403   "Your request was blocked."   25 bytes, text/plain
 | `error code: 1010`, tiny `text/plain` | **Browser Integrity Check** | Security → Settings |
 | `Your request was blocked.` | **AI bot policies** | Security → Bots |
 | error **1020** with a full HTML block page | a WAF managed or custom rule | Security → WAF |
+| `403` **with a `cf-mitigated: challenge` header** | a **Managed Challenge** from a WAF custom rule | Security → WAF → Custom rules |
 
 ⚠️ **Bot Fight Mode also emits 1010**, so check that it is off before reading a 1010 as Browser Integrity Check.
+
+🔴 **A challenge and a block both return `403`. Only the header tells them apart:**
+
+```bash
+curl -sI "https://<host>/" | grep -i cf-mitigated
+# cf-mitigated: challenge   -> a challenge the client failed to solve, not a block
+```
+
+⚠️ Without checking that header you will read a challenge as a block and go looking for a blocking rule that does not exist.
 
 :::info This mapping is inference, not measurement
 It is consistent with every observed response and with the dashboard's own settings, **but Cloudflare's Security Events log is the authority and it was not opened.** Treat it as a strong first guess that tells you which screen to open, not as proof.
@@ -446,10 +467,14 @@ Deployed and measured on a live zone. **Neither failure is visible from the rule
 | # | Setting | Value | What happens if you leave the default |
 |---|---|---|---|
 | 1 | Cache eligibility | **Eligible for cache** | nothing is cached |
-| 2 | Edge TTL | **Ignore cache-control header and use this TTL** → e.g. 5 min | 🔴 **a silent no-op** |
+| 2 | Edge TTL | **Ignore cache-control header and use this TTL** → see below | 🔴 **a silent no-op** |
 | 3 | Browser TTL | **Bypass cache** | ⚠️ **unpurgeable staleness** |
 
 **Setting 2 — the default is a trap here.** Cloudflare defaults to *"Use cache-control header if present, bypass cache if not"*, and **PostgREST sends no `Cache-Control` at all**. So a rule can be Active, correctly scoped, and cache exactly nothing. It must be told to ignore the origin and use its own TTL.
+
+🔵 **Pick setting 2's TTL from how often the data actually changes, not from a number on a page.** A first value deliberately shorter than the real cadence is a good way to start — short enough that nobody developing against the API is confused while you watch it behave — but it exists **to be raised once you have seen it work**. A zone running 5 minutes while its data changed daily at most was later raised to an hour on exactly that reasoning; the cadence was always the argument, the 5 was scaffolding.
+
+⚠️ **Raising it lengthens every window described on this page** — how long a stale spec is served, how long an outage stays invisible, how long a corrected description keeps serving the old wording.
 
 **Setting 3 — fixing setting 2 creates this one.** The moment responses become cacheable, Cloudflare applies the zone default **Browser Cache TTL of 4 hours**:
 
@@ -554,6 +579,61 @@ Two things are still per-apex, and both are easy to assume away:
 - **Anything behind a login gate.** [oauth2-proxy](/docs/services/identity/oauth2-proxy) derives its callback URL from the request's hostname and scopes its session cookie to a single apex, so **one gate instance serves one apex.** A second apex needs a registered callback URL there *and* a second gate.
 
 So *"point any domain at the cluster and it routes"* is true — and it stops being true the moment the service is gated.
+
+## Challenging scanners without breaking scripted clients
+
+A tunnelled hostname is on the public internet, and **anything on the public internet is scanned.** Measured over 24 hours on one small zone: two addresses accounted for the large majority of traffic, walking a credential-and-config wordlist.
+
+```
+/secrets.yml   /etc/.env   /privatekey.key   /api/fs/exec
+/debug/pprof/cmdline   /wp-config.php.swp   /actuator/mappings   /core/settings.py
+```
+
+✅ **Nothing was exposed** — those paths returned 403 or 404. But the requests reached the origin, and the hosts being walked served only a default placeholder page. **Traffic you serve for nothing is still traffic you serve.**
+
+### 🔴 The obvious switch is the wrong one on a zone with an API
+
+**Bot Fight Mode** is free, one toggle, and **zone-wide with no scoping.** On a zone that also hosts a script-friendly open-data API it blocks non-browser clients aggressively — it would re-break `Python-urllib` and every scripted consumer, **undoing the Configuration Rule** described above. The two settings are in direct conflict and Bot Fight Mode wins, because it applies everywhere.
+
+| option | why not |
+|---|---|
+| **Bot Fight Mode** | 🔴 zone-wide, unscopeable, re-breaks scripted clients — see [the BIC section](#-browser-integrity-check-is-zone-wide--there-is-no-per-hostname-exception) |
+| **block the hosting ASN** | works, and blunt: also blocks legitimate services hosted there, plausibly including AI tooling and preview platforms |
+| **rate limiting** | the free plan gives **one** rule. Worth saving until there is real traffic to size it against — and the scanned hosts were not the API |
+
+### ✅ A WAF custom rule, scoped to the hostnames that need it
+
+**Security → WAF → Custom rules.** The free plan allows **five**; this kind of rule is a good use of the first.
+
+```
+expression   http.host in {"<placeholder>.<your-domain>" "<other>.<your-domain>"}
+action       Managed Challenge
+```
+
+🔵 **Managed Challenge rather than Block**, because a scanner and a mistaken human get the same response and only one of them can solve it. It is scoped to the hostnames named, so the API hostname is untouched.
+
+### ⚠️ Verifying a challenge from outside is not obvious
+
+A Managed Challenge returns **`403`** — the same status as a block. The header is the only discriminator:
+
+```bash
+curl -sI "https://<challenged-host>/" | grep -i cf-mitigated
+# cf-mitigated: challenge
+```
+
+**Confirm the API hostname did not get caught in it**, in the same pass:
+
+| check | want |
+|---|---|
+| a challenged host | `403` **with** `cf-mitigated: challenge` |
+| the API host with a scripted client | `200`, no `cf-mitigated` |
+| the API host's `Link` and CORS headers | still present |
+
+:::info Do not size a rule from a number you had to join together
+Cloudflare's rule preview and a hand-built attribution can disagree by more than an order of magnitude. One reading joined per-IP totals from one panel to hostnames from a **sampled** log list — which makes it the weaker of the two, and it was recorded as such rather than carried forward as measurement.
+
+🔵 **The rule was still correct**: it is scoped, low-risk and reversible, and none of that depended on the disputed number. **Know which of your figures is sampled before you quote it.**
+:::
 
 ## ⚠️ What a tunnel does not give you: availability
 
