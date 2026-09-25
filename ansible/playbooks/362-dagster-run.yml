@@ -39,6 +39,7 @@
     dagster_ns: "dagster"
     _target: "{{ target_host | default('rancher-desktop') }}"
     _job: "{{ job | default('') }}"
+    _location: "{{ location | default('') }}"
     _wait: "{{ (wait | default(false)) | bool }}"
     # 🔴 Generous ON PURPOSE. A 142 s queue delay in front of a 105 s job means a
     # 5-minute ceiling would have failed a healthy run. This bounds "something is
@@ -174,22 +175,75 @@
       # ⚠️ Lists the alternatives rather than only refusing. A novice who
       # mistypes a job name from an install summary needs the list, not a "no".
 
-    - name: "5. Pick the repository whose pipeline list contains the job"
+    # 🔴 EVERY claimant, not the last one seen.
+    #
+    # This was `set_fact` inside a loop with a `when`, which keeps the LAST
+    # match and silently discards the rest. Two code locations defining the
+    # same job name resolved to whichever Dagster happened to list last — and
+    # `repositoriesOrError` promises no ordering, so the same command could
+    # launch from a different location, and therefore a DIFFERENT IMAGE, on
+    # consecutive invocations with nothing changed.
+    #
+    # ⚠️ From outside, that is indistinguishable from the stale-handle defect
+    # that 360's F check reports: same command, same shell, different build.
+    # The two have different remedies, so they must not be left looking alike.
+    - name: "5. Collect every location whose pipeline list contains the job"
       ansible.builtin.set_fact:
-        _sel_repo: "{{ item.name }}"
-        _sel_loc: "{{ item.location.name }}"
+        _owners: "{{ _owners | default([]) + [item] }}"
       loop: "{{ (_repos.stdout | from_json).data.repositoriesOrError.nodes }}"
       loop_control: { label: "{{ item.location.name }}/{{ item.name }}" }
       when: _job in (item.pipelines | default([]) | map(attribute='name') | list)
 
     - name: "5b. A selector must have been resolved"
       ansible.builtin.assert:
-        that:
-          - _sel_repo is defined
-          - _sel_loc is defined
+        that: (_owners | default([]) | length) > 0
         fail_msg: >-
           '{{ _job }}' is in the job list but no location claims it. That is a
           contradiction rather than a user error — report it.
+
+    # 🔴 Refuse rather than pick. Launching the wrong one executes code the
+    # operator did not choose and reports success, which is the exact failure
+    # this playbook keeps meeting from other directions.
+    - name: "5b1. Refuse an ambiguous job name unless --location says which"
+      ansible.builtin.fail:
+        msg: |
+          '{{ _job }}' is defined in {{ _owners | length }} code locations:
+
+          {% for o in _owners %}
+            {{ o.location.name }}/{{ o.name }}
+          {% endfor %}
+
+          Launching would pick one of them arbitrarily — Dagster does not
+          promise an order — and each location can carry a DIFFERENT IMAGE.
+          The run would report success having executed code you did not choose.
+
+          Name the one you mean:
+
+            uis dagster run {{ _job }} --location <name>
+
+          If you did not expect two, that is the finding: a code location left
+          behind by an earlier install still claims this job.
+            kubectl get pods -n {{ dagster_ns }} -l component=user-deployments
+      when:
+        - (_owners | length) > 1
+        - (_location | default('') | length) == 0
+
+    - name: "5b2. Honour --location when it was given"
+      ansible.builtin.set_fact:
+        _owners: "{{ _owners | selectattr('location.name', 'equalto', _location) | list }}"
+      when: (_location | default('') | length) > 0
+
+    - name: "5b3. --location must name a location that claims the job"
+      ansible.builtin.assert:
+        that: (_owners | length) > 0
+        fail_msg: >-
+          No code location named '{{ _location }}' defines '{{ _job }}'.
+          `uis dagster verify` lists the locations that are loaded.
+
+    - name: "5b4. The resolved selector"
+      ansible.builtin.set_fact:
+        _sel_repo: "{{ (_owners | first).name }}"
+        _sel_loc: "{{ (_owners | first).location.name }}"
 
     # ─── launch ──────────────────────────────────────────────────────────────
     #
