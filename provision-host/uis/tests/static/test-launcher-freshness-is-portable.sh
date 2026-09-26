@@ -1,10 +1,15 @@
 #!/bin/bash
 # test-launcher-freshness-is-portable.sh — the guard must work where operators are
 #
-# 🔴 `_launcher_freshness` required `sha256sum`, which macOS does not ship
-# (it has `shasum`). On a Mac the check returned "unknown" on every run, so
-# the warning "Image is up to date — but this launcher is NOT" could never
-# fire on the platform most operators here use.
+# 🔴 `_launcher_freshness` required `sha256sum`. Wherever that is missing the
+# check returned "unknown" on every run, so the warning "Image is up to date —
+# but this launcher is NOT" could never fire there.
+#
+# ⚠️ NO HOST HAS BEEN OBSERVED WITH IT INERT. This was found by reading the
+# code, and the first write-up attributed it to macOS — wrongly. The host that
+# prompted it runs Linux Mint with stock coreutils, and a Mac that was checked
+# had sha256sum via Homebrew (urb-agents#1585). The dependency was unnecessary
+# on every platform, which is the argument that actually holds.
 #
 # ⚠️ It was HONEST about it — "could not be checked — not the same as current"
 # — which is the worst combination: a guard that cannot alarm and cannot be
@@ -44,7 +49,7 @@ fi
 
 # --- no hash-tool dependency anywhere in the launcher ----------------------
 if grep -qE '\bsha256sum\b|\bshasum\b' <<<"$code"; then
-    fail "the guard needs no hash binary" "a tool dependency is back; macOS ships neither by default"
+    fail "the guard needs no hash binary" "a tool dependency is back; not every platform ships one"
 else
     pass "the guard needs no hash binary"
 fi
@@ -96,8 +101,8 @@ fi
 
 # ---------------------------------------------------------------------------
 # 🔴 RUN IT. The whole reason this defect survived is that the guard was only
-# ever read, never exercised — it returned "unknown" forever on macOS and
-# nothing downstream reports an inert guard. Text assertions would not have
+# ever read, never exercised — it returned "unknown" forever wherever the tool
+# was missing, and nothing reports an inert guard. Text assertions would not have
 # caught that either, so the function is extracted and actually called.
 # ---------------------------------------------------------------------------
 _TD="$(mktemp -d)"
@@ -203,9 +208,9 @@ got="$(
     STUB_BODY="$_DIFF" STUB_FAIL="" bash -c '. "$1"; _launcher_freshness' _ "$_TD/fn.sh" 2>/dev/null
 )"
 if [[ "$got" == "behind" ]]; then
-    pass "RUN: the guard still fires with no sha256sum on PATH (the macOS case)"
+    pass "RUN: the guard still fires with no sha256sum on PATH"
 else
-    fail "the guard works without sha256sum" "got '$got' — inert on macOS, which is where the operators are"
+    fail "the guard works without sha256sum" "got '$got' — inert anywhere the tool is absent"
 fi
 
 echo ""
