@@ -1086,12 +1086,69 @@ pull_container() {
                     echo "      $UIS_IMAGE_SOURCE/actions" >&2
                     ;;
                 yes)
-                    log_warn "$remote IS published, but ':latest' still points at $after."
-                    echo "    That is a tagging fault in the release, not a fault here. Take it" >&2
-                    echo "    directly, by version rather than by moving tag:" >&2
+                    # 🔴 THIS SAW A LOCAL SYMPTOM AND ASSERTED A REMOTE CAUSE.
+                    #
+                    # It said "that is a tagging fault in the release, not a fault
+                    # here" and asked the operator to report it upstream. `pull`
+                    # cannot see what the registry is serving — it observed only
+                    # that the image it got was not the version it wanted.
+                    #
+                    # Measured (ops-dev, urb-agents#1580): the registry was
+                    # serving ':latest' == the new release throughout the window,
+                    # verified independently from a second machine. The stale copy
+                    # was on the operator's side of the wire. The message sent a
+                    # correct detection to the wrong address — and because it asked
+                    # to be reported, the wrong attribution travelled.
+                    #
+                    # ✅ So determine it instead of asserting it. `docker manifest
+                    # inspect` already runs in this path (image_tag_published), so
+                    # comparing the two tags costs one more call of machinery that
+                    # is already here. If it cannot be determined, say that — and
+                    # keep the request to report behind the check that decides
+                    # whether there is anything to report.
+                    local latest_m remote_m verdict="undetermined"
+                    if command -v docker >/dev/null 2>&1; then
+                        latest_m="$(docker manifest inspect "${repo}:latest" 2>/dev/null || true)"
+                        remote_m="$(docker manifest inspect "${repo}:${remote}" 2>/dev/null || true)"
+                        if [ -n "$latest_m" ] && [ -n "$remote_m" ]; then
+                            if [ "$latest_m" = "$remote_m" ]; then
+                                verdict="local"
+                            else
+                                verdict="registry"
+                            fi
+                        fi
+                    fi
+
+                    log_warn "Expected $remote, but this machine is on $after."
+                    echo "" >&2
+                    case "$verdict" in
+                        local)
+                            echo "    At the registry, ':latest' and '$remote' are the SAME image." >&2
+                            echo "    So the stale copy is on THIS side of the wire — a local image" >&2
+                            echo "    store, or a pull-through cache between you and the registry." >&2
+                            echo "    Nothing to report upstream; clear the cache and pull again." >&2
+                            ;;
+                        registry)
+                            echo "    At the registry, ':latest' and '$remote' are DIFFERENT images," >&2
+                            echo "    so ':latest' has not moved to its own release." >&2
+                            echo "    🔴 THIS ONE IS WORTH REPORTING — the build's own verify step" >&2
+                            echo "    exists to prevent exactly it." >&2
+                            ;;
+                        *)
+                            echo "    Cause not determined. Either ':latest' has not moved at the" >&2
+                            echo "    registry, or something between you and it served a cached" >&2
+                            echo "    manifest. This command cannot see which from here." >&2
+                            echo "" >&2
+                            echo "    Check which:" >&2
+                            echo "      docker manifest inspect ${repo}:latest" >&2
+                            echo "      docker manifest inspect ${repo}:${remote}" >&2
+                            echo "    Identical  -> the stale copy is local; clear it and re-pull." >&2
+                            echo "    Different  -> it is the release, and that is worth reporting." >&2
+                            ;;
+                    esac
+                    echo "" >&2
+                    echo "    Either way, take it by version now:" >&2
                     echo "      UIS_IMAGE=${repo}:${remote} ./uis pull" >&2
-                    echo "    and please report it — ':latest' lagging its own release is the" >&2
-                    echo "    failure the build's own verify step exists to prevent." >&2
                     ;;
                 *)
                     log_warn "main says $remote and this machine is on $after."
