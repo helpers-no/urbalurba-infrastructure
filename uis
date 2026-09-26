@@ -775,13 +775,20 @@ _launcher_freshness() {
         rm -f "$remote_tmp"; echo "unknown"; return 0
     fi
 
-    # 🔴 `cmp`, NOT sha256sum — which macOS does not ship.
+    # 🔴 `cmp`, NOT sha256sum — not every platform ships it.
     #
-    # This required sha256sum, so on macOS the check fell through to "unknown"
-    # on every run and the guard never fired. It was honest about it ("could
-    # not be checked — not the same as current") and it was inert on the
-    # platform most operators here use, which is the worst combination: a
-    # warning that cannot alarm and cannot be accused of lying.
+    # This required sha256sum, so wherever that is missing the check fell
+    # through to "unknown" on every run and the guard never fired. It was
+    # honest about it ("could not be checked — not the same as current"),
+    # which is the worst combination: a warning that cannot alarm and cannot
+    # be accused of lying. Nothing downstream reports an inert guard.
+    #
+    # ⚠️ NO HOST HAS BEEN OBSERVED WITH IT INERT. Found by reading the code,
+    # not from a symptom, and the first attribution of it to macOS was wrong:
+    # the host that prompted the fix runs Linux Mint and has sha256sum from
+    # stock coreutils (imac via ops-dev, urb-agents#1585). The dependency was
+    # unnecessary either way — which is the whole argument, and it never
+    # needed a platform attached to it.
     #
     # 🔵 update_launcher — the half that actually replaces the file — has
     # always used `cmp -s` and has no such dependency. Two functions doing the
