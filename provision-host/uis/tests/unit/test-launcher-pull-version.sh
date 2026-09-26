@@ -176,15 +176,25 @@ grep -q 'UIS_RAW_BASE/uis' <<< "$_fresh_fn" && pass_test \
 
 start_test "🔴 could-not-check is never reported as stale"
 # ⚠️ A spurious "your launcher is old" is how a guard becomes noise. An
-# unreachable raw host, an empty body and a missing sha256sum must all be
-# 'unknown'.
-# ⚠️ Asserts BEHAVIOUR, not a count. The first version counted `echo "unknown"`
-# occurrences and required >= 4 — so flipping one of them to "behind" still
-# passed, and the negative control caught that. "behind" may be reached from
-# exactly ONE place: the hash comparison at the end.
+# unreachable raw host, an empty body and a download that will not parse must
+# all be 'unknown'.
+#
+# ⚠️ Asserts the PROPERTY, not the implementation. The first version counted
+# `echo "unknown"` occurrences and required >= 4 — so flipping one of them to
+# "behind" still passed. The second named the hash comparison literally
+# (`[ "$a" = "$b" ]`) and broke in 1.6.160 when that became `cmp -s`, which is
+# the same mistake one layer up: it asserted HOW the answer is computed, and
+# the property is that exactly one path may compute it at all.
+#
+# 🔵 "behind" may be reached from exactly ONE place, and that place must be a
+# direct comparison of the two files rather than an error branch. The runtime
+# proof — unreachable, empty and mangled all returning 'unknown' — lives in
+# tests/static/test-launcher-freshness-is-portable.sh, which executes the
+# function instead of reading it.
 _b=$(grep -c 'echo "behind"' <<< "$_fresh_fn")
-[[ "$_b" -eq 1 ]] && grep -q '\[ "\$a" = "\$b" \]' <<< "$_fresh_fn" && pass_test \
-    || fail_test "'behind' is reachable from $_b places; only the hash comparison may conclude it"
+_cmp=$(grep -cE 'cmp -s "\$remote_tmp" "\$self"|\[ "\$a" = "\$b" \]' <<< "$_fresh_fn")
+[[ "$_b" -eq 1 && "$_cmp" -eq 1 ]] && pass_test \
+    || fail_test "'behind' reachable from $_b places, $_cmp comparisons; exactly one of each is required"
 
 start_test "an empty fetch is treated as could-not-check"
 grep -q '\[ ! -s "\$remote_tmp" \]' <<< "$_fresh_fn" && pass_test \
