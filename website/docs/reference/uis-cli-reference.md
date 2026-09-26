@@ -846,8 +846,16 @@ distinguishes three cases, because they need different actions:
 | what it found | what it tells you |
 |---|---|
 | `<repo>:<version>` **is not in the registry** | the build is still running or it failed — nothing is wrong with your machine, and it names the Actions page |
-| `<repo>:<version>` **is** in the registry but `:latest` is older | a tagging fault in the release; take it by version: `UIS_IMAGE=<repo>:<version> ./uis pull` |
+| `<repo>:<version>` **is** in the registry but you did not get it | it compares the two tags and says **which side is stale** — see below |
 | the registry **could not be reached** | *"do not know"*, stated as such — never reported as "not built yet" |
+
+:::danger A local symptom is not a remote cause
+Until 1.6.159 the middle row asserted *"that is a tagging fault in the release, not a fault here"* — **and asked the operator to report it.** `pull` cannot see what the registry is serving; it observed only that the image it received was not the version it wanted.
+
+🔴 Measured (`urb-agents#1580`): the registry was serving `:latest` == the new release for the whole window, checked independently from a second machine. **The stale copy was on the operator's side of the wire** — a local image store or a pull-through cache. The message sent a correct detection to the wrong address, and because it asked to be reported, the wrong attribution travelled.
+
+It now **compares the two tags** and reports one of three things: the tags are identical so the stale copy is local (nothing to report), the tags differ so `:latest` really has not moved (**worth reporting**), or it could not determine which — in which case it says only that, and gives you the two commands. The remedy and the non-zero exit are unchanged.
+:::
 
 🔴 **`pull`, `stop` and `restart` refuse while a UIS command is running inside
 the container** (1.6.52). All three stop it, and `template install` is minutes
