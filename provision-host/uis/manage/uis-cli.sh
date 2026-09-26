@@ -2482,7 +2482,11 @@ cmd_argocd_remove() {
 
 cmd_argocd_list() {
     print_section "ArgoCD Applications"
-    ansible-playbook "$ANSIBLE_DIR/argocd-list-apps.yml"
+    # Propagate the playbook's status explicitly. The playbook REFUSES when
+    # ArgoCD is not running rather than reporting an empty inventory, and a
+    # refusal that exits 0 is the defect it was written to remove
+    # (urb-agents#1575).
+    ansible-playbook "$ANSIBLE_DIR/argocd-list-apps.yml" || return "$EXIT_GENERAL_ERROR"
 }
 
 cmd_argocd_verify() {

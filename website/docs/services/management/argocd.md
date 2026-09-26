@@ -60,8 +60,14 @@ Access the dashboard at [http://argocd.localhost](http://argocd.localhost).
 |---------|-------------|
 | `./uis argocd register <name> <repo-url>` | Register a GitHub repo as ArgoCD application |
 | `./uis argocd remove <name>` | Remove an ArgoCD application and its namespace |
-| `./uis argocd list` | List registered applications |
+| `./uis argocd list` | List registered applications — **refuses** if ArgoCD is not running |
 | `./uis argocd verify` | Run health checks |
+
+:::info `list` will not report an empty inventory it could not take
+If ArgoCD is not running, `./uis argocd list` **fails with a non-zero status** and names the remedy, rather than printing `(0 registered)`.
+
+🔴 The two read the same and mean opposite things. An `argocd` namespace left behind by a removal is empty but present, so *"no applications registered"* was previously indistinguishable from *"ArgoCD is not here"* — on the command people run first to see where they stand (`urb-agents#1575`).
+:::
 
 ### Key Files
 
