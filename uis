@@ -756,7 +756,6 @@ _launcher_freshness() {
     local self remote_tmp
     self="${UIS_LAUNCHER_PATH:-${BASH_SOURCE[0]}}"
     [ -r "$self" ] || { echo "unknown"; return 0; }
-    command -v sha256sum >/dev/null 2>&1 || { echo "unknown"; return 0; }
 
     remote_tmp="$(mktemp 2>/dev/null)" || { echo "unknown"; return 0; }
     if ! curl -fsSL --max-time 15 "$UIS_RAW_BASE/uis" -o "$remote_tmp" 2>/dev/null; then
@@ -768,12 +767,31 @@ _launcher_freshness() {
         rm -f "$remote_tmp"; echo "unknown"; return 0
     fi
 
-    local a b
-    a="$(sha256sum < "$self" 2>/dev/null | cut -d" " -f1)"
-    b="$(sha256sum < "$remote_tmp" 2>/dev/null | cut -d" " -f1)"
+    # ⚠️ A download that arrives intact but mangled must read as "could not
+    # tell", not "behind". update_launcher already refuses to INSTALL anything
+    # that will not parse; the reporting half should not raise an alarm over
+    # the same file, or the guard becomes noise on a flaky connection.
+    if ! bash -n "$remote_tmp" 2>/dev/null; then
+        rm -f "$remote_tmp"; echo "unknown"; return 0
+    fi
+
+    # 🔴 `cmp`, NOT sha256sum — which macOS does not ship.
+    #
+    # This required sha256sum, so on macOS the check fell through to "unknown"
+    # on every run and the guard never fired. It was honest about it ("could
+    # not be checked — not the same as current") and it was inert on the
+    # platform most operators here use, which is the worst combination: a
+    # warning that cannot alarm and cannot be accused of lying.
+    #
+    # 🔵 update_launcher — the half that actually replaces the file — has
+    # always used `cmp -s` and has no such dependency. Two functions doing the
+    # same comparison, one of them carrying a portability problem the other
+    # had already solved. They now use the same mechanism (urb-agents#1581).
+    if cmp -s "$remote_tmp" "$self"; then
+        rm -f "$remote_tmp"; echo "current"; return 0
+    fi
     rm -f "$remote_tmp"
-    if [ -z "$a" ] || [ -z "$b" ]; then echo "unknown"; return 0; fi
-    [ "$a" = "$b" ] && echo "current" || echo "behind"
+    echo "behind"; return 0
 }
 
 report_version_status() {
