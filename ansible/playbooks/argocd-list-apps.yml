@@ -13,20 +13,45 @@
     argocd_namespace: "argocd"
 
   tasks:
-    - name: "1. Check if ArgoCD namespace exists"
+    # 🔴 ASK WHETHER ARGOCD IS RUNNING, NOT WHETHER ITS NAMESPACE EXISTS.
+    #
+    # This checked for the namespace. imac measured an argocd namespace that
+    # existed and was COMPLETELY EMPTY — no pods, no deployments — so the check
+    # passed, the Application query returned nothing, and `uis argocd list`
+    # printed "(0 registered) — No applications registered." and exited 0
+    # (urb-agents#1575).
+    #
+    # ⚠️ That output is indistinguishable from a healthy ArgoCD with nothing
+    # registered yet, and `list` is the command someone runs FIRST to see where
+    # they stand. A namespace outlives everything that was ever in it, so its
+    # presence answers a different question than the reader is asking.
+    #
+    # 🔵 This is the same condition `argocd-register-app.yml` already uses, and
+    # register behaved correctly throughout. The two verbs disagreed about
+    # whether they were allowed to speak; now they cannot. A test asserts both
+    # playbooks select on the same label.
+    - name: "1. Is ArgoCD actually running?"
       kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Namespace
-        name: "{{ argocd_namespace }}"
+        kind: Pod
+        namespace: "{{ argocd_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name=argocd-server"
         kubeconfig: "{{ merged_kubeconf_file }}"
-      register: argocd_ns
+      register: argocd_pods
+      failed_when: false
 
-    - name: "2. Fail if ArgoCD is not deployed"
+    - name: "2. Refuse to report an inventory that was never taken"
       ansible.builtin.fail:
         msg: |
-          ArgoCD namespace '{{ argocd_namespace }}' not found.
+          ❌ ArgoCD is not deployed or not running.
+
+          No ArgoCD server pods found in namespace '{{ argocd_namespace }}'.
+
+          This is "could not look", NOT "nothing is registered" — the two read
+          the same and mean opposite things.
+
           Deploy ArgoCD first: uis deploy argocd
-      when: argocd_ns.resources | length == 0
+      when: (argocd_pods.resources | default([]) | length) == 0
 
     - name: "3. Get all ArgoCD Application resources"
       kubernetes.core.k8s_info:
