@@ -131,6 +131,44 @@ Decided 2026-09-07. Items 1 and 2 are independent and both proceed now.
 | 4 | Per-workload named secrets (`ANALYSIS-nais-uis` §4 item 1) — closes the seam above; the real prerequisite for both external developers **and** whole-lifecycle GitOps | M | not started — **two consumers now, see below** |
 | 5 | *Then* reconsider a UIS `Application` type | L | deferred |
 
+### The fork this exposes: should `argocd register` provision, or should these apps be templates?
+
+`urb-agents#1692` proposes that `uis argocd register` read a `requires:` block from the repository and run the provisioning before it registers. The pain behind it is concrete: the developer must *know* the `uis configure` invocation, get someone with cluster access to run it, and pass four flags correctly — which for one application took a bus task to another agent with the command written out.
+
+🔵 **The proposal is close to something UIS already has.** `uis template install` reads a declaration, provisions `postgresql` with a `config:` block including `init:`, writes a named per-app Secret, records the result in `.uis.extend/applications.yaml`, and refuses unmet dependencies. **The request is, in effect, for the ArgoCD path to gain what the template path already does.**
+
+So the decision is not "should UIS have a provisioning declaration" — it has one. It is:
+
+| | |
+|---|---|
+| **A** | the ArgoCD path gains provisioning, and two paths each read their own declaration |
+| **B** | applications that need provisioning become templates, and the ArgoCD path stays deploy-only |
+
+⚠️ **A is smaller to build and doubles the number of declaration formats. B adds nothing and asks an application author to adopt a heavier mechanism.** Neither is obviously right, and it is a maintainer decision rather than a technical one.
+
+### 🔴 Whichever is chosen, `requires:` is the wrong keyword for it
+
+`requires:` already means **two different things** in this repository:
+
+| where | shape | means |
+|---|---|---|
+| `service.schema.json` | `requires: [<service-id>]` | hard dependencies between **platform services** |
+| `template-info.yaml` | `requires: [{application, provides}]` | this tenant needs **another installed application**, checked against `.uis.extend/applications.yaml`, and **refused** if absent |
+
+A third shape — `requires: [{service, config}]`, meaning *provision this for me* — would make one keyword mean three things across three files. **Use a distinct key** (`provisions:`, or reuse the template path's `config:` block verbatim) so a reader can tell which question a declaration is answering.
+
+⚠️ And there is a precedent worth heeding: the **`requires` defect in 1.6.24** was UIS *reading a field no registry entry ever carried*. A declaration that nothing writes and nothing enforces looks supported and is not — the same failure as `SCRIPT_CONFIGURABLE="true"` on services with no handler.
+
+### What is already true, and would not need building
+
+- ✅ `uis configure postgresql --namespace --secret-name-prefix` **already writes a per-app Secret** carrying `DATABASE_URL`. The per-app named secret the proposal assumes exists today for this service, so **the database case is not blocked on item 4.**
+- ✅ **Re-running is already safe**, and deliberately so: with `--namespace` the password is read back from the existing Secret rather than rotated. That behaviour exists because rotation once left a running application holding the old credential and an install that exited 0 (`urb-agents#492`).
+- 🔴 ⚠️ **Item 3 is still open.** Eight services declare `SCRIPT_CONFIGURABLE="true"` and two have handlers. Anything that reads that flag to decide what it can provision would inherit the advertisement. **Item 3 is a prerequisite for a provisioning declaration, not a tidy-up beside it.**
+
+### The gap the proposal does not close, and should say so
+
+A Secret written or updated by `configure` **does not restart the pod consuming it** — `secretKeyRef` binds at container start. The application whose registration prompted this needed a pod restart afterwards. So "register provisions" must either roll the workload or report that it did not; otherwise it succeeds while the application keeps the credential it started with.
+
 ### Item 4 now has a second consumer, and it is the one the row was written for
 
 `urb-agents-console` (2026-09-28, `urb-agents#1677`) is the first application to **both** deploy its own workload via `uis argocd register` **and** depend on a platform service. It needs one *generated* credential (a database) and two *given* secrets, in a **public** repository.

@@ -89,6 +89,59 @@ else
     fail "the two halves are decoupled" "the cheap half gets bound to the expensive one"
 fi
 
+# ---------------------------------------------------------------------------
+# urb-agents#1692 — a proposal that `uis argocd register` provision from a
+# `requires:` block in the repository.
+#
+# 🔴 `requires:` already means TWO things here (service-to-service hard deps in
+# service.schema.json; tenant-needs-another-application in template-info.yaml,
+# checked against .uis.extend/applications.yaml). A third shape would make one
+# keyword answer three questions across three files.
+#
+# ⚠️ And the 1.6.24 `requires` defect is the precedent: UIS read a field no
+# registry entry ever carried. A declaration nothing writes looks supported and
+# is not — the same failure as SCRIPT_CONFIGURABLE on services with no handler.
+# ---------------------------------------------------------------------------
+
+_n=0
+grep -qF 'hard dependencies between **platform services**' "$DOC" && _n=$((_n+1))
+grep -qF 'another installed application' "$DOC" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass "the two existing meanings of requires: are recorded"
+else
+    fail "both meanings are recorded" "only $_n of 2 — a third shape looks like a free slot"
+fi
+
+if grep -qF '1.6.24' "$DOC"; then
+    pass "the 1.6.24 requires defect is cited as the precedent"
+else
+    fail "the precedent is cited" "a declaration nothing writes gets added again"
+fi
+
+# 🔴 The prerequisite that is easy to miss: item 3 is not done.
+if grep -qF 'prerequisite for a provisioning declaration' "$DOC"; then
+    pass "item 3 is named as a prerequisite, not a tidy-up"
+else
+    fail "item 3 is a prerequisite" "a provisioning declaration inherits the false advertisement"
+fi
+
+# The gap the proposal does not close.
+if grep -qF 'does not restart the pod consuming it' "$DOC"; then
+    pass "the secretKeyRef restart gap is stated against 'register provisions'"
+else
+    fail "the restart gap is stated" "register would succeed while the app keeps its old credential"
+fi
+
+# And the fork itself must stay a fork, not be silently decided.
+_n=0
+grep -qF 'the ArgoCD path gains provisioning' "$DOC" && _n=$((_n+1))
+grep -qF 'become templates' "$DOC" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass "both arms of the fork are recorded for the maintainer"
+else
+    fail "the fork is recorded" "only $_n of 2 — one arm gets adopted by default"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
