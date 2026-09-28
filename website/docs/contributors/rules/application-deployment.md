@@ -128,8 +128,43 @@ Decided 2026-09-07. Items 1 and 2 are independent and both proceed now.
 | 1 | Atlas via templates — ordering (`PLAN-templates-000`), then the missing `config:` fields | M | in flight |
 | 2 | Atlas frontend via `uis argocd register` | free | ready, nothing blocks it |
 | 3 | **Retract `SCRIPT_CONFIGURABLE` where no handler exists** — see below | S | filed |
-| 4 | Per-workload named secrets (`ANALYSIS-nais-uis` §4 item 1) — closes the seam above; the real prerequisite for both external developers **and** whole-lifecycle GitOps | M | not started |
+| 4 | Per-workload named secrets (`ANALYSIS-nais-uis` §4 item 1) — closes the seam above; the real prerequisite for both external developers **and** whole-lifecycle GitOps | M | not started — **two consumers now, see below** |
 | 5 | *Then* reconsider a UIS `Application` type | L | deferred |
+
+### Item 4 now has a second consumer, and it is the one the row was written for
+
+`urb-agents-console` (2026-09-28, `urb-agents#1677`) is the first application to **both** deploy its own workload via `uis argocd register` **and** depend on a platform service. It needs one *generated* credential (a database) and two *given* secrets, in a **public** repository.
+
+🔵 **What it adds is not urgency — it is evidence.** Item 4's justification was a prediction about external developers. This is the first case where the seam actually costs **someone else's hands**: the app's author has no cluster access, so a third party must run `uis configure` before the application can start. Atlas did not show this, because Atlas belongs to the same people who run the cluster.
+
+⚠️ **It does not reorder anything.** Item 4 was already the gate and already ahead of item 5; a second consumer confirms that rather than revising it.
+
+### What item 4 does and does not close
+
+| | after item 4 |
+|---|---|
+| blast radius | ✅ one app's own keys instead of every namespace's shared Secret |
+| adding a key | ✅ one place, not a three-file edit (SEC-F5) |
+| a developer self-serving a database | 🔴 **still no** — a generated credential is still minted imperatively |
+| rebuild from git alone | 🔴 **still partial** — but the missing piece becomes one *named* Secret instead of a silently empty value |
+
+🔵 That last row is the honest win and it is easy to oversell. Item 4 does not make the GitOps story whole. It makes what is missing **diagnosable**, which is the same shape as every other fix in this product: a refusal that names the absent thing beats a success that does not mention it.
+
+### On a vault, and why a concrete consumer does not summon one
+
+[INVESTIGATE-secrets-dev-to-production](../../ai-developer/plans/backlog/INVESTIGATE-secrets-dev-to-production.md) **Part 4** is titled *"Why this comes before the vault question"*, and its argument is not that a vault waits for demand:
+
+> *"a vault does not stop an unset key rendering empty, does not make an allowlist self-updating, and does not put validation on the deploy path. Fixing this first makes the vault question smaller."*
+
+So a new consumer does not move the vault forward — **item 4 is upstream of it either way**, and doing item 4 first shrinks what a vault would have to answer.
+
+### 🔴 Encrypted secrets in git trade away Principle 0
+
+Sealed Secrets and SOPS are the obvious answers for *given* secrets in a public repository, and they are cryptographically sound there. **The objection is not secrecy, it is portability:** both bind a secret to a specific key holder, so the same git tree **cannot come up on a developer's laptop**.
+
+⚠️ That is [Principle 0](./kubernetes-deployment.md) — *every service runs on a developer's laptop* — which `ANALYSIS-nais-uis` names as one of three things UIS does **better** than NAIS. Committing encrypted secrets buys reproducibility on one cluster by giving up reproducibility everywhere else.
+
+**So the recommendation is to separate the two questions.** Item 4 lets an application *name* the Secret it expects — `envFrom: [secret: <name>]`, plain Kubernetes, no platform code. **Where that Secret comes from stays swappable**: created by hand today, by Sealed Secrets, SOPS or External Secrets later, with no change to the application's declaration. Deciding the delivery mechanism now would bind the cheap half to the expensive one.
 
 **Item 4 is the gate, and it is not the one people assume.** "We need GitOps before we
 onboard developers" is the wrong dependency: ArgoCD already works. What a developer
