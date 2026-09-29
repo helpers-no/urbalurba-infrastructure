@@ -147,14 +147,19 @@ _RM="$REPO/ansible/playbooks/070-remove-authentik.yml"
 _U09="$REPO/ansible/playbooks/utility/u09-authentik-create-postgres.yml"
 # ⚠️ Require confirm=yes on the COMMAND line, not just mentioned in prose —
 # the explanatory sentence beneath it also contains the word.
+_SVC="$REPO/provision-host/uis/services/identity/service-authentik.sh"
+_note="$(sed -n '/^SCRIPT_UNDEPLOY_NOTE="/,/"$/p' "$_SVC")"
 _n=0
-grep -qF 'ansible-playbook playbooks/utility/u09-authentik-create-postgres.yml -e operation=delete -e confirm=yes' "$_RM" && _n=$((_n+1))
-grep -qF '/mnt/urbalurbadisk/ansible' "$_RM" && _n=$((_n+1))
-grep -qF './uis shell' "$_RM" && _n=$((_n+1))
-# A continuation backslash does not survive `debug`'s JSON escaping.
-if grep -qE '\\\\"$' "$_RM"; then _n=0; fi
+grep -qF 'ansible-playbook playbooks/utility/u09-authentik-create-postgres.yml -e operation=delete -e confirm=yes' <<<"$_note" && _n=$((_n+1))
+grep -qF '/mnt/urbalurbadisk/ansible' <<<"$_note" && _n=$((_n+1))
+grep -qF './uis shell' <<<"$_note" && _n=$((_n+1))
+# Neither of the two shapes that failed to paste may come back.
+grep -qF '\' <<<"$_note" && _n=0
+grep -qE '^\s*".*",\s*$' <<<"$_note" && _n=0
+# And the playbook must not print a command again: its output cannot be pasted.
+grep -qF 'ansible-playbook playbooks/utility/u09' "$_RM" && _n=0
 if [[ "$_n" -eq 3 ]]; then
-    pass "the printed remedy is one runnable line, with the container path and the way in"
+    pass "the remedy is pasteable, and comes from uis rather than an Ansible debug task"
 else
     fail "the remedy is runnable as printed" "only $_n of 3 — an agent cannot follow it"
 fi

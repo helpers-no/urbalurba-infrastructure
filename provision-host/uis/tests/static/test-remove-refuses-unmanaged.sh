@@ -65,7 +65,7 @@ else
 fi
 
 start_test "--force is offered as the way through, and warns before destroying"
-if echo "$guard" | grep -q -- "--force" && grep -q "5b. Warn when forcing" "$RM_PB"; then
+if echo "$guard" | grep -q -- "--force" && grep -q "5f. Forcing the removal of a namespace ArgoCD left behind" "$RM_PB"; then
     pass_test
 else
     fail_test "No --force path or no warning on it"
@@ -91,15 +91,15 @@ start_test "the undeploy remedy has no line-continuation backslash"
 # `debug` JSON-escapes its msg, so a lone \ is rendered as \\ and the shell
 # sees a literal backslash instead of a continuation. imac pasted it verbatim
 # and got 'ERROR! the playbook: \ could not be found'.
-remedy="$(awk '/To remove the database and its role/,/Verification:/' "$UNDEPLOY_PB")"
-if echo "$remedy" | grep -q '\\\\"$'; then
-    fail_test "Remedy still ends a line with a continuation backslash: $remedy"
+remedy="$(sed -n '/^SCRIPT_UNDEPLOY_NOTE="/,/"$/p' "$ROOT/provision-host/uis/services/identity/service-authentik.sh")"
+if echo "$remedy" | grep -qF '\\'; then
+    fail_test "Remedy still contains a continuation backslash: $remedy"
 else
     pass_test
 fi
 
 start_test "the remedy is a single runnable ansible-playbook line carrying confirm=yes"
-if echo "$remedy" | grep -q "ansible-playbook playbooks/utility/u09-authentik-create-postgres.yml -e operation=delete -e confirm=yes"; then
+if echo "$remedy" | grep -qF "ansible-playbook playbooks/utility/u09-authentik-create-postgres.yml -e operation=delete -e confirm=yes"; then
     pass_test
 else
     fail_test "No single-line command found: $remedy"
@@ -160,6 +160,153 @@ if grep -q "terchris/urb-dev-typescript-hello-world" "$CLI"; then
     pass_test
 else
     fail_test "No corrected example URL found"
+fi
+
+
+# ============================================================
+# urb-agents#1736: --force deleted anything, and the remedy still
+# could not be pasted
+# ============================================================
+
+print_test_section "urb-agents#1736: --force, the pasteable remedy, and task 18"
+
+SVC_AUTHENTIK="$ROOT/provision-host/uis/services/identity/service-authentik.sh"
+SVC_DEPLOY="$ROOT/provision-host/uis/lib/service-deployment.sh"
+
+start_test "--force refuses when the namespace holds resources this app does not own"
+if grep -q "5e. Refuse to force-delete resources this application does not own" "$RM_PB"; then
+    pass_test
+else
+    fail_test "No untracked-resource refusal in $RM_PB"
+fi
+
+start_test "it finds them with the selector that also catches resources with no label at all"
+# `key!=value` matches resources lacking the key — the set that must survive.
+if grep -qF 'argocd.argoproj.io/instance!={{ app_name }}' "$RM_PB"; then
+    pass_test
+else
+    fail_test "Not using the argocd.argoproj.io/instance!=<app> selector"
+fi
+
+start_test "it looks beyond pods — a Secret and a PVC were destroyed on a pod count"
+n=$(grep -cF "all,secret,configmap,persistentvolumeclaim" "$RM_PB")
+if [[ "$n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "Expected the wide enumeration in both 5c and task 12; found $n"
+fi
+
+start_test "Kubernetes' own per-namespace ConfigMap is not counted as someone's data"
+if grep -qF "kube-root-ca.crt" "$RM_PB"; then
+    pass_test
+else
+    fail_test "kube-root-ca.crt is not excluded, so every namespace looks occupied"
+fi
+
+start_test "the refusal names the resources rather than counting them"
+blk="$(awk '/5e. Refuse to force-delete/,/^    - name: "5f/' "$RM_PB")"
+if echo "$blk" | grep -qF "untracked | join"; then
+    pass_test
+else
+    fail_test "Refusal does not list the resources: $blk"
+fi
+
+start_test "🔴 the refusal is a fail — a warning printed and acted on in the same run is a log line"
+if echo "$blk" | grep -q "ansible.builtin.fail"; then
+    pass_test
+else
+    fail_test "5e does not stop the play"
+fi
+
+start_test "removing a name with no namespace says nothing was removed"
+if grep -q "5g. Nothing to remove" "$RM_PB"; then
+    pass_test
+else
+    fail_test "No 'nothing to remove' path — a missing name still claims success"
+fi
+
+start_test "the final summary no longer claims removals unconditionally"
+fin="$(awk '/17. Final status display/,0' "$RM_PB")"
+n=0
+echo "$fin" | grep -qF "NOTHING TO REMOVE" && n=$((n+1))
+echo "$fin" | grep -qF "No ArgoCD Application of that name existed" && n=$((n+1))
+echo "$fin" | grep -qF "No namespace of that name existed" && n=$((n+1))
+if [[ $n -eq 3 ]]; then pass_test; else fail_test "only $n of 3 conditional lines in the summary"; fi
+
+# ── the remedy, which failed to paste twice ──
+
+start_test "the undeploy playbook no longer prints anything meant to be pasted"
+# 🔴 debug wraps every line: a list item arrives as a JSON string with quotes
+# and a trailing comma, so bash said "./uis shell,: No such file or directory".
+if grep -qF "ansible-playbook playbooks/utility/u09-authentik-create-postgres.yml" "$UNDEPLOY_PB"; then
+    fail_test "The playbook still prints the command through debug"
+else
+    pass_test
+fi
+
+start_test "the command now comes from the service definition, where printf can print it"
+if grep -q "^SCRIPT_UNDEPLOY_NOTE=" "$SVC_AUTHENTIK"; then
+    pass_test
+else
+    fail_test "No SCRIPT_UNDEPLOY_NOTE on the authentik service"
+fi
+
+start_test "uis prints that note with printf, not through a callback"
+if grep -qF "_print_undeploy_note" "$SVC_DEPLOY" && grep -qF "printf '\\n%s\\n'" "$SVC_DEPLOY"; then
+    pass_test
+else
+    fail_test "The note is not printed, or not with printf"
+fi
+
+start_test "it is printed after a successful removal"
+if awk '/log_success "\$SCRIPT_NAME removed"/{getline; if ($0 ~ /_print_undeploy_note/) found=1} END{exit !found}' "$SVC_DEPLOY"; then
+    pass_test
+else
+    fail_test "_print_undeploy_note is not called after the removal succeeds"
+fi
+
+start_test "🔴 the note itself is pasteable: bash can parse every command line in it"
+note="$(sed -n '/^SCRIPT_UNDEPLOY_NOTE="/,/"$/p' "$SVC_AUTHENTIK")"
+bad=0
+echo "$note" | grep -qF '\' && bad=1            # no continuation backslashes
+echo "$note" | grep -qE '^\s*".*",\s*$' && bad=1  # no JSON list-item shape
+# and the two real command lines must parse
+( source "$SVC_AUTHENTIK" 2>/dev/null
+  printf '%s\n' "$SCRIPT_UNDEPLOY_NOTE" \
+    | grep -E '^\s+(\./uis shell|cd /mnt)' \
+    | bash -n - ) 2>/dev/null || bad=1
+if [[ $bad -eq 0 ]]; then pass_test; else fail_test "The note is not pasteable: $note"; fi
+
+# ── task 18 ──
+
+start_test "task 18 defaults before 'first', so a missing field does not crash the play"
+# regex_search returns None on no match and `first` raises on None BEFORE
+# `default` is reached: 'NoneType' object is not iterable.
+t18="$(awk '/- name: 18. Extract key provider information/,/- name: 19/' "$VERIFY_PB")"
+n=$(echo "$t18" | grep -c "default(\[''\], true) | first")
+if [[ "$n" -ge 3 ]]; then pass_test; else fail_test "only $n expressions default before first"; fi
+
+start_test "no expression in task 18 still pipes regex_search straight into first"
+if echo "$t18" | grep -qE "regex_search\([^)]*\)[^|]*\| first"; then
+    fail_test "An expression still calls first on a possibly-None value: $t18"
+else
+    pass_test
+fi
+
+start_test "OAuth2-only fields are not demanded of a proxy provider"
+n=$(echo "$t18" | grep -cF "if has_oauth2_provider else 'Not applicable (proxy provider)'")
+if [[ "$n" -eq 2 ]]; then
+    pass_test
+else
+    fail_test "only $n of 2 OAuth2-only fields are guarded (url:, access_token_validity:)"
+fi
+
+start_test "the hardcoded provider name is gone from the display too"
+t19="$(awk '/- name: 19. Display provider information/,/- name: 20/' "$VERIFY_PB")"
+if echo "$t19" | grep -qF "whoami-provider"; then
+    fail_test "task 19 still prints 'Provider Name: whoami-provider', which does not exist"
+else
+    pass_test
 fi
 
 print_summary

@@ -15,6 +15,23 @@ SCRIPT_MANIFEST=""
 SCRIPT_CHECK_COMMAND="kubectl get pods -n authentik -l app.kubernetes.io/name=authentik --no-headers 2>/dev/null | grep -q Running"
 SCRIPT_REMOVE_PLAYBOOK="070-remove-authentik.yml"
 SCRIPT_REQUIRES="postgresql redis"
+
+# Printed verbatim after `uis undeploy authentik`. `undeploy` deliberately
+# keeps the database — UIS cannot back up what it deploys, so a removal that
+# destroys data has no undo — and this is how to remove it when you mean to.
+#
+# 🔴 It lives here, not in 070-remove-authentik.yml, because Ansible's debug
+# callback wraps every line it prints and the result cannot be pasted. Two
+# releases shipped a remedy that failed byte-for-byte (urb-agents#1732, #1736).
+# Keep it pasteable: no continuations, one command per line.
+SCRIPT_UNDEPLOY_NOTE="The PostgreSQL database 'authentik' and its role were NOT deleted.
+
+To remove them, run these two lines:
+
+  ./uis shell
+  cd /mnt/urbalurbadisk/ansible && ansible-playbook playbooks/utility/u09-authentik-create-postgres.yml -e operation=delete -e confirm=yes
+
+(confirm=yes is required when there is no terminal to answer the prompt -- an agent, a CI job or a script)"
 SCRIPT_PRIORITY="40"
 
 # === Deployment Details (Optional) ===

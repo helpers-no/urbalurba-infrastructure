@@ -128,7 +128,23 @@ The register playbook never needed the guard — task 10 creates the namespace w
 
 🔵 **Adoption does not put the Secret at risk — measured.** imac verified it on a cluster (`urb-agents#1732`): same UID and same data hash before register, after the first sync, and after a forced second sync with `prune: true` and a hard refresh. ArgoCD's tracked resources were only the `Service` and `Deployment`; the Secret had no `argocd.argoproj.io/tracking-id` annotation and no `app.kubernetes.io/instance` label.
 
-⚠️ **The caveat is a real constraint on future work:** if `configure` ever labels its Secret `app.kubernetes.io/instance=<name>`, ArgoCD's label tracking would start owning it — and pruning it.
+⚠️ **The caveat is a real constraint on future work:** if `configure` ever labels its Secret **`argocd.argoproj.io/instance=<name>`**, ArgoCD's label tracking would start owning it — and pruning it.
+
+🔵 That label is measured, not assumed: the live `fleet` Deployment carries `argocd.argoproj.io/instance: fleet`, and `application.resourceTrackingMethod` is unset (ArgoCD v2.14.10). ⚠️ This page first named `app.kubernetes.io/instance`, which is ArgoCD's *other* tracking label and not the one in use here — corrected by imac in `urb-agents#1736`.
+
+### 🔴 …and then `--force` deleted anything at all
+
+The first fix gave `remove` a `--force` for the genuine orphan. imac attacked it (`urb-agents#1736`) and it deleted **any** namespace by name:
+
+| case | before |
+|---|---|
+| a namespace holding someone else's `Deployment` | deleted, exit 0 |
+| a namespace holding a `Secret`, a `ConfigMap` and a `PVC`, no pods | deleted, reported **"Found 0 pods"** |
+| a name with no namespace at all | exit 0 and a **false claim**: *"Namespace … removed"* |
+
+🔴 **The warning was printed and acted on in the same run** — for an agent or a script that is a log line, not a warning — and it named no resource, only a pod count. So the loop was one step longer and still there: `register` refuses → someone runs `remove` anyway → `remove` refuses and *suggests* `--force` → `--force` deletes the workloads.
+
+**Since 1.6.177**, `--force` deletes only a namespace ArgoCD really left behind. It lists everything not carrying `argocd.argoproj.io/instance=<name>` — the selector `key!=value` also matches resources that lack the key, which is exactly the set that must survive — and refuses, naming them, if there is any. `kube-root-ca.crt` is excluded because Kubernetes puts it in every namespace. A name with no namespace now says *"nothing to remove"* rather than claiming success.
 
 ### 🔴 `argocd remove` deleted namespaces it never managed
 
