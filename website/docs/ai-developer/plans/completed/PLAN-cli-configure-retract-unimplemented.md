@@ -13,7 +13,7 @@ fails at the point of use.
 **Decided**: 2026-09-07 by Terje — item 3 of the sequence in
 [Rules for Deploying Applications](../../../contributors/rules/application-deployment.md).
 
-**Related**: [ANALYSIS-nais-uis](./ANALYSIS-nais-uis.md) §4 item 4 ("finish or retract
+**Related**: [ANALYSIS-nais-uis](../backlog/ANALYSIS-nais-uis.md) §4 item 4 ("finish or retract
 `SCRIPT_CONFIGURABLE`", effort S) — this is the *retract* half, chosen deliberately.
 
 ---
@@ -50,17 +50,17 @@ handler lands, and the handler is the thing that earns the flag.
 
 ## Tasks
 
-- [ ] 1.1 Remove `SCRIPT_CONFIGURABLE="true"` from the six service files:
+- [x] 1.1 Remove `SCRIPT_CONFIGURABLE="true"` from the six service files:
       `elasticsearch`, `mysql`, `mongodb`, `qdrant`, `redis`, `authentik`
-- [ ] 1.2 Regenerate `website/src/data/services.json` and confirm the flag disappears
+- [x] 1.2 Regenerate `website/src/data/services.json` and confirm the flag disappears
       for exactly those six and remains for `postgresql` and `postgrest`
-- [ ] 1.3 Make `configure.sh` reject an unconfigurable service *by its metadata* rather
+- [x] 1.3 Make `configure.sh` reject an unconfigurable service *by its metadata* rather
       than by falling through to a missing handler — the error should say "service X is
       not configurable" and list what is, not "handler not yet implemented", which reads
       as a promise
-- [ ] 1.4 Add the rule to [adding-a-service.md](../../../contributors/guides/adding-a-service.md):
+- [x] 1.4 Add the rule to [adding-a-service.md](../../../contributors/guides/adding-a-service.md):
       declare `SCRIPT_CONFIGURABLE` **only** when a handler exists
-- [ ] 1.5 Add a unit test asserting every service declaring the flag has a matching
+- [x] 1.5 Add a unit test asserting every service declaring the flag has a matching
       `configure-<id>.sh` — so the drift cannot come back silently
 
 ## Acceptance
@@ -76,3 +76,32 @@ Implementing any handler. That is a separate plan per service, and each one need
 answer to "what does configuring this service for one app even mean" — which for Redis
 (a shared keyspace? a numbered DB? an ACL user?) is a design question, not a coding task.
 That question is precisely why speculative flags are worse than no flags.
+
+---
+
+## Completed 2026-09-29 — 1.6.169
+
+Terje's decision, after the consequences were measured in `urb-agents#1710`:
+**all six, including authentik.**
+
+The question that decided it was *"will authentik deploy stop working?"* — answered
+empirically rather than by inspection: flipping the flag in a copy of
+`service-authentik.sh` and diffing every `SCRIPT_*` variable the deploy path consumes
+showed **one line changed and nothing else**. `SCRIPT_PLAYBOOK`, `SCRIPT_NAMESPACE`,
+`SCRIPT_CHECK_COMMAND`, `SCRIPT_REQUIRES` and `SCRIPT_REMOVE_PLAYBOOK` are byte-identical,
+and a sweep of 534 files found **zero references to the flag in any deploy path**.
+
+### One task the plan did not have
+
+🔴 `configure.sh` printed **`uis configure redis --app volunteer-app --json`** as an
+example in the usage shown when the syntax is wrong — so retracting redis without
+touching it would have handed the operator a second failing command at the moment they
+were already confused. Fixed, and `test-configurable-has-a-handler.sh` now asserts that
+every service named in those examples is configurable.
+
+### What the six became
+
+`SCRIPT_CONFIGURABLE="false"` with a comment naming the reason, rather than the field
+being deleted — matching `oauth2-proxy`, which already spelled it that way. Absence and
+`"false"` behave identically at the gate; an explicit `"false"` says *considered and
+declined* where an absent field says *nobody filled this in*.

@@ -91,7 +91,12 @@ else
 fi
 
 # Check configurable field on expected services
-for service in postgresql mysql mongodb redis elasticsearch qdrant authentik; do
+# ⚠️ Exactly the two with a handler. mysql, mongodb, redis, elasticsearch,
+# qdrant and authentik were listed here and had none — this test asserted the
+# false advertisement rather than catching it. Retracted 2026-09-29 on Terje's
+# decision (urb-agents#1710); they are checked below as NOT configurable now,
+# which is the assertion that would have caught it.
+for service in postgresql postgrest; do
     start_test "$service has configurable: true"
     val=$(jq -r --arg id "$service" '.services[] | select(.id == $id) | .configurable' "$SERVICES_JSON" 2>/dev/null)
     if [[ "$val" == "true" ]]; then
@@ -102,7 +107,7 @@ for service in postgresql mysql mongodb redis elasticsearch qdrant authentik; do
 done
 
 # Check non-configurable services don't have configurable: true
-for service in grafana prometheus argocd nginx whoami; do
+for service in grafana prometheus argocd nginx whoami mysql mongodb redis elasticsearch qdrant authentik; do
     start_test "$service is NOT configurable"
     val=$(jq -r --arg id "$service" '.services[] | select(.id == $id) | .configurable // "null"' "$SERVICES_JSON" 2>/dev/null)
     if [[ "$val" != "true" ]]; then

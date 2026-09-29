@@ -54,7 +54,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Investigate: install an application that spans several services, from one declaration](INVESTIGATE-templates-multi-surface-application.md) | Let one declaration install an application that needs *several* platform | 2026-09-08 |
 | [Declare external dependencies as shim Services](PLAN-system-dependencies-shim-services.md) | Every dependency UIS has on something outside the cluster is declared | 2026-09-07 |
 | [Ship neko as an optional add-on — the honest case for and against](PLAN-service-neko-001-optional-addon.md) | — | 2026-09-07 |
-| [Plan: advertise only the `configure` handlers that exist](PLAN-cli-configure-retract-unimplemented.md) | `SCRIPT_CONFIGURABLE="true"` appears only on services that actually have a | 2026-09-07 |
 | [---](INVESTIGATE-system-launcher-image-version-drift.md) | — | 2026-08-31 |
 | [A workflow's `paths:` filter and what the job actually depends on drift apart, silently](INVESTIGATE-system-workflow-paths-filter-drift.md) | Decide how a workflow's declared `paths:` can be kept honest against what its job really | 2026-08-30 |
 | [Investigate: should a service bring its own availability probe, and can Uptime Kuma accept one?](INVESTIGATE-system-monitor-definitions-with-services.md) | Decide how the external watchdog's monitors get created and stay in | 2026-08-30 |

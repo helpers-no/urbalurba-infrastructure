@@ -35,5 +35,10 @@ SCRIPT_SUMMARY="MySQL is the world's most popular open-source relational databas
 SCRIPT_DOCS="/docs/services/databases/mysql"
 
 # === Template Integration (Optional) ===
-SCRIPT_CONFIGURABLE="true"
+# ⚠️ NOT configurable: there is no `lib/configure-mysql.sh` handler, and the
+# flag is what `uis configure` reads to decide whether to try. Declaring it
+# true advertised a capability that produced "Handler not yet implemented"
+# (urb-agents#1710, Terje 2026-09-29). Re-declare it the day a handler lands —
+# a unit test now requires the two to agree.
+SCRIPT_CONFIGURABLE="false"
 SCRIPT_EXPOSE_PORT="33306"

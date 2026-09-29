@@ -113,6 +113,9 @@ SCRIPT_OWNER="platform-team"   # platform-team | app-team
 SCRIPT_PROVIDES_APIS=""        # API names this service provides (e.g., "myservice-api")
 SCRIPT_CONSUMES_APIS=""        # API names this service consumes (e.g., "litellm-api")
 
+# === Template Integration (Optional) ===
+SCRIPT_CONFIGURABLE="false"    # ONLY "true" when lib/configure-<id>.sh exists
+
 # === Website Metadata (Optional) ===
 SCRIPT_ABSTRACT="Brief abstract for documentation"
 SCRIPT_SUMMARY="Extended description for the documentation page"
@@ -121,6 +124,16 @@ SCRIPT_WEBSITE="https://myservice.example.com"
 SCRIPT_TAGS="tag1,tag2,tag3"
 SCRIPT_DOCS="/docs/services/category/myservice"
 ```
+
+### 🔴 `SCRIPT_CONFIGURABLE` — declare it only when a handler exists
+
+`uis configure <service>` reads this flag to decide whether to try. **The handler is a separate file**, `provision-host/uis/lib/configure-<id>.sh`, and nothing makes the two agree by itself.
+
+⚠️ **Eight services once declared `"true"` and two had handlers.** The other six advertised a capability that produced `Handler not yet implemented.` at the point of use — readable from the service list and the generated docs, so nobody could tell them apart until they ran it. All six were retracted on 2026-09-29 (`urb-agents#1710`).
+
+**So: leave it `"false"` until the handler exists.** Re-declaring is a one-line change on the day it does, and `tests/static/test-configurable-has-a-handler.sh` fails if the two ever disagree — in **either** direction, since a handler without the flag is a service the gate refuses for no reason.
+
+🔵 If you add the flag, remember `services.json` is **generated**: run `bash provision-host/uis/manage/uis-docs.sh` and commit the result, or CI's JSON Generation check will catch the drift.
 
 **Field reference:**
 

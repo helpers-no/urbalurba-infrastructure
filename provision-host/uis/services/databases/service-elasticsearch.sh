@@ -35,5 +35,10 @@ SCRIPT_SUMMARY="Elasticsearch is a distributed, RESTful search and analytics eng
 SCRIPT_DOCS="/docs/services/databases/elasticsearch"
 
 # === Template Integration (Optional) ===
-SCRIPT_CONFIGURABLE="true"
+# ⚠️ NOT configurable: there is no `lib/configure-elasticsearch.sh` handler, and the
+# flag is what `uis configure` reads to decide whether to try. Declaring it
+# true advertised a capability that produced "Handler not yet implemented"
+# (urb-agents#1710, Terje 2026-09-29). Re-declare it the day a handler lands —
+# a unit test now requires the two to agree.
+SCRIPT_CONFIGURABLE="false"
 SCRIPT_EXPOSE_PORT="39200"
