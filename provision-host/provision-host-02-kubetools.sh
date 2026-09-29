@@ -170,11 +170,23 @@ install_ansible_kubernetes() {
         #
         # 🔴 community.postgresql is the exception, and pinned BACKWARDS on
         # purpose: at 5.0.0 the four `*-create-postgres.yml` playbooks cannot
-        # run at all, and they are written for 3.x. `port` and `login_port` are
-        # NOT interchangeable — 3.4.0 accepts only `port`, 5.0.0 only
-        # `login_port` — so there is no spelling that works on both and this
-        # cannot be fixed by renaming. Moving to 5.x means editing 43 call
-        # sites across four playbooks and is a deliberate upgrade, not a repair.
+        # run at all, because they pass `port:` and 5.0.0 removed it.
+        #
+        # ⚠️ AN EARLIER VERSION OF THIS COMMENT GAVE A REASON THAT IS FALSE.
+        # It said `port` and `login_port` are not interchangeable, so renaming
+        # could not work. They ARE: 3.4.0 defines `port:` with
+        # `aliases: [ login_port ]`, and 5.0.0 accepts `login_port` as the
+        # canonical name. **`login_port` works on both**, so renaming the 43
+        # call sites is a real alternative to this pin (imac, #1721 — I had
+        # searched the doc fragment for a `login_port:` option block and missed
+        # it because it is an alias, then read my pattern not matching as the
+        # parameter not existing).
+        #
+        # 🔵 The pin stands on the reason that was always true: 3.4.0 is what
+        # those playbooks were written and tested against, it works, and
+        # moving to 5.x is an upgrade someone should choose rather than a
+        # repair someone is forced into. Renaming is the alternative whenever
+        # anyone wants 5.x — and it is now known to be available.
         install_collection kubernetes.core      6.6.0  "git+https://github.com/ansible-collections/kubernetes.core.git,6.6.0" || collections_failed=1
         install_collection community.postgresql 3.4.0  "git+https://github.com/ansible-collections/community.postgresql.git,3.4.0" || collections_failed=1
         install_collection community.general    13.4.0 "git+https://github.com/ansible-collections/community.general.git,13.4.0" || collections_failed=1

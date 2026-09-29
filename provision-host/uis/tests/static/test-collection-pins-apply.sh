@@ -124,6 +124,33 @@ else
     pass "the failure is not downgraded to a note"
 fi
 
+# --- 🔴 the pin's stated reason must be the true one -----------------------
+# An earlier version of this comment said `port` and `login_port` are not
+# interchangeable, so renaming could not work and a pin was forced. That is
+# FALSE: 3.4.0 defines `port:` with `aliases: [ login_port ]`, and 5.0.0 takes
+# `login_port` as the canonical name — so `login_port` works on both and
+# renaming IS available (imac, urb-agents#1721).
+#
+# ⚠️ The pin still stands, on the reason that was always true. But a comment
+# that states an invented constraint makes the next reader rule out an option
+# that exists, so the retraction has to be in the file, not only in a commit.
+_kt_raw="$(cat "$KT")"
+if grep -qF 'NOT interchangeable' <<<"$_kt_raw"; then
+    fail "the false 'not interchangeable' claim is gone" \
+         "it rules out renaming, which measurement shows is available on both versions"
+else
+    pass "the false 'not interchangeable' claim is gone"
+fi
+
+_n=0
+grep -qF 'aliases: [ login_port ]' <<<"$_kt_raw" && _n=$((_n+1))
+grep -qF 'works on both' <<<"$_kt_raw" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass "the comment records that login_port works on both, with the evidence"
+else
+    fail "the correction is recorded" "only $_n of 2 — the next reader cannot tell which claim was wrong"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]

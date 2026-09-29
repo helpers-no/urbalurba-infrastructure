@@ -309,14 +309,25 @@ configure_service() {
             _configure_error "usage" "$service_id" "--purge is not implemented for postgresql. It did not remove anything; it rotated the password. Drop the database and role by hand."
             return 1
         fi
+        # ⚠️ Derive the REAL names rather than printing placeholders. The first
+        # version of this message said `DROP ROLE "<app>_user"`, and there is no
+        # `_user` suffix — configure names the role after the app with hyphens
+        # turned into underscores, and the database with `_db` appended. So the
+        # refusal was honest about refusing and wrong about the remedy, on a
+        # command whose whole point is removing things (imac, #1721).
+        local _p_db _p_role
+        _p_role=$(echo "${app_name}" | tr '-' '_')
+        _p_db="${_p_role}_db"
         log_error "--purge is not implemented for postgresql."
         echo "    It was accepted and ignored until 1.6.170, which meant it ROTATED" >&2
         echo "    the password and left the database and role in place." >&2
         echo "" >&2
-        echo "    To remove them, as the admin role:" >&2
-        echo "      DROP DATABASE \"<database>\";" >&2
-        echo "      DROP ROLE \"<app>_user\";" >&2
-        echo "    and delete the Secret if one was written." >&2
+        echo "    To remove them, connect as the admin role and run:" >&2
+        echo "      DROP DATABASE \"${database_name:-$_p_db}\";" >&2
+        echo "      DROP ROLE \"$_p_role\";" >&2
+        if [[ -n "$namespace" ]]; then
+            echo "    then: kubectl delete secret $secret_name -n $namespace" >&2
+        fi
         return 1
     fi
 
