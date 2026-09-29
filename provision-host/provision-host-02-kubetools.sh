@@ -182,8 +182,26 @@ install_ansible_kubernetes() {
         if [ "$collections_failed" -eq 0 ]; then
             add_status "Ansible Collections" "Status" "kubernetes.core, community.postgresql, community.general"
         else
-            add_status "Ansible Collections" "Status" "Some collections failed"
-            echo "Note: Playbooks requiring these collections won't work"
+            # 🔴 A FAILED COLLECTION IS AN ERROR, NOT A NOTE.
+            #
+            # This printed "Note: Playbooks requiring these collections won't
+            # work" and carried on, so the build SUCCEEDED and published an
+            # image whose playbooks could not run. That is the same shape as
+            # the defect this whole change is about: a failure reported as
+            # information while the artifact ships anyway.
+            #
+            # ⚠️ It matters more now than before. The pin is verified after
+            # install, and a verification whose failure is a note is not a
+            # verification — if the pinning syntax is wrong, the old behaviour
+            # would publish an image with the wrong collection and a line in
+            # the build log nobody reads (urb-agents#1720).
+            #
+            # `main` returns ${#ERRORS[@]}, and the Dockerfile RUN fails on a
+            # non-zero exit, so recording this stops the image being built.
+            add_error "Ansible Collections" "One or more collections failed to install or did not match their pin"
+            add_status "Ansible Collections" "Status" "FAILED — see errors above"
+            echo "ERROR: playbooks requiring these collections cannot run." >&2
+            echo "       Refusing to build an image whose collections are wrong." >&2
         fi
 
         ANSIBLE_VERSION=$(ansible --version 2>&1 | head -n1 | sed -E 's/ansible \[core ([0-9.]+)\].*/\1/')
