@@ -290,6 +290,36 @@ configure_service() {
     # unconditionally instead.
     local rotate="${10:-false}"
 
+    # 🔴 PURGE IS ARGUMENT 11 AND THIS HANDLER NEVER READ IT.
+    #
+    # Exactly the bug the comment above records for `rotate`, left in place for
+    # the flag next to it. `--help` promises "Remove the application's database
+    # and role"; what happened instead was an ordinary configure run, so on an
+    # existing database `--purge` ROTATED the password and left the database
+    # and the role standing. imac ran it on a disposable app and had to drop
+    # both by hand (urb-agents#1720).
+    #
+    # ⚠️ Refused rather than implemented. Writing an untested DROP DATABASE
+    # from a machine with no cluster is the one change I should not make on a
+    # command whose whole promise is deletion — and a flag that silently does
+    # something else is worse than one that says no.
+    local purge="${11:-false}"
+    if [[ "$purge" == "true" ]]; then
+        if [[ "$json_output" == true ]]; then
+            _configure_error "usage" "$service_id" "--purge is not implemented for postgresql. It did not remove anything; it rotated the password. Drop the database and role by hand."
+            return 1
+        fi
+        log_error "--purge is not implemented for postgresql."
+        echo "    It was accepted and ignored until 1.6.170, which meant it ROTATED" >&2
+        echo "    the password and left the database and role in place." >&2
+        echo "" >&2
+        echo "    To remove them, as the admin role:" >&2
+        echo "      DROP DATABASE \"<database>\";" >&2
+        echo "      DROP ROLE \"<app>_user\";" >&2
+        echo "    and delete the Secret if one was written." >&2
+        return 1
+    fi
+
     # Compute secret name once
     local secret_name=""
     if [[ -n "$secret_name_prefix" ]]; then

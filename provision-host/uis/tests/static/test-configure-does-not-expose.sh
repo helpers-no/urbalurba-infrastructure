@@ -202,6 +202,40 @@ else
     fail "the undiscoverable flags are documented" "only $_n of 3 — the command still has to be handed over"
 fi
 
+# --- 🔴 --purge must not silently do something else -----------------------
+# It is argument 11 and the handler never read it, so `--purge` ran an ordinary
+# configure: it ROTATED the password and left the database and role standing,
+# while --help promised "Remove the application's database and role"
+# (imac, urb-agents#1720). Exactly the bug the file records for `rotate`, left
+# in place on the flag beside it.
+_n=0
+grep -qF 'local purge="${11:-false}"' <<<"$pg" && _n=$((_n+1))
+grep -qF 'not implemented for postgresql' <<<"$pg" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass "--purge is read and refused rather than ignored"
+else
+    fail "--purge is refused" "only $_n of 2 — a deletion flag that rotates a password instead"
+fi
+
+# ⚠️ And the refusal must say what to do, since the operator wanted the data gone.
+# ⚠️ Scope to the refusal block. The file also has `DROP DATABASE IF EXISTS`
+# in the init-file ROLLBACK path 300 lines away, which satisfied a file-wide
+# grep and made this assertion vacuous until a mutation found it.
+_purge_blk="$(sed -n '/not implemented for postgresql/,/^    fi$/p' <<<"$pg")"
+if grep -qF 'DROP DATABASE' <<<"$_purge_blk"; then
+    pass "the refusal names the manual steps"
+else
+    fail "the refusal is actionable" "it says no and leaves the operator nowhere"
+fi
+
+# The usage must not promise it for postgresql either — that text was written
+# from the argument parser rather than from what the handlers implement.
+if grep -qF 'postgresql REFUSES it' <<<"$cfg"; then
+    pass "the usage no longer promises --purge for postgresql"
+else
+    fail "the usage matches the handlers" "--help still advertises a flag postgresql refuses"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
