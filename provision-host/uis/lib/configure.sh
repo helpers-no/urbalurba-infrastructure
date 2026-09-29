@@ -87,9 +87,13 @@ database, a role, and optionally a Secret holding the connection URL.
 Options:
   --app <name>                 Application this is for (required)
   --database <name>            Database name (default: derived from --app)
-  --init-file <path>           SQL applied after creation, as the APP role
+  --init-file <path|->         SQL applied after creation, as the APP role
                                (so it cannot CREATE EXTENSION).
-                               Use - to read the SQL from stdin.
+                               Use - to read the SQL from stdin. Do that from
+                               the host: a path is resolved inside the container,
+                               which cannot see files on your machine.
+                                 cat schema.sql | uis configure postgresql \
+                                   --app myapp --init-file -
   --namespace <ns>             Write the credential into a Secret in <ns>.
                                Implies the consumer is in-cluster, so the
                                database is NOT exposed on the host.
@@ -187,7 +191,7 @@ run_configure() {
 
     # Validate required args
     if [[ -z "$service_id" ]]; then
-        log_error "Usage: uis configure <service> --app <name> [--database <name>] [--init-file -] --json"
+        log_error "Usage: uis configure <service> --app <name> [--database <name>] [--init-file <path|->] --json"
         echo "" >&2
         echo "Creates app-specific resources in a running service and returns connection JSON." >&2
         echo "" >&2
@@ -208,6 +212,30 @@ run_configure() {
         fi
         log_error "Missing required --app argument"
         return 1
+    fi
+
+    # 🔴 --init-file <path> used to be accepted, forwarded, and never read.
+    # Only "-" had a branch, so the documented path form created a database
+    # with no tables in it and reported success. Refuse here, before anything
+    # is created, rather than after.
+    #
+    # ⚠️ The path is resolved INSIDE the container: `uis` mounts only
+    # .uis.extend and .uis.secrets, so a file on the caller's own machine is
+    # not visible. That is what the second half of this message is for.
+    if [[ -n "$init_file" && "$init_file" != "-" && ! -r "$init_file" ]]; then
+        if [[ "$json_output" == "true" ]]; then
+            _configure_error "init_file" "$service_id" "Cannot read init file '$init_file' inside the container. Pipe it instead: cat <file> | uis configure $service_id ... --init-file -"
+        fi
+        log_error "Cannot read init file: $init_file"
+        echo "" >&2
+        echo "uis runs inside a container and cannot see files on your machine." >&2
+        echo "Pipe the SQL in instead:" >&2
+        echo "" >&2
+        echo "  cat $init_file | uis configure $service_id --app <name> --init-file -" >&2
+        echo "" >&2
+        echo "(a path works only for a file inside the container, such as one" >&2
+        echo " under /mnt/urbalurbadisk)" >&2
+        exit "${EXIT_GENERAL_ERROR:-1}"
     fi
 
     # Validate --namespace and --secret-name-prefix go together (or neither)

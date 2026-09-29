@@ -89,6 +89,26 @@ _pg_apply_init_file() {
            --set ON_ERROR_STOP=on -f - 2>&1
 }
 
+# Apply the init SQL, from stdin or from a file this container can read.
+#
+# 🔴 Until 1.6.176 only "-" was handled. `--init-file <path>` — the form the
+# usage text advertises, and the form `dev-templates` and urb-agents-console
+# both document — fell through every branch, and `configure` reported success
+# having created a database with no tables in it.
+#
+# ⚠️ A path is resolved INSIDE the container. `uis` mounts only .uis.extend and
+# .uis.secrets, so a path on the caller's machine is not visible here; that is
+# why configure.sh refuses an unreadable one up front instead of reaching this
+# function and silently doing nothing.
+_pg_run_init() {
+    local database="$1" user="$2" pass="$3" src="$4"
+    if [[ "$src" == "-" ]]; then
+        _pg_apply_init_file "$database" "$user" "$pass"
+    else
+        _pg_apply_init_file "$database" "$user" "$pass" < "$src"
+    fi
+}
+
 # Check if a database exists
 _pg_database_exists() {
     local db_name="$1"
@@ -457,10 +477,10 @@ configure_service() {
         # have that property until they fixed it). That requirement exists
         # precisely so this path can exist.
         local init_applied=false
-        if [[ "$init_file" == "-" ]]; then
-            echo "Applying init file from stdin (database already existed)..." >&2
+        if [[ -n "$init_file" ]]; then
+            echo "Applying init file from ${init_file/#-/stdin} (database already existed)..." >&2
             local re_init_result re_init_exit
-            re_init_result=$(_pg_apply_init_file "$database_name" "$username" "$app_password") && re_init_exit=0 || re_init_exit=$?
+            re_init_result=$(_pg_run_init "$database_name" "$username" "$app_password" "$init_file") && re_init_exit=0 || re_init_exit=$?
             if [[ $re_init_exit -ne 0 ]]; then
                 echo "Init file failed:" >&2
                 echo "$re_init_result" >&2
@@ -614,11 +634,11 @@ EOF
     echo "Database '$database_name' created with user '$username'." >&2
 
     # Apply init file if provided via stdin
-    if [[ "$init_file" == "-" ]]; then
-        echo "Applying init file from stdin..." >&2
+    if [[ -n "$init_file" ]]; then
+        echo "Applying init file from ${init_file/#-/stdin}..." >&2
         # Guard against set -e: capture both output and exit code without triggering exit
         local init_result init_exit
-        init_result=$(_pg_apply_init_file "$database_name" "$username" "$app_password") && init_exit=0 || init_exit=$?
+        init_result=$(_pg_run_init "$database_name" "$username" "$app_password" "$init_file") && init_exit=0 || init_exit=$?
         if [[ $init_exit -ne 0 ]]; then
             # Show the real psql error on stderr so users can see what went wrong
             echo "Init file failed:" >&2

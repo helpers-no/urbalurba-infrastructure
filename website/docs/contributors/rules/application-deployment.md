@@ -43,7 +43,7 @@ Atlas is a data platform: an ingest pipeline plus a read-only API plus a fronten
 
 | Part | Path | Mechanism |
 |---|---|---|
-| database + migrations | `uis` | `uis configure postgresql --app atlas --init-file -` |
+| database + migrations | `uis` | `cat schema.sql \| uis configure postgresql --app atlas --init-file -` |
 | secret in the `dagster` namespace | `uis` | same call, `--namespace dagster --secret-name-prefix atlas-database` |
 | ingest pipeline | `uis` | a Dagster **code location** — `.uis.extend/dagster-code-locations.yaml` + `uis deploy dagster` |
 | read-only API | `uis` | `uis configure postgrest --app atlas` + `uis deploy postgrest --app atlas` |
@@ -80,6 +80,21 @@ means a commit to the application's repo, not an automatic rollout.
 ❌ **No application secrets.** The register path creates a GitHub credentials secret
 for private repos and nothing else. An application's own secrets come from
 `uis configure` — see the limit below.
+
+---
+
+### 🔴 `--init-file` takes `-`, and a path only inside the container
+
+`--init-file <path>` was accepted, forwarded, and **never read**. Only `-` had a branch, so the documented path form created a database with no tables in it and reported success — the form the usage text advertised, the form `dev-templates` documents, and the form `urb-agents-console`'s own `init-database.sql` names in its header.
+
+**From the host, pipe it:**
+
+```bash
+cat config/init-database.sql | uis configure postgresql --app myapp \
+  --namespace myapp --secret-name-prefix myapp --init-file -
+```
+
+⚠️ A path is resolved **inside** the container. `uis` mounts only `.uis.extend` and `.uis.secrets`, so a file on the caller's machine is not visible there. Since 1.6.176 a path that cannot be read is **refused before anything is created**, naming the pipe form — rather than being ignored.
 
 ---
 
