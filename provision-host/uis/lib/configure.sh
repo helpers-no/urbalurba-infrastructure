@@ -88,7 +88,8 @@ Options:
   --app <name>                 Application this is for (required)
   --database <name>            Database name (default: derived from --app)
   --init-file <path>           SQL applied after creation, as the APP role
-                               (so it cannot CREATE EXTENSION)
+                               (so it cannot CREATE EXTENSION).
+                               Use - to read the SQL from stdin.
   --namespace <ns>             Write the credential into a Secret in <ns>.
                                Implies the consumer is in-cluster, so the
                                database is NOT exposed on the host.

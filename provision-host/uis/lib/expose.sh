@@ -146,10 +146,33 @@ expose_service() {
     # Create PID directory
     mkdir -p "$EXPOSE_PID_DIR"
 
+    # ─── which address to bind ─────────────────────────────────────────────
+    #
+    # 🔴 This was 0.0.0.0 — every interface — so an exposed service was
+    # reachable from the local network, and `uis configure` used to call it
+    # automatically. imac measured the shared PostgreSQL answering on its
+    # machine's LAN address with the host firewall inactive (#1700).
+    #
+    # ✅ Loopback is the default now, because imac measured that it costs the
+    # devcontainer case nothing. On Rancher Desktop, `host.docker.internal`
+    # resolves through Lima's resolver to Lima's address for the physical host,
+    # not the docker bridge gateway — so a loopback listener in the VM's host
+    # network is reachable from the container and closed on the LAN (#1704).
+    #
+    # ⚠️ NOT measured on bare-Linux native Docker, where `host.docker.internal`
+    # is the bridge gateway and loopback would NOT be reachable. If a
+    # devcontainer cannot reach an exposed service there, that is this line:
+    #
+    #     UIS_EXPOSE_ADDRESS=0.0.0.0 uis expose <service>
+    #
+    # which is named in the output below so the remedy arrives with the symptom
+    # rather than in a document nobody is reading at the time.
+    local bind_address="${UIS_EXPOSE_ADDRESS:-127.0.0.1}"
+
     # Start port-forward in background
-    log_info "Exposing $service_id: svc/$svc_name ($namespace) → 0.0.0.0:$expose_port"
+    log_info "Exposing $service_id: svc/$svc_name ($namespace) → $bind_address:$expose_port"
     kubectl port-forward "svc/$svc_name" \
-        --address 0.0.0.0 \
+        --address "$bind_address" \
         -n "$namespace" \
         "${expose_port}:${internal_port}" \
         >/dev/null 2>&1 &
@@ -168,8 +191,14 @@ expose_service() {
     echo "$pid" > "$EXPOSE_PID_DIR/$service_id.pid"
 
     log_info "$service_id exposed on port $expose_port (PID $pid)"
-    echo "Connect via: host.docker.internal:$expose_port (from DCT devcontainer)" >&2
+    echo "Connect via: host.docker.internal:$expose_port (from a devcontainer)" >&2
     echo "Connect via: localhost:$expose_port (from host machine)" >&2
+    if [[ "$bind_address" == "127.0.0.1" ]]; then
+        echo "Bound to loopback, so it is NOT reachable from your network." >&2
+        echo "  If a devcontainer cannot reach it: UIS_EXPOSE_ADDRESS=0.0.0.0 uis expose $service_id" >&2
+    else
+        echo "⚠️  Bound to $bind_address — reachable from your network." >&2
+    fi
 }
 
 # Stop port-forward for a service
