@@ -111,7 +111,21 @@ The only order that worked was the reverse, and it works by *recovering from a b
 
 The register playbook never needed the guard — task 10 creates the namespace with `state: present`, which is idempotent.
 
-🔵 **Adoption does not put the Secret at risk.** `syncPolicy.automated.prune` removes resources ArgoCD *tracks* — ones that were in git and are gone. A Secret created out of band by `configure` carries no tracking metadata, so it is not a prune candidate. ⚠️ Stated from ArgoCD's documented prune semantics, not from a run on this cluster; the deploy test is what confirms it.
+🔵 **Adoption does not put the Secret at risk — measured.** imac verified it on a cluster (`urb-agents#1732`): same UID and same data hash before register, after the first sync, and after a forced second sync with `prune: true` and a hard refresh. ArgoCD's tracked resources were only the `Service` and `Deployment`; the Secret had no `argocd.argoproj.io/tracking-id` annotation and no `app.kubernetes.io/instance` label.
+
+⚠️ **The caveat is a real constraint on future work:** if `configure` ever labels its Secret `app.kubernetes.io/instance=<name>`, ArgoCD's label tracking would start owning it — and pruning it.
+
+### 🔴 `argocd remove` deleted namespaces it never managed
+
+The refusal above used to end with *"or clear it: `uis argocd remove <name>`"*. imac ran exactly that, and `remove` deleted the namespace **and the workload in it**, although **no ArgoCD Application of that name had ever existed**.
+
+The playbook already knew: task 4 fetches the Application and task 5 prints whether it exists. Nothing acted on the answer — task 13 deleted the namespace gated only on the namespace existing.
+
+So the remedy destroyed what the refusal had just protected.
+
+**Since 1.6.175:** `remove` undoes `register` and nothing else. No Application of that name and the namespace exists → it refuses, naming `kubectl get all -n <name>` so you can see what is at stake. `--force` is for the genuine orphan and warns before it destroys. And the refusal in `register` no longer names `remove` at all — it says explicitly not to reach for it.
+
+🔵 **The lesson is not about ArgoCD.** A refusal is only as safe as the command it recommends, and this one had never been run by whoever wrote it.
 
 ---
 

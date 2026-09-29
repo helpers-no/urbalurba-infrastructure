@@ -148,12 +148,15 @@ _U09="$REPO/ansible/playbooks/utility/u09-authentik-create-postgres.yml"
 # ⚠️ Require confirm=yes on the COMMAND line, not just mentioned in prose —
 # the explanatory sentence beneath it also contains the word.
 _n=0
-grep -qE '^\s*- "\s*-e operation=delete -e confirm=yes"' "$_RM" && _n=$((_n+1))
+grep -qF 'ansible-playbook playbooks/utility/u09-authentik-create-postgres.yml -e operation=delete -e confirm=yes' "$_RM" && _n=$((_n+1))
 grep -qF '/mnt/urbalurbadisk/ansible' "$_RM" && _n=$((_n+1))
-if [[ "$_n" -eq 2 ]]; then
-    pass "the printed remedy names the container path and the confirm flag"
+grep -qF './uis shell' "$_RM" && _n=$((_n+1))
+# A continuation backslash does not survive `debug`'s JSON escaping.
+if grep -qE '\\\\"$' "$_RM"; then _n=0; fi
+if [[ "$_n" -eq 3 ]]; then
+    pass "the printed remedy is one runnable line, with the container path and the way in"
 else
-    fail "the remedy is runnable as printed" "only $_n of 2 — an agent cannot follow it"
+    fail "the remedy is runnable as printed" "only $_n of 3 — an agent cannot follow it"
 fi
 
 # 🔴 The guard must be on BOTH tasks — the prompt AND the abort. With it on
