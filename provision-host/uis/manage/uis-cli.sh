@@ -93,7 +93,7 @@ Template Deployment (from helpers-no/dev-templates):
   template check <id>     Ask the application whether its output reflects its input
   template progress <id>  How far through the FIRST install am I, and is that normal?
                           Four states counted, and it says when a red x from
-                          `check` is expected rather than wrong
+                          'check' is expected rather than wrong
 
 Service Connections (interactive admin access):
   connect <service> [args]  Open an interactive client (psql, redis-cli, mysql, mongosh)
