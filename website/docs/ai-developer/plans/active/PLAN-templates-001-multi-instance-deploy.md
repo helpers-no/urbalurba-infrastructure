@@ -188,7 +188,7 @@ and it is honest about what remains.
 | **TPL-F5** — code location in `provides:` | Needs TPL-Q1/Q2 answered: whether a template may contribute to another service's `.uis.extend` file, and what removal does | The install stays two commands |
 | **TPL-F8** — intra-application ordering | Deferred per TPL-F9: priority order already satisfies the first application once its schema exists at install time. Build it when a second application's real dependency can define the syntax | A future app with a genuine cross-surface dependency hits it |
 | **TPL-Q3** — app-owned templates | A supply-chain decision, not a design one; needs the platform owner | Templates still come from the central registry |
-| Handlers for the six stubbed `configure` services | [PLAN-cli-configure-retract-unimplemented](../backlog/PLAN-cli-configure-retract-unimplemented.md) retracts them instead | An app needing Redis or Mongo cannot be provisioned by a template |
+| Handlers for the six stubbed `configure` services | [PLAN-cli-configure-retract-unimplemented](../completed/PLAN-cli-configure-retract-unimplemented.md) retracts them instead | An app needing Redis or Mongo cannot be provisioned by a template |
 
 ---
 

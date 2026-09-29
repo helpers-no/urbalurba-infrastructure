@@ -36,7 +36,7 @@ platform service, which NAIS has no analogue for.
 |---|---|---|---|
 | 1 | Atlas via templates — [templates-000 ordering](./INVESTIGATE-templates-multi-surface-application.md), then the `config:` fields | M | in flight |
 | 2 | Atlas frontend via `uis argocd register` | free | ready, blocked by nothing |
-| 3 | [Retract `SCRIPT_CONFIGURABLE` where no handler exists](./PLAN-cli-configure-retract-unimplemented.md) | S | **filed today** |
+| 3 | [Retract `SCRIPT_CONFIGURABLE` where no handler exists](../completed/PLAN-cli-configure-retract-unimplemented.md) | S | ✅ **DONE 2026-09-29, 1.6.169.** All six retracted including authentik, on Terje's decision after the consequences were measured (`urb-agents#1710`). Flipping the flag changes **one line and nothing else** — every `SCRIPT_*` variable the deploy path reads is byte-identical, and a 534-file sweep found zero references to it in any deploy path. 🔴 The plan missed one task: `configure.sh` advertised `uis configure redis` as an example in its own usage. A test now asserts flag↔handler agreement **in both directions**, that `services.json` matches, and that the examples name only configurable services. |
 | 4 | Per-workload named secrets (§4 item 1) | M | not started |
 | 5 | Reconsider a UIS `Application` type | L | deferred |
 

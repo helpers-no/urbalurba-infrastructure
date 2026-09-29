@@ -202,7 +202,6 @@
     ,"removePlaybook": "060-remove-elasticsearch.yml"
     ,"helmChart": "elastic/elasticsearch"
     ,"namespace": "default"
-    ,"configurable": true
     ,"exposePort": 39200
   }
 ,
@@ -224,7 +223,6 @@
     ,"removePlaybook": "040-remove-database-mongodb.yml"
     ,"namespace": "default"
     ,"image": "mongo:8.0.5"
-    ,"configurable": true
     ,"exposePort": 37017
   }
 ,
@@ -246,7 +244,6 @@
     ,"removePlaybook": "040-remove-database-mysql.yml"
     ,"namespace": "default"
     ,"image": "mysql:8.0"
-    ,"configurable": true
     ,"exposePort": 33306
   }
 ,
@@ -290,7 +287,6 @@
     ,"removePlaybook": "044-remove-qdrant.yml"
     ,"helmChart": "qdrant/qdrant"
     ,"namespace": "default"
-    ,"configurable": true
     ,"exposePort": 36333
   }
 ,
@@ -312,7 +308,6 @@
     ,"removePlaybook": "050-remove-redis.yml"
     ,"helmChart": "bitnami/redis"
     ,"namespace": "default"
-    ,"configurable": true
     ,"exposePort": 36379
   }
 ,
@@ -335,7 +330,6 @@
     ,"requires": ["postgresql", "redis"]
     ,"helmChart": "bitnami/authentik"
     ,"namespace": "authentik"
-    ,"configurable": true
     ,"exposePort": 39000
   }
 ,

@@ -190,8 +190,13 @@ run_configure() {
         echo "Creates app-specific resources in a running service and returns connection JSON." >&2
         echo "" >&2
         echo "Examples:" >&2
+        # ⚠️ Examples must name services that ARE configurable. This advertised
+        # `uis configure redis`, which was never implemented and is no longer
+        # even declared — so the usage shown when you get the syntax wrong
+        # handed you a second command that also fails (urb-agents#1710).
         echo "  uis configure postgresql --app volunteer-app --database volunteer_db --json" >&2
-        echo "  uis configure redis --app volunteer-app --json" >&2
+        echo "  uis configure postgresql --app volunteer-app --namespace volunteer-app \\" >&2
+        echo "                           --secret-name-prefix volunteer-app" >&2
         return 1
     fi
 

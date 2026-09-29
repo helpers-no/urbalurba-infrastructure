@@ -24,6 +24,7 @@ line, which carries one for the plans whose authors recorded it.
 
 | Plan | Goal | Last updated |
 |------|------|-----------|
+| [Plan: advertise only the `configure` handlers that exist](PLAN-cli-configure-retract-unimplemented.md) | `SCRIPT_CONFIGURABLE="true"` appears only on services that actually have a | 2026-09-29 |
 | [---](PLAN-network-cloudflare-port-and-docs-lift-up.md) | — | 2026-09-17 |
 | [Summer vacation work summary: 18 July – 19 August 2026](STATUS-summer-vacation-2026-07-18-to-08-19.md) | — | 2026-09-07 |
 | [PLAN-008: Service Migration Status & Remaining Work](STATUS-service-migration.md) | Track migration status of all 26 UIS services and complete remaining work for services that are not fully migrated. | 2026-09-07 |
