@@ -492,6 +492,22 @@ deploy_single_service() {
 # extra-var to the removal playbook.
 # When purge="true", _purge=true is passed as an extra-var so the removal
 # playbook can drop persistent state (databases, roles, secrets, PVCs, namespace).
+# 🔴 Print a leftover-state note the operator can PASTE.
+#
+# This exists because an Ansible `debug` task cannot. Its callback wraps every
+# line: a list renders each item as a JSON string with quotes and a trailing
+# comma, and a lone backslash renders as `\\`. The authentik removal remedy was
+# printed that way and failed byte-for-byte twice — once on the backslashes,
+# and once, after those were removed, on the quotes and commas
+# (imac, urb-agents#1732 and #1736).
+#
+# printf has no callback. A service declares SCRIPT_UNDEPLOY_NOTE and it is
+# printed exactly as written.
+_print_undeploy_note() {
+    [[ -n "${SCRIPT_UNDEPLOY_NOTE:-}" ]] || return 0
+    printf '\n%s\n' "$SCRIPT_UNDEPLOY_NOTE"
+}
+
 remove_single_service() {
     local service_id="$1"
     local app_name="${2:-}"
@@ -544,6 +560,7 @@ remove_single_service() {
                 die_k8s "Removal playbook failed"
             fi
             log_success "$SCRIPT_NAME removed"
+            _print_undeploy_note
             return 0
         fi
     fi

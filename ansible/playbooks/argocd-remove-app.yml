@@ -89,6 +89,9 @@
           leftover namespace gone:
             uis argocd remove {{ app_name }} --force
 
+          --force only removes a namespace ArgoCD left behind. If anything in
+          there was not created by this application, it refuses and names it.
+
           To see what would be lost first:
             kubectl get all -n {{ app_name }}
       when:
@@ -96,15 +99,94 @@
         - namespace_info.resources | length > 0
         - not (force | default(false) | bool)
 
-    - name: "5b. Warn when forcing the removal of an unmanaged namespace"
-      ansible.builtin.debug:
+    # 🔴 --force used to delete any namespace by name, and say only how many
+    # PODS were in it. imac destroyed a Secret, a ConfigMap and a PVC with it
+    # on the evidence of "Found 0 pods" (urb-agents#1736, case A3), and the
+    # warning was printed and acted on in the same run — a log line, not a
+    # warning.
+    #
+    # ArgoCD on this install tracks with `argocd.argoproj.io/instance=<app>`
+    # (measured on the live fleet Deployment; resourceTrackingMethod unset,
+    # ArgoCD v2.14.10). So a namespace ArgoCD really did own carries that
+    # label on its resources, and a foreign one does not.
+    #
+    # `key!=value` also matches resources that do not carry the key at all,
+    # which is exactly the set we must not delete.
+    - name: "5c. What in this namespace does NOT belong to this application"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - all,secret,configmap,persistentvolumeclaim
+          - -n
+          - "{{ app_name }}"
+          - -o
+          - name
+          - -l
+          - "argocd.argoproj.io/instance!={{ app_name }}"
+          - --kubeconfig
+          - "{{ merged_kubeconf_file }}"
+      register: untracked_raw
+      changed_when: false
+      failed_when: false
+      when:
+        - argocd_app.resources | length == 0
+        - namespace_info.resources | length > 0
+
+    - name: "5d. Set the untracked list, minus what Kubernetes puts in every namespace"
+      ansible.builtin.set_fact:
+        untracked: "{{ (untracked_raw.stdout_lines | default([]))
+                       | reject('search', '^configmap/kube-root-ca.crt$')
+                       | reject('equalto', '')
+                       | list }}"
+      when:
+        - argocd_app.resources | length == 0
+        - namespace_info.resources | length > 0
+
+    - name: "5e. Refuse to force-delete resources this application does not own"
+      ansible.builtin.fail:
         msg: |
-          ⚠️  No ArgoCD application named '{{ app_name }}' exists.
-          Deleting namespace '{{ app_name }}' and everything in it because --force was given.
+          Refusing to delete namespace '{{ app_name }}'.
+
+          No ArgoCD application named '{{ app_name }}' exists, and the namespace
+          holds {{ untracked | length }} resource(s) that ArgoCD never managed:
+
+          {{ untracked | join('\n          ') }}
+
+          --force removes a namespace ArgoCD left behind. It is not a way to
+          delete someone else's namespace, and these resources would go with it.
+
+          Delete them yourself if that is what you want:
+            kubectl delete namespace {{ app_name }}
       when:
         - argocd_app.resources | length == 0
         - namespace_info.resources | length > 0
         - force | default(false) | bool
+        - untracked | default([]) | length > 0
+
+    - name: "5f. Forcing the removal of a namespace ArgoCD left behind"
+      ansible.builtin.debug:
+        msg: |
+          ⚠️  No ArgoCD application named '{{ app_name }}' exists.
+          Every resource in namespace '{{ app_name }}' is labelled
+          argocd.argoproj.io/instance={{ app_name }}, so this is an orphan.
+          Deleting it because --force was given.
+      when:
+        - argocd_app.resources | length == 0
+        - namespace_info.resources | length > 0
+        - force | default(false) | bool
+        - untracked | default([]) | length == 0
+
+    # ⚠️ --force on a name with no namespace used to exit 0 and claim
+    # "Namespace '<name>' and all its resources removed" (imac, case A1).
+    - name: "5g. Nothing to remove"
+      ansible.builtin.debug:
+        msg: |
+          Nothing to remove: there is no ArgoCD application named '{{ app_name }}'
+          and no namespace of that name. Nothing was deleted.
+      when:
+        - argocd_app.resources | length == 0
+        - namespace_info.resources | length == 0
 
     - name: 6. Remove ArgoCD Application
       kubernetes.core.k8s:
@@ -178,9 +260,32 @@
           changed_when: false
           when: namespace_info.resources | length > 0
 
-        - name: Display namespace resources
+        # 🔴 This said "Found N pods", and N was 0 for a namespace holding a
+        # Secret, a ConfigMap and a PVC — all of which were then deleted
+        # (imac, urb-agents#1736 case A3). Count what is actually at stake.
+        - name: Everything in the namespace, not just the pods
+          ansible.builtin.command:
+            argv:
+              - kubectl
+              - get
+              - all,secret,configmap,persistentvolumeclaim
+              - -n
+              - "{{ app_name }}"
+              - -o
+              - name
+              - --kubeconfig
+              - "{{ merged_kubeconf_file }}"
+          register: doomed_raw
+          changed_when: false
+          failed_when: false
+          when: namespace_info.resources | length > 0
+
+        - name: Display what is about to be deleted
           ansible.builtin.debug:
-            msg: "Found {{ namespace_resources.resources | length }} pods in namespace {{ app_name }} before removal"
+            msg: |
+              Deleting namespace '{{ app_name }}' and these
+              {{ (doomed_raw.stdout_lines | default([])) | length }} resource(s):
+              {{ (doomed_raw.stdout_lines | default([])) | join('\n              ') }}
           when: namespace_info.resources | length > 0
       when: namespace_info.resources | length > 0
 
@@ -228,11 +333,8 @@
       ansible.builtin.debug:
         msg:
           - "=================================================="
-          - "🎉 APPLICATION REMOVAL SUCCESSFUL! 🎉"
+          - "{{ 'APPLICATION REMOVAL SUCCESSFUL' if (argocd_app.resources | length > 0 or namespace_info.resources | length > 0) else 'NOTHING TO REMOVE' }}"
           - "=================================================="
-          - "✅ ArgoCD Application '{{ app_name }}' removed from argocd namespace"
-          - "✅ GitHub credentials secret '{{ github_secret_name }}' removed from argocd namespace"
-          - "✅ Namespace '{{ app_name }}' and all its resources removed"
-          - ""
-          - "All application resources have been successfully removed from the cluster."
+          - "{{ '✅ ArgoCD Application removed from argocd namespace' if argocd_app.resources | length > 0 else '·  No ArgoCD Application of that name existed' }}"
+          - "{{ '✅ Namespace and all its resources removed' if namespace_info.resources | length > 0 else '·  No namespace of that name existed' }}"
           - ""

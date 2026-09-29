@@ -149,21 +149,35 @@
         has_proxy_provider: "{{ 'authentik_providers_proxy.proxyprovider' in provider_details_raw.stdout }}"
       no_log: true
 
+    # 🔴 Two defects here, both found by imac (urb-agents#1736 check 4).
+    #
+    # 1. ORDER. `regex_search` returns None when nothing matches, and `first`
+    #    raises on None BEFORE `default` is ever reached:
+    #      'NoneType' object is not iterable
+    #    So a missing field did not fall back to 'Not configured' — it failed
+    #    the play. `default([''], true)` substitutes a list first, and `first`
+    #    then always has something to take.
+    #
+    # 2. WRONG FIELDS FOR THIS PROVIDER. whoami uses a PROXY provider
+    #    (mode: forward_single), which has external_host / internal_host and
+    #    no url: or access_token_validity: — those are OAuth2 fields. Task 17
+    #    already knows which kind this is, so ask only for what can exist.
     - name: 18. Extract key provider information
       ansible.builtin.set_fact:
-        external_host: "{{ provider_details_raw.stdout | regex_search('external_host: (.+)', '\\1') | first | default('Not configured') }}"
-        oauth2_redirect_uri: "{{ provider_details_raw.stdout | regex_search('url: (http://[^\\s]+)', '\\1') | first | default('Not configured') }}"
-        access_token_validity: "{{ provider_details_raw.stdout | regex_search('access_token_validity: (.+)', '\\1') | first | default('Not configured') }}"
+        external_host: "{{ provider_details_raw.stdout | regex_search('external_host: (.+)', '\\1') | default([''], true) | first | default('Not configured', true) }}"
+        internal_host: "{{ provider_details_raw.stdout | regex_search('internal_host: (.+)', '\\1') | default([''], true) | first | default('Not applicable', true) }}"
+        oauth2_redirect_uri: "{{ (provider_details_raw.stdout | regex_search('url: (http[^\\s]+)', '\\1') | default([''], true) | first | default('Not configured', true)) if has_oauth2_provider else 'Not applicable (proxy provider)' }}"
+        access_token_validity: "{{ (provider_details_raw.stdout | regex_search('access_token_validity: (.+)', '\\1') | default([''], true) | first | default('Not configured', true)) if has_oauth2_provider else 'Not applicable (proxy provider)' }}"
 
     - name: 19. Display provider information
       ansible.builtin.debug:
         msg: |
           Provider Configuration for {{ app_name }}:
           - Provider ID: {{ app_provider_id }}
-          - Provider Name: whoami-provider
           - OAuth2 Provider: {{ 'Yes' if has_oauth2_provider else 'No' }}
           - Proxy Provider: {{ 'Yes' if has_proxy_provider else 'No' }}
           - External Host: {{ external_host }}
+          - Internal Host: {{ internal_host }}
           - First Redirect URI: {{ oauth2_redirect_uri }}
           - Access Token Validity: {{ access_token_validity }}
 
