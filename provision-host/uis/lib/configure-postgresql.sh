@@ -185,6 +185,42 @@ _pg_ensure_namespace() {
 }
 
 # Create or update a K8s Secret containing DATABASE_URL (idempotent)
+# ─── whether to expose on the host: ONE decision, called from both tails ───
+#
+# 🔴 THIS FILE HAS TWO PARALLEL TAILS and every fix has had to be applied to
+# both. Its own comment below says so about the init file, which "used to be
+# applied only on the create path, several hundred lines below a `return 0`
+# this branch reaches first". The 1.6.166 expose guard repeated that mistake
+# exactly: it landed on the create path, the database-already-exists path kept
+# its unguarded call, and **every re-run reopened the port** (imac, #1704).
+#
+# So this is a function rather than a guard written twice. A bare
+# `expose_service` call in this file is now a defect by construction, and the
+# test counts call sites instead of checking that a guarded one exists — which
+# is why 9/9 green did not catch it.
+_pg_maybe_expose() {
+    local service_id="$1" namespace="$2"
+
+    # ⚠️ --namespace is the signal that the consumer is IN-CLUSTER: it is the
+    # flag that says "write the credential into a Secret here". The host
+    # port-forward serves the other case, a devcontainer reaching
+    # host.docker.internal. They are alternatives.
+    if [[ -n "$namespace" ]]; then
+        echo "Not exposing $service_id on the host: --namespace means the consumer" >&2
+        echo "  is in-cluster and reaches it at $PG_CLUSTER_HOST:$PG_INTERNAL_PORT." >&2
+        echo "  For local development instead: uis expose $service_id" >&2
+        return 0
+    fi
+
+    type expose_service &>/dev/null || return 0
+    _is_exposed "$service_id" 2>/dev/null && return 0
+
+    echo "Auto-exposing $service_id on the host for local development..." >&2
+    echo "  It keeps running after this command exits." >&2
+    echo "  Stop it with: uis expose $service_id --stop" >&2
+    expose_service "$service_id" >&2 || true
+}
+
 _pg_create_secret() {
     local ns="$1"
     local secret_name="$2"
@@ -349,12 +385,7 @@ configure_service() {
             return 1
         fi
 
-        # Auto-expose if not already exposed
-        if type expose_service &>/dev/null; then
-            if ! _is_exposed "$service_id" 2>/dev/null; then
-                expose_service "$service_id" >&2 || true
-            fi
-        fi
+        _pg_maybe_expose "$service_id" "$namespace"
 
         # Build cluster URL with the new password
         local cluster_url="postgresql://$username:$app_password@$PG_CLUSTER_HOST:$PG_INTERNAL_PORT/$database_name"
@@ -445,7 +476,24 @@ EOF
 EOF
             return 0
         fi
-        log_info "Database '$database_name' already existed; password reset for user '$username'."
+        # 🔴 "password reset" was said even when the password was REUSED. imac
+        # compared the Secret's data by hash across a re-run and found it
+        # byte-identical, while this line claimed a reset (#1704). The code
+        # already knows which happened — $rotated — so it now says so.
+        #
+        # ⚠️ And the Secret reference was missing here. 1.6.166 added it to the
+        # create tail only, so the path that runs on every re-run offered no
+        # way to reach the credential it had just confirmed. Same two-tails
+        # trap as the expose guard above.
+        if [[ "$rotated" == "true" ]]; then
+            log_info "Database '$database_name' already existed; password ROTATED for '$username'."
+        else
+            log_info "Database '$database_name' already existed; existing credential reused for '$username'."
+        fi
+        if [[ -n "$namespace" ]]; then
+            echo "  Secret:  $secret_name (namespace: $namespace, key: DATABASE_URL)" >&2
+            echo "  Read it: kubectl get secret $secret_name -n $namespace -o jsonpath='{.data.DATABASE_URL}' | base64 -d" >&2
+        fi
         return 0
     fi
 
@@ -556,47 +604,7 @@ EOF
         echo "Init file applied successfully." >&2
     fi
 
-    # ─── auto-expose, and the case it must not fire in ─────────────────────
-    #
-    # 🔴 THIS OPENED THE SHARED DATABASE TO THE LOCAL NETWORK AS A SIDE EFFECT.
-    #
-    # `expose_service` runs `kubectl port-forward --address 0.0.0.0` in the
-    # BACKGROUND, so it survives the command that started it. Calling it
-    # unconditionally meant that `uis configure postgresql --namespace <ns>` —
-    # whose entire job is to create a database and a Secret for a consumer
-    # INSIDE the cluster — left the shared instance reachable on every
-    # interface of the host, and kept it that way after exiting.
-    #
-    # imac measured it on 1.6.161 while provisioning an application's database:
-    # port 35432 answering on the machine's LAN address, host firewall
-    # inactive, on a command whose output mentioned it in one informational
-    # line (urb-agents#1700). The application connects via the cluster service
-    # and never needed the port at all.
-    #
-    # ⚠️ `--namespace` is exactly the signal that the consumer is in-cluster:
-    # it is the flag that says "write the credential into a Secret in this
-    # namespace". The host port-forward serves the OTHER case — a DCT
-    # devcontainer reaching the database through `host.docker.internal`. The
-    # two are alternatives, so the presence of --namespace rules the expose out.
-    #
-    # 🔵 The bind address is deliberately NOT changed here. Narrowing it to
-    # loopback looks like the obvious hardening and would break the case the
-    # expose exists for: a DCT container reaching `host.docker.internal` on
-    # Linux arrives at the docker bridge gateway, not 127.0.0.1. That is a
-    # separate decision, recorded rather than guessed at.
-    if [[ -n "$namespace" ]]; then
-        echo "Not exposing $service_id on the host: --namespace means the consumer" >&2
-        echo "  is in-cluster and reaches it at $PG_CLUSTER_HOST:$PG_INTERNAL_PORT." >&2
-        echo "  For local development instead: uis expose $service_id" >&2
-    elif type expose_service &>/dev/null; then
-        if ! _is_exposed "$service_id" 2>/dev/null; then
-            echo "Auto-exposing $service_id on the host..." >&2
-            echo "  ⚠️  This binds ALL interfaces, so it is reachable from your network," >&2
-            echo "      and it keeps running after this command exits." >&2
-            echo "      Stop it with: uis expose $service_id --stop" >&2
-            expose_service "$service_id" >&2 || true
-        fi
-    fi
+    _pg_maybe_expose "$service_id" "$namespace"
 
     # Build cluster URL (used for both JSON and secret)
     local cluster_url="postgresql://$username:$app_password@$PG_CLUSTER_HOST:$PG_INTERNAL_PORT/$database_name"

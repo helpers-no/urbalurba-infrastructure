@@ -153,6 +153,16 @@ UIS_FORWARDED_ENV=(
     # derived check, not reported.
     UIS_DEBUG
     UIS_NONINTERACTIVE
+    # lib/expose.sh — which address a port-forward binds. Loopback by default
+    # since 1.6.167; this is the escape hatch for a host where a devcontainer
+    # cannot reach loopback (bare-Linux native Docker, where
+    # host.docker.internal is the bridge gateway — reasoned, not measured).
+    #
+    # ⚠️ The output NAMES this variable as the remedy, so it has to work from
+    # the host. Unforwarded it would be inert exactly where it is advertised,
+    # which is the third time that has happened to this list and the reason
+    # test-forwarded-env.sh derives its candidates from the code.
+    UIS_EXPOSE_ADDRESS
 )
 
 # TARGET_HOST is the name an operator naturally reaches for, but the container's
