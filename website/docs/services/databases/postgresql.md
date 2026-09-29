@@ -34,13 +34,13 @@ UIS deploys the official Bitnami PostgreSQL 18.3 image (pinned by digest), which
 | **btree_gin** | 1.3 | Additional indexing strategies |
 | **pgcrypto** | 1.4 | Cryptographic functions |
 
-:::danger Available in the image is not the same as available in your database
+:::tip Activated in every database, including yours
 
-These eight are **built into the image** and are created by the chart's `initdb` script in the **`postgres`** database only. A database made by `uis configure postgresql` is cloned from `template1`, which never receives them — so **an application database has none of them**.
+All eight are **created in every database**, so an application can use them without asking. Two things do it: the PostgreSQL deploy activates them in `template1`, so every database created afterwards inherits them, and `uis configure postgresql` activates them in the database it creates.
 
-⚠️ And an application cannot add one. `--init-file` applies your SQL as the **application role**, and `CREATE EXTENSION` needs superuser, so it is refused there ([`urb-agents#1446`](https://github.com/terchris/urb-agents/issues/1446)).
+⚠️ **A database created before UIS 1.6.178 does not have them.** Re-run `uis configure postgresql` for that application — it is idempotent and activates them on the existing database.
 
-🔵 If you need one, it is a platform request today. See [PLAN — extensions per app](../../ai-developer/plans/backlog/PLAN-extensions-in-app-databases.md), which proposes a `--extensions` flag on `configure`.
+🔵 You still cannot add one through `--init-file`: that SQL runs as the **application role** and `CREATE EXTENSION` needs superuser ([`urb-agents#1446`](https://github.com/terchris/urb-agents/issues/1446)). UIS activates the eight above as admin on your behalf; anything beyond them is a platform request.
 
 :::
 

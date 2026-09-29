@@ -9,7 +9,7 @@ sidebar_label: PLAN — extensions per app
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — proposal, decision is Terje's
+## Status: Done in 1.6.178 — Terje decided against the proposal, and for something simpler
 
 🔵 Filed 2026-09-29 from `urb-agents#1741`, where `atlas` asked whether PostGIS was available before choosing how to model kommune geometry. Answering it properly turned up a gap that is not about PostGIS.
 
@@ -32,23 +32,49 @@ sidebar_label: PLAN — extensions per app
 
 🔵 `atlas` drew the distinction itself before asking — *"404 only proves it is not exposed, not that it is absent"* — and the same distinction applies one level down: **available in the image** is not **created in your database**. The documentation does not draw it anywhere.
 
-## Proposal
+## Terje's decision, 2026-09-29
 
-- [ ] 1.1 `uis configure postgresql --extensions <list>` — create named extensions **as admin**, in the database just created, after `CREATE DATABASE`
-- [ ] 1.2 🔴 **Accept only the extensions the pinned image ships.** Anything else is refused by name, listing what is available — never attempted and reported as succeeding
-- [ ] 1.3 Idempotent (`IF NOT EXISTS`), and applied on the database-already-exists path too — [both tails](./INVESTIGATE-provisioning-declaration.md), which this file has been caught by twice
-- [ ] 1.4 Run **before** `--init-file`, so an init file can use the types
-- [ ] 1.5 Report which were created in the `--json` output, so a caller can tell
-- [ ] 1.6 A test that the accepted list matches what the image actually contains — in both directions, the shape that caught the `SCRIPT_CONFIGURABLE` drift
+> *"i want the extensions activated so that they can be used by anyone that want the functionality."*
 
-### Why not `template1`
+🔵 **Not the `--extensions <list>` flag this plan proposed.** That made every application ask for what the platform already had, which is the same shape as the problem: a capability present but out of reach. The decision is that all eight are simply **on, everywhere**.
 
-Adding `\c template1` to the initdb script would give every future database all eight for free. Rejected as the primary fix:
+## What was built
 
-- ⚠️ **It only takes effect on a fresh data directory**, so every existing cluster — including the one everything is tested on — would be unchanged, and the fix would appear to work while changing nothing for anyone who already has UIS.
-- It gives every application all eight whether or not it wants them, including PostGIS.
+Two mechanisms, deliberately overlapping, because neither covers everything alone:
 
-🔵 Worth doing *as well*, as the default for new clusters, but it cannot be the answer on its own.
+| | covers | does not cover |
+|---|---|---|
+| **`040-database-postgresql.yml` seeds `template1`** | every database created **after** the deploy, by anything — `configure`, a service's own chart, a developer's `CREATE DATABASE` | databases that already exist |
+| **`configure` activates them as admin** | the database it creates, **and** an existing one on a re-run | databases nothing ever calls `configure` for |
+
+⚠️ **`template1` alone was rejected as the whole answer** for the reason given below: it takes effect on a fresh data directory only if done at initdb. Doing it in the deploy playbook instead — idempotent, on every `uis deploy postgresql` — is what makes it reach a cluster that already exists.
+
+- [x] The list lives in **one file**, `provision-host/uis/lib/postgres-extensions.conf`, read by both the playbook and the handler
+- [x] 🔴 The Helm values file cannot read it, so `test-extensions-are-one-list.sh` asserts the two agree — the drift this design would otherwise invite
+- [x] Activated **before** `--init-file`, so init SQL can use the types
+- [x] Both tails of `configure-postgresql.sh`, counted by the test rather than checked once
+- [x] `ON_ERROR_STOP=on`, and a failure **fails the command** on all four report paths
+- [x] Refuses rather than guessing if the list file is unreadable
+
+### Still true, and worth saying
+
+An application **cannot** add a ninth extension itself: `--init-file` runs as the application role and `CREATE EXTENSION` needs superuser (`urb-agents#1446`). UIS now does the eight on its behalf. Anything beyond them is still a platform request — and that is the right place for that boundary, because the eight are what the pinned image ships and can be tested against.
+
+🔴 **A database created before 1.6.178 does not have them.** Re-running `uis configure postgresql` for that application activates them, because the handler covers the already-exists path. Nothing retro-fits a database that `configure` never made.
+
+## The alternative that was rejected, and why it is recorded
+
+`initdb.scripts` could have been pointed at `template1` instead of the default database — a one-line change in the chart values.
+
+🔴 **It would have appeared to work and changed nothing for anyone who already runs UIS.** `initdb` runs once, on a fresh data directory. Every existing cluster — including the one every release is tested on — would have been untouched, while the diff looked correct and the tests passed. That is the defect class this repository spends most of its time on, and it would have been introduced by the fix for it.
+
+⚠️ Recorded because it is the obvious change, and the next person to look at this will think of it first.
+
+## What this costs
+
+Every database now carries eight extensions whether it uses them or not — PostGIS is the substantial one, several thousand catalogue rows.
+
+🔵 Judged worth it: UIS's premise is that a developer gets a working datacentre without filing requests ([Principle 0](../../../contributors/rules/kubernetes-deployment.md)), and per-database opt-in would have meant every application discovering the list, choosing from it, and getting the flag right. ⚠️ If the footprint ever matters, the place to revisit is the list — not the mechanism.
 
 ## Documentation, independent of the decision
 
