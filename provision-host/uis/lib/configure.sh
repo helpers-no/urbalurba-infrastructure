@@ -98,7 +98,9 @@ Options:
   --url-prefix <p>             postgrest only: first label of the hostname
   --rotate                     Mint a new password instead of reusing the
                                one already in the Secret
-  --purge                      Remove the application's database and role
+  --purge                      Remove the application's resources.
+                               postgrest only — postgresql REFUSES it
+                               (it was accepted and ignored before 1.6.170)
   --json                       Machine-readable output on stdout
   --help, -h                   This text
 

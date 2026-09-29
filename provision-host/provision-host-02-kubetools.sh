@@ -75,13 +75,59 @@ install_ansible_kubernetes() {
         # Galaxy is often down, so try Galaxy first then fall back to GitHub
         echo "Installing required Ansible collections..."
 
+        # 🔵 READ BACK WHAT WAS INSTALLED. DO NOT TRUST THE INSTALL.
+        #
+        # This defect was a pin that silently did not apply, so the fix cannot
+        # rest on the pinning syntax being right — that is the same bet that
+        # lost. `ansible-galaxy collection list` reports what is actually on
+        # disk; if it disagrees with the pin, provisioning stops here and says
+        # so, rather than building an image whose collections nobody chose.
+        _verify_collection_version() {
+            local collection="$1" want="$2" got
+            got=$(ansible-galaxy collection list "$collection" 2>/dev/null \
+                  | awk -v c="$collection" '$1 == c { print $2; exit }')
+            if [ -z "$got" ]; then
+                echo "ERROR: $collection is not installed after a successful install report." >&2
+                return 1
+            fi
+            if [ "$got" != "$want" ]; then
+                echo "ERROR: $collection pinned to $want but $got is installed." >&2
+                echo "       The pin did not apply. This is what shipped community.postgresql 5.0.0" >&2
+                echo "       against playbooks written for 3.x and broke authentik (urb-agents#1720)." >&2
+                return 1
+            fi
+            echo "  verified: $collection $got"
+            return 0
+        }
+
+        # 🔴 THE VERSION WAS ONLY IN THE FALLBACK, SO THE PIN NEVER APPLIED.
+        #
+        # This read as a pin at the call site — `...git,3.4.0` — and installed
+        # the BARE NAME from Galaxy, which resolves to the latest release. The
+        # version was reached only when Galaxy returned HTTP 500. So the pin
+        # took effect exactly when Galaxy was DOWN, and never otherwise.
+        #
+        # Measured 2026-09-29 (imac, urb-agents#1720; versions from Galaxy):
+        #
+        #   collection             stated   actually installed
+        #   community.postgresql   3.4.0    5.0.0   ← two majors
+        #   kubernetes.core        6.2.0    6.6.0
+        #   community.general      8.6.0    13.4.0  ← FIVE majors
+        #
+        # 🔴 And it broke something. community.postgresql 5.0.0 removed the
+        # `port` parameter in favour of `login_port`, and four database
+        # playbooks still pass `port:`. So `uis deploy authentik` has failed on
+        # a FRESH CLUSTER since 5.x entered the image — on the service Terje
+        # calls critical — and nothing reported it, because the pin that was
+        # supposed to prevent exactly this was decorative.
         install_collection() {
             local collection="$1"
-            local github_url="$2"
+            local version="$2"
+            local github_url="$3"
 
-            echo "Installing $collection from Galaxy..."
+            echo "Installing $collection==$version from Galaxy..."
             local output
-            output=$(ansible-galaxy collection install "$collection" --force 2>&1)
+            output=$(ansible-galaxy collection install "${collection}:==${version}" --force 2>&1)
             echo "$output"
 
             # Check if Galaxy returned 500 error
@@ -92,7 +138,8 @@ install_ansible_kubernetes() {
                     output=$(ansible-galaxy collection install "$github_url" --force 2>&1)
                     echo "$output"
                     if echo "$output" | grep -q "was installed successfully"; then
-                        echo "Successfully installed $collection from GitHub"
+                        _verify_collection_version "$collection" "$version" || return 1
+                        echo "Successfully installed $collection==$version from GitHub"
                         return 0
                     fi
                 fi
@@ -102,7 +149,8 @@ install_ansible_kubernetes() {
 
             # Galaxy succeeded
             if echo "$output" | grep -q "was installed successfully\|is already installed"; then
-                echo "Successfully installed $collection from Galaxy"
+                _verify_collection_version "$collection" "$version" || return 1
+                echo "Successfully installed $collection==$version from Galaxy"
                 return 0
             fi
 
@@ -111,9 +159,25 @@ install_ansible_kubernetes() {
         }
 
         local collections_failed=0
-        install_collection kubernetes.core "git+https://github.com/ansible-collections/kubernetes.core.git,6.2.0" || collections_failed=1
-        install_collection community.postgresql "git+https://github.com/ansible-collections/community.postgresql.git,3.4.0" || collections_failed=1
-        install_collection community.general "git+https://github.com/ansible-collections/community.general.git,8.6.0" || collections_failed=1
+        # ⚠️ TWO OF THESE ARE PINNED TO WHAT IS RUNNING, NOT TO WHAT WAS WRITTEN.
+        #
+        # kubernetes.core and community.general have been resolving to 6.6.0
+        # and 13.4.0 and everything on them works. Reverting to the numbers
+        # that were never applied would be two untested downgrades — five
+        # majors in community.general's case — to fix a problem nobody has.
+        # A pin exists for reproducibility, not for any particular version, so
+        # these freeze the state that is proven working.
+        #
+        # 🔴 community.postgresql is the exception, and pinned BACKWARDS on
+        # purpose: at 5.0.0 the four `*-create-postgres.yml` playbooks cannot
+        # run at all, and they are written for 3.x. `port` and `login_port` are
+        # NOT interchangeable — 3.4.0 accepts only `port`, 5.0.0 only
+        # `login_port` — so there is no spelling that works on both and this
+        # cannot be fixed by renaming. Moving to 5.x means editing 43 call
+        # sites across four playbooks and is a deliberate upgrade, not a repair.
+        install_collection kubernetes.core      6.6.0  "git+https://github.com/ansible-collections/kubernetes.core.git,6.6.0" || collections_failed=1
+        install_collection community.postgresql 3.4.0  "git+https://github.com/ansible-collections/community.postgresql.git,3.4.0" || collections_failed=1
+        install_collection community.general    13.4.0 "git+https://github.com/ansible-collections/community.general.git,13.4.0" || collections_failed=1
 
         if [ "$collections_failed" -eq 0 ]; then
             add_status "Ansible Collections" "Status" "kubernetes.core, community.postgresql, community.general"
