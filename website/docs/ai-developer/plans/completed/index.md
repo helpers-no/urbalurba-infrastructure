@@ -19,7 +19,7 @@ checkout artefact — every row showed whichever day the repository was last
 cloned. Git dates are honest but they still move when a file is edited for any
 reason: a bulk Status normalisation on 2026-09-08 is why most rows share a date.
 
-Where a real completion date matters it lives in the plan's own 
+Where a real completion date matters it lives in the plan's own `**Status:**`
 line, which carries one for the plans whose authors recorded it.
 
 | Plan | Goal | Last updated |
