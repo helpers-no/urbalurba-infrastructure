@@ -142,6 +142,52 @@ else
     fail "the fork is recorded" "only $_n of 2 — one arm gets adopted by default"
 fi
 
+# ---------------------------------------------------------------------------
+# urb-agents#1710 — what retracting SCRIPT_CONFIGURABLE actually costs.
+#
+# 🔵 The flag and the handler are independent: the work is done by a handler
+# FILE that does not exist either way, so retracting turns one refusal into an
+# earlier and more accurate one. Recording that stops the decision being
+# re-litigated as "would it break something".
+#
+# 🔴 And the two service-specific findings, because both say the handler is
+# the small part: authentik needs its blueprint MOUNT made dynamic (three
+# static entries in a product values file, read at startup, one slot), and
+# redis ACLs are lost on restart without an aclfile that is not configured.
+# ---------------------------------------------------------------------------
+
+_n=0
+grep -qF 'flag and the handler are independent' "$DOC" && _n=$((_n+1))
+grep -qF 'earlier and more accurate one' "$DOC" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass "retracting the flag changes the message, not the capability"
+else
+    fail "retraction is documented as safe" "only $_n of 2 — it reads as removing a capability"
+fi
+
+_n=0
+grep -qF 'The delivery is the obstacle' "$DOC" && _n=$((_n+1))
+grep -qF 'exactly one slot exists' "$DOC" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass "the authentik obstacle is named as the mount, and the slot count given"
+else
+    fail "the authentik obstacle is named" "only $_n of 2 — a handler gets estimated as a script"
+fi
+
+if grep -qF 'built before item 4 would add per-app keys' "$DOC"; then
+    pass "building authentik before item 4 is recorded as making SEC-F5 worse"
+else
+    fail "the item 4 ordering is stated" "a handler would add keys to a Secret replicated everywhere"
+fi
+
+_n=0
+grep -qF 'lives in memory' "$DOC" && _n=$((_n+1))
+grep -qF 'no `aclfile`' "$DOC" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass "redis ACLs are documented as lost on restart without an aclfile"
+else
+    fail "the redis catch is recorded" "only $_n of 2 — a handler would provision a user that vanishes"
+fi
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
