@@ -153,6 +153,88 @@ else
          "commands at line ${_cmd_line:-none}, gate at ${_gate_line:-none}"
 fi
 
+# ---------------------------------------------------------------------------
+# 🔴 THE SAME HAZARD IN A SPELLING THIS FILE DID NOT LOOK AT: HEREDOCS.
+#
+# Every check above matches `echo "` / `printf "`. `cmd_help` is a `cat <<EOF`,
+# which those patterns never see — so a backtick sat in the help text until
+# somebody ran the command and reported it:
+#
+#     uis help configure  ->  check: command not found
+#
+# An UNQUOTED heredoc performs command substitution, so bash ran `check` and
+# the backticked word vanished from the output (imac, urb-agents#1700 item 3).
+#
+# 🔵 The rule is narrow on purpose: a backtick in an unquoted heredoc is always
+# a mistake, while `$(...)` is the spelling used when substitution IS wanted —
+# as in the config file `uis init` generates with `$(date)`. So this forbids
+# backticks only, and ignores escaped ones (\\`), which is how the two
+# legitimate uses in the docs generators spell a literal backtick.
+# ---------------------------------------------------------------------------
+
+# Echoes "line N: text" for every backtick inside an UNQUOTED heredoc.
+_scan_heredocs() {
+    python3 - "$1" <<'PYEOF'
+import re, sys
+lines = open(sys.argv[1], errors="ignore").read().splitlines()
+inhd = False
+for i, l in enumerate(lines, 1):
+    if not inhd:
+        m = re.search(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", l)
+        if m:
+            inhd, quoted, delim, start, body = True, bool(m.group(1)), m.group(2), i, []
+    else:
+        if l.strip() == delim:
+            if not quoted:
+                for k, x in enumerate(body, 1):
+                    # An escaped backtick is inert inside an unquoted heredoc,
+                    # and escaping is the fix, so strip those before looking.
+                    if "`" in re.sub(r"\\.", "", x):
+                        print(f"line {start+k}: {x.strip()[:70]}")
+            inhd = False
+        else:
+            body.append(l)
+PYEOF
+}
+
+_hd_hits=""
+for f in "${FILES[@]}"; do
+    [[ -f "$f" ]] || continue
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && _hd_hits+="$(basename "$f"):$line"$'\n'
+    done < <(_scan_heredocs "$f")
+done
+if [[ -z "$_hd_hits" ]]; then
+    pass "🔴 no unquoted heredoc carries a backtick, which bash would execute"
+else
+    fail "🔴 no unquoted heredoc carries a backtick" \
+         "these EXECUTE every time the text is printed:"$'\n'"${_hd_hits%$'\n'}"
+fi
+
+# ⚠️ Positive control: the scanner must find one that IS there, or a clean
+# result is indistinguishable from a broken parser.
+_hdctl="$(mktemp)"
+printf 'show() {\n    cat <<EOF\nthis has a `backtick`\nEOF\n}\n' > "$_hdctl"
+if [[ -n "$(_scan_heredocs "$_hdctl")" ]]; then
+    pass "control: the heredoc scanner finds a backtick that is there"
+else
+    fail "control: the heredoc scanner finds a backtick that is there" \
+         "it found nothing in a file built to contain one — the check above proves nothing"
+fi
+rm -f "$_hdctl"
+
+# 🔵 Negative control: a QUOTED heredoc is inert and must NOT be flagged, or
+# the fix for this class would fail its own test.
+_hdctl2="$(mktemp)"
+printf "show() {\n    cat <<'EOF'\nthis has a \`backtick\` and is inert\nEOF\n}\n" > "$_hdctl2"
+if [[ -z "$(_scan_heredocs "$_hdctl2")" ]]; then
+    pass "control: a quoted heredoc with a backtick is correctly ignored"
+else
+    fail "control: a quoted heredoc with a backtick is correctly ignored" \
+         "quoting the delimiter is a valid fix and the scanner rejects it"
+fi
+rm -f "$_hdctl2"
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]

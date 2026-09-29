@@ -73,6 +73,40 @@ _is_service_deployed() {
 }
 
 # Main configure command — parse args and dispatch to handler
+# ⚠️ `uis configure postgresql --help` used to fail with "Unknown option:
+# --help", and `uis help configure` listed none of these flags — so the only
+# way to learn them was to be handed the command. imac could run #1676 solely
+# because the task spelled it out (urb-agents#1700 item 3).
+_configure_usage() {
+    cat <<'EOF'
+Usage: uis configure <service> [options]
+
+Creates the per-application resources a service needs — for postgresql: a
+database, a role, and optionally a Secret holding the connection URL.
+
+Options:
+  --app <name>                 Application this is for (required)
+  --database <name>            Database name (default: derived from --app)
+  --init-file <path>           SQL applied after creation, as the APP role
+                               (so it cannot CREATE EXTENSION)
+  --namespace <ns>             Write the credential into a Secret in <ns>.
+                               Implies the consumer is in-cluster, so the
+                               database is NOT exposed on the host.
+  --secret-name-prefix <p>     Secret name prefix; requires --namespace
+  --schemas <list>             postgrest only: schemas to expose
+  --url-prefix <p>             postgrest only: first label of the hostname
+  --rotate                     Mint a new password instead of reusing the
+                               one already in the Secret
+  --purge                      Remove the application's database and role
+  --json                       Machine-readable output on stdout
+  --help, -h                   This text
+
+Examples:
+  uis configure postgresql --app myapp
+  uis configure postgresql --app myapp --namespace myapp --secret-name-prefix myapp
+EOF
+}
+
 run_configure() {
     local service_id=""
     local app_name=""
@@ -88,6 +122,9 @@ run_configure() {
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h) _configure_usage; return 0 ;;
+        esac
         case "$1" in
             --app)
                 app_name="$2"

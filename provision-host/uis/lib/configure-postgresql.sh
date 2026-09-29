@@ -191,11 +191,17 @@ _pg_create_secret() {
     local database_url="$3"
     local kubeconf="${KUBECONF:-/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all}"
 
+    # ⚠️ Labelled, so a person or a rebuild can tell this from a hand-made
+    # Secret of the same name. Nothing marked it before, which is the same gap
+    # the oauth2-proxy objects carry labels to close (urb-agents#1700 item 4).
     kubectl create secret generic "$secret_name" \
         --namespace="$ns" \
         --from-literal=DATABASE_URL="$database_url" \
         --kubeconfig="$kubeconf" \
         --dry-run=client -o yaml 2>/dev/null \
+        | kubectl label --local -f - --dry-run=client -o yaml \
+            "app.kubernetes.io/managed-by=uis" \
+            "urbalurba.io/generated-by=configure-postgresql" 2>/dev/null \
         | kubectl apply --kubeconfig="$kubeconf" -f - >/dev/null 2>&1
 }
 
@@ -550,10 +556,44 @@ EOF
         echo "Init file applied successfully." >&2
     fi
 
-    # Auto-expose if not already exposed (6UIS)
-    if type expose_service &>/dev/null; then
+    # ─── auto-expose, and the case it must not fire in ─────────────────────
+    #
+    # 🔴 THIS OPENED THE SHARED DATABASE TO THE LOCAL NETWORK AS A SIDE EFFECT.
+    #
+    # `expose_service` runs `kubectl port-forward --address 0.0.0.0` in the
+    # BACKGROUND, so it survives the command that started it. Calling it
+    # unconditionally meant that `uis configure postgresql --namespace <ns>` —
+    # whose entire job is to create a database and a Secret for a consumer
+    # INSIDE the cluster — left the shared instance reachable on every
+    # interface of the host, and kept it that way after exiting.
+    #
+    # imac measured it on 1.6.161 while provisioning an application's database:
+    # port 35432 answering on the machine's LAN address, host firewall
+    # inactive, on a command whose output mentioned it in one informational
+    # line (urb-agents#1700). The application connects via the cluster service
+    # and never needed the port at all.
+    #
+    # ⚠️ `--namespace` is exactly the signal that the consumer is in-cluster:
+    # it is the flag that says "write the credential into a Secret in this
+    # namespace". The host port-forward serves the OTHER case — a DCT
+    # devcontainer reaching the database through `host.docker.internal`. The
+    # two are alternatives, so the presence of --namespace rules the expose out.
+    #
+    # 🔵 The bind address is deliberately NOT changed here. Narrowing it to
+    # loopback looks like the obvious hardening and would break the case the
+    # expose exists for: a DCT container reaching `host.docker.internal` on
+    # Linux arrives at the docker bridge gateway, not 127.0.0.1. That is a
+    # separate decision, recorded rather than guessed at.
+    if [[ -n "$namespace" ]]; then
+        echo "Not exposing $service_id on the host: --namespace means the consumer" >&2
+        echo "  is in-cluster and reaches it at $PG_CLUSTER_HOST:$PG_INTERNAL_PORT." >&2
+        echo "  For local development instead: uis expose $service_id" >&2
+    elif type expose_service &>/dev/null; then
         if ! _is_exposed "$service_id" 2>/dev/null; then
-            echo "Auto-exposing $service_id..." >&2
+            echo "Auto-exposing $service_id on the host..." >&2
+            echo "  ⚠️  This binds ALL interfaces, so it is reachable from your network," >&2
+            echo "      and it keeps running after this command exits." >&2
+            echo "      Stop it with: uis expose $service_id --stop" >&2
             expose_service "$service_id" >&2 || true
         fi
     fi
@@ -582,13 +622,24 @@ EOF
         echo "PostgreSQL configured for '$app_name':"
         echo "  Database: $database_name"
         echo "  Username: $username"
-        echo "  Password: $app_password"
-        echo ""
-        echo "  Local:   postgresql://$username:$app_password@host.docker.internal:$expose_port/$database_name"
-        echo "  Cluster: $cluster_url"
+        # 🔴 WITH --namespace THE CREDENTIAL ALREADY HAS A HOME, so stdout does
+        # not need a copy. It printed the password and two URLs containing it —
+        # four credential lines — and for an agent stdout IS its transcript,
+        # which is why #1676 had to be sent with "do not post the output"
+        # (imac, urb-agents#1700).
+        #
+        # ⚠️ Without --namespace there is no Secret, so the password on stdout
+        # is the only way to return a usable credential and it still prints.
+        # `--json` is unchanged: it is opt-in and machine-read.
         if [[ -n "$namespace" ]]; then
             echo ""
             echo "  Secret:  $secret_name (namespace: $namespace, key: DATABASE_URL)"
+            echo "  Read it: kubectl get secret $secret_name -n $namespace -o jsonpath='{.data.DATABASE_URL}' | base64 -d"
+        else
+            echo "  Password: $app_password"
+            echo ""
+            echo "  Local:   postgresql://$username:$app_password@host.docker.internal:$expose_port/$database_name"
+            echo "  Cluster: $cluster_url"
         fi
     fi
 }
