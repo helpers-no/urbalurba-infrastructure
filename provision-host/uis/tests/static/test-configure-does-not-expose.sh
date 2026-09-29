@@ -236,6 +236,39 @@ else
     fail "the usage matches the handlers" "--help still advertises a flag postgresql refuses"
 fi
 
+# ⚠️ And the refusal must print the REAL names. The first version said
+# `DROP ROLE "<app>_user"` and there is no `_user` suffix — configure names the
+# role after the app with hyphens turned to underscores, and the database with
+# `_db` appended. Honest about refusing, wrong about the remedy, on a command
+# whose whole point is removing things (imac, urb-agents#1721).
+_n=0
+grep -qF "_p_role=\$(echo \"\${app_name}\" | tr '-' '_')" <<<"$pg" && _n=$((_n+1))
+grep -qF '_p_db="${_p_role}_db"' <<<"$pg" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass "the purge refusal derives the real role and database names"
+else
+    fail "the refusal derives real names" "only $_n of 2 — it prints names that do not exist"
+fi
+
+# 🔴 The derivation must match what configure itself uses, or the refusal names
+# a different object than the one that was created. Compare the expression on
+# the right of each assignment, not the whole line.
+_deriv() { grep -F "$1" <<<"$pg" | head -1 | sed 's/^[^=]*=//'; }
+_mk_role="$(_deriv 'username=$(echo')"
+_pg_role="$(_deriv '_p_role=$(echo')"
+if [[ -n "$_mk_role" && "$_mk_role" == "$_pg_role" ]]; then
+    pass "the refusal and the creator derive the role name identically"
+else
+    fail "the two derivations agree" "creator='$_mk_role' refusal='$_pg_role'"
+fi
+
+# It must not print the placeholder that was wrong.
+if grep -qF '<app>_user' <<<"$pg"; then
+    fail "no placeholder role name remains" "'<app>_user' is back, and no such role is ever created"
+else
+    pass "no placeholder role name remains"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]

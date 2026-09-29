@@ -737,6 +737,30 @@
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: whoami_auth_test
+      # 🔴 THE OUTPOST BINDS PROVIDERS ~2 MINUTES AFTER THE BLUEPRINT APPLIES,
+      # and this probed once. So `uis deploy authentik` EXITED 1 on a cluster
+      # where authentik was fine: task 52 read the single 404 and failed the
+      # whole install (imac, urb-agents#1721).
+      #
+      # imac's log is what makes this unambiguous rather than a guess — the
+      # same request, nothing changed in between, only waiting:
+      #
+      #   11:51:06  404   <- this task
+      #   11:51:23  404   <- and again, then exit 1 at 11:51:30
+      #   11:52:58  302   <- outpost now has the providers bound
+      #
+      # ⚠️ Retry until the 302 rather than sleeping longer. A fixed wait is a
+      # guess that is too short on a loaded cluster and wasted on a fast one,
+      # and task 49 "wait for middleware to propagate" already waits for the
+      # wrong thing — the middleware, not the outpost's provider binding.
+      #
+      # 🔵 It also absorbs a known flakiness in this probe shape: `kubectl run
+      # --rm -i` can return rc=0 with empty stdout when the container outlives
+      # the attach, which reads as a failure. A retry makes one bad sample
+      # harmless instead of fatal.
+      until: "'302' in whoami_auth_test.stdout"
+      retries: 24
+      delay: 10
       failed_when: false
       changed_when: false
 
@@ -748,6 +772,30 @@
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: whoami_internal_auth_test
+      # 🔴 THE OUTPOST BINDS PROVIDERS ~2 MINUTES AFTER THE BLUEPRINT APPLIES,
+      # and this probed once. So `uis deploy authentik` EXITED 1 on a cluster
+      # where authentik was fine: task 52 read the single 404 and failed the
+      # whole install (imac, urb-agents#1721).
+      #
+      # imac's log is what makes this unambiguous rather than a guess — the
+      # same request, nothing changed in between, only waiting:
+      #
+      #   11:51:06  404   <- this task
+      #   11:51:23  404   <- and again, then exit 1 at 11:51:30
+      #   11:52:58  302   <- outpost now has the providers bound
+      #
+      # ⚠️ Retry until the 302 rather than sleeping longer. A fixed wait is a
+      # guess that is too short on a loaded cluster and wasted on a fast one,
+      # and task 49 "wait for middleware to propagate" already waits for the
+      # wrong thing — the middleware, not the outpost's provider binding.
+      #
+      # 🔵 It also absorbs a known flakiness in this probe shape: `kubectl run
+      # --rm -i` can return rc=0 with empty stdout when the container outlives
+      # the attach, which reads as a failure. A retry makes one bad sample
+      # harmless instead of fatal.
+      until: "'302' in whoami_internal_auth_test.stdout"
+      retries: 24
+      delay: 10
       failed_when: false
       changed_when: false
 
