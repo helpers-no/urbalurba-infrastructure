@@ -150,7 +150,19 @@
           ⚠️  WARNING: This will permanently delete all Authentik data!
           {% endif %}
 
-    - name: 8. Confirm deletion (delete mode only)
+    # 🔴 THIS COULD ONLY BE RUN BY A HUMAN AT A TERMINAL, AND SAID THE HUMAN
+    # REFUSED WHEN THERE WAS NO HUMAN.
+    #
+    # `undeploy authentik` prints this playbook as the way to remove the
+    # database it leaves behind. imac followed that instruction exactly and got
+    # `❌ Deletion aborted by user` with exit 2 — nobody aborted anything; there
+    # was simply no TTY for `pause` to read (urb-agents#1725).
+    #
+    # ⚠️ So the documented remedy was unusable by an agent, a CI job or a
+    # script, and it blamed the operator for the automation's own limitation.
+    # `-e confirm=yes` is the non-interactive path; the prompt still runs for
+    # anyone who does not pass it.
+    - name: 8. Confirm deletion (delete mode only, unless confirm=yes)
       pause:
         prompt: |
           ⚠️  DESTRUCTIVE OPERATION WARNING ⚠️
@@ -164,12 +176,26 @@
           
           Type 'yes' to continue, or 'no' to abort
       register: delete_confirmation
-      when: current_operation == 'delete'
+      when:
+        - current_operation == 'delete'
+        - (confirm | default('')) | lower != 'yes'
 
-    - name: 9. Abort on deletion refusal
+    - name: 9. Abort unless the deletion was confirmed
       fail:
-        msg: "❌ Deletion aborted by user"
-      when: current_operation == 'delete' and delete_confirmation.user_input | lower != 'yes'
+        msg: |
+          ❌ Deletion NOT confirmed — nothing was deleted.
+
+          Either the prompt was answered with something other than 'yes', or
+          there was no terminal to answer it (an agent, a CI job or a script).
+
+          To delete non-interactively, pass the confirmation explicitly:
+            ansible-playbook <this-playbook> -e operation=delete -e confirm=yes
+
+          ⚠️ This removes the authentik database, its role and all of its data.
+      when:
+        - current_operation == 'delete'
+        - (confirm | default('')) | lower != 'yes'
+        - (delete_confirmation.user_input | default('')) | lower != 'yes'
 
     - name: 10. Start port-forward to PostgreSQL in background
       shell: |

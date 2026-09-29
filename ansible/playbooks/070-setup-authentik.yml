@@ -758,7 +758,11 @@
       # --rm -i` can return rc=0 with empty stdout when the container outlives
       # the attach, which reads as a failure. A retry makes one bad sample
       # harmless instead of fatal.
-      until: "'302' in whoami_auth_test.stdout"
+      # ⚠️ Match the STATUS, not the body. The command appends
+      # `HTTP_STATUS:%{http_code}`, and `'302' in stdout` would also match a
+      # 404 page whose HTML happened to contain "302" — an asset hash, say.
+      # Not observed; free to remove (imac, urb-agents#1725).
+      until: "'HTTP_STATUS:302' in whoami_auth_test.stdout"
       retries: 24
       delay: 10
       failed_when: false
@@ -793,7 +797,11 @@
       # --rm -i` can return rc=0 with empty stdout when the container outlives
       # the attach, which reads as a failure. A retry makes one bad sample
       # harmless instead of fatal.
-      until: "'302' in whoami_internal_auth_test.stdout"
+      # ⚠️ Match the STATUS, not the body. The command appends
+      # `HTTP_STATUS:%{http_code}`, and `'302' in stdout` would also match a
+      # 404 page whose HTML happened to contain "302" — an asset hash, say.
+      # Not observed; free to remove (imac, urb-agents#1725).
+      until: "'HTTP_STATUS:302' in whoami_internal_auth_test.stdout"
       retries: 24
       delay: 10
       failed_when: false
@@ -807,7 +815,7 @@
           Troubleshooting: 
           - kubectl get middleware authentik-forward-auth -n {{ default_namespace }}
           - kubectl get ingressroute whoami-protected -n {{ default_namespace }}
-      when: "'302' not in whoami_auth_test.stdout and '302' not in whoami_internal_auth_test.stdout"
+      when: "'HTTP_STATUS:302' not in whoami_auth_test.stdout and 'HTTP_STATUS:302' not in whoami_internal_auth_test.stdout"
 
     - name: "53. Display authentication test results"
       ansible.builtin.debug:

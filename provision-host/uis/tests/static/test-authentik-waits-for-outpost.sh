@@ -57,8 +57,8 @@ if [[ "$_probe" == "NOYAML" ]]; then
     # templates once shipped green.
     echo "  (no pyyaml here — falling back to a text scan, CI parses it properly)"
     _n=0
-    grep -qF "until: \"'302' in whoami_auth_test.stdout\"" "$PB" && _n=$((_n+1))
-    grep -qF "until: \"'302' in whoami_internal_auth_test.stdout\"" "$PB" && _n=$((_n+1))
+    grep -qF "until: \"'HTTP_STATUS:302' in whoami_auth_test.stdout\"" "$PB" && _n=$((_n+1))
+    grep -qF "until: \"'HTTP_STATUS:302' in whoami_internal_auth_test.stdout\"" "$PB" && _n=$((_n+1))
     if [[ "$_n" -eq 2 ]]; then
         pass "both auth probes retry until a 302 (text scan)"
     else
@@ -118,6 +118,63 @@ if [[ -n "$_w52" ]] && ! grep -qE '\bfalse\b' <<<"$_w52"; then
     pass "task 52 still fails the install when no 302 ever appears"
 else
     fail "a genuine failure is still caught" "the gate is '${_w52:-missing}' — the retry would mask a broken auth flow"
+fi
+
+# --- 🔴 match the STATUS, not the body ------------------------------------
+# `'302' in stdout` also matches a 404 page whose HTML contains "302" — an
+# asset hash, say. The command already appends HTTP_STATUS:%{http_code}, so
+# the stricter form is free (imac, urb-agents#1725).
+if grep -qE "until:.*'302' in" "$PB" && ! grep -qE "until:.*'HTTP_STATUS:302' in" "$PB"; then
+    fail "the retry matches the status line" "'302' alone matches anywhere in the response body"
+else
+    pass "the retry matches HTTP_STATUS:302, not any 302 in the body"
+fi
+
+# ⚠️ And the gate must agree with the retry, or they disagree about what a
+# pass is: the probe could stop retrying on a body match the gate then rejects.
+_g="$(grep -F 'not in whoami_auth_test.stdout' "$PB" | head -1)"
+if grep -qF 'HTTP_STATUS:302' <<<"$_g"; then
+    pass "task 52's gate uses the same match as the retry"
+else
+    fail "the gate and the retry agree" "gate is '$_g' — it can reject what the retry accepted"
+fi
+
+# --- the delete remedy must be runnable as printed ------------------------
+# 🔴 `undeploy` printed a bare relative path with no confirm flag, so the
+# documented remedy failed with "Deletion aborted by user" when no user had
+# aborted anything — it just had no TTY.
+_RM="$REPO/ansible/playbooks/070-remove-authentik.yml"
+_U09="$REPO/ansible/playbooks/utility/u09-authentik-create-postgres.yml"
+# ⚠️ Require confirm=yes on the COMMAND line, not just mentioned in prose —
+# the explanatory sentence beneath it also contains the word.
+_n=0
+grep -qE '^\s*- "\s*-e operation=delete -e confirm=yes"' "$_RM" && _n=$((_n+1))
+grep -qF '/mnt/urbalurbadisk/ansible' "$_RM" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass "the printed remedy names the container path and the confirm flag"
+else
+    fail "the remedy is runnable as printed" "only $_n of 2 — an agent cannot follow it"
+fi
+
+# 🔴 The guard must be on BOTH tasks — the prompt AND the abort. With it on
+# only one, either the prompt still blocks an agent, or the abort fires after
+# a confirmed run. Count them; one is not enough.
+_guards="$(grep -cF "(confirm | default('')) | lower != 'yes'" "$_U09")"
+_n=0
+[[ "$_guards" -eq 2 ]] && _n=$((_n+1))
+grep -qF 'Deletion NOT confirmed' "$_U09" && _n=$((_n+1))
+if [[ "$_n" -eq 2 ]]; then
+    pass "delete mode has a non-interactive path and no longer blames the user"
+else
+    fail "delete mode is usable without a TTY" "only $_n of 2 — confirm guard on $_guards of 2 tasks"
+fi
+
+# ⚠️ Comment-stripped: the comment explaining this defect QUOTES the old
+# message, so a file-wide grep matches the explanation rather than the code.
+if grep -v '^[[:space:]]*#' "$_U09" | grep -qF 'Deletion aborted by user'; then
+    fail "the message does not blame a user who did nothing" "the old wording is back in the code"
+else
+    pass "the message does not blame a user who did nothing"
 fi
 
 echo ""
