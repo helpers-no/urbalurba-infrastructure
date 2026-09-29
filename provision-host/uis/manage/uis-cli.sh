@@ -2398,6 +2398,47 @@ cmd_argocd() {
     esac
 }
 
+# ─── what "the name is taken" actually means ──────────────────────────────
+#
+# 🔴 This guard used to refuse whenever the namespace existed, which made the
+# natural order impossible:
+#
+#     uis configure postgresql --app x --namespace x --secret-name-prefix x
+#     uis argocd register x <repo>        # ← refused: "namespace x is in use"
+#
+# `configure` HAS to create that namespace — it is where the pod reads
+# DATABASE_URL from — so step 1 created the very thing that made step 2
+# refuse. The only order that worked was to register first and leave the pod
+# in CreateContainerConfigError until its Secret showed up.
+#
+# ⚠️ The playbook never needed the guard: task 10 of argocd-register-app.yml
+# creates the namespace with `state: present`, which is idempotent.
+#
+# So the question is not whether the namespace exists, it is whether anything
+# is IN it that registering would trample. Two things are refused:
+#
+#   - an ArgoCD Application of this name. 🔴 The old guard did not check this
+#     at all, so an orphaned Application whose namespace had been deleted
+#     passed straight through.
+#   - workloads in the namespace that we would be handing to a syncPolicy
+#     with prune and selfHeal on.
+#
+# Existing-and-empty is not one of them. A namespace Kubernetes just created
+# is never literally empty — it gets a `default` ServiceAccount and a
+# `kube-root-ca.crt` ConfigMap — so only workload kinds are counted.
+_argocd_app_exists() {
+    local app_name="$1" kubeconf="$2"
+    kubectl get application "$app_name" -n argocd --kubeconfig="$kubeconf" &>/dev/null
+}
+
+# Names of the workloads in a namespace, one per line; empty if there are none.
+_argocd_namespace_workloads() {
+    local ns="$1" kubeconf="$2"
+    kubectl get deployments,statefulsets,daemonsets,jobs,cronjobs,pods \
+        -n "$ns" --kubeconfig="$kubeconf" --no-headers 2>/dev/null \
+        | awk 'NF { print $1 }'
+}
+
 cmd_argocd_register() {
     local app_name="${1:-}"
     local repo_url="${2:-}"
@@ -2434,12 +2475,30 @@ cmd_argocd_register() {
         exit "$EXIT_GENERAL_ERROR"
     fi
 
-    # Check if name is already in use as a namespace
+    # Refuse only when the name is genuinely taken — see the note above
     local kubeconf="/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
-    if kubectl get namespace "$app_name" --kubeconfig="$kubeconf" &>/dev/null; then
-        log_error "Name '$app_name' is already in use as a Kubernetes namespace."
-        echo "Choose a different name or remove it first: uis argocd remove $app_name" >&2
+
+    if _argocd_app_exists "$app_name" "$kubeconf"; then
+        log_error "An ArgoCD application named '$app_name' is already registered."
+        echo "Remove it first: uis argocd remove $app_name" >&2
         exit "$EXIT_GENERAL_ERROR"
+    fi
+
+    if kubectl get namespace "$app_name" --kubeconfig="$kubeconf" &>/dev/null; then
+        local occupants
+        occupants="$(_argocd_namespace_workloads "$app_name" "$kubeconf")"
+        if [[ -n "$occupants" ]]; then
+            log_error "Namespace '$app_name' already contains workloads:"
+            echo "$occupants" | sed 's/^/  /' >&2
+            echo "" >&2
+            echo "Registering would hand this namespace to ArgoCD, which prunes and" >&2
+            echo "self-heals what it manages. Choose a different name, or clear it:" >&2
+            echo "  uis argocd remove $app_name" >&2
+            exit "$EXIT_GENERAL_ERROR"
+        fi
+        echo "Namespace '$app_name' exists and holds no workloads — adopting it."
+        echo "(this is what 'uis configure --namespace $app_name' leaves behind)"
+        echo ""
     fi
 
     print_section "Registering $app_name with ArgoCD"
