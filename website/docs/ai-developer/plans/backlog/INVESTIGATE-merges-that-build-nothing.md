@@ -36,6 +36,42 @@ The failure is silent and it points the wrong way. Nothing reports an error — 
 
 **Both releases were published by dispatching the build manually and verifying the digest**, so 1.6.172, 1.6.173 and 1.6.174 are all correct in the registry. The process caught it. **The process catching it is not the same as it not happening.**
 
+## 🔴 Correction, and a worse defect underneath it (2026-09-29, later)
+
+Two more merges, and the picture changed:
+
+| commit | version | push-triggered runs |
+|---|---|---|
+| `dd129fa` | 1.6.174 | **0**, ever |
+| `3982cf1` | 1.6.175 | **0**, ever |
+| `d9fdbcf` | 1.6.176 | 4 — **arriving 7 minutes after the merge** |
+| `ca2c9ee` | 1.6.177 | 4, promptly |
+
+So it is not always absence. Sometimes the push event is just **very late**, and the original filing could not tell the two apart.
+
+### What that cost
+
+Seeing no runs, I dispatched the build by hand at 19:08:50. The push event then fired at 19:14:26 and built **the same commit again**. Both builds pushed the tag `1.6.176`, and the second won:
+
+```
+1.6.176  after the dispatched build  sha256:55bef8a2…
+1.6.176  after the push build        sha256:39099afd…
+```
+
+🔴 **The same version tag served two different images**, and I had already told a tester the first digest. Whoever pulled in that window has different bytes from whoever pulls now, from one commit.
+
+⚠️ **The build is not reproducible** — same source, different digest — which is ordinary for an unpinned image build, and is exactly why a tag cannot be treated as an identity. `latest` and `1.6.176` are pointers, and a second build moves them.
+
+🔵 **Docs regeneration is not a cause.** `93cbf86` (`chore: regenerate UIS documentation`) carries `version.txt` 1.6.174 and triggered no build, because GitHub does not cascade workflows from a `GITHUB_TOKEN` push. That was worth ruling out.
+
+### So there are two defects, not one
+
+1. **A merge that produces no build at all** (`dd129fa`, `3982cf1`), still unexplained.
+2. 🔴 **A version tag that can be rebuilt with different content**, which the workaround for (1) actively causes.
+
+- [ ] 1.4 **Refuse to overwrite an existing tag.** The build should fail, not silently re-point, when `<version>` is already in the registry with a different digest. That makes (2) impossible and turns the duplicate build into a loud no-op.
+- [ ] 1.5 Before dispatching by hand, wait long enough to be sure — seven minutes is the measured worst case so far — **and check the registry for an existing image of that version first.**
+
 ## What to find out
 
 - [ ] 1.1 Whether this is GitHub-side flakiness or something about how the merge is made
