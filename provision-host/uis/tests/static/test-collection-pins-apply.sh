@@ -103,6 +103,27 @@ else
          "pin is '$_pg_pin' and playbooks using 'port:' = $_uses_port — authentik's database step will fail"
 fi
 
+# --- 🔴 and a failed pin must STOP THE BUILD ------------------------------
+# A verification whose failure is a note is not a verification. This printed
+# "Note: Playbooks requiring these collections won't work" and carried on, so
+# the build succeeded and published an image whose playbooks could not run —
+# the same shape as the defect above. `main` returns ${#ERRORS[@]} and the
+# Dockerfile RUN fails on a non-zero exit, so the failure has to reach ERRORS.
+_fail_blk="$(sed -n '/collections_failed" -eq 0/,/^        fi$/p' <<<"$kt")"
+if grep -qF 'add_error "Ansible Collections"' <<<"$_fail_blk"; then
+    pass "a failed collection is recorded as an error, which fails the build"
+else
+    fail "a failed collection fails the build" \
+         "it is only a status line, so the image publishes with the wrong collections"
+fi
+
+# ⚠️ And the error path must not still describe itself as a note.
+if grep -qF "Note: Playbooks requiring these collections won't work" <<<"$kt"; then
+    fail "the failure is not downgraded to a note" "the old wording is back, and it shipped images"
+else
+    pass "the failure is not downgraded to a note"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]
