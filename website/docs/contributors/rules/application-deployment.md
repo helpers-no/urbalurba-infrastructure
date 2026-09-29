@@ -225,3 +225,38 @@ half of this rule works for Atlas and would fail for application #2.
 which six lie, and a stub advertised as a capability is the same defect that cost the
 first tenant two of its four install steps. Retracted is not cancelled: re-declaring is
 a one-line change the day a handler exists.
+
+#### What retracting actually does, measured
+
+Asked before deciding (`urb-agents#1710`). **The flag and the handler are independent**, and only the flag is being withdrawn:
+
+| | `uis configure redis --app x` says |
+|---|---|
+| today | passes the gate, then `No configure handler for 'redis'. Handler not yet implemented.` |
+| retracted | `Service 'redis' is not configurable.` — plus the list of services that are |
+
+🔵 **So retracting turns one refusal into an earlier and more accurate one.** It cannot break an install, because the work is done by a handler *file* (`lib/configure-<service>.sh`) that does not exist either way. Exactly two things read the flag: the gate in `configure.sh`, and the docs generator.
+
+#### 🔴 authentik is the expensive one, and not for the reason it looks
+
+The blueprint *content* is already solved and proven: `073-authentik-2-openwebui-blueprint.yaml.j2` is a **templated per-app OIDC blueprint** — provider, `client_id`/`client_secret`, `redirect_uris`, application, group mappings — and `service-protection-blueprint` is already generated dynamically. A handler would emit the same shape.
+
+⚠️ **The delivery is the obstacle.** Every blueprint needs **three** static entries in `075-authentik-config.yaml.j2` — `blueprints.configMaps[]`, `server.volumes[]` and `server.volumeMounts[]` — a *product* config file operators are told not to edit, and authentik reads the list **at startup**.
+
+The repository already documents this, in the header of the slot file itself:
+
+> *"Authentik requires ALL blueprint ConfigMaps to be listed in the Helm chart when it starts… THE PROBLEM: We can't predict what applications developers will add later! THE SOLUTION: Pre-allocated empty slots."*
+
+🔴 **And exactly one slot exists.** Its own example shows a `slot-2`; there is no slot 2. So one application can be configured without touching product config, and the second needs a values edit and an authentik restart. **A handler is not writing a blueprint — it is making the mount dynamic**, which is a change to how authentik is deployed, not a script beside it.
+
+⚠️ Second cost: `client_id` and `client_secret` come from **`urbalurba-secrets`** (`OPENWEBUI_OAUTH_CLIENT_ID`, `..._SECRET`), so each new app adds keys to the shared file — SEC-F5, and precisely what item 4 exists to fix. **An authentik handler built before item 4 would add per-app keys to a Secret replicated across every namespace.**
+
+#### redis is the better second handler, with one catch
+
+Structurally it is the closest analogue to postgres: connect as admin, create a principal, write a per-app Secret — `ACL SETUSER` in place of `CREATE ROLE`, `REDIS_URL` in place of `DATABASE_URL`. Four consumers share one password today (authentik, openwebui, argocd, nextcloud), so per-app ACL users would be a real isolation gain rather than a rename.
+
+🔴 **The catch has no postgres equivalent: a redis ACL created at runtime lives in memory.** Postgres roles are in the database and survive a restart; redis ACLs are lost unless an `aclfile` is configured. `050-redis-config.yaml` sets `commonConfiguration` (AOF only) and **no `aclfile`** — so a handler written today would provision a user that vanishes on the next pod restart, reporting success.
+
+✅ That is fixable — `aclfile` in `commonConfiguration` plus a writable mount — but it is **a change to how redis is deployed before the handler is worth writing**, the same shape as authentik's mount problem. Both say the same thing: **the handler is the small part.**
+
+
