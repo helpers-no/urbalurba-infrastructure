@@ -109,6 +109,55 @@ _pg_run_init() {
     fi
 }
 
+# Escape a psql error for embedding in a JSON string. Same implementation the
+# init_file path has used since 1.6.x, lifted into a function so the extension
+# paths do not carry a third copy of it.
+_pg_escape_json() {
+    printf '%s' "$1" \
+      | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read().strip())[1:-1])' 2>/dev/null \
+      || printf '%s' "$1" | tr '\n' ' ' | sed 's/"/\\"/g; s/\\/\\\\/g'
+}
+
+# ─── the extensions every UIS database gets ───────────────────────────────
+#
+# Terje, 2026-09-29: "i want the extensions activated so that they can be used
+# by anyone that want the functionality."
+#
+# 🔴 They used to reach no application database at all. The CREATE EXTENSION
+# statements lived only in the chart's initdb script, which runs once against
+# `postgres`; an app database is cloned from template1, which never had them.
+# So the eight extensions the documentation advertises were unreachable from
+# every database this handler had ever created (atlas, urb-agents#1741).
+#
+# Two mechanisms, deliberately overlapping:
+#   - 040-database-postgresql.yml seeds template1, so NEW databases inherit them
+#   - this runs on both paths here, so a database that already exists is
+#     retro-fitted by re-running `uis configure postgresql`
+#
+# ⚠️ As ADMIN. CREATE EXTENSION needs superuser, which is exactly why an app
+# cannot do it through --init-file (urb-agents#1446) and why this exists.
+_pg_extension_list() {
+    local f="${UIS_BASE:-/mnt/urbalurbadisk}/provision-host/uis/lib/postgres-extensions.conf"
+    [[ -r "$f" ]] || return 1
+    grep -vE '^[[:space:]]*(#|$)' "$f" | tr -d '[:blank:]'
+}
+
+# Echoes nothing on success; on failure echoes psql's complaint.
+_pg_ensure_extensions() {
+    local database="$1" admin_pass="$2"
+    local ext sql=""
+    local -a wanted=()
+    mapfile -t wanted < <(_pg_extension_list) || true
+    if [[ ${#wanted[@]} -eq 0 ]]; then
+        echo "no extension list found; refusing to guess" >&2
+        return 1
+    fi
+    for ext in "${wanted[@]}"; do
+        sql+="CREATE EXTENSION IF NOT EXISTS \"$ext\"; "
+    done
+    _pg_exec_db "$sql" "$database" "${PG_ADMIN_USER:-postgres}" "$admin_pass"
+}
+
 # Check if a database exists
 _pg_database_exists() {
     local db_name="$1"
@@ -459,6 +508,17 @@ configure_service() {
             _pg_create_secret "$namespace" "$secret_name" "$cluster_url"
         fi
 
+        # Extensions before the init file, so the init SQL can use the types.
+        local re_ext_err
+        if ! re_ext_err=$(_pg_ensure_extensions "$database_name" "$admin_pass" 2>&1); then
+            if [[ "$json_output" == true ]]; then
+                _configure_error "extensions" "$service_id" "Failed to activate extensions in '$database_name': $(_pg_escape_json "$re_ext_err")"
+            fi
+            log_error "Failed to activate extensions in '$database_name'"
+            echo "$re_ext_err" >&2
+            return 1
+        fi
+
         # 🔴 Apply the init file HERE TOO. It used to be applied only on the
         # create path, several hundred lines below a `return 0` this branch
         # reaches first — so on an existing database the init SQL was read from
@@ -632,6 +692,18 @@ EOF
     _pg_exec "GRANT ALL PRIVILEGES ON DATABASE \"$database_name\" TO \"$username\"" "$admin_pass" >/dev/null 2>&1
 
     echo "Database '$database_name' created with user '$username'." >&2
+
+    # Extensions before the init file, so the init SQL can use the types.
+    local ext_err
+    if ! ext_err=$(_pg_ensure_extensions "$database_name" "$admin_pass" 2>&1); then
+        if [[ "$json_output" == true ]]; then
+            _configure_error "extensions" "$service_id" "Failed to activate extensions in '$database_name': $(_pg_escape_json "$ext_err")"
+        fi
+        log_error "Failed to activate extensions in '$database_name'"
+        echo "$ext_err" >&2
+        return 1
+    fi
+    echo "Extensions activated in '$database_name'." >&2
 
     # Apply init file if provided via stdin
     if [[ -n "$init_file" ]]; then

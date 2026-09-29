@@ -34,6 +34,6 @@ Other databases are deployed on demand when specific applications need them.
 
 ## PostgreSQL Extensions
 
-UIS deploys the official Bitnami PostgreSQL image (PostgreSQL 18.3), which **contains** 8 pre-built extensions: pgvector (AI embeddings), PostGIS (geospatial), hstore, ltree, uuid-ossp, pg_trgm, btree_gin, and pgcrypto.
+UIS deploys the official Bitnami PostgreSQL image (PostgreSQL 18.3) with 8 extensions: pgvector (AI embeddings), PostGIS (geospatial), hstore, ltree, uuid-ossp, pg_trgm, btree_gin, and pgcrypto.
 
-🔴 **They are created in the `postgres` database only, so a database made by `uis configure postgresql` has none of them**, and an application cannot add one itself. See [PostgreSQL details](./postgresql.md) before choosing a data model that depends on one.
+✅ **They are activated in every database**, including the one `uis configure postgresql` creates for your application — no request, no flag. See [PostgreSQL details](./postgresql.md).

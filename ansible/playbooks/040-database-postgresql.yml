@@ -137,6 +137,113 @@
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
 
+    # 🔴 Activate the extensions in template1, so every database created from
+    # here on has them.
+    #
+    # Until 1.6.178 the CREATE EXTENSION statements lived only in the chart's
+    # initdb script, which runs once against the `postgres` database. Every
+    # application database is cloned from template1, which never received them
+    # — so NO database `uis configure postgresql` had ever made had PostGIS,
+    # pgvector or any of the other six, while the documentation listed them as
+    # features of the platform. atlas was choosing a data model on the strength
+    # of that list when it asked (urb-agents#1741).
+    #
+    # Seeding template1 HERE rather than at initdb means it also reaches
+    # clusters that already exist: this runs on every `uis deploy postgresql`
+    # and CREATE EXTENSION IF NOT EXISTS is idempotent.
+    #
+    # ⚠️ Databases created BEFORE this ran are not retro-fitted by it. Re-running
+    # `uis configure postgresql` for an app does that, because the handler
+    # ensures the same list on the already-exists path.
+    #
+    # ⚠️ The pod is DISCOVERED and the host comes from PGHOST. `postgresql-0` is
+    # a StatefulSet artefact that does not exist on the external-services proxy
+    # topology, and psql without -h uses a unix socket the proxy has no server
+    # behind. test-postgres-connection-shape.sh caught both in the first draft
+    # of this task.
+    - name: "8a. Find the PostgreSQL pod"
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        kind: Pod
+        namespace: default
+        label_selectors:
+          - app.kubernetes.io/name=postgresql
+      register: pg_ext_pods
+
+    - name: "8b. Fail if no PostgreSQL pod was found"
+      ansible.builtin.fail:
+        msg: "No PostgreSQL pod found; cannot activate extensions in template1"
+      when: pg_ext_pods.resources | length == 0
+
+    - name: "8c. Read PGHOST for the psql connection"
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        kind: Secret
+        namespace: default
+        name: urbalurba-secrets
+      register: pg_ext_secret
+
+    - name: "8d. Activate the UIS extensions in template1"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - exec
+          - -n
+          - default
+          - "{{ pg_ext_pods.resources[0].metadata.name }}"
+          - --
+          - env
+          - "PGPASSWORD={{ postgres_password }}"
+          - psql
+          - -h
+          - "{{ pg_ext_secret.resources[0].data.PGHOST | b64decode }}"
+          - -U
+          - postgres
+          - -d
+          - template1
+          - --set
+          - ON_ERROR_STOP=on
+          - -c
+          - "{{ uis_pg_extensions | map('regex_replace', '^(.*)$', 'CREATE EXTENSION IF NOT EXISTS \"\\1\";') | join(' ') }}"
+      vars:
+        uis_pg_extensions: "{{ lookup('file', '/mnt/urbalurbadisk/provision-host/uis/lib/postgres-extensions.conf').splitlines()
+                               | reject('match', '^\\s*#')
+                               | reject('match', '^\\s*$')
+                               | map('trim') | list }}"
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+
+    - name: "8e. Show which extensions template1 now has"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - exec
+          - -n
+          - default
+          - "{{ pg_ext_pods.resources[0].metadata.name }}"
+          - --
+          - env
+          - "PGPASSWORD={{ postgres_password }}"
+          - psql
+          - -h
+          - "{{ pg_ext_secret.resources[0].data.PGHOST | b64decode }}"
+          - -U
+          - postgres
+          - -d
+          - template1
+          - -t
+          - -c
+          - "select extname || ' ' || extversion from pg_extension order by extname"
+      register: template1_ext_list
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+
+    - name: "8f. Display them"
+      ansible.builtin.debug:
+        msg: "template1 extensions: {{ template1_ext_list.stdout_lines | map('trim') | reject('equalto','') | list }}"
+
     - name: 9. Verify PostgreSQL service is running
       kubernetes.core.k8s_info:
         kubeconfig: "{{ merged_kubeconf_file }}"
