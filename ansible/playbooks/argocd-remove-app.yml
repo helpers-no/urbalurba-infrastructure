@@ -67,6 +67,45 @@
           - "ArgoCD Application {{ app_name }} exists: {{ argocd_app.resources | length > 0 }}"
           - "Beginning cleanup process..."
 
+    # 🔴 Task 4 already knows whether an Application exists. Until 1.6.175 it
+    # was only printed, and task 13 deleted the namespace regardless of the
+    # answer — so `uis argocd remove <any-namespace>` deleted that namespace
+    # and everything in it, whether or not ArgoCD had ever managed it.
+    #
+    # Found by imac (urb-agents#1732) by running the exact command that
+    # `argocd register` printed when it refused to take over an occupied
+    # namespace. The remedy destroyed what the refusal had just protected.
+    - name: "5a. Refuse to delete a namespace this never managed"
+      ansible.builtin.fail:
+        msg: |
+          No ArgoCD application named '{{ app_name }}' exists.
+
+          Namespace '{{ app_name }}' does exist, and removing it would delete
+          it and everything inside it. This command undoes 'uis argocd
+          register', so with nothing registered there is nothing to undo, and
+          it will not guess that the namespace was meant.
+
+          If the application really was removed by hand and you want the
+          leftover namespace gone:
+            uis argocd remove {{ app_name }} --force
+
+          To see what would be lost first:
+            kubectl get all -n {{ app_name }}
+      when:
+        - argocd_app.resources | length == 0
+        - namespace_info.resources | length > 0
+        - not (force | default(false) | bool)
+
+    - name: "5b. Warn when forcing the removal of an unmanaged namespace"
+      ansible.builtin.debug:
+        msg: |
+          ⚠️  No ArgoCD application named '{{ app_name }}' exists.
+          Deleting namespace '{{ app_name }}' and everything in it because --force was given.
+      when:
+        - argocd_app.resources | length == 0
+        - namespace_info.resources | length > 0
+        - force | default(false) | bool
+
     - name: 6. Remove ArgoCD Application
       kubernetes.core.k8s:
         name: "{{ app_name }}"

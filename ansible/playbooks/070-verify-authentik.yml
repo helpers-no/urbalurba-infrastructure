@@ -78,15 +78,16 @@
           sh -c "ak export_blueprint | grep -B 5 -A 10 'slug: {{ app_name }}'"
         kubeconfig: "{{ merged_kubeconf_file }}"
       register: app_config
+      failed_when: false
       no_log: true
 
     - name: 10. Verify application exists and has valid configuration
       ansible.builtin.assert:
         that:
-          - "app_name in app_config.stdout"
-          - "'slug: ' + app_name in app_config.stdout"
-          - "'provider:' in app_config.stdout"
-          - "'policy_engine_mode:' in app_config.stdout"
+          - "app_name in (app_config.stdout | default(''))"
+          - "'slug: ' + app_name in (app_config.stdout | default(''))"
+          - "'provider:' in (app_config.stdout | default(''))"
+          - "'policy_engine_mode:' in (app_config.stdout | default(''))"
         fail_msg: "Application '{{ app_name }}' not found or configuration is incomplete"
         success_msg: "✓ Application '{{ app_name }}' found and valid"
 
@@ -117,23 +118,29 @@
           sh -c "ak export_blueprint | grep -B 5 -A 30 'pk: {{ app_provider_id }}' | grep -A 25 'model: authentik_providers'"
         kubeconfig: "{{ merged_kubeconf_file }}"
       register: provider_config
+      failed_when: false
       no_log: true
 
     - name: 15. Verify provider configuration exists
       ansible.builtin.assert:
         that:
-          - "'model: authentik_providers_' in provider_config.stdout"
+          - "'model: authentik_providers_' in (provider_config.stdout | default(''))"
         fail_msg: "Provider ID {{ app_provider_id }} configuration not found"
         success_msg: "✓ Provider ID {{ app_provider_id }} found"
 
+    # 🔴 This used to run its own `grep -A 25 'name: whoami-provider'`.
+    # No such provider exists: the service-protection blueprint creates one per
+    # domain — whoami-localhost-provider, whoami-tailscale-provider,
+    # whoami-cloudflare-provider (073-authentik-service-protection-blueprint.yaml.j2:59).
+    # The grep matched nothing, exited 1, failed k8s_exec, and `no_log: true`
+    # censored the one line that said why. imac found it in urb-agents#1732,
+    # after task 45 had been reporting "NEEDS REVIEW" and being waved through.
+    #
+    # Task 14 already fetched this provider by its pk, which is the identifier
+    # that cannot be guessed wrong. Reuse it instead of grepping for a name.
     - name: 16. Extract provider details
-      kubernetes.core.k8s_exec:
-        namespace: "{{ authentik_namespace }}"
-        pod: "{{ worker_pod_name }}"
-        command: >
-          sh -c "ak export_blueprint | grep -A 25 'name: whoami-provider'"
-        kubeconfig: "{{ merged_kubeconf_file }}"
-      register: provider_details_raw
+      ansible.builtin.set_fact:
+        provider_details_raw: "{{ provider_config }}"
       no_log: true
 
     - name: 17. Check for OAuth2 provider
@@ -168,12 +175,13 @@
           sh -c "ak export_blueprint | grep -A 20 'authentik Embedded Outpost'"
         kubeconfig: "{{ merged_kubeconf_file }}"
       register: outpost_details
+      failed_when: false
       no_log: true
 
     - name: 21. Verify provider is assigned to outpost
       ansible.builtin.assert:
         that:
-          - "('- ' + app_provider_id) in outpost_details.stdout"
+          - "('- ' + app_provider_id) in (outpost_details.stdout | default(''))"
         fail_msg: "Provider ID {{ app_provider_id }} is not assigned to any outpost"
         success_msg: "✓ Provider {{ app_provider_id }} assigned to outpost"
 

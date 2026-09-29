@@ -149,7 +149,7 @@ Alloy:
 
 ArgoCD:
   argocd register <name> <url>  Register a GitHub repo as ArgoCD application
-  argocd remove <name>          Remove an ArgoCD-managed application
+  argocd remove <name> [--force] Remove an ArgoCD-managed application
   argocd list                   List registered ArgoCD applications
   argocd verify                 Run E2E health checks on ArgoCD server
 
@@ -2358,7 +2358,7 @@ cmd_argocd() {
         echo ""
         echo "Commands:"
         echo "  register <name> <url> Register a GitHub repo as ArgoCD application"
-        echo "  remove <name>         Remove an ArgoCD-managed application"
+        echo "  remove <name> [--force] Remove an ArgoCD-managed application (--force: no Application of that name)"
         echo "  list                  List registered ArgoCD applications"
         echo "  verify                Run E2E health checks on ArgoCD server"
         echo ""
@@ -2386,7 +2386,7 @@ cmd_argocd() {
             echo ""
             echo "Commands:"
             echo "  register <name> <url> Register a GitHub repo as ArgoCD application"
-            echo "  remove <name>         Remove an ArgoCD-managed application"
+            echo "  remove <name> [--force] Remove an ArgoCD-managed application (--force: no Application of that name)"
             echo "  list                  List registered ArgoCD applications"
             echo "  verify                Run E2E health checks on ArgoCD server"
             echo ""
@@ -2451,7 +2451,7 @@ cmd_argocd_register() {
         echo "  <repo-url>  Full GitHub repository URL (https://...)" >&2
         echo "" >&2
         echo "Examples:" >&2
-        echo "  uis argocd register hello-world https://github.com/helpers-no/urb-dev-typescript-hello-world" >&2
+        echo "  uis argocd register hello-world https://github.com/terchris/urb-dev-typescript-hello-world" >&2
         echo "  uis argocd register my-app https://github.com/myorg/my-k8s-app" >&2
         exit "$EXIT_GENERAL_ERROR"
     fi
@@ -2492,8 +2492,11 @@ cmd_argocd_register() {
             echo "$occupants" | sed 's/^/  /' >&2
             echo "" >&2
             echo "Registering would hand this namespace to ArgoCD, which prunes and" >&2
-            echo "self-heals what it manages. Choose a different name, or clear it:" >&2
-            echo "  uis argocd remove $app_name" >&2
+            echo "self-heals what it manages." >&2
+            echo "" >&2
+            echo "Choose a different name, or remove those workloads yourself first." >&2
+            echo "🔴 Do NOT reach for 'uis argocd remove $app_name' — it deletes the" >&2
+            echo "whole namespace, which is what this refusal just protected." >&2
             exit "$EXIT_GENERAL_ERROR"
         fi
         echo "Namespace '$app_name' exists and holds no workloads — adopting it."
@@ -2526,17 +2529,41 @@ cmd_argocd_register() {
         -e "github_pat=$github_pat"
 }
 
+# 🔴 `remove` deletes the namespace, and used to do it for ANY name.
+#
+# imac ran the exact command `register` printed when it refused an occupied
+# namespace, and `uis argocd remove imac-c1732-busy` deleted that namespace and
+# the workload in it — although no ArgoCD Application of that name had ever
+# existed. The playbook already *collects* the answer (task 4) and only printed
+# it; nothing acted on it.
+#
+# So `remove` now undoes `register` and nothing else: no Application of that
+# name means there is nothing of ours to remove, and it refuses. `--force` is
+# for the genuine orphan — an Application deleted by hand, its namespace left
+# behind — and it says what it is about to destroy.
 cmd_argocd_remove() {
-    local app_name="${1:-}"
+    local app_name="" force="false"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force) force="true"; shift ;;
+            -*)      log_error "Unknown option: $1"; exit "$EXIT_GENERAL_ERROR" ;;
+            *)       [[ -z "$app_name" ]] && app_name="$1"; shift ;;
+        esac
+    done
+
     if [[ -z "$app_name" ]]; then
-        log_error "Usage: uis argocd remove <name>"
+        log_error "Usage: uis argocd remove <name> [--force]"
         echo "Example: uis argocd remove hello-world" >&2
+        echo "" >&2
+        echo "  --force  delete the namespace even when no ArgoCD application of" >&2
+        echo "           that name exists (for an orphaned namespace)" >&2
         exit "$EXIT_GENERAL_ERROR"
     fi
 
     print_section "Removing $app_name from ArgoCD"
     ansible-playbook "$ANSIBLE_DIR/argocd-remove-app.yml" \
-        -e "app_name=$app_name"
+        -e "app_name=$app_name" \
+        -e "force=$force"
 }
 
 cmd_argocd_list() {
