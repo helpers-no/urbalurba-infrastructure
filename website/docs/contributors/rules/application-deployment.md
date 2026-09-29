@@ -83,6 +83,38 @@ for private repos and nothing else. An application's own secrets come from
 
 ---
 
+## The order: configure first, then register
+
+An application that needs **both** a platform service and its own workload takes two commands, and **they have an order**:
+
+```bash
+uis configure postgresql --app console --namespace console --secret-name-prefix console
+uis argocd register console https://github.com/helpers-no/urb-agents-console
+```
+
+**Database first.** `configure` creates the namespace and writes the Secret; `register` then hands that namespace to ArgoCD, and the workload starts with its credential already present.
+
+🔴 **Before 1.6.174 this order refused itself.** `configure --namespace x` creates namespace `x` — it must, because that is where the pod reads `DATABASE_URL` from — and `register` then failed with *"Name 'x' is already in use as a Kubernetes namespace."* Step 1 created the thing that made step 2 refuse.
+
+The only order that worked was the reverse, and it works by *recovering from a broken state*: register first, the pod cannot start because its Secret does not exist, and Kubernetes retries until `configure` creates it. That succeeds, but it puts a `CreateContainerConfigError` in front of every operator as a normal step.
+
+**What changed:** `register` now asks what is *in* the namespace rather than whether it exists.
+
+| namespace state | before | now |
+|---|---|---|
+| does not exist | ✅ register | ✅ register |
+| exists, no workloads (what `configure` leaves) | 🔴 refused | ✅ adopted, and says so |
+| exists, holds workloads | ✅ refused | ✅ refused, **naming them** |
+| ArgoCD `Application` of that name already exists | 🔴 **not checked at all** | ✅ refused |
+
+⚠️ That last row was a real hole, not a side effect: the old guard looked only at namespaces, so an orphaned `Application` whose namespace had been deleted registered straight over itself.
+
+The register playbook never needed the guard — task 10 creates the namespace with `state: present`, which is idempotent.
+
+🔵 **Adoption does not put the Secret at risk.** `syncPolicy.automated.prune` removes resources ArgoCD *tracks* — ones that were in git and are gone. A Secret created out of band by `configure` carries no tracking metadata, so it is not a prune candidate. ⚠️ Stated from ArgoCD's documented prune semantics, not from a run on this cluster; the deploy test is what confirms it.
+
+---
+
 ## 🔴 The limit, stated plainly
 
 **A cluster rebuilt from git alone would come up with no application secrets.**
