@@ -213,6 +213,51 @@ else
     echo "  Testing: all five YAML files parse... SKIPPED (no js-yaml available on this host)"
 fi
 
+# ── urb-agents#1802: the key-creation escalation and its fix ──
+
+# ⚠️ First version matched the bare string "key deny --create-bucket"
+# anywhere, including inside the FOLLOWING task's own fail_msg prose ("`garage
+# key deny --create-bucket` did not succeed"). That survived the task itself
+# being flipped to `allow` - reinstating the exact vulnerability - because
+# the next task's message still said "deny". Anchor on the real invocation:
+# it always runs the absolute binary path (`/garage key deny ...`); prose
+# references it without the leading slash, via backticks.
+if grep -qE '/garage key deny --create-bucket' "$SETUP" && ! grep -qE '/garage key allow --create-bucket' "$SETUP"; then
+    pass "setup denies create-bucket permission on the bootstrap key"
+else
+    fail "setup denies create-bucket permission on the bootstrap key" "no 'deny' invocation found, or an 'allow' invocation is also present"
+fi
+
+if grep -q "15d\. Confirm the key no longer shows create-bucket permission" "$SETUP" \
+   && grep -q "Can create buckets: true" "$SETUP"; then
+    pass "the denial is verified by reading the key back, not by trusting the command's exit code"
+else
+    fail "the denial is verified by reading the key back, not by trusting the command's exit code" "no readback check found"
+fi
+
+if grep -q "s3api create-bucket" "$TEST_PB" && grep -q "escalation_test.rc != 0" "$TEST_PB"; then
+    pass "the E2E test re-attempts the exact escalation and asserts it is refused"
+else
+    fail "the E2E test re-attempts the exact escalation and asserts it is refused" "no regression test for the escalation found"
+fi
+
+# ⚠️ First version matched the bare substring "HTTP_CODE:403" anywhere in the
+# file - which a comment two tasks earlier, QUOTING the garbled-output bug it
+# documents ("...reachable (HTTP_CODE:403pod..."), also contains. Mutating
+# the real `that:` condition to a vacuous `true` left this check passing.
+# Anchor on the exact Ansible expression, which appears nowhere else.
+if grep -qF "\"'HTTP_CODE:403' in auth_test.stdout\"" "$TEST_PB"; then
+    pass "the unsigned-request test now asserts the confirmed 403, not a soft check"
+else
+    fail "the unsigned-request test now asserts the confirmed 403, not a soft check" "still soft, or 403 not asserted"
+fi
+
+if grep -qi "imac proved it\|imac confirmed it\|imac proved the opposite" "$DOCS"; then
+    pass "the docs correct the false 'scoped to one bucket' claim and credit the finding"
+else
+    fail "the docs correct the false 'scoped to one bucket' claim and credit the finding" "no correction found in garage.md"
+fi
+
 echo
 echo "Passed: $PASS  Failed: $FAIL"
 [[ $FAIL -eq 0 ]]

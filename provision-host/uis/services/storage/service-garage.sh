@@ -46,7 +46,13 @@ SCRIPT_OWNER="platform-team"    # platform-team | app-team
 
 # === Website Metadata (Optional) ===
 SCRIPT_ABSTRACT="S3-compatible object storage for files, images, and backups"
-SCRIPT_LOGO="garage-logo.svg"
+# No logo file shipped yet - deliberately empty rather than a path to an
+# asset that does not exist. Garage is not (as of writing) on Simple Icons,
+# the source every other SCRIPT_LOGO in this repo draws from, and sourcing a
+# correct brand mark needs more care than inventing a path. Add one properly
+# when it exists; test-generated-json.sh treats an empty value as "none
+# claimed" and does not fail on it, unlike a path to a missing file.
+SCRIPT_LOGO=""
 SCRIPT_WEBSITE="https://garagehq.deuxfleurs.fr"
 SCRIPT_TAGS="object-storage,s3,buckets,files,images,blob-storage"
 SCRIPT_SUMMARY="Garage is a lightweight, S3-compatible object storage server maintained by Deuxfleurs. Applications talk to it with any AWS S3 SDK. Deployed here as a single node with one bootstrap bucket and access key, an S3 API on port 3900, and no web console - Garage ships none. Replaces MinIO, whose images were withdrawn from every public registry on 2026-10-01."

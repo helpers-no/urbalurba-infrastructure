@@ -51,17 +51,29 @@ This is **not** a drop-in replacement in every respect.
 
 | | MinIO | Garage |
 |---|---|---|
-| Root credential | a true root/admin key: can list, create and access **every** bucket | the bootstrap key is scoped to **one bucket** (`default-bucket`) and can create no other, over the S3 API |
+| Root credential | a true root/admin key: can list, create and access **every** bucket | the bootstrap key is **narrowed to one bucket after deploy** (see the escalation below) - a different mechanism from MinIO's, not the same shape |
 | Creating a new bucket | `mc mb` - any client holding the root key, any time | `garage bucket create` via the CLI inside the pod - an operator/automation action, not something an application can self-serve |
 | Web console | yes, port 9001 | none |
 | Cluster "layout" | not applicable (single node just runs) | normally a manual step (`garage layout assign` / `apply`) - UIS avoids this using `--single-node --default-bucket`, a flag pair Garage has shipped since v2.3.0 for exactly this case |
 
+### 🔴 The bootstrap key is NOT scoped to one bucket by default - this was wrong in the first version of this page, and imac proved it
+
+`--default-bucket` does not create a key limited to that bucket. It sets the key's **account-level `can_create_buckets=true` flag**, and nothing narrows it back down on its own. it is believed safe (`urb-agents#1802`): a single `aws s3api create-bucket` call, over the S3 API, with exactly this key - succeeded. The key could mint itself unlimited new buckets, each one it then owned with full read/write/delete. That is a root-equivalent credential, which is exactly the shape this page originally said Garage avoided.
+
+**Since 1.6.181, the setup playbook denies that permission explicitly, right after bootstrap** (`garage key deny --create-bucket <key>`, confirmed from Garage's own CLI source - `KeyPermOpt` in `src/garage/cli/structs.rs`, tag v2.3.0 - and verified by reading the key's permissions back afterward, not by trusting the command's exit code). **Before that fix, every `uis deploy garage` handed out a credential that could create arbitrary buckets.**
+
 ⚠️ **The consequence that matters most:** if a second UIS consumer wants its own
 bucket (today, nothing does - the Loki/Tempo migration off MinIO is a separate,
 not-yet-filed piece of work), someone has to run `garage bucket create` +
-`garage key create` + `garage bucket allow` by hand or via a new playbook task.
-There is no `uis configure garage` yet. Filed as a gap, not built speculatively -
-see the investigation.
+`garage key create` + `garage bucket allow` by hand or via a new playbook task
+**as an operator holding cluster access**, because the application-facing key
+can no longer do it itself. There is no `uis configure garage` yet. Filed as a
+gap, not built speculatively - see the investigation.
+
+### 🔵 Two small Garage CLI rough edges, found while fixing the above - not UIS bugs
+
+- `garage key info --show-secret=false` does **not** actually suppress the secret key in its output, despite the flag name. Treat any `garage key info` output as sensitive regardless of this flag.
+- `garage bucket delete` / `unalias` gave circular "has other aliases, delete it instead" errors when imac tried removing test buckets by ID rather than by name. Deleting via the S3 API (`aws s3 rb`) worked without issue.
 
 ## Deploy
 
