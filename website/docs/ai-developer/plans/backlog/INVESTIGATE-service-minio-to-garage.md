@@ -9,7 +9,9 @@ sidebar_label: INVESTIGATE — MinIO to Garage
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — investigation only. **Nothing is decided.**
+## Status: Backlog, but one fact below is no longer a question
+
+🔴 **2026-10-01, same day as filing: `ops` reports, and I have independently confirmed, that MinIO's images are no longer obtainable from any public source — not Docker Hub, not quay.io, not the binary.** This does not decide MinIO vs Garage. It does mean `./uis deploy minio` **cannot succeed today on a cluster with no cached MinIO image**, regardless of which replacement (if any) is chosen. See the new section below; everything after it is unchanged from the original filing.
 
 🔵 Filed 2026-10-01 on Terje's instruction: *add the swap from MinIO to Garage to the backlog, but an investigation must be created first.*
 
@@ -18,6 +20,37 @@ sidebar_label: INVESTIGATE — MinIO to Garage
 **No decision exists, and none was ever written down.** The git tree on `main` (`f505870`) has 0 files mentioning Garage, against 65 for MinIO as the positive control. The bus, my memory notes, handovers and session transcripts have nothing before 2026-10-01 either. `ops` was told to write a deliberately thin MinIO role in the meantime, so the lab does not wait on this.
 
 ⚠️ **How to read the sources below.** Each fact is labelled: **measured** (I ran it, today), **reported** (someone else measured it and I did not repeat it), **docs** (fetched from the project's own site today), **secondary** (a search result, not read in full), or **unverified** (recalled, not confirmed).
+
+## 🔴 MinIO's images are gone, not just stale — measured independently, 2026-10-01
+
+`ops` reported this in `urb-agents#1801`, following up same-day on `#1795`. **I repeated every check myself, with my own controls, before writing this down.**
+
+**The exact reference UIS's own chart would pull** — not `latest`, the pinned tag from `manifests/045-minio-config.yaml`, read out of the fetched chart's `values.yaml` (`image.repository` defaults to `quay.io/minio/minio` since UIS overrides neither):
+
+```
+quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z   -> 401 Unauthorized (manifest request, with a valid anon token)
+quay.io/minio/mc:RELEASE.2024-11-21T17-21-54Z      -> 401 Unauthorized (same)
+```
+
+🔴 **The `mc` image matters as much as the server image.** The chart's `post-job.yaml` runs `mc` in **five** separate Jobs/containers to create buckets and policies after the server starts. A cluster that somehow had the server image cached would still fail there.
+
+**Broader checks, each with a control run the same minute:**
+
+| target | result | control, same minute |
+|---|---|---|
+| `dl.min.io/server/minio/release/linux-amd64/minio` | **410 Gone** | `registry-1.docker.io` manifest for `library/alpine:3.20` → 200 |
+| `docker.io/minio/minio:latest` (manifest, valid token) | **401** | `quay.io/prometheus/node-exporter:latest` (manifest, valid token) → 200 |
+| `quay.io/minio/minio:latest` (manifest, valid token) | **401** | same control → 200 |
+| `quay.io/minio/mc:latest` | **401** | — |
+| GitHub `minio/minio` latest release (`RELEASE.2025-10-15T17-29-55Z`) | tag exists, **0 release assets** | — |
+
+**So this is not account-gating returning a clean "pay for this."** A `401`/`unauthorized` with no path to a credential that resolves it, a `410 Gone` on the binary, and a tagged GitHub release with nothing attached, together say the artifact is **withdrawn**, not merely licensed differently.
+
+**On ops's second question — does a licence or account restore access:** `min.io/download` offers exactly two things, both under the name **AIStor**, not MinIO: *"AIStor Free"* and a 60-day *"AIStor Enterprise Trial"*, both gated behind requesting a licence key. ⚠️ **I did not request one**, so I cannot say whether AIStor Free is a drop-in replacement image with the same S3 API, or something else entirely. What I can say is that **the open-source `minio/minio` artifact UIS's chart names has no path back**, under any name I could find, free or paid.
+
+🔵 **What this changes for the investigation below.** Section "Options" still holds — A/B/C/D are all still on the table — but **Option A ("stay on MinIO, fix the pin") is no longer available as written**, because pinning a specific tag of an image that cannot be pulled fixes nothing. A revived Option A would mean building the MinIO *server* from source (it is still source-available, AGPLv3, per the README) and publishing UIS's own image — which is a different, larger undertaking than "add `--version`".
+
+**What is NOT yet known:** whether `./uis deploy minio` has actually been run against a cluster with a cold image cache since this happened. ⚠️ I have no cluster and no Docker on this host, so I verified the registry side — which is the determinative fact, since kubelet, containerd and a developer's own `docker pull` all hit the same registry API I just hit — but **nobody has watched the Helm install itself fail**. `ops` asked the same question and has not run it either. This is `imac`'s to confirm.
 
 ## What UIS actually asks of MinIO — measured on `main`
 
