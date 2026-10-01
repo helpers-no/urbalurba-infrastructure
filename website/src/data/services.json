@@ -772,6 +772,26 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "garage",
+    "name": "Garage",
+    "description": "S3-compatible object storage",
+    "category": "STORAGE",
+    "tags": ["object-storage", "s3", "buckets", "files", "images", "blob-storage"],
+    "abstract": "S3-compatible object storage for files, images, and backups",
+    "logo": "garage-logo.svg",
+    "website": "https://garagehq.deuxfleurs.fr"
+    ,"summary": "Garage is a lightweight, S3-compatible object storage server maintained by Deuxfleurs. Applications talk to it with any AWS S3 SDK. Deployed here as a single node with one bootstrap bucket and access key, an S3 API on port 3900, and no web console - Garage ships none. Replaces MinIO, whose images were withdrawn from every public registry on 2026-10-01."
+    ,"docs": "/docs/services/storage/garage"
+    ,"playbook": "047-setup-garage.yml"
+    ,"priority": 36
+    ,"checkCommand": "kubectl get pods -n default -l app=garage --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "047-remove-garage.yml"
+    ,"namespace": "default"
+    ,"exposePort": 39901
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "minio",
     "name": "MinIO",
     "description": "S3-compatible object storage",
