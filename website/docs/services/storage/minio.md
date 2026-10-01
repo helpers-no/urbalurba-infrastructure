@@ -17,6 +17,14 @@ S3-compatible object storage
 | **Helm chart** | `minio/minio` (unpinned) |
 | **Default namespace** | `default` |
 
+:::danger The upstream image may no longer be pullable (2026-10-01, unconfirmed on a cluster)
+
+🔴 MinIO's images appear to have been withdrawn from every public registry: the exact tag this chart pins (`quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z`) and the `mc` image its post-install step needs both return 401; the binary at `dl.min.io` returns 410; GitHub's latest tagged release ships no assets. Checked with controls (other images on the same registries pull fine in the same minute) — see [INVESTIGATE-service-minio-to-garage](../../ai-developer/plans/backlog/INVESTIGATE-service-minio-to-garage.md) for the full measurement.
+
+⚠️ **Not yet confirmed: whether `uis deploy minio` actually fails on a cluster with no cached image.** If your cluster has never deployed MinIO before, test before relying on it.
+
+:::
+
 ## What It Does
 
 MinIO is a high-performance, S3-compatible object storage server. Applications talk to it with any AWS S3 SDK, so code written against MinIO in UIS runs unchanged against AWS S3 or a production MinIO cluster later. It is deployed in standalone (single-node) mode with a persistent volume.
