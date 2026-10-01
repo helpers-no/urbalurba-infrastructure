@@ -76,6 +76,24 @@ Every database now carries eight extensions whether it uses them or not — Post
 
 🔵 Judged worth it: UIS's premise is that a developer gets a working datacentre without filing requests ([Principle 0](../../../contributors/rules/kubernetes-deployment.md)), and per-database opt-in would have meant every application discovering the list, choosing from it, and getting the flag right. ⚠️ If the footprint ever matters, the place to revisit is the list — not the mechanism.
 
+## 🔴 Reopened by hardware: `vector` on a CPU without AVX2
+
+imac, `urb-agents#1743`, on the host every release is tested on:
+
+> *"this host's CPU (i5-2400S, Sandy Bridge) has **no AVX2**, and the image's pgvector 0.8.2 compiles its distance kernels for AVX2. The `vector` type works, but every distance operator dies with SIGILL, and one faulting backend makes the postmaster restart the whole instance."*
+
+⚠️ **Activating `vector` everywhere therefore arms that for every application on such a host**, not only the one that wanted embeddings — and the blast radius is the shared PostgreSQL, so it takes atlas, Dagster and the console with it.
+
+🔵 It is not a defect in this change's logic: the same gun existed for anyone who ran `CREATE EXTENSION vector` before. What changed is that nobody has to opt in any more.
+
+- [ ] 3.1 Decide whether `vector` stays in the unconditional list. Options, cheapest first:
+  - **document it and leave it** — the type is safe, only the operators fault, and a developer who reaches for `<->` is already doing vector work
+  - **check the CPU once at deploy** and drop `vector` from the list on a host without AVX2, saying so
+  - **build or source a pgvector without the AVX2 kernels** — correct and the most work
+- [ ] 3.2 🔴 Whichever is chosen, the failure must not be a mystery: a SIGILL that restarts PostgreSQL is the least diagnosable outcome this platform can produce, and *"one query away for every application"* is the part that makes it worth a decision rather than a note.
+
+⚠️ Documented in [postgresql.md](../../../services/databases/postgresql.md) in 1.6.179. **The decision is Terje's and is deliberately not taken here.**
+
 ## Documentation, independent of the decision
 
 - [ ] 2.1 Say plainly in `services/databases/index.md` and `postgresql.md` that the extensions are **available in the image** and **created only in the `postgres` database**

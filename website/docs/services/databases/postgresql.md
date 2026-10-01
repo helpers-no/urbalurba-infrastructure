@@ -34,6 +34,23 @@ UIS deploys the official Bitnami PostgreSQL 18.3 image (pinned by digest), which
 | **btree_gin** | 1.3 | Additional indexing strategies |
 | **pgcrypto** | 1.4 | Cryptographic functions |
 
+:::danger pgvector's distance operators need AVX2, and a faulting backend restarts the whole instance
+
+🔴 **On a CPU without AVX2, `vector` is a loaded gun in every database.** The image's pgvector 0.8.2 compiles its distance kernels for AVX2. The `vector` *type* works, so a table and a column look fine — but **every distance operator (`<->`, `<=>`, `<#>`) dies with SIGILL, and one faulting backend makes the postmaster restart the entire PostgreSQL instance**, taking every other application's connections with it.
+
+Measured by imac on 2026-08-02 (Open WebUI) and again on `urb-agents#1743`: an Intel i5-2400S (Sandy Bridge) has no AVX2.
+
+**Check before relying on it:**
+
+```bash
+grep -o avx2 /proc/cpuinfo | head -1     # Linux: empty means no AVX2
+sysctl -n machdep.cpu.leaf7_features     # macOS: look for AVX2
+```
+
+⚠️ Since 1.6.178 `vector` is activated in **every** database, so on such a host this is one query away for every application, not only the one that wanted embeddings. See [PLAN — extensions per app](../../ai-developer/plans/backlog/PLAN-extensions-in-app-databases.md).
+
+:::
+
 :::tip Activated in every database, including yours
 
 All eight are **created in every database**, so an application can use them without asking. Two things do it: the PostgreSQL deploy activates them in `template1`, so every database created afterwards inherits them, and `uis configure postgresql` activates them in the database it creates.
