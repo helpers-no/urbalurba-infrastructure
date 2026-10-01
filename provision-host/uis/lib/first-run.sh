@@ -277,6 +277,45 @@ ssh_keys_exist() {
     [[ -f "$ssh_dir/id_rsa_ansible" && -f "$ssh_dir/id_rsa_ansible.pub" ]]
 }
 
+# Append any KEY=value line from $1 (the shipped template) whose KEY does
+# not already exist in $2 (the installed copy). Never touches a key that is
+# already present, with whatever value it already has — an installer may
+# have deliberately changed it, and this function's whole job is to add
+# what is missing, not to decide what is right.
+#
+# Usage: _append_missing_default_values <shipped_file> <installed_file>
+# Returns: 0 whether or not anything needed appending; the caller does not
+# need to branch on it, only read the log line this prints when it acts.
+_append_missing_default_values() {
+    local shipped="$1" installed="$2"
+    [[ -f "$shipped" && -f "$installed" ]] || return 0
+
+    local -a new_lines=()
+    local line key
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # A real KEY=value line: starts with an identifier character, has an
+        # '=', is not a comment. (grep -E anchors this the same way the rest
+        # of this codebase reads these .env-shaped template files.)
+        [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+        key="${line%%=*}"
+        grep -qE "^${key}=" "$installed" && continue
+        new_lines+=("$line")
+    done < "$shipped"
+
+    [[ ${#new_lines[@]} -eq 0 ]] && return 0
+
+    {
+        echo ""
+        echo "# --- New defaults added by 'uis secrets generate' ---"
+        echo "# These keys exist in the shipped template but were missing here (this"
+        echo "# installation predates them). Values below are the shipped defaults;"
+        echo "# edit them the same as anything else in this file."
+        printf '%s\n' "${new_lines[@]}"
+    } >> "$installed"
+
+    log_info "Added ${#new_lines[@]} new default value(s) to 00-common-values.env.template: ${new_lines[*]%%=*}"
+}
+
 # Copy secrets templates to .uis.secrets/secrets-config/ on first run
 # Also syncs the master template on every run (structural, not user-edited)
 # Workflow: edit secrets-config/, then generate kubernetes secrets
@@ -294,6 +333,33 @@ copy_secrets_templates() {
             cp "$src_master" "$dst_master"
             log_info "Updated master secrets template (new keys available)"
         fi
+
+        # 🔴 EXISTING INSTALLATIONS NEVER GOT NEW DEFAULT VALUES — found by
+        # imac deploying Garage on an upgraded cluster (urb-agents#1802). The
+        # master YAML sync above handles new KEY NAMES in the structural
+        # template; it says nothing about 00-common-values.env.template
+        # itself, which is where a VALUE actually lives. A new service added
+        # three lines there (GARAGE_ACCESS_KEY= etc.) and this function
+        # returned before ever looking at the file — so every installation
+        # that pre-dated those lines kept `GARAGE_ACCESS_KEY` existing in the
+        # generated Secret with an EMPTY value (envsubst on an unset shell
+        # variable substitutes nothing), and the deploy failed twice before
+        # imac traced it rather than retrying blind.
+        #
+        # This is upgrade-path-only and was never specific to Garage: any
+        # future secret added the same way hits every pre-existing cluster
+        # the same silent way.
+        #
+        # Fix: append any KEY= line whose KEY is not already present in the
+        # installed file, verbatim from the shipped one — so the shipped
+        # default value is what a pre-existing install gets, same as what a
+        # brand-new install already received below. Never touches a key that
+        # already exists: an installer may have deliberately changed its
+        # value, and this is not the place to override that.
+        _append_missing_default_values \
+            "$templates_src/00-common-values.env.template" \
+            "$secrets_config/00-common-values.env.template"
+
         return 0
     fi
 
