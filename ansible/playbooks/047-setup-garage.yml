@@ -295,6 +295,66 @@
           Output: {{ garage_bucket_list.stdout[:1000] | default('No output') }}
       when: "'default-bucket' not in (garage_bucket_list.stdout | default(''))"
 
+    # 🔴 THE FIX FOR imac's ESCALATION FINDING (urb-agents#1802).
+    #
+    # --default-bucket does not create a key scoped to one bucket. It sets the
+    # key's ACCOUNT-level `can_create_buckets=true` flag, and nothing narrows
+    # it back down afterward. imac proved it: a single `aws s3api
+    # create-bucket` call with this exact key, over the S3 API, succeeded -
+    # the key can mint itself unlimited new buckets, each one it then owns
+    # with full read/write/delete.
+    #
+    # garage.md described the opposite ("cannot create another [bucket] over
+    # the S3 API") as the whole reason a second consumer needed an explicit
+    # operator step. That was a claim from Garage's quick-start docs, which
+    # describe the common case, not this one - and it was wrong. Docs are
+    # corrected in the same change as this fix, not instead of it.
+    #
+    # The real primary source is Garage's own CLI argument parser
+    # (src/garage/cli/structs.rs, tag v2.3.0): `KeyPermOpt` takes
+    # `--create-bucket`, wired to subcommands named `allow` and `deny`. So:
+    - name: "15b. Narrow the bootstrap key: deny it the ability to create more buckets"
+      ansible.builtin.shell: |
+        kubectl exec -n {{ garage_namespace }} "{{ garage_pods_ready.resources[0].metadata.name }}" -- \
+          /garage key deny --create-bucket "{{ garage_access_key_fact }}"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_key_deny
+      no_log: true
+      failed_when: false
+      changed_when: true
+
+    - name: "15c. Fail if the key could not be narrowed"
+      ansible.builtin.fail:
+        msg: |
+          `garage key deny --create-bucket` did not succeed. The bootstrap
+          key may still be able to create arbitrary new buckets - do not
+          hand it to an application until this is fixed.
+          {{ (garage_key_deny.stderr | default('')) | trim }}
+      when: garage_key_deny.rc | default(1) != 0
+
+    # Confirm the narrowing actually took, the same way imac's finding was
+    # confirmed - by reading the key's own reported permissions, not by
+    # trusting the previous task's exit code.
+    - name: "15d. Confirm the key no longer shows create-bucket permission"
+      ansible.builtin.shell: |
+        kubectl exec -n {{ garage_namespace }} "{{ garage_pods_ready.resources[0].metadata.name }}" -- \
+          /garage key info --show-secret=false "{{ garage_access_key_fact }}"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_key_info
+      no_log: true
+      failed_when: false
+      changed_when: false
+
+    # ⚠️ imac also found `--show-secret=false` does not actually suppress the
+    # secret (a Garage CLI bug, not ours) - this task is no_log regardless, so
+    # that never reaches Ansible's output either way.
+    - name: "15e. Fail if the key can still create buckets"
+      ansible.builtin.fail:
+        msg: "`garage key info` still reports create-bucket permission after the deny. Do not use this deployment until this is understood."
+      when: "'Can create buckets: true' in (garage_key_info.stdout | default(''))"
+
     - name: "16. Apply the Garage IngressRoute (S3 API)"
       kubernetes.core.k8s:
         state: present

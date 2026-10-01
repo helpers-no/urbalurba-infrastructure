@@ -3,25 +3,30 @@
 # Description:
 # End-to-end tests for the Garage object storage deployment.
 # Validates reachability, rejection of unsigned requests, bucket round-trip,
-# and Traefik routing. No console test - Garage ships none (see
-# 045-test-minio.yml's test C, which this intentionally has no equivalent of).
+# that the application key cannot create new buckets, and Traefik routing. No
+# console test - Garage ships none (see 045-test-minio.yml's test C, which
+# this intentionally has no equivalent of).
 #
 # Tests (all CRITICAL):
 #   A. Reachability - S3 API :3900 answers something, not connection-refused
-#   B. Auth          - an unsigned request must NOT succeed (not HTTP 200)
-#   C. Round-trip    - awscli creates... no: writes to and reads from the
-#                      bootstrap bucket (it already exists; see garage.md on
-#                      why Garage's default key cannot create a NEW bucket)
-#   D. Routing       - s3.<domain> and garage.<domain> must resolve through Traefik
+#   B. Auth          - an unsigned request must get exactly 403
+#   C. Round-trip    - awscli writes to and reads from the bootstrap bucket
+#                      (it already exists; the deploy playbook's own key is
+#                      denied create-bucket permission after setup - see
+#                      garage.md's escalation writeup - so this test does not
+#                      attempt to create one)
+#   D. No escalation - the regression test for that denial: the SAME key must
+#                      be refused when it tries to create a new bucket over
+#                      the S3 API (urb-agents#1802)
+#   E. Routing       - s3.<domain> and garage.<domain> must resolve through Traefik
 #
-# 🔴 Test B does not assert a specific status code. MinIO's equivalent test
-# (045-test-minio.yml test B) asserts exactly 403, which is documented MinIO
-# behaviour. I found no equivalent documented for Garage's response to an
-# unsigned request, and asserting a code I have not verified would be the
-# same mistake this whole investigation started by correcting (see
-# INVESTIGATE-service-minio-to-garage.md). So it asserts the thing that
-# actually matters - the request did NOT succeed - and reports the real code
-# it got, which should be read and, once known, turned into a real assertion.
+# imac measured test B's real status (urb-agents#1802): curl got 403, body
+# {"Code":"AccessDenied","Message":"Forbidden: Garage does not support
+# anonymous access yet"}. Asserted explicitly now, matching MinIO's
+# documented behaviour (045-test-minio.yml test B). Before that measurement
+# this playbook deliberately left it soft rather than guess a code - the same
+# discipline this whole investigation started from
+# (INVESTIGATE-service-minio-to-garage.md).
 #
 # Usage:
 # ansible-playbook ansible/playbooks/047-test-garage.yml
@@ -106,7 +111,13 @@
           - Check pod status: kubectl get pods -n {{ garage_namespace }} -l app=garage
           - Check pod logs:   kubectl logs -n {{ garage_namespace }} -l app=garage --tail=50
           - Check the layout:  kubectl exec -n {{ garage_namespace }} <pod> -- /garage status
-        success_msg: "Test A PASSED: Garage S3 API is reachable ({{ reach_test.stdout }})"
+        # ⚠️ imac found this prints garbled: "...reachable (HTTP_CODE:403pod
+        # "garage-test-reach-..." deleted from default namespace)". `kubectl
+        # run --rm`'s own pod-deletion confirmation lands in the SAME captured
+        # stdout as curl's -w output, with no separating newline - not a
+        # display bug, the captured value itself contains both. Extract just
+        # the code rather than printing the capture verbatim.
+        success_msg: "Test A PASSED: Garage S3 API is reachable ({{ reach_test.stdout | regex_search('HTTP_CODE:[0-9]+') | default(reach_test.stdout) }})"
 
     - name: "A3. Display reachability test success"
       ansible.builtin.debug:
@@ -126,18 +137,26 @@
       failed_when: false
       changed_when: false
 
-    - name: "B2. Verify unsigned requests do not get a 200"
+    # 🔴 Confirmed by imac, urb-agents#1802: Garage returns a specific, stable
+    # 403 to an unsigned request - `curl` showed 403, body
+    # {"Code":"AccessDenied","Message":"Forbidden: Garage does not support
+    # anonymous access yet"}, and the test harness's own capture agreed. Now
+    # asserted explicitly rather than left soft, matching MinIO's documented
+    # behaviour (045-test-minio.yml test B) - no surprise for anything that
+    # assumed that convention.
+    - name: "B2. Verify unsigned requests get exactly 403"
       ansible.builtin.assert:
         that:
-          - "'HTTP_CODE:200' not in auth_test.stdout"
+          - "'HTTP_CODE:403' in auth_test.stdout"
         fail_msg: |
-          CRITICAL: Garage returned HTTP 200 to an UNSIGNED request on {{ test_bucket }}!
-          That means an anonymous client can read the bucket's contents.
-          Got: {{ auth_test.stdout[:500] | default('No output') }}
-        success_msg: >-
-          Test B PASSED: unauthenticated request did not succeed
-          ({{ auth_test.stdout }} - record this code once known, see this
-          playbook's header; it has not been asserted as a specific value)
+          CRITICAL: Garage did not return 403 to an UNSIGNED request on {{ test_bucket }}!
+          Got: {{ auth_test.stdout | regex_search('HTTP_CODE:[0-9]+') | default(auth_test.stdout[:500]) }}
+
+          A 200 means an anonymous client can read the bucket's contents.
+          Anything other than 403 is a change in Garage's own behaviour from
+          what was measured on 2026-10-01 and should be understood, not waved
+          through.
+        success_msg: "Test B PASSED: unauthenticated request rejected with 403"
 
     - name: "B3. Display auth test success"
       ansible.builtin.debug:
@@ -146,10 +165,13 @@
     # ===== Test C: Bucket round-trip with awscli (CRITICAL) =====
     #
     # Unlike MinIO's test D (045-test-minio.yml), this does NOT create and
-    # delete a bucket. Garage's --default-bucket access key is scoped to
-    # 'default-bucket' only and cannot create a new one over the S3 API - see
-    # garage.md "What is different from MinIO". So this round-trips an object
-    # inside the bucket that already exists.
+    # delete a bucket. 🔴 Not because the key structurally cannot - imac
+    # proved the opposite (urb-agents#1802): --default-bucket's key can create
+    # arbitrary new buckets until the setup playbook's task 15b explicitly
+    # denies that permission. So this test round-trips an object inside the
+    # bucket that already exists, deliberately NOT exercising create-bucket -
+    # doing so here would be testing against a credential this deployment
+    # intends to have already locked down, which is backwards.
     - name: "C1. Write an object, read it back, clean up"
       ansible.builtin.shell: |
         kubectl run garage-test-s3-{{ 99999 | random }} --image=amazon/aws-cli --rm -i --restart=Never -n {{ garage_namespace }} \
@@ -195,11 +217,74 @@
       ansible.builtin.debug:
         msg: "Test C: S3 bucket round-trip - PASSED (CRITICAL)"
 
-    # ===== Test D: routing =====
+    # ===== Test D: the application key must NOT be able to create a bucket (CRITICAL) =====
+    #
+    # The regression test for imac's finding (urb-agents#1802): attempt
+    # EXACTLY what imac proved worked before the fix - a single
+    # `aws s3api create-bucket` call with the application-facing credential -
+    # and assert it is refused. The setup playbook's own task 15b/15d/15e
+    # check this once, at deploy time; this re-checks it on every
+    # `./uis verify garage`, so a regression (a Garage upgrade that changes
+    # how `key deny` behaves, a redeploy that skips the narrowing step, a
+    # future edit to this file that drops it) is caught running, not only
+    # once at install.
+    - name: "D1. Attempt to create a bucket with the application key"
+      ansible.builtin.shell: |
+        kubectl run garage-test-escalate-{{ 99999 | random }} --image=amazon/aws-cli --rm -i --restart=Never -n {{ garage_namespace }} \
+          --env=AWS_ACCESS_KEY_ID={{ garage_access_key | quote }} \
+          --env=AWS_SECRET_ACCESS_KEY={{ garage_secret_key | quote }} \
+          --env=AWS_DEFAULT_REGION=garage \
+          --command -- aws --endpoint-url http://{{ garage_service }}:3900 \
+          s3api create-bucket --bucket uis-verify-escalation-test
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: escalation_test
+      retries: 1
+      delay: 1
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: "D2. Verify bucket creation was refused"
+      ansible.builtin.assert:
+        that:
+          - escalation_test.rc != 0
+        fail_msg: >-
+          CRITICAL SECURITY REGRESSION: the application-facing Garage key was
+          able to create a new bucket (uis-verify-escalation-test). This is
+          exactly what urb-agents#1802 found and 1.6.181 fixed by denying
+          create-bucket permission after bootstrap - that denial is no longer
+          holding. Do not use this deployment for anything until this is
+          understood; the key can mint buckets it then fully owns.
+        success_msg: "Test D PASSED: the application key cannot create a bucket (create-bucket permission correctly denied)"
+
+    - name: "D3. Clean up if the escalation somehow succeeded"
+      # Defensive only - D2 already failed the play above if this matters.
+      # If a human re-runs with --skip-tags or similar, this still cleans up
+      # rather than leaving a stray bucket from a security test.
+      ansible.builtin.shell: |
+        kubectl run garage-test-cleanup-{{ 99999 | random }} --image=amazon/aws-cli --rm -i --restart=Never -n {{ garage_namespace }} \
+          --env=AWS_ACCESS_KEY_ID={{ garage_access_key | quote }} \
+          --env=AWS_SECRET_ACCESS_KEY={{ garage_secret_key | quote }} \
+          --env=AWS_DEFAULT_REGION=garage \
+          --command -- aws --endpoint-url http://{{ garage_service }}:3900 \
+          s3 rb s3://uis-verify-escalation-test --force
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: escalation_test.rc == 0
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: "D4. Display escalation test success"
+      ansible.builtin.debug:
+        msg: "Test D: Application key cannot create a bucket - PASSED (CRITICAL)"
+
+    # ===== Test E: routing =====
     #
     # Same topology-awareness as 045-test-minio.yml test E - see that file's
     # comment for why this does not assert *.localhost unconditionally.
-    - name: "D0. Which exposure does this installation use?"
+    - name: "E0. Which exposure does this installation use?"
       ansible.builtin.shell: |
         kubectl get ingressroute -n {{ garage_namespace }} -l app=garage -o name 2>/dev/null | wc -l
       environment:
@@ -208,7 +293,7 @@
       changed_when: false
       failed_when: false
 
-    - name: "D1. Reach the S3 API through Traefik (Host: garage.localhost)"
+    - name: "E1. Reach the S3 API through Traefik (Host: garage.localhost)"
       ansible.builtin.shell: |
         kubectl run garage-test-route-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ garage_namespace }} -- \
           /bin/sh -c 'sleep 2; curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" -H "Host: garage.localhost" http://{{ traefik_ip }}/'
@@ -222,7 +307,7 @@
       changed_when: false
       when: (_traefik_routes.stdout | default('0') | int) > 0
 
-    - name: "D1b. Otherwise, report the exposure this installation does have"
+    - name: "E1b. Otherwise, report the exposure this installation does have"
       ansible.builtin.shell: |
         kubectl get ingress -n {{ garage_namespace }} -o jsonpath='{range .items[*]}{.metadata.name}={.status.loadBalancer.ingress[0].hostname} {end}' 2>/dev/null
       environment:
@@ -232,7 +317,7 @@
       failed_when: false
       when: (_traefik_routes.stdout | default('0') | int) == 0
 
-    - name: "D2. Verify routing"
+    - name: "E2. Verify routing"
       ansible.builtin.assert:
         that:
           - "'HTTP_CODE:000' not in route_test.stdout"
@@ -246,12 +331,12 @@
         success_msg: "Test D PASSED: Garage IngressRoute resolves through Traefik"
       when: (_traefik_routes.stdout | default('0') | int) > 0
 
-    - name: "D3. Display routing result"
+    - name: "E3. Display routing result"
       ansible.builtin.debug:
         msg: >-
           {{ ((_traefik_routes.stdout | default('0') | int) > 0)
-             | ternary('Test D: Traefik routing - PASSED (CRITICAL)',
-                       'Test D: no Traefik routes here - this installation exposes Garage another way: ' ~ (_ts_ingress.stdout | default('none found'))) }}
+             | ternary('Test E: Traefik routing - PASSED (CRITICAL)',
+                       'Test E: no Traefik routes here - this installation exposes Garage another way: ' ~ (_ts_ingress.stdout | default('none found'))) }}
 
     # ===== Summary =====
     - name: "SUMMARY - Display all test results"
@@ -261,9 +346,10 @@
           Garage E2E Test Results
           ===============================================
           A. Reachability (:3900):                   PASS
-          B. Unsigned request does not succeed:       PASS ({{ auth_test.stdout | default('?') }})
+          B. Unsigned request rejected with 403:      PASS
           C. Bucket write/read/delete round-trip:     PASS
-          D. Routing: {{ ((_traefik_routes.stdout | default('0') | int) > 0)
+          D. Application key cannot create a bucket:  PASS (the urb-agents#1802 regression test)
+          E. Routing: {{ ((_traefik_routes.stdout | default('0') | int) > 0)
                   | ternary('Traefik (garage.* / s3.*)  PASS',
                             'not via Traefik here - ' ~ (_ts_ingress.stdout | default('no ingress found'))) }}
 
