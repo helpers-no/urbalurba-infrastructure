@@ -9,7 +9,13 @@ sidebar_label: INVESTIGATE — MinIO to Garage
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog, but one fact below is no longer a question
+## Status: Decided by Terje, 2026-10-01. Building.
+
+> *"i think that we now need to do the minio replacement"* — Terje, same day as the withdrawal finding below.
+
+**The `garage` UIS service is written** (`service-garage.sh`, `047-setup-garage.yml`, `047-remove-garage.yml`, `047-test-garage.yml`, `047-garage-config.yaml`, `048-garage-ingressroute.yaml`). 🔴 **Not yet verified on a cluster.** See `/docs/services/storage/garage` for the full design and what is honestly still open - in particular, Garage's `--default-bucket` credential is scoped to **one bucket**, not a root/admin key the way MinIO's was, so a second bucket consumer (the Loki/Tempo migration off MinIO) is a separate, not-yet-filed piece of work, not something this first deliverable includes.
+
+**What stays open below** is the context for *why*, kept for whoever tests or extends this, not because the swap itself is still a question.
 
 🔴 **2026-10-01, same day as filing: `ops` reports, and I have independently confirmed, that MinIO's images are no longer obtainable from any public source — not Docker Hub, not quay.io, not the binary.** This does not decide MinIO vs Garage. It does mean `./uis deploy minio` **cannot succeed today on a cluster with no cached MinIO image**, regardless of which replacement (if any) is chosen. See the new section below; everything after it is unchanged from the original filing.
 

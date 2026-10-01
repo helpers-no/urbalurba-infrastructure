@@ -11,12 +11,13 @@ Platform storage infrastructure. Deploy the services your application needs.
 
 | Service | Description | Deploy |
 |---------|-------------|--------|
-| [MinIO](./minio.md) | S3-compatible object storage | `./uis deploy minio` |
+| [Garage](./garage.md) | S3-compatible object storage (replaces MinIO, 2026-10-01) | `./uis deploy garage` |
+| [MinIO](./minio.md) | S3-compatible object storage - ⚠️ images withdrawn, see its page | `./uis deploy minio` |
 
 ## Quick Start
 
 Deploy the services you need:
 
 ```bash
-./uis deploy minio
+./uis deploy garage
 ```

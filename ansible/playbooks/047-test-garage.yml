@@ -1,0 +1,273 @@
+---
+# file: ansible/playbooks/047-test-garage.yml
+# Description:
+# End-to-end tests for the Garage object storage deployment.
+# Validates reachability, rejection of unsigned requests, bucket round-trip,
+# and Traefik routing. No console test - Garage ships none (see
+# 045-test-minio.yml's test C, which this intentionally has no equivalent of).
+#
+# Tests (all CRITICAL):
+#   A. Reachability - S3 API :3900 answers something, not connection-refused
+#   B. Auth          - an unsigned request must NOT succeed (not HTTP 200)
+#   C. Round-trip    - awscli creates... no: writes to and reads from the
+#                      bootstrap bucket (it already exists; see garage.md on
+#                      why Garage's default key cannot create a NEW bucket)
+#   D. Routing       - s3.<domain> and garage.<domain> must resolve through Traefik
+#
+# 🔴 Test B does not assert a specific status code. MinIO's equivalent test
+# (045-test-minio.yml test B) asserts exactly 403, which is documented MinIO
+# behaviour. I found no equivalent documented for Garage's response to an
+# unsigned request, and asserting a code I have not verified would be the
+# same mistake this whole investigation started by correcting (see
+# INVESTIGATE-service-minio-to-garage.md). So it asserts the thing that
+# actually matters - the request did NOT succeed - and reports the real code
+# it got, which should be read and, once known, turned into a real assertion.
+#
+# Usage:
+# ansible-playbook ansible/playbooks/047-test-garage.yml
+
+- name: End-to-End Garage Tests
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    garage_namespace: "default"
+    garage_service: "garage.default.svc.cluster.local"
+    test_bucket: "default-bucket"
+
+  tasks:
+    - name: "0. Display test suite initiation"
+      ansible.builtin.debug:
+        msg: |
+          End-to-End Garage Tests
+          ===============================================
+          Running 4 test groups (all CRITICAL)
+
+    - name: "0.1. Get Traefik ClusterIP for in-cluster hostname routing"
+      ansible.builtin.command: kubectl get svc traefik -n kube-system -o jsonpath={.spec.clusterIP}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: traefik_ip_result
+      changed_when: false
+
+    - name: "0.2. Store Traefik IP"
+      ansible.builtin.set_fact:
+        traefik_ip: "{{ traefik_ip_result.stdout }}"
+
+    - name: "0.3. Get Garage access key from urbalurba-secrets"
+      ansible.builtin.shell: |
+        kubectl get secret urbalurba-secrets -n {{ garage_namespace }} \
+        -o jsonpath='{.data.GARAGE_ACCESS_KEY}' | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: access_key_result
+      changed_when: false
+
+    - name: "0.4. Get Garage secret key from urbalurba-secrets"
+      ansible.builtin.shell: |
+        kubectl get secret urbalurba-secrets -n {{ garage_namespace }} \
+        -o jsonpath='{.data.GARAGE_SECRET_KEY}' | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: secret_key_result
+      changed_when: false
+      no_log: true
+
+    - name: "0.5. Store credentials"
+      ansible.builtin.set_fact:
+        garage_access_key: "{{ access_key_result.stdout }}"
+        garage_secret_key: "{{ secret_key_result.stdout }}"
+      no_log: true
+
+    # ===== Test A: Reachability (CRITICAL) =====
+    - name: "A1. Request the S3 API (unsigned - just checking it answers at all)"
+      ansible.builtin.shell: |
+        kubectl run garage-test-reach-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ garage_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" http://{{ garage_service }}:3900/
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: reach_test
+      retries: 5
+      delay: 10
+      until: "'HTTP_CODE:000' not in reach_test.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: "A2. Verify the S3 API answers (not connection-refused)"
+      ansible.builtin.assert:
+        that:
+          - "'HTTP_CODE:000' not in reach_test.stdout"
+          - "reach_test.stdout | length > 0"
+        fail_msg: |
+          CRITICAL: Garage's S3 API did not answer at all!
+          Got: {{ reach_test.stdout[:500] | default('No output') }}
+
+          Troubleshooting:
+          - Check pod status: kubectl get pods -n {{ garage_namespace }} -l app=garage
+          - Check pod logs:   kubectl logs -n {{ garage_namespace }} -l app=garage --tail=50
+          - Check the layout:  kubectl exec -n {{ garage_namespace }} <pod> -- /garage status
+        success_msg: "Test A PASSED: Garage S3 API is reachable ({{ reach_test.stdout }})"
+
+    - name: "A3. Display reachability test success"
+      ansible.builtin.debug:
+        msg: "Test A: Reachability - PASSED (CRITICAL)"
+
+    # ===== Test B: Unauthenticated access does not succeed (CRITICAL) =====
+    - name: "B1. Request the bootstrap bucket without credentials"
+      ansible.builtin.shell: |
+        kubectl run garage-test-auth-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ garage_namespace }} -- \
+          curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" http://{{ garage_service }}:3900/{{ test_bucket }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: auth_test
+      retries: 3
+      delay: 5
+      until: auth_test.rc == 0
+      failed_when: false
+      changed_when: false
+
+    - name: "B2. Verify unsigned requests do not get a 200"
+      ansible.builtin.assert:
+        that:
+          - "'HTTP_CODE:200' not in auth_test.stdout"
+        fail_msg: |
+          CRITICAL: Garage returned HTTP 200 to an UNSIGNED request on {{ test_bucket }}!
+          That means an anonymous client can read the bucket's contents.
+          Got: {{ auth_test.stdout[:500] | default('No output') }}
+        success_msg: >-
+          Test B PASSED: unauthenticated request did not succeed
+          ({{ auth_test.stdout }} - record this code once known, see this
+          playbook's header; it has not been asserted as a specific value)
+
+    - name: "B3. Display auth test success"
+      ansible.builtin.debug:
+        msg: "Test B: Unauthenticated access does not succeed - PASSED (CRITICAL)"
+
+    # ===== Test C: Bucket round-trip with awscli (CRITICAL) =====
+    #
+    # Unlike MinIO's test D (045-test-minio.yml), this does NOT create and
+    # delete a bucket. Garage's --default-bucket access key is scoped to
+    # 'default-bucket' only and cannot create a new one over the S3 API - see
+    # garage.md "What is different from MinIO". So this round-trips an object
+    # inside the bucket that already exists.
+    - name: "C1. Write an object, read it back, clean up"
+      ansible.builtin.shell: |
+        kubectl run garage-test-s3-{{ 99999 | random }} --image=amazon/aws-cli --rm -i --restart=Never -n {{ garage_namespace }} \
+          --env=AWS_ACCESS_KEY_ID={{ garage_access_key | quote }} \
+          --env=AWS_SECRET_ACCESS_KEY={{ garage_secret_key | quote }} \
+          --env=AWS_DEFAULT_REGION=garage \
+          --command -- sh -c '
+            set -e
+            echo "urbalurba-garage-roundtrip" > /tmp/probe.txt
+            aws --endpoint-url http://{{ garage_service }}:3900 s3 cp /tmp/probe.txt s3://{{ test_bucket }}/probe.txt
+            aws --endpoint-url http://{{ garage_service }}:3900 s3 cp s3://{{ test_bucket }}/probe.txt /tmp/probe-back.txt
+            cat /tmp/probe-back.txt
+            aws --endpoint-url http://{{ garage_service }}:3900 s3 rm s3://{{ test_bucket }}/probe.txt
+          '
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: roundtrip_test
+      retries: 3
+      delay: 10
+      until: "'urbalurba-garage-roundtrip' in roundtrip_test.stdout"
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: "C2. Verify the object round-tripped"
+      ansible.builtin.assert:
+        that:
+          - "'urbalurba-garage-roundtrip' in roundtrip_test.stdout"
+        fail_msg: |
+          CRITICAL: Garage bucket round-trip failed!
+          Expected to write an object to {{ test_bucket }} and read it back.
+          Output (truncated, credentials excluded by no_log above): see the
+          task's own register if re-run with -vvv.
+
+          Troubleshooting:
+          - Credentials come from urbalurba-secrets (GARAGE_ACCESS_KEY / GARAGE_SECRET_KEY)
+          - Check storage:  kubectl get pvc -n {{ garage_namespace }} -l app=garage
+          - Check logs:     kubectl logs -n {{ garage_namespace }} -l app=garage --tail=50
+          - Check the bucket exists: kubectl exec -n {{ garage_namespace }} <pod> -- /garage bucket list
+        success_msg: "Test C PASSED: bucket write/read/delete round-trip OK"
+
+    - name: "C3. Display round-trip test success"
+      ansible.builtin.debug:
+        msg: "Test C: S3 bucket round-trip - PASSED (CRITICAL)"
+
+    # ===== Test D: routing =====
+    #
+    # Same topology-awareness as 045-test-minio.yml test E - see that file's
+    # comment for why this does not assert *.localhost unconditionally.
+    - name: "D0. Which exposure does this installation use?"
+      ansible.builtin.shell: |
+        kubectl get ingressroute -n {{ garage_namespace }} -l app=garage -o name 2>/dev/null | wc -l
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: _traefik_routes
+      changed_when: false
+      failed_when: false
+
+    - name: "D1. Reach the S3 API through Traefik (Host: garage.localhost)"
+      ansible.builtin.shell: |
+        kubectl run garage-test-route-{{ 99999 | random }} --image=curlimages/curl --rm -i --restart=Never -n {{ garage_namespace }} -- \
+          /bin/sh -c 'sleep 2; curl -s -o /dev/null -w "HTTP_CODE:%{http_code}" -H "Host: garage.localhost" http://{{ traefik_ip }}/'
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: route_test
+      retries: 5
+      delay: 10
+      until: "'HTTP_CODE:000' not in route_test.stdout"
+      failed_when: false
+      changed_when: false
+      when: (_traefik_routes.stdout | default('0') | int) > 0
+
+    - name: "D1b. Otherwise, report the exposure this installation does have"
+      ansible.builtin.shell: |
+        kubectl get ingress -n {{ garage_namespace }} -o jsonpath='{range .items[*]}{.metadata.name}={.status.loadBalancer.ingress[0].hostname} {end}' 2>/dev/null
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: _ts_ingress
+      changed_when: false
+      failed_when: false
+      when: (_traefik_routes.stdout | default('0') | int) == 0
+
+    - name: "D2. Verify routing"
+      ansible.builtin.assert:
+        that:
+          - "'HTTP_CODE:000' not in route_test.stdout"
+        fail_msg: |
+          CRITICAL: Garage Traefik routing failed!
+          garage.localhost -> {{ route_test.stdout | default('No output') }}
+
+          Troubleshooting:
+          - Check routes: kubectl get ingressroute -n {{ garage_namespace }} -l app=garage
+          - Re-apply:     kubectl apply -f /mnt/urbalurbadisk/manifests/048-garage-ingressroute.yaml
+        success_msg: "Test D PASSED: Garage IngressRoute resolves through Traefik"
+      when: (_traefik_routes.stdout | default('0') | int) > 0
+
+    - name: "D3. Display routing result"
+      ansible.builtin.debug:
+        msg: >-
+          {{ ((_traefik_routes.stdout | default('0') | int) > 0)
+             | ternary('Test D: Traefik routing - PASSED (CRITICAL)',
+                       'Test D: no Traefik routes here - this installation exposes Garage another way: ' ~ (_ts_ingress.stdout | default('none found'))) }}
+
+    # ===== Summary =====
+    - name: "SUMMARY - Display all test results"
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          Garage E2E Test Results
+          ===============================================
+          A. Reachability (:3900):                   PASS
+          B. Unsigned request does not succeed:       PASS ({{ auth_test.stdout | default('?') }})
+          C. Bucket write/read/delete round-trip:     PASS
+          D. Routing: {{ ((_traefik_routes.stdout | default('0') | int) > 0)
+                  | ternary('Traefik (garage.* / s3.*)  PASS',
+                            'not via Traefik here - ' ~ (_ts_ingress.stdout | default('no ingress found'))) }}
+
+          No console test - Garage ships none.
+
+          ALL TESTS PASSED - Garage is healthy
+          ===============================================

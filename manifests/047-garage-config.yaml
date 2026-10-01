@@ -1,0 +1,170 @@
+# File: manifests/047-garage-config.yaml
+#
+# Description:
+# Garage object storage, deployed as a single pod using the official image
+# directly - NOT Garage's Helm chart.
+#
+# Why not the chart: Garage's chart lives only in its own git repository (no
+# Helm-repo index, no versioned .tgz to pin, unlike charts.min.io for MinIO -
+# and that lack of a pin is part of why MinIO's withdrawal went unnoticed). It
+# also depends on a CustomResourceDefinition for one discovery mode and is
+# built for a real multi-node, geo-distributed cluster: manual
+# `garage layout assign`/`apply` after every install, two PersistentVolumeClaims
+# per replica (metadata and data on separate storage classes). None of that
+# fits one dev-laptop instance.
+#
+# What this uses instead: the official image (dxflrs/garage, confirmed
+# pullable 2026-10-01), run with `--single-node --default-bucket`, a flag pair
+# Garage has shipped since v2.3.0 specifically for this case. It auto-configures
+# a one-node cluster with NO layout step, and creates one bucket and one access
+# key from environment variables the deploy playbook sets - GARAGE_DEFAULT_
+# ACCESS_KEY and GARAGE_DEFAULT_SECRET_KEY accept a CHOSEN key pair, not only a
+# minted one, so the credential can come from urbalurba-secrets the same way
+# MinIO's rootUser/rootPassword did.
+#
+# garage.toml itself is NOT in this file. It is built by the setup playbook as
+# a Secret, because it embeds GARAGE_RPC_SECRET - secrets never live in a
+# manifest (rules/secrets-management.md). This file holds everything that
+# is not secret: the Deployment, the Service, and the PVC.
+#
+# Ports (all different from MinIO's 9000/9001 - this is a different server,
+# not a drop-in):
+#   3900  S3 API            - what applications use
+#   3901  RPC               - internal only, single-node has no peers to talk to,
+#                             but the server still binds it
+#   (3902 web and 3903 admin are NOT enabled - see garage.md "What was left out")
+#
+# No console. Garage ships none; see garage.md.
+#
+# Usage:
+#   kubectl apply -f 047-garage-config.yaml   (the setup playbook does this)
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: garage-data
+  namespace: default
+  labels:
+    app: garage
+    app.kubernetes.io/name: garage
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: "20Gi"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: garage
+  namespace: default
+  labels:
+    app: garage
+    app.kubernetes.io/name: garage
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # a second pod would be a second single-node cluster, not HA
+  selector:
+    matchLabels:
+      app: garage
+  template:
+    metadata:
+      labels:
+        app: garage
+    spec:
+      containers:
+        - name: garage
+          # Pinned by tag - Garage publishes no `latest` (confirmed 404, not
+          # merely stale, 2026-10-01). There is no floating tag to default to,
+          # so a bump here is always a deliberate edit, which is the posture
+          # UIS's MinIO chart should have had.
+          image: dxflrs/garage:v2.3.0
+          imagePullPolicy: IfNotPresent
+          # Both set explicitly, matching Garage's own quick-start docker run
+          # example byte for byte (`dxflrs/garage:v2.3.0 /garage server
+          # --single-node --default-bucket`) - the docs don't make clear
+          # whether `/garage` is the image's baked-in ENTRYPOINT or just
+          # argv[0] of CMD, so this reproduces the example under either
+          # reading rather than guessing which.
+          command: ["/garage"]
+          args: ["server", "--single-node", "--default-bucket"]
+          env:
+            - name: GARAGE_CONFIG_FILE
+              value: /etc/garage/garage.toml
+            # SECRET-VERSION: pending — read by --default-bucket at STARTUP
+            # ONLY, to create the bootstrap key the first time Garage runs.
+            # A secretKeyRef env var binds at container start (urb-agents#1415);
+            # changing urbalurba-secrets afterward reaches no running pod the
+            # way every other such consumer in this repo has been found not
+            # to. Worse than most: I have not verified whether --default-bucket
+            # even attempts to update an EXISTING key/bucket on a later
+            # restart, or silently no-ops once they exist - so today a
+            # rotation may do nothing even with a pod restart. Not resolved;
+            # flagged rather than guessed at.
+            - name: GARAGE_DEFAULT_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: urbalurba-secrets, key: GARAGE_ACCESS_KEY }
+            - name: GARAGE_DEFAULT_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: urbalurba-secrets, key: GARAGE_SECRET_KEY }
+            - name: GARAGE_DEFAULT_BUCKET
+              value: default-bucket
+          ports:
+            - name: s3-api
+              containerPort: 3900
+            - name: rpc
+              containerPort: 3901
+          volumeMounts:
+            - name: config
+              mountPath: /etc/garage
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/garage
+          # The S3 API is the one thing an application actually depends on.
+          readinessProbe:
+            tcpSocket: { port: 3900 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 3900 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+      volumes:
+        - name: config
+          secret:
+            # Built by the setup playbook, not by this manifest - it carries
+            # GARAGE_RPC_SECRET.
+            secretName: garage-toml
+        - name: data
+          persistentVolumeClaim:
+            # PVC owned by UIS, not by this Deployment: deleting the Deployment
+            # (an `undeploy`) never deletes it. Matches the MinIO/Qdrant pattern.
+            claimName: garage-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage
+  namespace: default
+  labels:
+    app: garage
+    app.kubernetes.io/name: garage
+spec:
+  selector:
+    app: garage
+  ports:
+    - name: s3-api
+      port: 3900
+      targetPort: 3900
+    - name: rpc
+      port: 3901
+      targetPort: 3901
