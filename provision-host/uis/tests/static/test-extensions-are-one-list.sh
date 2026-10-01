@@ -146,4 +146,56 @@ else
     fail_test "index.md does not state that the extensions reach an app database"
 fi
 
+
+# ============================================================
+# urb-agents#1743: 8d echoed the superuser password on failure
+# ============================================================
+
+start_test "🔴 The template1 tasks do not display their argv, which carries PGPASSWORD"
+# Ansible echoes the whole `cmd` on failure. imac measured the superuser
+# password once in a failing deploy log and zero times in two successful ones.
+n=0
+for t in "8d. Activate the UIS extensions in template1" "8e. Show which extensions template1 now has"; do
+    blk="$(awk -v pat="$t" '$0 ~ pat {f=1} f && /^    - name: "8/ && $0 !~ pat {exit} f' "$DEPLOY_PB")"
+    echo "$blk" | grep -q "no_log: true" && n=$((n+1))
+done
+if [[ $n -eq 2 ]]; then pass_test; else fail_test "only $n of 2 password-carrying tasks are no_log"; fi
+
+start_test "But a failure is still reported with a cause, not censored"
+# no_log alone turns a leak into "the output has been hidden" and no reason —
+# the defect 070-verify-authentik task 16 spent two releases on.
+if grep -q '8d2. Fail if the extensions could not be activated' "$DEPLOY_PB"; then
+    pass_test
+else
+    fail_test "no_log with no follow-up failure task: a failure would be silent or unexplained"
+fi
+
+start_test "That failure prints psql's output, never the command"
+blk="$(awk '/8d2. Fail if the extensions could not be activated/,/8e\./' "$DEPLOY_PB")"
+if echo "$blk" | grep -qF "template1_ext.stderr" && ! echo "$blk" | grep -qF ".cmd"; then
+    pass_test
+else
+    fail_test "8d2 does not report stderr, or reports the command: $blk"
+fi
+
+start_test "The activation task still fails the deploy — a leak fix must not become a silent pass"
+if echo "$blk" | grep -qF "template1_ext.rc | default(1) != 0"; then
+    pass_test
+else
+    fail_test "8d2 does not gate on the return code, defaulting to failure: $blk"
+fi
+
+start_test "Every kubectl task in the deploy still carries KUBECONFIG"
+# ⚠️ Adding no_log cost 8d its `environment:` block in the first draft of this
+# fix, which would have broken kubectl outright.
+missing="$(python3 - "$DEPLOY_PB" <<'PYEOF'
+import re, sys
+s = open(sys.argv[1]).read()
+bad = [t.split('\n')[0] for t in re.split(r'\n    - name: ', s)[1:]
+       if re.search(r'^\s+- kubectl$', t, re.M) and 'KUBECONFIG' not in t]
+print(' | '.join(bad))
+PYEOF
+)"
+if [[ -z "$missing" ]]; then pass_test; else fail_test "kubectl without KUBECONFIG: $missing"; fi
+
 print_summary

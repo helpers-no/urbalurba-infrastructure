@@ -67,6 +67,30 @@
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       when: "'postgresql' not in helm_list.stdout"
+      # 🔴 no_log, because Ansible echoes the whole `cmd` when a task fails and
+      # this one carries `--set auth.postgresPassword=<the real superuser
+      # password>`. imac measured it on a clean cluster (urb-agents#1743): a DNS
+      # timeout fetching the chart, one minute after a VM rebuild, printed the
+      # password into the deploy output. It is the FAILURE path only, which is
+      # why four releases of successful installs never showed it — and exactly
+      # what an agent transcript or a CI log keeps.
+      #
+      # Same defect as task 8d, in the step that predates the extensions work.
+      # ⚠️ no_log alone would swap the leak for "the output has been hidden" and
+      # no cause, so the failure is reported by 7a from stderr instead.
+      no_log: true
+      failed_when: false
+      register: pg_helm_install
+
+    - name: "7a. Fail if the PostgreSQL install did not succeed"
+      ansible.builtin.fail:
+        msg: |
+          helm install postgresql failed (rc={{ pg_helm_install.rc }}).
+
+          {{ (pg_helm_install.stderr | default('')) | replace(postgres_password, '********') | trim }}
+      when:
+        - pg_helm_install.rc is defined
+        - pg_helm_install.rc != 0
 
     # 🔴 READY, NOT Running. `status.phase == "Running"` is true the instant the
     # container starts — and Bitnami's PostgreSQL then bounces its server twice
@@ -211,8 +235,32 @@
                                | reject('match', '^\\s*$')
                                | map('trim') | list }}"
       changed_when: false
+      # 🔴 no_log, because Ansible echoes the whole `cmd` on failure and this
+      # argv contains `env PGPASSWORD=<the postgres superuser password>`.
+      # imac measured it in 1.6.178 (urb-agents#1743): the value appeared once
+      # in a failing deploy log and zero times in two successful ones — so it
+      # is the FAILURE path, which is exactly what an agent transcript or a CI
+      # log keeps. It is also visible in the host process list while running.
+      #
+      # ⚠️ no_log alone would replace the leak with a censored fatal and no
+      # cause, which is the defect this repository spends most of its time on
+      # (see 070-verify-authentik task 16). So: do not fail here, and let 8d2
+      # fail with psql's stderr only. The registered result is still readable;
+      # no_log suppresses display, not capture.
+      no_log: true
+      failed_when: false
+      register: template1_ext
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
+
+    - name: "8d2. Fail if the extensions could not be activated"
+      ansible.builtin.fail:
+        msg: |
+          Could not activate the UIS extensions in template1.
+
+          {{ (template1_ext.stderr | default('')) | replace(postgres_password, '********') | trim }}
+          {{ (template1_ext.stdout | default('')) | replace(postgres_password, '********') | trim }}
+      when: template1_ext.rc | default(1) != 0
 
     - name: "8e. Show which extensions template1 now has"
       ansible.builtin.command:
@@ -237,6 +285,9 @@
           - "select extname || ' ' || extversion from pg_extension order by extname"
       register: template1_ext_list
       changed_when: false
+      # Same argv, same exposure on failure.
+      no_log: true
+      failed_when: false
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
 
