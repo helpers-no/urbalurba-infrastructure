@@ -25,6 +25,8 @@ EXPOSE_CONFIG=(
     # MinIO S3 API. The console is reached through Traefik (http://minio.localhost),
     # so only the API port is port-forwarded.
     ["minio"]="minio default 9000"
+    # Garage S3 API. No console to route around - Garage ships none.
+    ["garage"]="garage default 3900"
     # Temporal gRPC frontend — what SDK clients and workers connect to. The Web UI
     # is reached through Traefik (http://temporal.localhost) instead.
     ["temporal"]="temporal-frontend temporal 7233"

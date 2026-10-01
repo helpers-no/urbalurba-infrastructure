@@ -1,0 +1,395 @@
+---
+# file: ansible/playbooks/047-setup-garage.yml
+# Description:
+# Set up Garage S3-compatible object storage on the Kubernetes cluster.
+# Replaces MinIO, whose images were withdrawn from every public registry on
+# 2026-10-01 (urb-agents#1801) - not account-gated, actually gone.
+#
+# Prerequisites:
+# - Kubernetes cluster with a default StorageClass
+# - kubectl configured for target cluster
+# - urbalurba-secrets applied to the default namespace
+#   (contains GARAGE_ACCESS_KEY, GARAGE_SECRET_KEY, GARAGE_RPC_SECRET)
+# - Required manifests: 047-garage-config.yaml, 048-garage-ingressroute.yaml
+#
+# Architecture:
+# - The official image run directly (dxflrs/garage:v2.3.0) - NOT Garage's own
+#   Helm chart. See 047-garage-config.yaml's header for why.
+# - `--single-node --default-bucket`, a flag pair Garage has shipped since
+#   v2.3.0 for exactly this case: no manual `garage layout assign`/`apply`,
+#   and the access key it creates is a CHOSEN one (from urbalurba-secrets),
+#   not a minted one - confirmed from Garage's own quick-start docs, 2026-10-01.
+# - garage.toml is built HERE, as a Secret, because it carries GARAGE_RPC_SECRET.
+#   Secrets never live in a manifest file (rules/secrets-management.md).
+# - S3 API on service "garage" port 3900. No console - Garage ships none.
+# - Traefik IngressRoute: garage.<domain> and s3.<domain> -> garage:3900
+# - Persistent volume keeps the bucket across pod restarts and re-deploys.
+#
+# 🔴 NOT VERIFIED ON A CLUSTER. Every command below is reasoned from Garage's
+# own documentation (fetched 2026-10-01, with the image pull confirmed against
+# the real registry) and written to match UIS's existing MinIO/Postgres
+# conventions exactly. Nobody has watched this playbook run. Treat the version
+# that shipped to imac as the one to trust, not this comment.
+#
+# Usage:
+# ansible-playbook playbooks/047-setup-garage.yml -e target_host="rancher-desktop"
+
+- name: Set up Garage Object Storage on Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    manifests_folder: "/mnt/urbalurbadisk/manifests"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    garage_namespace: "default"
+    component_name: "garage"
+    pod_readiness_timeout: 180
+
+    garage_config_file: "{{ manifests_folder }}/047-garage-config.yaml"
+    garage_ingressroute_file: "{{ manifests_folder }}/048-garage-ingressroute.yaml"
+
+  tasks:
+    - name: 1. Display deployment information
+      ansible.builtin.debug:
+        msg:
+          - "======================================"
+          - "Garage Object Storage Deployment"
+          - "File: ansible/playbooks/047-setup-garage.yml"
+          - "======================================"
+          - "Target Host: {{ _target }}"
+          - "Namespace: {{ garage_namespace }}"
+          - "Image: dxflrs/garage:v2.3.0 (not Helm - see 047-garage-config.yaml)"
+          - "Credentials: GARAGE_ACCESS_KEY / GARAGE_SECRET_KEY / GARAGE_RPC_SECRET from urbalurba-secrets"
+
+    # 🔴 Both MinIO and Garage claim s3.<domain> (046 / 048-garage-ingressroute.yaml),
+    # deliberately - that is what lets an application's config survive the swap
+    # unchanged. Two IngressRoutes claiming the same HostRegexp is undefined
+    # which one Traefik picks. Warn rather than silently create a route that
+    # may lose a coin flip.
+    - name: "2. Check whether MinIO is also deployed (s3.<domain> route collision)"
+      kubernetes.core.k8s_info:
+        kind: Service
+        namespace: "{{ garage_namespace }}"
+        name: minio
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: _minio_svc_check
+      failed_when: false
+
+    - name: "2a. Warn if both will be deployed"
+      ansible.builtin.debug:
+        msg: |
+          ⚠️  MinIO's Service is still present in this namespace.
+          Both MinIO's and Garage's IngressRoutes claim s3.{{ '{{ domain }}' }} on purpose,
+          so an application's S3 endpoint config does not need to change. With BOTH
+          deployed, which one actually answers s3.<domain> is undefined - Traefik
+          will pick one, not both, and not predictably.
+          If you are migrating data rather than testing side by side:
+            ./uis undeploy minio
+          before relying on s3.<domain> again.
+      when: _minio_svc_check.resources | default([]) | length > 0
+
+    - name: "3. Get Garage access key from urbalurba-secrets"
+      ansible.builtin.shell: |
+        kubectl get secret urbalurba-secrets -n {{ garage_namespace }} \
+        -o jsonpath='{.data.GARAGE_ACCESS_KEY}' 2>/dev/null | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_access_key
+      changed_when: false
+      failed_when: false
+
+    - name: "4. Get Garage secret key from urbalurba-secrets"
+      ansible.builtin.shell: |
+        kubectl get secret urbalurba-secrets -n {{ garage_namespace }} \
+        -o jsonpath='{.data.GARAGE_SECRET_KEY}' 2>/dev/null | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_secret_key
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: "5. Get Garage RPC secret from urbalurba-secrets"
+      ansible.builtin.shell: |
+        kubectl get secret urbalurba-secrets -n {{ garage_namespace }} \
+        -o jsonpath='{.data.GARAGE_RPC_SECRET}' 2>/dev/null | base64 -d
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_rpc_secret
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: "6. Fail early when credentials are missing"
+      ansible.builtin.fail:
+        msg: |
+          GARAGE_ACCESS_KEY / GARAGE_SECRET_KEY / GARAGE_RPC_SECRET not found in
+          urbalurba-secrets (namespace {{ garage_namespace }}).
+
+          Fix:
+            ./uis secrets generate
+            ./uis secrets apply
+            ./uis deploy garage
+      when: >
+        garage_access_key.stdout | default('') | length == 0 or
+        garage_secret_key.stdout | default('') | length == 0 or
+        garage_rpc_secret.stdout | default('') | length == 0
+
+    - name: "7. Set Garage credential facts"
+      ansible.builtin.set_fact:
+        garage_access_key_fact: "{{ garage_access_key.stdout }}"
+        garage_secret_key_fact: "{{ garage_secret_key.stdout }}"
+        garage_rpc_secret_fact: "{{ garage_rpc_secret.stdout }}"
+      no_log: true
+
+    - name: "8. Display Garage credential status (masked)"
+      ansible.builtin.debug:
+        msg:
+          - "Garage access key: {{ garage_access_key_fact }}"
+          - "Garage secret key: {{ garage_secret_key_fact | regex_replace('.', '*') }}"
+
+    - name: "9. Create the Garage data PVC (owned by UIS, not by the Deployment)"
+      # Kept out of the Deployment's own lifecycle on purpose, same reasoning
+      # as MinIO's PVC (045-setup-minio.yml task 10): deleting the Deployment
+      # on `./uis undeploy garage` must not delete the bucket's data.
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "garage-data"
+            namespace: "{{ garage_namespace }}"
+            labels:
+              app: garage
+              app.kubernetes.io/name: garage
+              app.kubernetes.io/component: storage
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: "20Gi"
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    # 🔴 garage.toml built HERE, as a Secret - it carries garage_rpc_secret_fact.
+    # Values verified from Garage's own quick-start config example (2026-10-01):
+    # metadata_dir/data_dir under one mounted volume, db_engine sqlite and
+    # replication_factor 1 for a single node, rpc_bind_addr/rpc_public_addr on
+    # loopback since there are no peers to reach. [s3_web] and [admin] are
+    # deliberately absent - see 047-garage-config.yaml and garage.md "What was
+    # left out".
+    - name: "10. Build and apply the garage.toml Secret"
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: garage-toml
+            namespace: "{{ garage_namespace }}"
+            labels:
+              app: garage
+          stringData:
+            garage.toml: |
+              metadata_dir = "/var/lib/garage/meta"
+              data_dir = "/var/lib/garage/data"
+              db_engine = "sqlite"
+              replication_factor = 1
+              rpc_bind_addr = "[::]:3901"
+              rpc_public_addr = "127.0.0.1:3901"
+              rpc_secret = "{{ garage_rpc_secret_fact }}"
+
+              [s3_api]
+              s3_region = "garage"
+              api_bind_addr = "[::]:3900"
+              root_domain = ".s3.garage.svc.cluster.local"
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      no_log: true
+      register: garage_toml_apply
+      failed_when: false
+
+    - name: "10a. Fail if the garage.toml Secret could not be applied"
+      ansible.builtin.fail:
+        msg: "Failed to apply the garage-toml Secret (see Ansible's own error above the no_log boundary; no further detail is available without revealing the RPC secret)."
+      when: garage_toml_apply.failed | default(false)
+
+    - name: "11. Deploy Garage (Deployment + Service)"
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ garage_config_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: garage_deploy_result
+
+    - name: "12. Wait for Garage pod to be running"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ garage_namespace }}"
+        label_selectors:
+          - "app=garage"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: garage_pods
+      retries: 20
+      delay: 15
+      until: >
+        garage_pods.resources | length > 0 and
+        garage_pods.resources[0].status.phase == "Running"
+
+    - name: "13. Wait for Garage pod to be fully ready (1/1)"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ garage_namespace }}"
+        label_selectors:
+          - "app=garage"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: garage_pods_ready
+      retries: 30
+      delay: 10
+      until: >
+        garage_pods_ready.resources | length > 0 and
+        garage_pods_ready.resources[0].status.containerStatuses[0].ready == true
+
+    # 🔴 This is the step that confirms --single-node --default-bucket actually
+    # did what the docs say. `garage status` also implicitly confirms the
+    # single-node layout auto-configured, since an unconfigured node reports
+    # "NO ROLE ASSIGNED" (seen in Garage's own multi-node docs for the manual
+    # case this flag is meant to skip).
+    - name: "14. Confirm the node's layout is configured (garage status)"
+      ansible.builtin.shell: |
+        kubectl exec -n {{ garage_namespace }} "{{ garage_pods_ready.resources[0].metadata.name }}" -- /garage status
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_status
+      retries: 10
+      delay: 6
+      until: garage_status.rc == 0
+      failed_when: false
+      changed_when: false
+
+    - name: "14a. Fail if the layout never configured"
+      ansible.builtin.fail:
+        msg: |
+          `garage status` did not succeed after Garage reported Ready.
+          --single-node should configure the layout automatically; it did not.
+          Output: {{ garage_status.stdout[:1000] | default('No output') }}
+          {{ garage_status.stderr[:500] | default('') }}
+      when: garage_status.rc != 0
+
+    - name: "15. Confirm the default bucket and key were created"
+      ansible.builtin.shell: |
+        kubectl exec -n {{ garage_namespace }} "{{ garage_pods_ready.resources[0].metadata.name }}" -- /garage bucket list
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_bucket_list
+      retries: 10
+      delay: 6
+      until: "'default-bucket' in garage_bucket_list.stdout"
+      failed_when: false
+      changed_when: false
+
+    - name: "15a. Fail if --default-bucket did not create the bucket"
+      ansible.builtin.fail:
+        msg: |
+          Expected 'default-bucket' in `garage bucket list`. --default-bucket
+          should have created it from GARAGE_DEFAULT_BUCKET at startup.
+          Output: {{ garage_bucket_list.stdout[:1000] | default('No output') }}
+      when: "'default-bucket' not in (garage_bucket_list.stdout | default(''))"
+
+    - name: "16. Apply the Garage IngressRoute (S3 API)"
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ garage_ingressroute_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: "17. Verify the IngressRoute was created"
+      kubernetes.core.k8s_info:
+        api_version: traefik.io/v1alpha1
+        kind: IngressRoute
+        namespace: "{{ garage_namespace }}"
+        name: garage-api
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: garage_ingress_check
+      retries: 5
+      delay: 2
+      until: garage_ingress_check.resources | length > 0
+
+    - name: "18. Get Garage pods"
+      ansible.builtin.command: kubectl get pods -n {{ garage_namespace }} -l app=garage
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_pods_out
+      changed_when: false
+
+    - name: "19. Get Garage services"
+      ansible.builtin.command: kubectl get svc -n {{ garage_namespace }} -l app=garage
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_svc_out
+      changed_when: false
+
+    - name: "20. Get Garage PVC"
+      ansible.builtin.command: kubectl get pvc -n {{ garage_namespace }} -l app=garage
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_pvc_out
+      changed_when: false
+
+    - name: "21. Display final deployment status"
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          Garage Object Storage Deployment Status
+          ===============================================
+
+          SUCCESS - Garage deployed, layout configured, default bucket ready
+
+          Status:
+          - Object storage: {{ 'Running' if garage_pods_out.stdout.find('Running') != -1 else 'Not running' }}
+          - Layout:         configured (single-node, confirmed via `garage status`)
+          - Default bucket: 'default-bucket' confirmed via `garage bucket list`
+          - Storage:        Persistent volume configured
+          - IngressRoute:   {{ garage_ingress_check.resources | length }} created
+
+          Deployment details:
+          - Namespace:  {{ garage_namespace }}
+          - Image:      dxflrs/garage:v2.3.0
+          - S3 API:     http://garage.{{ garage_namespace }}.svc.cluster.local:3900 (cluster internal)
+          - No console: Garage ships none. See /docs/services/storage/garage.
+
+          Garage pods:
+          {{ garage_pods_out.stdout }}
+
+          Garage services:
+          {{ garage_svc_out.stdout }}
+
+          Storage (PVC):
+          {{ garage_pvc_out.stdout }}
+
+          Access instructions:
+          - S3 API (browser/app):  http://s3.localhost  or  http://garage.localhost
+          - S3 API from host:      ./uis expose garage   then use http://localhost:39901
+          - Credentials:           GARAGE_ACCESS_KEY / GARAGE_SECRET_KEY in urbalurba-secrets
+              kubectl get secret urbalurba-secrets -n {{ garage_namespace }} \
+                -o jsonpath='{.data.GARAGE_ACCESS_KEY}' | base64 -d
+              kubectl get secret urbalurba-secrets -n {{ garage_namespace }} \
+                -o jsonpath='{.data.GARAGE_SECRET_KEY}' | base64 -d
+          - Default bucket:        default-bucket (the access key above is scoped to
+                                    this one bucket only - unlike MinIO's root
+                                    credential, this key cannot create OR reach any
+                                    other bucket. See garage.md.)
+
+          Usage examples (from an application pod, any AWS S3 SDK):
+          - Endpoint:          http://garage.default.svc.cluster.local:3900
+          - Region:            garage (SDKs require one; Garage's own default)
+          - Path-style access: required
+
+          Troubleshooting:
+          - Check pods:    kubectl get pods -n {{ garage_namespace }} -l app=garage
+          - View logs:     kubectl logs -n {{ garage_namespace }} -l app=garage
+          - Check layout:  kubectl exec -n {{ garage_namespace }} <pod> -- /garage status
+          - Check PVC:     kubectl get pvc -n {{ garage_namespace }} -l app=garage
+          - Check routes:  kubectl get ingressroute -n {{ garage_namespace }} -l app=garage
+          - Verify E2E:    ./uis verify garage
+
+          GARAGE READY - OBJECT STORAGE DEPLOYED
+          ===============================================

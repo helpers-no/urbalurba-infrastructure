@@ -1,0 +1,207 @@
+---
+# file: ansible/playbooks/047-remove-garage.yml
+# Description:
+# Remove Garage object storage from the Kubernetes cluster.
+#
+#   Default mode (no extra-var), set by `./uis undeploy garage`:
+#     - Delete the Deployment, Service and the garage-toml Secret
+#     - Remove the Traefik IngressRoute
+#     - Wait for the pod to terminate
+#     KEEPS: the PVC (the bucket's data) and urbalurba-secrets.
+#     A subsequent ./uis deploy garage re-attaches the same data.
+#
+#   Purge mode (-e _purge=true, set by `./uis undeploy garage --purge`):
+#     - Everything default mode does, plus:
+#     - Delete the Garage PVC - PERMANENTLY DELETES ALL BUCKET DATA
+#     User-level confirmation is enforced by uis-cli.sh before this playbook runs.
+#
+# Not Helm - there is no release to uninstall. See 047-garage-config.yaml.
+#
+# Usage:
+# ansible-playbook playbooks/047-remove-garage.yml -e target_host="rancher-desktop"
+# ansible-playbook playbooks/047-remove-garage.yml -e _purge=true
+
+- name: Remove Garage Object Storage from Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    garage_namespace: "default"
+    cleanup_wait_timeout: 120
+    purge_mode: "{{ _purge | default(false) | bool }}"
+
+  tasks:
+    - name: 1. Display removal information
+      ansible.builtin.debug:
+        msg:
+          - "======================================"
+          - "Garage Object Storage Removal"
+          - "File: ansible/playbooks/047-remove-garage.yml"
+          - "======================================"
+          - "Target Host: {{ _target }}"
+          - "Namespace: {{ garage_namespace }}"
+          - "Mode: {{ 'PURGE - deletes the PVC and all bucket data' if purge_mode else 'default - keeps the PVC and all bucket data' }}"
+
+    - name: 2. Get current Garage resources before removal
+      ansible.builtin.shell: |
+        echo "=== PODS ==="
+        kubectl get pods -n {{ garage_namespace }} -l app=garage --no-headers 2>/dev/null || echo "No Garage pods found"
+        echo "=== SERVICES ==="
+        kubectl get svc -n {{ garage_namespace }} -l app=garage --no-headers 2>/dev/null || echo "No Garage services found"
+        echo "=== PVCs ==="
+        kubectl get pvc -n {{ garage_namespace }} -l app=garage --no-headers 2>/dev/null || echo "No Garage PVCs found"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_resources_before
+      changed_when: false
+      failed_when: false
+
+    - name: 3. Display resources before removal
+      ansible.builtin.debug:
+        msg: |
+          Current Garage resources:
+          {{ garage_resources_before.stdout }}
+
+    - name: 4. Remove Garage IngressRoute
+      kubernetes.core.k8s:
+        state: absent
+        api_version: traefik.io/v1alpha1
+        kind: IngressRoute
+        name: garage-api
+        namespace: "{{ garage_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: 5. Remove the Garage Deployment and Service
+      kubernetes.core.k8s:
+        state: absent
+        src: "/mnt/urbalurbadisk/manifests/047-garage-config.yaml"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: garage_delete_result
+      failed_when: false
+      # ⚠️ This also matches 047-garage-config.yaml's PVC definition, which
+      # WOULD delete it. k8s state:absent against a multi-document file
+      # deletes every document in it. Guarded by task 5a immediately after:
+      # the PVC is re-created in default mode, so this is only destructive in
+      # the window between these two tasks - acceptable for an undeploy, not
+      # for anything else. Purge mode wants the PVC gone anyway (task 9).
+
+    - name: 5a. Re-create the PVC unless this is a purge (undo task 5's side effect)
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "garage-data"
+            namespace: "{{ garage_namespace }}"
+            labels:
+              app: garage
+              app.kubernetes.io/name: garage
+              app.kubernetes.io/component: storage
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: "20Gi"
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      when: not purge_mode
+
+    - name: 6. Remove the garage-toml Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: garage-toml
+        namespace: "{{ garage_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: 7. Wait for Garage pod to terminate
+      ansible.builtin.shell: |
+        timeout {{ cleanup_wait_timeout }} bash -c 'while kubectl get pods -n {{ garage_namespace }} -l app=garage --no-headers 2>/dev/null | grep -q .; do echo "Waiting for pods to terminate..."; sleep 5; done'
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_pod_termination
+      changed_when: false
+      failed_when: false
+
+    - name: 8. Count remaining Garage pods
+      ansible.builtin.shell: |
+        kubectl get pods -n {{ garage_namespace }} -l app=garage --no-headers 2>/dev/null | wc -l
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_remaining_pods
+      changed_when: false
+      failed_when: false
+
+    # ============= PURGE ONLY: DESTROYS ALL STORED OBJECTS =============
+
+    - name: 9. PURGE - delete Garage PVC (all bucket data)
+      ansible.builtin.shell: |
+        kubectl delete pvc -n {{ garage_namespace }} -l app=garage --ignore-not-found=true
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_pvc_delete
+      when: purge_mode
+      changed_when: true
+      failed_when: false
+
+    - name: 10. Check remaining PVCs
+      ansible.builtin.shell: |
+        kubectl get pvc -n {{ garage_namespace }} -l app=garage --no-headers 2>/dev/null
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: garage_preserved_pvcs
+      changed_when: false
+      failed_when: false
+
+    - name: 11. Set removal status facts
+      ansible.builtin.set_fact:
+        deployment_removed: "{{ (garage_remaining_pods.stdout | int) == 0 }}"
+        pvcs_preserved: "{{ garage_preserved_pvcs.stdout | trim | length > 0 }}"
+
+    - name: 12. Display final removal status
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          Garage Object Storage Removal Status
+          ===============================================
+
+          Removal status:
+          - Pods:          {{ 'All terminated' if deployment_removed else 'Still running' }}
+          - IngressRoute:  Removed (garage-api)
+
+          Data:
+          {% if purge_mode %}
+          - PVC: DELETED - all bucket data is gone permanently
+          {% else %}
+          - PVC: {{ 'Preserved - bucket data survives' if pvcs_preserved else 'No PVC found' }}
+          - Secrets: urbalurba-secrets preserved (GARAGE_ACCESS_KEY / GARAGE_SECRET_KEY / GARAGE_RPC_SECRET)
+          {% endif %}
+
+          {% if pvcs_preserved %}
+          Preserved PVCs:
+          {{ garage_preserved_pvcs.stdout }}
+          {% endif %}
+
+          Re-deployment:
+          - ./uis deploy garage
+          {% if not purge_mode %}
+          - Existing bucket data is re-attached from the preserved PVC
+          {% endif %}
+
+          {% if not purge_mode %}
+          Complete cleanup (DESTRUCTIVE):
+          - ./uis undeploy garage --purge
+          - WARNING: this permanently deletes all bucket data
+          {% endif %}
+
+          Verification commands:
+          - kubectl get all -n {{ garage_namespace }} -l app=garage
+          - kubectl get pvc -n {{ garage_namespace }} -l app=garage
+
+          {{ 'GARAGE REMOVED' if deployment_removed else 'CHECK REMOVAL STATUS' }}
+          ===============================================

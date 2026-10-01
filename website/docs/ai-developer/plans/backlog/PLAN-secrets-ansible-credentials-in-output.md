@@ -37,6 +37,8 @@ Largest: `u02-verify-postgres` (15), `u07-setup-unity-catalog-database` (9), `u0
 
 ⚠️ **This is a heuristic scan, not an audit.** It matches patterns in the task text. I sampled one row in seven and every sampled row was a real credential-carrying command (a Redis Helm install, `psql` calls, API-key `curl`s), but **I did not review all 82 individually**, so some `{{ …token… }}` matches may carry nothing secret, and a credential passed some way the patterns do not match is invisible to it.
 
+🔴 **The scan also only looked inside `command`/`shell`/`raw` tasks, and that is too narrow - found while writing the equivalent check for the new Garage service.** Ansible can echo any module's arguments on failure, not only a command module's argv: a `kubernetes.core.k8s` task whose `definition:` carries a secret leaks it the same way. Mutation-testing the Garage version of this check against its own `no_log` proved the narrower pattern blind to it - removing `no_log` from a `k8s` task changed nothing the old pattern saw. **So 82 is a floor, not the count** - a second pass scanning every module, not just the three command-shaped ones, is needed before this plan's numbers are trusted. None of the fixes already shipped (1.6.179's tasks 7/8d) are affected; they are command tasks and were checked correctly.
+
 ## 🔴 Why this is not a one-line edit
 
 `no_log: true` on a failing task replaces the leak with *"the output has been hidden because of no_log"* and **no cause**. That is the defect this repository spends most of its time on — a command that fails and says nothing useful — and `070-verify-authentik` task 16 cost two releases for exactly that reason.

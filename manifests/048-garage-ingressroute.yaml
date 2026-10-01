@@ -1,0 +1,67 @@
+# File: manifests/048-garage-ingressroute.yaml
+#
+# Description:
+# Traefik IngressRoute for Garage's S3 API. Only one route - Garage has no
+# console, unlike MinIO's two (046-minio-ingressroute.yaml).
+#
+#   garage.<domain>  -> garage:3900   (implementation-specific name)
+#   s3.<domain>       -> garage:3900   (protocol alias, already in use for MinIO)
+#
+# The `s3.*` alias is the whole point of naming it after the protocol rather
+# than the implementation (see 046-minio-ingressroute.yaml's own comment on
+# this): an application configured against `s3.<domain>` does not need to
+# change when the object store behind it changes. This is that change.
+#
+# HostRegexp Routing:
+# Works on every domain the cluster is reachable on without edits - see
+# 046-minio-ingressroute.yaml for the localhost / Tailscale / Cloudflare cases,
+# identical here.
+#
+# Usage:
+# kubectl apply -f 048-garage-ingressroute.yaml
+#
+# Dependencies:
+# - 047-garage-config.yaml (the Garage Deployment and Service)
+#
+# Testing:
+# S3 API:   curl -I http://s3.localhost/   (expects a response from the S3
+#           API, not a connection refused - Garage's root path is not a
+#           health endpoint the way MinIO's /minio/health/live is; see
+#           047-test-garage.yml for the actual signed-request check)
+#
+# Security Considerations:
+# - The S3 API route is public at the network level but every bucket
+#   operation is still signed with AWS SigV4 credentials, same posture as
+#   MinIO's S3 route (046-minio-ingressroute.yaml).
+# - No console route exists to omit a security consideration for - Garage
+#   ships none.
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: garage-api
+  namespace: default
+  labels:
+    app: garage
+    component: s3-api
+    type: public
+    routing: unified
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: HostRegexp(`garage\..+`)
+      kind: Rule
+      services:
+        - name: garage
+          port: 3900
+    # Alias: the protocol name, not the implementation. Already in use for
+    # MinIO (046-minio-ingressroute.yaml) - whichever of the two is deployed
+    # answers here, which is what makes the swap possible without touching
+    # every application's configuration.
+    - match: HostRegexp(`s3\..+`)
+      kind: Rule
+      services:
+        - name: garage
+          port: 3900
