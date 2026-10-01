@@ -15,11 +15,12 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [---](INVESTIGATE-service-minio-to-garage.md) | — | 2026-10-01 |
+| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-01 |
 | [---](PLAN-undeploy-purge-verb.md) | — | 2026-09-29 |
 | [---](PLAN-extensions-in-app-databases.md) | — | 2026-09-29 |
 | [---](INVESTIGATE-provisioning-declaration.md) | — | 2026-09-29 |
 | [---](INVESTIGATE-merges-that-build-nothing.md) | — | 2026-09-29 |
-| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-09-29 |
 | [---](PLAN-declared-postgres-extensions.md) | — | 2026-09-24 |
 | [---](PLAN-secret-version-propagation.md) | nine pod templates read `urbalurba-secrets` through a `secretKeyRef` and carry nothing that changes when that secret does. Give them the same treatment oauth2-proxy and PostgREST already have — or a better, single mechanism. | 2026-09-23 |
 | [---](PLAN-install-reports-disarmed-schedules.md) | — | 2026-09-23 |
