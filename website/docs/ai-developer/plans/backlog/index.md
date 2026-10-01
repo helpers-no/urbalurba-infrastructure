@@ -17,6 +17,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 |----------|------|---------|
 | [---](PLAN-secrets-ansible-credentials-in-output.md) | — | 2026-10-01 |
 | [---](PLAN-extensions-in-app-databases.md) | — | 2026-10-01 |
+| [---](INVESTIGATE-system-loki-tempo-minio-dependency.md) | — | 2026-10-01 |
 | [---](INVESTIGATE-service-minio-to-garage.md) | — | 2026-10-01 |
 | [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-01 |
 | [---](PLAN-undeploy-purge-verb.md) | — | 2026-09-29 |
