@@ -26,7 +26,6 @@ print_section() { echo; echo -e "${GREEN}=======================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ANSIBLE_DIR="$PLATFORM_DIR/ansible"
-GENERATED_DIR="$ANSIBLE_DIR/generated"
 CONFIG_FILE="$PLATFORM_DIR/config.sh"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -74,7 +73,6 @@ print_section "Step 3: production k3s cluster"
 
 INIT_VM="${PROXMOX_HOST1_NAME}-k3s"
 JOIN_VMS=("${PROXMOX_HOST2_NAME}-k3s" "${PROXMOX_HOST3_NAME}-k3s")
-JOIN_HOSTS=("${PROXMOX_HOST2_NAME}" "${PROXMOX_HOST3_NAME}")
 
 print_status "k3s-ensure: $INIT_VM (--cluster-init)"
 ap playbooks/k3s-ensure.yml --limit "$INIT_VM" \

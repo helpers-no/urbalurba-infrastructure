@@ -45,10 +45,20 @@ fi
 source "$CONFIG_FILE"
 
 # ─── Step 1: ansible available ────────────────────────────────────────────
+# 🔴 NOT a self-heal install if missing. The provision-host image already guarantees
+# ansible-core from PyPI, not apt (provision-host-02-kubetools.sh — deliberately PyPI, since
+# Launchpad's PPA flakes regularly; see that script's own comment). `apt-get install ansible`
+# would install a second, DIFFERENT ansible stack (Ubuntu's distro package) alongside the pip
+# one every other UIS playbook relies on, rather than treating a missing `ansible-playbook` as
+# what it actually is — a broken image — and failing loudly. Same philosophy the cluster-
+# membership check two steps below already uses: refuse and point at the real fix, don't
+# improvise a different one.
 print_section "Step 1: ansible"
 if ! command -v ansible-playbook >/dev/null 2>&1; then
-    print_warning "ansible-playbook not found — installing..."
-    apt-get update -qq && apt-get install -y -qq ansible
+    print_error "ansible-playbook not found in this container."
+    echo "  This image is expected to ship it (via pip, provision-host-02-kubetools.sh)."
+    echo "  Rebuild the provision-host image rather than installing a second ansible stack here."
+    exit 1
 fi
 print_success "ansible-playbook: $(ansible-playbook --version | head -1)"
 
