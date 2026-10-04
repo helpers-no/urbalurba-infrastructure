@@ -28,7 +28,6 @@ cat > "$GENERATED_DIR/inventory.yml" <<EOF
 # re-run that script instead. Not committed (see .gitignore).
 all:
   vars:
-    ansible_user: tec
     ansible_ssh_private_key_file: "${PROXMOX_SSH_KEY}"
   children:
     proxmox:
