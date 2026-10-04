@@ -1,0 +1,87 @@
+# platforms/proxmox-k3s/config.sh-template
+#
+# Copy to config.sh (git-ignored — never commit this file, it names your own
+# machines) and fill in your own values. Sourced by every script in
+# platforms/proxmox-k3s/scripts/.
+#
+# Before filling this in: each of the 3 hosts below needs Proxmox already
+# installed, a ZFS pool/storage already created, and the three joined into
+# one Proxmox cluster. That part is NOT scripted — see README.md's
+# "Before you start" section for why (one step genuinely needs a human
+# typing a password) and the exact commands to run it yourself.
+
+# ── The three Proxmox hosts ──────────────────────────────────────────────
+# host3 is assumed the weakest machine of the three in the defaults below
+# (it gets a lighter VM and a control-plane-only k3s role) — reorder which
+# physical machine is host1/2/3 to match your own hardware, not the names.
+PROXMOX_HOST1_NAME="host1"
+PROXMOX_HOST1_ADDR="192.168.1.10"
+PROXMOX_HOST2_NAME="host2"
+PROXMOX_HOST2_ADDR="192.168.1.11"
+PROXMOX_HOST3_NAME="host3"
+PROXMOX_HOST3_ADDR="192.168.1.12"
+
+# The SSH key ansible uses to reach every Proxmox host AND every k3s VM this
+# creates. scripts/00-preflight.sh generates one if this path doesn't exist.
+PROXMOX_SSH_KEY="${HOME}/.ssh/id_ed25519_proxmox_k3s"
+
+# Proxmox cluster name (what `pvecm create <name>` was run with) and the ZFS
+# storage name every host registered (see README) — must be identical on all
+# three hosts, that's what makes a guest movable between them.
+PROXMOX_CLUSTER_NAME="homelab"
+PROXMOX_STORAGE="tank-vm"
+
+# ── Networking ────────────────────────────────────────────────────────────
+# The k3s VMs need 6 free static addresses on the SAME subnet as the 3
+# Proxmox hosts above (2 per host: production + mirror test cluster). Must
+# not already be in use or handed out by your DHCP server.
+NETWORK_PREFIX_LENGTH="24"          # match your LAN's netmask (e.g. 22, 24)
+NETWORK_GATEWAY="192.168.1.1"
+NETWORK_DNS="192.168.1.1"
+NETWORK_SEARCH_DOMAIN="lan"
+
+K3S_VM_HOST1_IP="192.168.1.30"       # production, --cluster-init
+K3S_VM_HOST1_TEST_IP="192.168.1.31"  # mirror test cluster, --cluster-init
+K3S_VM_HOST2_IP="192.168.1.32"       # production, joins host1
+K3S_VM_HOST2_TEST_IP="192.168.1.33"  # test, joins host1-test
+K3S_VM_HOST3_IP="192.168.1.34"       # production, control-plane-only — see README
+K3S_VM_HOST3_TEST_IP="192.168.1.35"  # test, joins host1-test
+
+# ── VM sizing ──────────────────────────────────────────────────────────────
+# Defaults are what the reference lab used — see README's "Sizing" section
+# for the reasoning (host2 had the most headroom, host3 the least). Tune for
+# your own hardware; these are the only numbers that matter for that.
+K3S_VM_HOST1_CORES=2;      K3S_VM_HOST1_MEMORY_MB=4096;      K3S_VM_HOST1_DISK_GB=20
+K3S_VM_HOST1_TEST_CORES=1; K3S_VM_HOST1_TEST_MEMORY_MB=2048; K3S_VM_HOST1_TEST_DISK_GB=10
+K3S_VM_HOST2_CORES=4;      K3S_VM_HOST2_MEMORY_MB=6144;      K3S_VM_HOST2_DISK_GB=20
+K3S_VM_HOST2_TEST_CORES=2; K3S_VM_HOST2_TEST_MEMORY_MB=2048; K3S_VM_HOST2_TEST_DISK_GB=10
+K3S_VM_HOST3_CORES=2;      K3S_VM_HOST3_MEMORY_MB=3072;      K3S_VM_HOST3_DISK_GB=10
+K3S_VM_HOST3_TEST_CORES=1; K3S_VM_HOST3_TEST_MEMORY_MB=2048; K3S_VM_HOST3_TEST_DISK_GB=10
+
+# host3's PRODUCTION k3s node contributes its HA vote and nothing else — no
+# workload pods are scheduled there. Set to false if host3 isn't your
+# weakest/slowest-disk machine. See README for why this exists.
+K3S_VM_HOST3_CONTROL_PLANE_ONLY=true
+
+# VMIDs — must be free on each respective Proxmox host.
+K3S_VM_HOST1_VMID=490;  K3S_VM_HOST1_TEST_VMID=491
+K3S_VM_HOST2_VMID=290;  K3S_VM_HOST2_TEST_VMID=291
+K3S_VM_HOST3_VMID=190;  K3S_VM_HOST3_TEST_VMID=191
+
+# ── VM identity ────────────────────────────────────────────────────────────
+VM_CLOUD_IMAGE="noble-server-cloudimg-amd64.img"
+VM_CLOUD_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+VM_CIUSER="k3s"
+
+# ── k3s ────────────────────────────────────────────────────────────────────
+# Pin an EXACT version, not a floating channel — see README for why. Check
+# the current one at https://update.k3s.io/v1-release/channels (the "stable"
+# channel's value) rather than trusting a value in this template to still be
+# current.
+K3S_VERSION="v1.36.5+k3s1"
+
+# Deliberately different from production's k3s defaults (10.42.0.0/16 /
+# 10.43.0.0/16) so `ip route`/`kubectl` output is never ambiguous about which
+# cluster you're looking at.
+K3S_TEST_CLUSTER_CIDR="10.52.0.0/16"
+K3S_TEST_SERVICE_CIDR="10.53.0.0/16"

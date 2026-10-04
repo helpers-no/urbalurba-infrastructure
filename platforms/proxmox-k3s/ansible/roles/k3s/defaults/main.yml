@@ -1,0 +1,11 @@
+---
+# Defaults — every one of these is normally supplied by a vars/vms/<name>.yml declaration's `k3s:`
+# dict (see playbooks/k3s-ensure.yml), except k3s_token, which is deliberately NEVER in a
+# committed file — see the role's own tasks/main.yml header.
+
+k3s_role: "{{ k3s.role }}"                 # init | join — required, no sane default
+k3s_version: "{{ k3s.version }}"           # pinned exact version, e.g. v1.36.5+k3s1
+k3s_server_url: "{{ k3s.server_url | default('') }}"      # required when role == join
+k3s_cluster_cidr: "{{ k3s.cluster_cidr | default('') }}"  # optional — test cluster only, today
+k3s_service_cidr: "{{ k3s.service_cidr | default('') }}"
+k3s_taint_control_plane_only: "{{ k3s.taint_control_plane_only | default(false) }}"

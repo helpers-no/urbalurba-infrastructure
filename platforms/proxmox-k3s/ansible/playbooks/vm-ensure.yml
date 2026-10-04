@@ -1,0 +1,234 @@
+---
+# vm-ensure — create a Proxmox VM from a DECLARATION, via cloud-init.
+#
+#   ansible-playbook -i generated/inventory.yml playbooks/vm-ensure.yml \
+#       --limit host1 -e vm_file=generated/vars/vms/host1-k3s.yml \
+#       -e control_pubkey_file=/path/to/key.pub
+#   ... --check            # say what it would do, touch nothing
+#   ... -e vmid=491         # override the id, e.g. while the original still runs elsewhere
+#
+# 🔴 THIS NEEDS A CLOUD IMAGE, NOT A CONTAINER TEMPLATE. A VM's disk comes from importing a cloud
+# provider's qcow2/raw image via `qm set <vmid> --scsi0 <storage>:0,import-from=<path>` — the
+# modern Proxmox 9 import mechanism, not the older two-step `qm importdisk` dance. Verified: a
+# 624MB Ubuntu Noble cloud image imports and converts onto a ZFS-backed storage in well under a
+# minute.
+#
+# 🔴 CLOUD-INIT'S DEFAULT USER IS THE IMAGE'S OWN DEFAULT (`ubuntu` on Ubuntu's cloud images), NOT
+# WHATEVER `--ciuser` SAYS, IF `--ciuser` FAILS TO APPLY. Found running this for real: a `qm set`
+# with a bad `--sshkeys` path (pointing at a file that didn't exist on that node) errored out and
+# silently skipped every other flag on the same command line, including `--ciuser` — the VM booted
+# fine, but as the image's default user, not the declared one, and the first SSH attempt as the
+# declared user failed with "Permission denied" even though the key itself was fine. Fixed two
+# ways: `--sshkeys` is set to a path GUARANTEED to exist on the target node (the task below copies
+# the key there first), and cloud-init identity is its OWN `qm set` call, separate from creation,
+# so a typo in one flag can't silently swallow the others.
+#
+# 🔵 SNIPPETS CONTENT TYPE IS NOT ON BY DEFAULT. `local` storage ships with
+# `vztmpl,import,backup,iso` only — no `snippets`. This playbook doesn't need it (cloud-init here
+# uses Proxmox's own built-in `--ciuser`/`--sshkeys`/`--ipconfig0` fields, not a custom `cicustom`
+# snippet), but if a future VM needs more than those fields offer, enabling `snippets` on `local`
+# (`pvesm set local --content vztmpl,import,backup,iso,snippets`) is a one-time, cluster-wide
+# change worth knowing about.
+#
+# ⚠️ IT CREATES, IT DOES NOT RECONFIGURE. If the VM exists, this reports and stops. Changing cores
+# or memory on a live VM is a different act with different consent.
+- name: Ensure a VM exists, from its declaration
+  hosts: proxmox
+  gather_facts: false
+
+  vars:
+    vm_file: ""
+    # The control node's key, installed via cloud-init rather than exec'ing into the guest (there
+    # is no container-style "exec into it before it boots" for a VM — cloud-init IS the mechanism).
+    # No hardcoded default — pass -e control_pubkey_file=<path to your own PROXMOX_SSH_KEY.pub>.
+    control_pubkey_file: ""
+
+  tasks:
+    # ── 0. a declaration is required ──────────────────────────────────────────────────────────
+    - name: A declaration is required
+      ansible.builtin.assert:
+        that:
+          - vm_file | length > 0
+        fail_msg: "Pass -e vm_file=vars/vms/<name>.yml — this playbook builds from a declaration, not from flags."
+        quiet: true
+
+    - name: The control node's public key path is required
+      ansible.builtin.assert:
+        that:
+          - control_pubkey_file | length > 0
+        fail_msg: "Pass -e control_pubkey_file=<path to your PROXMOX_SSH_KEY.pub>."
+        quiet: true
+
+    # 🔴 A CREATING playbook that fans out silently when the operator mistypes the limit is a
+    # footgun, not an inconvenience.
+    - name: Refuse to create on more than one node unless that is explicitly the intent
+      ansible.builtin.assert:
+        that:
+          - (ansible_play_hosts | length) == 1 or (allow_fanout | default(false) | bool)
+        fail_msg: >-
+          This play matched {{ ansible_play_hosts | length }} nodes
+          ({{ ansible_play_hosts | join(', ') }}) and it CREATES VMs.
+          Use `--limit <node>` (not `-e target=`), or pass -e allow_fanout=true if you really mean
+          to build this VM on every one of them.
+        quiet: true
+      run_once: true
+
+    - name: Read the declaration
+      ansible.builtin.include_vars:
+        file: "{{ vm_file if vm_file.startswith('/') else (playbook_dir ~ '/../' ~ vm_file) }}"
+
+    - name: Settle the id
+      ansible.builtin.set_fact:
+        g_vmid: "{{ vmid | default(vm.vmid) }}"
+
+    - name: Does it already exist here
+      ansible.builtin.command: "qm config {{ g_vmid }}"
+      register: existing
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Say so and stop if it does
+      ansible.builtin.debug:
+        msg: >-
+          {{ vm.name }} ({{ g_vmid }}) already exists on {{ inventory_hostname }}.
+          ⚠️ This playbook creates; it does not reconfigure a live VM. Nothing changed.
+      when: existing.rc == 0
+
+    # ── the cloud image has to be on the node before qm can import it ────────────────────────
+    - name: Is the cloud image already cached
+      ansible.builtin.stat:
+        path: "/var/lib/vz/template/iso/{{ vm.cloud_image }}"
+      register: cloud_image
+      when: existing.rc != 0
+
+    # 🔴 NOT ansible.builtin.get_url — hit a real bug verifying this on a second node that hadn't
+    # cached the image yet: "HTTPSConnection.__init__() got an unexpected keyword argument
+    # 'cert_file'", an ansible-core/urllib3 incompatibility, not a node-level difference (`python3
+    # --version` matched the first node exactly). Never surfaced on the first node because its
+    # cache hit short-circuited before any network call — so this would have silently affected
+    # every node eventually, not just the one it was first noticed on. Shelling out to `wget`
+    # sidesteps ansible's own HTTPS module stack entirely.
+    - name: Fetch it if not
+      ansible.builtin.command:
+        cmd: "wget -q -O {{ vm.cloud_image }} {{ vm.cloud_image_url }}"
+        chdir: /var/lib/vz/template/iso
+        creates: "/var/lib/vz/template/iso/{{ vm.cloud_image }}"
+      when:
+        - existing.rc != 0
+        - not cloud_image.stat.exists
+
+    # ── the control node's key has to exist AS A FILE on this node — cloud-init's --sshkeys
+    # reads a path, not a value, and a path that doesn't exist silently voids the whole command
+    # line it's part of (see the warning above). Copying it here, every run, is cheap and safe.
+    - name: The control node's key, present on this node for --sshkeys to read
+      ansible.builtin.copy:
+        content: "{{ lookup('file', control_pubkey_file) }}"
+        dest: "/root/.ssh/{{ control_pubkey_file | basename }}"
+        mode: "0644"
+      when: existing.rc != 0
+
+    # ── create it ──────────────────────────────────────────────────────────────────────────
+    - name: Create the VM shell
+      ansible.builtin.command: >-
+        qm create {{ g_vmid }}
+        --name {{ vm.name }}
+        --memory {{ vm.memory }}
+        --cores {{ vm.cores }}
+        --cpu host
+        --net0 virtio,bridge={{ vm.bridge | default('vmbr0') }}
+        --scsihw virtio-scsi-pci
+        --ostype l26
+        --agent enabled=1
+      when: existing.rc != 0
+      register: created
+
+    - name: Import the cloud image as this VM's disk
+      ansible.builtin.command: >-
+        qm set {{ g_vmid }}
+        --scsi0 {{ vm.storage }}:0,import-from=/var/lib/vz/template/iso/{{ vm.cloud_image }}
+      when: existing.rc != 0
+
+    - name: Add the cloud-init drive
+      ansible.builtin.command: "qm set {{ g_vmid }} --ide2 {{ vm.storage }}:cloudinit"
+      when: existing.rc != 0
+
+    - name: Boot from the imported disk
+      ansible.builtin.command: "qm set {{ g_vmid }} --boot order=scsi0"
+      when: existing.rc != 0
+
+    # 🔵 Cloud images are console-only by default — a serial console is how Proxmox's own
+    # noVNC/xterm.js viewer reaches a system that never initializes a VGA framebuffer.
+    - name: Serial console, which cloud images expect
+      ansible.builtin.command: "qm set {{ g_vmid }} --serial0 socket --vga serial0"
+      when: existing.rc != 0
+
+    - name: Grow the disk to what the declaration asks for
+      ansible.builtin.command: "qm resize {{ g_vmid }} scsi0 {{ vm.disk_gb }}G"
+      when: existing.rc != 0
+
+    # ── cloud-init identity, SEPARATE call from creation (see the warning above: one typo must
+    # not silently void a flag three arguments earlier) ───────────────────────────────────────
+    - name: Cloud-init identity and network
+      ansible.builtin.command: >-
+        qm set {{ g_vmid }}
+        --ciuser {{ vm.ciuser }}
+        --sshkeys /root/.ssh/{{ control_pubkey_file | basename }}
+        --ipconfig0 ip={{ vm.ip }},gw={{ vm.gateway }}
+        --nameserver {{ vm.nameserver }}
+        --searchdomain {{ vm.searchdomain }}
+      when: existing.rc != 0
+
+    - name: Start it
+      ansible.builtin.command: "qm start {{ g_vmid }}"
+      when: existing.rc != 0
+
+    # 🔴 A fresh VM at this IP always has a FRESH host key — found live, 2026-10-04: a prior VM at
+    # the same address (even one this same playbook destroyed and is now rebuilding) leaves a now-
+    # stale entry in the control node's known_hosts, and `StrictHostKeyChecking=accept-new` only
+    # accepts keys for hosts it has NEVER seen — it correctly REFUSES a changed key, same as it
+    # would for a real MITM. Scrubbing here is safe specifically BECAUSE this task only runs when
+    # `existing.rc != 0` — we just created this VM ourselves, so any old entry for its address is
+    # guaranteed stale, not a security question.
+    - name: Forget any stale host key for this address before connecting
+      ansible.builtin.command: "ssh-keygen -f ~/.ssh/known_hosts -R {{ vm.ip.split('/')[0] }}"
+      failed_when: false
+      changed_when: true
+      when: existing.rc != 0
+      delegate_to: localhost
+
+    # ── prove it, rather than trusting the exit code ─────────────────────────────────────────
+    # 🔴 An exit-0 `qm start` means the process launched, not that
+    # cloud-init finished or the network came up. A VM can be "running" at the hypervisor and
+    # still be unreachable for minutes while package_upgrade runs.
+    - name: Wait for it to answer SSH as the declared user
+      ansible.builtin.wait_for:
+        host: "{{ vm.ip.split('/')[0] }}"
+        port: 22
+        timeout: 300
+      when: existing.rc != 0
+      delegate_to: localhost
+
+    # 🔴 `cloud-init status` exits 2 while still RUNNING — that's cloud-init's own convention, not
+    # an error, but it's also the LAST command in the chain, so its exit code becomes the whole
+    # SSH command's exit code. Found live: login genuinely succeeded (stdout had `ok` + hostname +
+    # `status: running`) and the task still reported FAILED. What we actually need verified here is
+    # SSH auth working, not cloud-init's completion state — `failed_when: false` plus the `until`
+    # on stdout content is the real success condition, not the shell's own exit code.
+    - name: Prove the login works, rather than assuming it
+      ansible.builtin.command: "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -i {{ control_pubkey_file | replace('.pub','') }} {{ vm.ciuser }}@{{ vm.ip.split('/')[0] }} 'echo ok; hostname -f; cloud-init status'"
+      register: proof
+      changed_when: false
+      failed_when: false
+      until: "'ok' in proof.stdout"
+      retries: 20
+      delay: 10
+      when: existing.rc != 0
+      delegate_to: localhost
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: |
+          {{ vm.name }} ({{ g_vmid }}) on {{ inventory_hostname }} — {{ vm.ip }}
+          {{ proof.stdout | default('(already existed — nothing created)') }}
+          ⚠️ The VM exists and answers SSH. k3s is not installed — that is the role that follows.
