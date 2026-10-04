@@ -1,0 +1,46 @@
+---
+# k3s-ensure — install and join k3s on a VM that vm-ensure.yml already built.
+#
+#   ansible-playbook -i generated/inventory.yml playbooks/k3s-ensure.yml \
+#       --limit host1-k3s -e vm_file=generated/vars/vms/host1-k3s.yml
+#
+# 🔴 THIS RUNS AGAINST THE VM ITSELF, NOT THE HYPERVISOR. Unlike vm-ensure.yml (`hosts: proxmox`,
+# talks to the hypervisor via `qm`), this connects by SSH to the VM's own address as the declared
+# `ciuser` — the inventory entries for these VMs (host1-k3s, host2-k3s, ...) live under the
+# `guests:` group, reachable like any other guest.
+#
+# See roles/k3s/tasks/main.yml for the full init/join sequence and why the join token is never
+# written to a committed file.
+- name: Install and join k3s on a VM
+  hosts: all
+  gather_facts: true
+
+  vars:
+    vm_file: ""
+
+  tasks:
+    - name: A declaration is required
+      ansible.builtin.assert:
+        that:
+          - vm_file | length > 0
+        fail_msg: "Pass -e vm_file=vars/vms/<name>.yml — same declaration vm-ensure.yml used."
+        quiet: true
+
+    - name: Refuse to run on more than one node unless that is explicitly the intent
+      ansible.builtin.assert:
+        that:
+          - (ansible_play_hosts | length) == 1 or (allow_fanout | default(false) | bool)
+        fail_msg: >-
+          This play matched {{ ansible_play_hosts | length }} hosts
+          ({{ ansible_play_hosts | join(', ') }}) and it installs k3s with a specific
+          init/join role per node. Use `--limit <host>`.
+        quiet: true
+      run_once: true
+
+    - name: Read the declaration
+      ansible.builtin.include_vars:
+        file: "{{ vm_file if vm_file.startswith('/') else (playbook_dir ~ '/../' ~ vm_file) }}"
+
+    - name: Apply the k3s role
+      ansible.builtin.include_role:
+        name: k3s
