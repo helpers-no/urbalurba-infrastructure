@@ -16,8 +16,12 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | Document | Goal | Updated |
 |----------|------|---------|
 | [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-10-05 |
+| [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-10-05 |
 | [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-10-05 |
+| [Investigate: should a service bring its own availability probe, and can Uptime Kuma accept one?](INVESTIGATE-system-monitor-definitions-with-services.md) | Decide how the external watchdog's monitors get created and stay in | 2026-10-05 |
 | [Investigate: migrate `hosts-to-be-deleted/*` to `platforms/*` (or formally retire)](INVESTIGATE-system-migrate-hosts-to-platforms.md) | — | 2026-10-05 |
+| [Investigate: Backup and scheduling — UIS deploys stateful services it cannot back up](INVESTIGATE-system-backup-and-scheduling.md) | Give UIS (a) a backup capability for the stateful services it deploys, | 2026-10-05 |
+| [Investigate: an external watchdog — does Uptime Kuma overlap the observability stack?](INVESTIGATE-service-uptime-kuma.md) | Decide whether UIS needs an availability watchdog that runs *outside* | 2026-10-05 |
 | [Investigate: SemaphoreUI as a UIS service](INVESTIGATE-service-semaphore.md) | Make [SemaphoreUI](https://semaphoreui.com) — a web UI and API for running | 2026-10-05 |
 | [Investigate: Dagster Orchestration Platform for UIS](INVESTIGATE-service-dagster.md) | UIS today has no data-pipeline orchestrator. Applications that need to ingest, transform, and catalogue data have three options — each with drawbacks: | 2026-10-05 |
 | [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-05 |
@@ -66,7 +70,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Ship neko as an optional add-on — the honest case for and against](PLAN-service-neko-001-optional-addon.md) | — | 2026-09-07 |
 | [---](INVESTIGATE-system-launcher-image-version-drift.md) | — | 2026-08-31 |
 | [A workflow's `paths:` filter and what the job actually depends on drift apart, silently](INVESTIGATE-system-workflow-paths-filter-drift.md) | Decide how a workflow's declared `paths:` can be kept honest against what its job really | 2026-08-30 |
-| [Investigate: should a service bring its own availability probe, and can Uptime Kuma accept one?](INVESTIGATE-system-monitor-definitions-with-services.md) | Decide how the external watchdog's monitors get created and stay in | 2026-08-30 |
 | [`uis deploy` reports one exit code for two different outcomes](INVESTIGATE-cli-deploy-revert-exit-code.md) | An operator or a script can tell "the topology change failed" apart from "the topology | 2026-08-30 |
 | [Investigate: a green UIS test run must not depend on the development topology](INVESTIGATE-system-topology-coverage.md) | — | 2026-08-26 |
 | [---](PLAN-docs-remove-playbooks-name-a-pod-that-may-not-exist.md) | — | 2026-08-25 |
@@ -98,10 +101,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Investigate: UIS Connect Commands for All Services](INVESTIGATE-cli-connect-add.md) | Build a generic `uis service connect <service> [arg]` surface that opens an interactive client into any deployed service. Replaces the per-service-verb framing (`uis connect postgresql …`) with a single umbrella verb under `uis service <verb>` (alongside future `uis service logs`, `uis service describe`, etc.). | 2026-08-13 |
 | [Ship an availability probe with every service](PLAN-system-observability-006-service-probes.md) | `uis deploy <service>` results in that service being monitored by the | 2026-08-09 |
 | [Plan: Grafana runs with only the datasources that exist](PLAN-service-grafana-optional-datasources.md) | Make Grafana deployable with Prometheus alone, provisioning Loki and | 2026-08-07 |
-| [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-08-07 |
 | [Investigate: Observability — the stack deploys, but the signals don't arrive](INVESTIGATE-system-observability.md) | Make a UIS deployment actually observable. The observability stack | 2026-08-07 |
-| [Investigate: Backup and scheduling — UIS deploys stateful services it cannot back up](INVESTIGATE-system-backup-and-scheduling.md) | Give UIS (a) a backup capability for the stateful services it deploys, | 2026-08-07 |
-| [Investigate: an external watchdog — does Uptime Kuma overlap the observability stack?](INVESTIGATE-service-uptime-kuma.md) | Decide whether UIS needs an availability watchdog that runs *outside* | 2026-08-07 |
 | [Investigate: a stack installs the same way on a laptop and a server](INVESTIGATE-cli-stack-profiles.md) | Give UIS a way to express *how much* of a stack to install and *how | 2026-08-07 |
 | [Fix: default LiteLLM config only works on Docker Desktop](PLAN-service-litellm-004-config-portability.md) | A first-time `uis deploy litellm` should produce a usable model list on | 2026-08-06 |
 | [Feature: let `uis undeploy` remove the database it created](PLAN-service-litellm-003-undeploy-purge.md) | Make a genuinely clean reinstall possible, so install bugs cannot hide | 2026-08-06 |
