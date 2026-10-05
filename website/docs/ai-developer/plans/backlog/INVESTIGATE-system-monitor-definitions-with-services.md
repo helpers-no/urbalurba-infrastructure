@@ -173,7 +173,8 @@ that nobody trusts enough to delete.
   advantage over config-as-code alternatives and may settle this on its own.
 - Where would rendered probe files live on a watchdog host that is deliberately
   **not** part of the cluster (INVESTIGATE-service-uptime-kuma F8, the
-  "components beside the cluster" gap)?
+  "components beside the cluster" gap — fifth instance as of 2026-10-05:
+  [INVESTIGATE-service-semaphore](./INVESTIGATE-service-semaphore.md) F8)?
 
 ---
 

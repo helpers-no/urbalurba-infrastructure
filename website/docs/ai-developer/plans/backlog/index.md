@@ -18,6 +18,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-10-05 |
 | [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-10-05 |
 | [Investigate: migrate `hosts-to-be-deleted/*` to `platforms/*` (or formally retire)](INVESTIGATE-system-migrate-hosts-to-platforms.md) | — | 2026-10-05 |
+| [Investigate: SemaphoreUI as a UIS service](INVESTIGATE-service-semaphore.md) | Make [SemaphoreUI](https://semaphoreui.com) — a web UI and API for running | 2026-10-05 |
 | [Investigate: Dagster Orchestration Platform for UIS](INVESTIGATE-service-dagster.md) | UIS today has no data-pipeline orchestrator. Applications that need to ingest, transform, and catalogue data have three options — each with drawbacks: | 2026-10-05 |
 | [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-05 |
 | [---](PLAN-secrets-ansible-credentials-in-output.md) | — | 2026-10-01 |

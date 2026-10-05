@@ -156,6 +156,10 @@ watches is the same class of gap as the external database, object store, secret
 store, registry cache and scheduler — the recurring **"components beside the
 cluster"** class. It could be a UIS service deployed against a *different*
 kubeconfig, but nothing in UIS expresses "this must not run where the rest runs".
+Fifth instance as of 2026-10-05:
+[INVESTIGATE-service-semaphore](./INVESTIGATE-service-semaphore.md) F8 — which
+also cites this file's own resolution (ship in-cluster anyway, accept the
+limitation) as its precedent.
 
 ---
 
