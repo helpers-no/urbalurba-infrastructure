@@ -45,6 +45,16 @@ platforms/proxmox/
 │   │                                 before it touches production. Overwrites the SAME
 │   │                                 ClusterSecretStore name, so existing ExternalSecrets on that
 │   │                                 cluster keep working untouched — only the backend changes.
+│   ├── point-postgresql-at.sh  ✅  `proxmox` or `proxmox-test` — switches the active k3s
+│   │                                 context AND UIS's `.uis.extend/external-services.yaml`
+│   │                                 `postgresql:` entry together, atomically, so `uis deploy
+│   │                                 postgresql` on whichever cluster is active always proxies to
+│   │                                 THAT cluster's own postgres (pg or pg-test), never the
+│   │                                 other's. ⚠️ That file is GLOBAL, not per-context, and may
+│   │                                 already hold real config from an unrelated installation —
+│   │                                 found running this for real: a stale postgresql/minio entry
+│   │                                 pointing at a since-wiped host. This script only ever
+│   │                                 touches the one `postgresql:` key, never the whole file.
 │   ├── generate-ansible-config.sh ✅  also generates vars/core-services/*.yml + secrets now
 │   ├── init.sh                  ✅  interactive wizard → config.sh
 │   ├── up.sh                    ✅  chains all 5 numbered build steps in one unbroken run
@@ -73,6 +83,11 @@ platforms/proxmox/
     │   ├── k3s-ensure.yml        ✅  existing — installs/joins k3s on a VM
     │   ├── guest-ensure.yml     ✅  LXC equivalent of vm-ensure.yml, for core services
     │   ├── service-pg.yml       ✅  install/configure PostgreSQL
+    │   ├── service-pg-test.yml  ✅  same `postgres` role — a SEPARATE guest/instance for the
+    │   │                            test cluster, not a database inside "pg". Available via
+    │   │                            CORE_SERVICES, not included by default. See
+    │   │                            scripts/point-postgresql-at.sh for wiring it to the test
+    │   │                            cluster's active target.
     │   ├── service-bao.yml      ✅  install/configure OpenBao
     │   ├── service-garage.yml  ✅  install/configure Garage (S3-compatible object store)
     │   ├── service-registry.yml ✅  install/configure zot — ONE pull-through cache instance
