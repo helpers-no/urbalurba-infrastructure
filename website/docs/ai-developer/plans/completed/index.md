@@ -24,6 +24,7 @@ line, which carries one for the plans whose authors recorded it.
 
 | Plan | Goal | Last updated |
 |------|------|-----------|
+| [Plan: SemaphoreUI user-facing documentation](PLAN-service-semaphore-002-docs.md) | A lab owner who has just run `uis deploy semaphore` can find, on the | 2026-10-05 |
 | [Plan: Bump Dagster from 1.13.19 to 1.13.25](PLAN-service-dagster-version-upgrade.md) | Move the pinned Dagster chart/core version from `1.13.19` to the current latest | 2026-10-05 |
 | [Plan: advertise only the `configure` handlers that exist](PLAN-cli-configure-retract-unimplemented.md) | `SCRIPT_CONFIGURABLE="true"` appears only on services that actually have a | 2026-09-29 |
 | [---](PLAN-network-cloudflare-port-and-docs-lift-up.md) | — | 2026-09-17 |
