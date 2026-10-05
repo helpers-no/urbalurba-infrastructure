@@ -19,6 +19,13 @@ reconciles this file against the consumer requirement and lists the six points
 where they diverged. Read the plan first; use this for the reasoning behind the
 options.
 
+Also now in flight: a real deadlock from unbounded schedule overlap
+([urb-agents#1847](https://github.com/terchris/urb-agents/issues/1847)) shipped
+tag-based run concurrency limits (`concurrency.runs.tagConcurrencyLimits`, PR #535), and
+[PLAN-service-dagster-version-upgrade](./PLAN-service-dagster-version-upgrade.md) tracks
+moving the pin from `1.13.19` to `1.13.25` to pick up a related connection-leak fix — blocked
+on confirming the atlas tenant's own pinned version first.
+
 **Goal**: Deploy Dagster as the data orchestration platform in UIS, providing scheduling, observability, and lineage for data pipelines across applications — starting with Atlas, with reusability for future apps.
 
 **Last Updated**: 2026-04-21
