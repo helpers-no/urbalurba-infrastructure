@@ -588,6 +588,26 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "semaphore",
+    "name": "SemaphoreUI",
+    "description": "Web UI and API for running Ansible, Terraform, OpenTofu and PowerShell",
+    "category": "MANAGEMENT",
+    "tags": ["automation", "ansible", "terraform", "opentofu", "ci-cd", "playbooks", "ops"],
+    "abstract": "Web UI and API for running Ansible, Terraform, OpenTofu and PowerShell against your own hosts",
+    "logo": "semaphore-logo.svg",
+    "website": "https://semaphoreui.com"
+    ,"summary": "SemaphoreUI gives Ansible, Terraform, OpenTofu and PowerShell playbooks a web UI, an API and a non-interactive CLI, instead of a terminal and a cron job. A project owns everything a run needs - the git repository, the inventory, the stored access keys - and SemaphoreUI executes templates against it, in-cluster, with a real history of every task it ran. A clean install ships with none of that configured: zero projects, repositories or access keys, the same empty-by-default convention as dagster-code-locations.yaml. Running inside the cluster is not a limitation - anything the automation reaches over SSH or HTTP (a VM to patch, a watchdog to notify) it reaches identically from a pod; the one thing no in-cluster tool can do is recover the specific cluster its own pod depends on. Note for anyone piping secrets through it: issued API tokens are stored as the bearer value itself, not a hash - a deliberate design choice made upstream, not a UIS defect."
+    ,"docs": "/docs/services/management/semaphore"
+    ,"playbook": "630-setup-semaphore.yml"
+    ,"priority": 85
+    ,"checkCommand": "kubectl get pods -n semaphore -l app=semaphore --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "630-remove-semaphore.yml"
+    ,"namespace": "semaphore"
+    ,"image": "semaphoreui/semaphore:v2.19.12"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "whoami",
     "name": "Whoami",
     "description": "Test service for debugging",

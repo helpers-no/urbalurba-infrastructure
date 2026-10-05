@@ -1,0 +1,96 @@
+---
+# 630-remove-semaphore.yml
+# Remove SemaphoreUI from the cluster
+#
+# The PVC is KEPT by default: it holds every project, repository, template,
+# access key and task history in the embedded SQLite database.
+#
+# Usage:
+#   uis undeploy semaphore                 keep the data
+#   uis undeploy semaphore --purge         delete it too
+#
+#   ansible-playbook 630-remove-semaphore.yml
+#   ansible-playbook 630-remove-semaphore.yml -e remove_pvc=true
+#
+# `uis undeploy --purge` passes `_purge=true`, which is the CLI-wide convention
+# for "remove persistent state". Both spellings are honoured: _purge so the
+# standard CLI flag works, remove_pvc so direct playbook runs keep working.
+#
+# Leaving the PVC behind means the SURVIVING ADMIN ACCOUNT carries whatever
+# password urbalurba-secrets held when it was first seeded. If the secret has
+# moved on, the account and the secret disagree. 630-setup-semaphore.yml task
+# 9.1 reconciles that on redeploy via `semaphore users change-by-login` - if
+# you change the reconcile there, re-read this note.
+
+- name: Remove SemaphoreUI
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    # Either spelling: _purge from `uis undeploy --purge`, remove_pvc from a
+    # direct playbook run.
+    _remove_pvc: "{{ (remove_pvc | default(false) | bool) or (_purge | default(false) | bool) }}"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    namespace: "semaphore"
+    component_name: "semaphore"
+
+  tasks:
+    - name: "1. Remove IngressRoute"
+      kubernetes.core.k8s:
+        state: absent
+        kind: IngressRoute
+        api_version: traefik.io/v1alpha1
+        name: "{{ component_name }}"
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: "2. Remove StatefulSet"
+      kubernetes.core.k8s:
+        state: absent
+        kind: StatefulSet
+        api_version: apps/v1
+        name: "{{ component_name }}"
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: "3. Remove Service"
+      kubernetes.core.k8s:
+        state: absent
+        kind: Service
+        api_version: v1
+        name: "{{ component_name }}"
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: "4. Remove ConfigMap"
+      kubernetes.core.k8s:
+        state: absent
+        kind: ConfigMap
+        api_version: v1
+        name: "{{ component_name }}-config"
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: "5. Remove PVC (only with --purge / remove_pvc=true)"
+      kubernetes.core.k8s:
+        state: absent
+        kind: PersistentVolumeClaim
+        api_version: v1
+        name: "{{ component_name }}-data"
+        namespace: "{{ namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      when: _remove_pvc
+      failed_when: false
+
+    - name: "6. Removal complete"
+      ansible.builtin.debug:
+        msg:
+          - "{{ component_name }} removed from {{ namespace }}"
+          - "{{ 'PVC deleted - every project, repository, template, access key and task history is gone' if _remove_pvc else 'PVC kept - projects, repositories and history survive a redeploy' }}"
+          - "{{ '' if _remove_pvc else 'To remove the data too: uis undeploy semaphore --purge' }}"

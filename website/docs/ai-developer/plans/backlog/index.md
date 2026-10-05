@@ -16,7 +16,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | Document | Goal | Updated |
 |----------|------|---------|
 | [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-10-05 |
-| [Plan: Deploy SemaphoreUI as a standard UIS service](PLAN-service-semaphore-001-deploy.md) | `uis deploy semaphore` on a clean installation produces a reachable | 2026-10-05 |
 | [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-10-05 |
 | [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-10-05 |
 | [Investigate: should a service bring its own availability probe, and can Uptime Kuma accept one?](INVESTIGATE-system-monitor-definitions-with-services.md) | Decide how the external watchdog's monitors get created and stay in | 2026-10-05 |
