@@ -17,6 +17,10 @@
 # README.md's "Before you start" for the exact manual commands. This script's
 # job is to fail loudly and early if that part wasn't done, not to attempt it.
 #
+# ⚠️ Step 2 (the SSH key) is now defensive, not authoritative — 00-storage-ensure.sh
+# creates and installs it on all 3 hosts earlier in the sequence. This still
+# generates one if somehow missing, so the script stays runnable standalone.
+#
 # Usage:
 #   ./scripts/02-k3s-preflight.sh
 

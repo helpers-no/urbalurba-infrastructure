@@ -22,8 +22,9 @@ PROXMOX_HOST3_NAME="host3"
 PROXMOX_HOST3_ADDR="192.168.1.12"
 
 # The SSH key ansible uses to reach every Proxmox host AND every k3s VM this
-# creates. scripts/02-k3s-preflight.sh generates one if this path doesn't exist.
-PROXMOX_SSH_KEY="${HOME}/.ssh/id_ed25519_proxmox_k3s"
+# creates. scripts/00-storage-ensure.sh generates it on first run and installs
+# it on all 3 hosts; every later script just assumes it already works.
+PROXMOX_SSH_KEY="${HOME}/.ssh/id_ed25519_proxmox"
 
 # Proxmox cluster name (what `pvecm create <name>` was run with) and the ZFS
 # storage name every host registered (see README) — must be identical on all

@@ -12,10 +12,12 @@
 # other builds); a surprise wizard here would be a bigger surprise than
 # refusing.
 #
-# ⚠️ Numbering starts at 02 deliberately — 00-storage-ensure.sh and
-# 01-cluster-join.sh (the storage + Proxmox-cluster-formation phases this
-# platform will also own) aren't written yet. See STRUCTURE.md. This chain
-# will grow to 5 steps; it's 3 today.
+# ⚠️ 01-cluster-join.sh and 05-core-services-apply.sh aren't written yet —
+# see STRUCTURE.md. This chain runs storage-ensure (safe mode — no disk is
+# touched without --create-pool, run that yourself once per fresh lab) then
+# stops at a manual reminder for cluster join, same gap README.md's "Before
+# you start" already documents. Will grow to a single unbroken chain once
+# 01 and 05 exist.
 
 set -euo pipefail
 
@@ -42,15 +44,24 @@ echo "clusters. No cloud cost — it's your own hardware — but it does use"
 echo "real disk/RAM/CPU on each host (see README.md's \"Sizing\")."
 echo
 
-echo "▶ 1/3 Preflight (verify the 3 Proxmox hosts are ready)..."
+echo "▶ 1/4 Storage (bootstrap the control key, verify all 3 hosts — safe, no disk touched)..."
+"$SCRIPT_DIR/00-storage-ensure.sh"
+echo
+echo "  ⚠️ If this is a fresh lab, run './scripts/00-storage-ensure.sh --create-pool' yourself"
+echo "  once (destructive, asks for a typed YES per host) before continuing — not auto-run here."
+echo "  ⚠️ Then join the 3 hosts into one Proxmox cluster by hand — see README.md's"
+echo "  \"Before you start\" (01-cluster-join.sh doesn't exist yet, see STRUCTURE.md)."
+echo
+
+echo "▶ 2/4 Preflight (verify the 3 Proxmox hosts are ready)..."
 "$SCRIPT_DIR/02-k3s-preflight.sh"
 echo
 
-echo "▶ 2/3 Apply (create 6 VMs, form both k3s clusters)..."
+echo "▶ 3/4 Apply (create 6 VMs, form both k3s clusters)..."
 "$SCRIPT_DIR/03-k3s-apply.sh"
 echo
 
-echo "▶ 3/3 Post-apply (kubeconfig + Traefik + switch UIS target)..."
+echo "▶ 4/4 Post-apply (kubeconfig + Traefik + switch UIS target)..."
 "$SCRIPT_DIR/04-k3s-post-apply.sh"
 
 echo

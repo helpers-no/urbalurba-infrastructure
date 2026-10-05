@@ -17,7 +17,7 @@ platforms/proxmox/
 ├── .gitignore                   ✅  config.sh, ansible/generated/
 │
 ├── scripts/
-│   ├── 00-storage-ensure.sh     🔲  Phase 2: per-host SSH key install (one password, once) +
+│   ├── 00-storage-ensure.sh     ✅  Phase 2: per-host SSH key install (one password, once) +
 │   │                                 ZFS pool creation (typed "YES" to confirm the disk)
 │   ├── 01-cluster-join.sh       🔲  Phase 3: preflight checks → interactive `pvecm add` (still
 │   │                                 genuinely manual — root-password auth, no wrapper removes
@@ -40,7 +40,7 @@ platforms/proxmox/
     ├── ansible.cfg               ✅  (`roles_path = roles` — needed because roles/ sits beside
     │                                  playbooks/, not nested under it)
     ├── playbooks/
-    │   ├── storage-ensure.yml   🔲  heavy lifting for 00 — the actual zpool/zfs/pvesm commands
+    │   ├── storage-ensure.yml   ✅  heavy lifting for 00 — the actual zpool/zfs/pvesm commands
     │   ├── cluster-join.yml     🔲  heavy lifting for 01 — ported + generalized from the
     │   │                            maintainer's private-lab original (preflight/pause/verify
     │   │                            split, the two real `pvecm add` gotchas documented in-line)
@@ -78,14 +78,17 @@ platforms/proxmox/
                                         from config.sh on every run
 ```
 
-## Why numbering starts at 00 but today's working scripts start at 02
+## Why numbering starts at 00 but today's chain still breaks after 00
 
-`00-storage-ensure.sh` and `01-cluster-join.sh` don't exist yet — this platform originally shipped
-(`#532`/`#533`) with only the k3s phase (then `02`/`03`/`04` in this numbering), on the
-understanding that storage setup and cluster formation were manual prerequisites documented in
-prose in README.md's "Before you start." This structure reserves their place in the sequence now,
-rather than leaving a permanent documentation-only gap — `up.sh` will grow from 3 chained steps to
-5 once they're written.
+`01-cluster-join.sh` doesn't exist yet — this platform originally shipped (`#532`/`#533`) with only
+the k3s phase (then `02`/`03`/`04` in this numbering), on the understanding that storage setup and
+cluster formation were manual prerequisites documented in prose in README.md's "Before you start."
+`00-storage-ensure.sh` (+ `storage-ensure.yml`) is now written and verified against a real 3-node
+lab — idempotent, confirmed `changed=0` on a clean re-run. `01-cluster-join.sh` still doesn't exist;
+`up.sh` chains storage-ensure automatically, then prints a manual reminder for cluster join (same
+gap README.md already documents) before continuing to the k3s phase. This structure reserves
+cluster-join's place in the sequence rather than leaving a permanent documentation-only gap —
+`up.sh` will become one unbroken chain once it's written.
 
 ## Why one platform, not three
 

@@ -1,0 +1,188 @@
+---
+# storage-ensure — take a freshly installed Proxmox node to "has a working ZFS pool registered
+# as Proxmox storage", from nothing but root SSH access (possibly not even that yet).
+#
+#   ansible-playbook -i <host>, playbooks/storage-ensure.yml --limit <host> -e @vars.yml
+#   ansible-playbook ... --limit <host> -k                      # first run, no key trusted yet
+#   ansible-playbook ... --limit <host> -e create_pool=true -e pool_disk_id=nvme-WDS...
+#   ansible-playbook ... --limit <host> --check                 # see what it would change
+#
+# 🔵 GENERALIZED FROM a private-lab original (proxmox-node-bootstrap.yml) that also handled
+# network-prefix discovery and full SMART baselines — this platform's own 02-k3s-preflight.sh
+# already covers host-health checking once the cluster exists, so this plays a narrower, earlier
+# role: get storage ready on a node that may not even trust us yet. Not a general "set up a
+# fresh node" playbook.
+#
+# 🔴 WHAT THIS DOES NOT DO: pick which disk to use for you. `pool_disk_id` must be an explicit
+# `/dev/disk/by-id/` name — the wrapper script (00-storage-ensure.sh) does the auto-detect +
+# human-confirmation step and passes the result in here. A playbook silently picking a disk is
+# the one thing worth never doing twice.
+- name: Ensure Proxmox storage exists on a node
+  hosts: all
+  gather_facts: true
+  become: false          # root already, on a Proxmox node
+
+  vars:
+    # The pubkey this platform's own scripts use to reach every Proxmox host — see
+    # config.sh's PROXMOX_SSH_KEY. No sane default: a reusable playbook must not assume whose
+    # key this is.
+    control_pubkey_file: ""
+    # Destructive step, off by default.
+    create_pool: false
+    pool_disk_id: ""
+    # The Proxmox storage ID this pool gets registered under (config.sh's PROXMOX_STORAGE,
+    # e.g. "tank-vm"). The physical zpool name is derived by stripping a conventional "-vm"
+    # suffix — "tank-vm" -> pool "tank" -> dataset "tank/vm". If your PROXMOX_STORAGE doesn't
+    # end in "-vm", override pool_name explicitly instead of relying on the derivation.
+    storage_id: ""
+    pool_name: "{{ storage_id | regex_replace('-vm$', '') }}"
+
+  tasks:
+    # ── 1. refuse to run against the wrong kind of host ──────────────────────────────────────
+    - name: This must be a Proxmox node
+      ansible.builtin.command: pveversion
+      register: pvever
+      changed_when: false
+      failed_when: pvever.rc != 0
+
+    - name: Say what we found
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} — {{ pvever.stdout_lines[0] }}"
+
+    # ── 2. this platform's own key, so every later script can reach this host unattended ──────
+    - name: Refuse to run without an explicit control_pubkey_file
+      ansible.builtin.assert:
+        that:
+          - control_pubkey_file | length > 0
+        fail_msg: >-
+          No control_pubkey_file given. This playbook will not guess whose key to trust —
+          pass -e control_pubkey_file=<path to your PROXMOX_SSH_KEY>.pub.
+        quiet: true
+
+    # 🔵 /root/.ssh/authorized_keys on Proxmox is a SYMLINK into /etc/pve/priv/ (the cluster
+    # filesystem, shared across every node once clustered). The authorized_key module follows
+    # it correctly; the 777 shown on the symlink itself is a symlink's permanent mode, not a
+    # permissions fault.
+    - name: This platform's key can reach this host, unattended, from now on
+      ansible.posix.authorized_key:
+        user: root
+        key: "{{ lookup('file', control_pubkey_file) }}"
+        state: present
+
+    # ── 3. a fresh install's apt is broken until this runs ─────────────────────────────────────
+    # A fresh Proxmox install points at the ENTERPRISE repos, which 401 without a paid
+    # subscription and make `apt update` fail outright — blocking the smartmontools/zfsutils
+    # installs below before they even start. Every fresh node hits this; fix it unconditionally.
+    - name: Disable the enterprise repositories
+      ansible.builtin.lineinfile:
+        path: "/etc/apt/sources.list.d/{{ item }}"
+        regexp: '^Enabled:'
+        line: 'Enabled: false'
+        create: false
+      loop:
+        - pve-enterprise.sources
+        - ceph.sources
+      failed_when: false
+
+    - name: ... and add the line if the file had none
+      ansible.builtin.lineinfile:
+        path: "/etc/apt/sources.list.d/{{ item }}"
+        line: 'Enabled: false'
+        insertafter: EOF
+      loop:
+        - pve-enterprise.sources
+        - ceph.sources
+      failed_when: false
+
+    - name: The no-subscription repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/pve-no-subscription.sources
+        mode: "0644"
+        content: |
+          Types: deb
+          URIs: http://download.proxmox.com/debian/pve
+          Suites: {{ ansible_distribution_release }}
+          Components: pve-no-subscription
+          Signed-By: /usr/share/keyrings/proxmox-release-{{ ansible_distribution_release }}.gpg
+
+    - name: Refresh the package index
+      ansible.builtin.apt:
+        update_cache: true
+      changed_when: false
+
+    - name: Tools this playbook needs on the node
+      ansible.builtin.apt:
+        name: [smartmontools]
+        state: present
+
+    # ── 4. candidate disks — informational, the wrapper decides, this just surfaces options ────
+    - name: Disks on this node, for the wrapper's auto-detect to choose from
+      ansible.builtin.shell:
+        cmd: "ls -1 /dev/disk/by-id/ | grep -v -- -part"
+        executable: /bin/bash
+      register: disk_candidates
+      changed_when: false
+
+    # ── 5. the pool — guarded, because it is the one destructive step ─────────────────────────
+    - name: Does the pool already exist
+      ansible.builtin.command: "zpool list -H -o name {{ pool_name }}"
+      register: haspool
+      changed_when: false
+      failed_when: false
+
+    - name: Refuse to create a pool without an explicit by-id disk
+      ansible.builtin.assert:
+        that:
+          - pool_disk_id | length > 0
+        fail_msg: >-
+          create_pool=true needs -e pool_disk_id=<name under /dev/disk/by-id/>, never a kernel
+          name like /dev/sdb — those move between boots and a pool built on one can fail to
+          import after a reboot. Candidates on this host: {{ disk_candidates.stdout_lines }}
+        quiet: true
+      when: create_pool | bool and haspool.rc != 0
+
+    - name: Create the pool
+      ansible.builtin.command: >-
+        zpool create -o ashift=12 {{ pool_name }} /dev/disk/by-id/{{ pool_disk_id }}
+      when: create_pool | bool and haspool.rc != 0
+
+    - name: Compression on the pool
+      ansible.builtin.command: "zfs set compression=lz4 {{ pool_name }}"
+      changed_when: false
+      when: create_pool | bool
+
+    # 🔴 A POOL IS NOT STORAGE. `zpool create` makes a pool the kernel knows about; Proxmox will
+    # not offer it to a guest until it is registered in storage.cfg.
+    # 🔵 The guest dataset is a CHILD of the pool (storage `{{ pool_name }}-vm` -> dataset
+    # `{{ pool_name }}/vm`), keeping the pool root free for anything else (backups, user data)
+    # that must NOT inherit Proxmox's storage settings.
+    - name: The dataset Proxmox will put guests on
+      ansible.builtin.command: "zfs create -p {{ pool_name }}/vm"
+      args:
+        creates: "/{{ pool_name }}/vm"
+      when: create_pool | bool
+
+    - name: Is the storage already registered
+      ansible.builtin.command: "pvesm status --storage {{ storage_id }}"
+      register: hasstore
+      changed_when: false
+      failed_when: false
+
+    - name: Register the pool as Proxmox storage
+      ansible.builtin.command: >-
+        pvesm add zfspool {{ storage_id }}
+        --pool {{ pool_name }}/vm
+        --content rootdir,images
+        --sparse 1
+      when:
+        - create_pool | bool
+        - hasstore.rc != 0
+
+    # ── 6. the report ──────────────────────────────────────────────────────────────────────────
+    - name: What this node is now
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }} — {{ pvever.stdout_lines[0] }}
+          control key: installed and confirmed reachable
+          pool "{{ pool_name }}": {{ 'present' if haspool.rc == 0 else ('created' if create_pool | bool else 'NOT created — re-run with --create-pool') }}
+          storage "{{ storage_id }}": {{ 'registered' if (hasstore is defined and hasstore.rc == 0) or (create_pool | bool) else 'NOT registered yet' }}
