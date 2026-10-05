@@ -138,9 +138,9 @@
 
 # ── 🔴 THE ESCALATION FIX ───────────────────────────────────────────────────────────────────
 # `--single-node --default-bucket` leaves the bootstrap key with account-level
-# can_create_buckets=true. UIS shipped that as "scoped to one bucket"; imac disproved it with one
+# can_create_buckets=true. UIS shipped that as "scoped to one bucket"; testing disproved it with one
 # `aws s3api create-bucket` call that SUCCEEDED (urb-agents#1802). It is Garage's own behaviour,
-# so this role carries the same fix or it ships the same hole (tor-agent, #1804).
+# so this role carries the same fix or it ships the same hole (urb-agents#1804).
 - name: Let the node settle before administering it
   ansible.builtin.command:
     cmd: "docker exec garage /garage -c /etc/garage.toml status"
@@ -159,9 +159,9 @@
   failed_when: garage_deny.rc != 0
   when: garage_deny_create_bucket | bool
 
-# 🔴 READ THE PERMISSION BACK rather than trust the exit code. imac's second check is what caught
+# 🔴 READ THE PERMISSION BACK rather than trust the exit code. A second check is what caught
 # that the first command alone was not enough — and `key info --show-secret=false` does NOT
-# actually suppress the secret (a Garage CLI bug tor-agent confirmed), so the output is treated as
+# actually suppress the secret (a confirmed Garage CLI bug), so the output is treated as
 # sensitive and only the one flag is extracted inside the container.
 - name: Confirm the denial actually took
   ansible.builtin.shell:

@@ -8,7 +8,7 @@
 
 **Goal**: Provision a single zot instance as UIS's pull-through registry cache — the
 host/platform-layer component [INVESTIGATE-system-registry-cache.md](./INVESTIGATE-system-registry-cache.md)
-(F1) and [production/registry-cache.md](../../production/registry-cache.md) both call for but UIS has
+(F1) and [production/registry-cache.md](../../../production/registry-cache.md) both call for but UIS has
 never actually built.
 
 **Investigation**: [INVESTIGATE-system-registry-cache.md](./INVESTIGATE-system-registry-cache.md)

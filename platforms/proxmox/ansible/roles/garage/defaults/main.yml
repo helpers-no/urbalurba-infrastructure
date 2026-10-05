@@ -48,9 +48,9 @@ garage_default_bucket: default-bucket
 
 # 🔴 THE STEP THAT MUST NOT BE SKIPPED. `--single-node --default-bucket` sets the bootstrap key's
 # ACCOUNT-LEVEL `can_create_buckets=true`, and nothing narrows it back down. UIS shipped that as
-# "a key scoped to one bucket"; imac disproved it with a single `aws s3api create-bucket` call
+# "a key scoped to one bucket"; testing disproved it with a single `aws s3api create-bucket` call
 # that succeeded, leaving three buckets owned by one credential (`urb-agents#1802`).
-# ⚠️ This is Garage's own behaviour, not a Kubernetes gap — tor-agent's words on #1804:
+# ⚠️ This is Garage's own behaviour, not a Kubernetes gap — confirmed in `urb-agents#1804`:
 # *"your role needs the same fix step, or it ships the same hole."*
 garage_deny_create_bucket: true
 

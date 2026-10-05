@@ -111,7 +111,7 @@
 
     # ── bao's half of BAO-F3's bidirectional auth: a reviewer ServiceAccount bao can present ───
     # when it calls the cluster's TokenReview API. Same shape as UIS's own hand-built
-    # hosts/asgard/bao-reviewer.yaml (see the investigation) — now declarative, per cluster.
+    # production reviewer ServiceAccount (see the investigation) — now declarative, per cluster.
     - name: bao-auth-reviewer ServiceAccount, per cluster
       kubernetes.core.k8s:
         state: present
