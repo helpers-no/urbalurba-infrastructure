@@ -36,6 +36,22 @@ POD_CIDRS = ["10.42.0.0/16", "10.244.0.0/16"]
 NOTIFICATION_CRITICAL = "uis-alerts"  # ntfy priority 5 - breaks through evening DND
 NOTIFICATION_INFO = "uis-info"        # ntfy priority 3 - silenced by DND after hours
 
+# Recorded on the uptime-kuma-monitors Secret itself after every successful
+# apply, so the next run (on any machine - this is cluster state, not local
+# state) knows what was last pushed without re-deriving it from Kuma's schema.
+ANNOTATION_COUNT = "urbalurba.io/monitor-count"
+ANNOTATION_HASH = "urbalurba.io/content-hash"
+
+# A generated set smaller than this fraction of the last-applied count is
+# refused rather than applied. AUTOKUMA__ON_DELETE=delete (see
+# manifests/230-uptime-kuma-autokuma.yaml) means every monitor missing from
+# the set gets DELETED - so a flaky `kubectl` or a discovery hiccup that
+# silently truncates the set would wipe Uptime Kuma, not just fail to add to
+# it. Verified: this is not hypothetical - a hand-run equivalent of this apply
+# did exactly that against a real instance. Relative, not absolute, because a
+# laptop install may legitimately have three monitors total.
+SHRINK_REFUSE_BELOW = 0.5
+
 
 # Two clusters, deliberately separate.
 #   FROM - where the services are.       Read-only. Discovery.
@@ -482,6 +498,63 @@ def kuma_sql(namespace, query):
     return [l.split("\x1f") for l in r.stdout.strip().splitlines() if l.strip()]
 
 
+def _content_hash(clean_monitors):
+    """A hash over what would be WRITTEN, not just which names exist.
+
+    Two monitors named the same but pointing at a different host:port or URL
+    hash differently - which is what makes this usable as a drift signal
+    `check` can compare against, not just a change marker for `apply`.
+    """
+    import hashlib
+    canon = json.dumps(sorted(clean_monitors, key=lambda m: m["name"]),
+                       sort_keys=True)
+    return hashlib.sha256(canon.encode()).hexdigest()
+
+
+def _shrink_refused(prev_count, new_count, force):
+    """Would applying `new_count` after `prev_count` risk a mass delete?
+
+    Pure and separate from `apply` specifically so it can be tested without a
+    cluster: this is the one decision in this file that MUST be right, since
+    getting it wrong in either direction either wipes a real watchdog or
+    blocks a legitimate removal.
+    """
+    if force or prev_count == 0:
+        return False
+    return new_count < prev_count and new_count < prev_count * SHRINK_REFUSE_BELOW
+
+
+def _apply_is_unchanged(new_hash, prev_hash, live_names, want_names, force):
+    """Would applying right now change anything Kuma actually holds?
+
+    `live_names` is None when Kuma could not be queried - treated as "cannot
+    confirm nothing changed", which must mean apply, not skip.
+    """
+    if force or live_names is None:
+        return False
+    return new_hash == prev_hash and live_names == want_names
+
+
+def _current_secret_annotations(namespace):
+    """What was recorded on the LAST successful apply, read from the cluster.
+
+    Cluster state, not local state, deliberately: apply and check can run
+    from different machines (a laptop today, a Semaphore job tomorrow), and a
+    file on disk would be invisible to whichever one did not write it.
+    Returns {} if the Secret does not exist yet (first-ever apply) or carries
+    no annotations - both are "no baseline", not an error.
+    """
+    r = subprocess.run(
+        ["kubectl"] + _ctx(CTX_TO) + ["get", "secret", "uptime-kuma-monitors",
+         "-n", namespace, "-o", "json"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return {}
+    try:
+        return json.loads(r.stdout).get("metadata", {}).get("annotations") or {}
+    except (json.JSONDecodeError, AttributeError):
+        return {}
+
+
 def attach_alerts(namespace, monitors, wait=180):
     """Attach the alert channel to every monitor that should page.
 
@@ -612,6 +685,12 @@ def main():
                     help="where Uptime Kuma runs. auto detects it by looking for "
                          "the service in the target cluster; override when "
                          "rendering for a watchdog that is not up yet")
+    ap.add_argument("--force", action="store_true",
+                    help="apply: skip the unchanged-since-last-apply short "
+                         "circuit AND the shrink guard. Use after a deliberate "
+                         "removal of several services at once - that is the "
+                         "one case a real drop and a bad discovery run look "
+                         "the same from here.")
     args = ap.parse_args()
 
     global CTX_FROM, CTX_TO
@@ -657,11 +736,57 @@ def main():
         # _notify is UIS bookkeeping; AutoKuma must not see it.
         clean = [{k: v for k, v in m.items()
                    if not k.startswith("_")} for m in monitors]
+        new_hash = _content_hash(clean)
+        new_count = len(clean)
+        prev = _current_secret_annotations(args.namespace)
+        prev_hash = prev.get(ANNOTATION_HASH)
+        prev_count = int(prev.get(ANNOTATION_COUNT, 0) or 0)
+
+        # 🔴 THE GUARD THIS SUBSYSTEM WAS MISSING, AND IT IS NOT HYPOTHETICAL.
+        # AUTOKUMA__ON_DELETE=delete (manifests/230-uptime-kuma-autokuma.yaml)
+        # means every name missing from this Secret gets DELETED from Kuma -
+        # not skipped, deleted. A flaky `kubectl`, a context mix-up, or a
+        # discovery hiccup that silently truncates `monitors` would apply a
+        # small set and wipe the rest. Measured against a real instance: this
+        # is exactly how a full watchdog went to zero monitors in one run.
+        # Relative to the LAST APPLY, not to history in general - a
+        # deliberate removal of several services at once looks identical to
+        # this from here, which is what --force is for.
+        if _shrink_refused(prev_count, new_count, args.force):
+            sys.exit(
+                f"ERROR: refusing to apply - monitor count dropped from "
+                f"{prev_count} to {new_count} (more than "
+                f"{int((1 - SHRINK_REFUSE_BELOW) * 100)}% gone).\n"
+                f"AutoKuma's ON_DELETE=delete reads every name missing from "
+                f"this set as 'delete it', so a bad discovery run would wipe "
+                f"Uptime Kuma rather than just fail to add to it.\n"
+                f"If this drop is real - several services genuinely "
+                f"removed - re-run with --force.")
+
+        # 🔵 SKIP ONLY WHEN NOTHING WOULD CHANGE, AND VERIFY THAT AGAINST
+        # KUMA ITSELF, NOT JUST THE HASH. AutoKuma self-heals drift
+        # continuously, so "the hash matches last time" does not mean Kuma
+        # still holds everything - something could have deleted a monitor by
+        # hand since. Restarting AutoKuma on an unchanged set is not free
+        # (it is the same restart that, on an empty set, deletes everything),
+        # so this only restarts when there is a real reason to.
+        live = kuma_sql(args.namespace, "select name from monitor;")
+        live_names = {r[0] for r in live} if live is not None else None
+        want_names = {m["name"] for m in clean}
+        if _apply_is_unchanged(new_hash, prev_hash, live_names, want_names,
+                               args.force):
+            print(f"\n  unchanged since the last apply ({new_count} monitors, "
+                  f"content hash matches, Kuma already holds the full set) - "
+                  f"skipping. Use --force to reapply anyway.")
+            return 0
+
         data = {f"{m['name']}.json": base64.b64encode(
             json.dumps(m, indent=2).encode()).decode() for m in clean}
         secret = {"apiVersion": "v1", "kind": "Secret",
                   "metadata": {"name": "uptime-kuma-monitors",
-                               "namespace": args.namespace},
+                               "namespace": args.namespace,
+                               "annotations": {ANNOTATION_COUNT: str(new_count),
+                                               ANNOTATION_HASH: new_hash}},
                   "type": "Opaque", "data": data}
         p = subprocess.run(["kubectl"] + _ctx(CTX_TO) + ["apply", "-f", "-"],
                            input=json.dumps(secret), capture_output=True, text=True)
@@ -729,10 +854,31 @@ def main():
             print(f"\n  in Uptime Kuma but not declared ({len(extra)}):")
             for n in extra:
                 print(f"    - {n}")
-        if not (missing or extra or skipped):
+
+        # 🔴 NAMES MATCHING IS NOT CONTENT MATCHING. A service whose address
+        # changed - a tailnet reassignment, a retargeted host - keeps the
+        # same monitor NAME, so `want == live` above stays true while Kuma
+        # silently probes the wrong place. Verified against a real instance:
+        # a retargeted host's monitor read as "OK" by name-only comparison
+        # while Uptime Kuma kept dialling the address it replaced.
+        #
+        # The fix compares against what was last APPLIED, not against Kuma's
+        # internal schema (AutoKuma's own mapping of a monitor's fields is
+        # not something this file should have to track). If nothing has ever
+        # been applied there is no baseline to drift from, so this is silent
+        # rather than a false alarm on a first run.
+        clean = [{k: v for k, v in m.items()
+                   if not k.startswith("_")} for m in monitors]
+        prev_hash = _current_secret_annotations(args.namespace).get(ANNOTATION_HASH)
+        content_drift = prev_hash is not None and prev_hash != _content_hash(clean)
+        if content_drift:
+            print("\n  DECLARATION CHANGED SINCE THE LAST APPLY - names match, "
+                  "but what they point at may not. Run `uis monitors apply`.")
+
+        if not (missing or extra or skipped or content_drift):
             print("\n  OK - Uptime Kuma matches what UIS deployed")
             return 0
-        return 1 if missing else 0
+        return 1 if (missing or content_drift) else 0
 
 
 if __name__ == "__main__":
