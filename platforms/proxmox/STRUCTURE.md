@@ -20,7 +20,7 @@ platforms/proxmox/
 ├── scripts/
 │   ├── 00-storage-ensure.sh     ✅  Phase 2: per-host SSH key install (one password, once) +
 │   │                                 ZFS pool creation (typed "YES" to confirm the disk)
-│   ├── 01-cluster-join.sh       🔲  Phase 3: preflight checks → interactive `pvecm add` (still
+│   ├── 01-cluster-join.sh       ✅  Phase 3: preflight checks → interactive `pvecm add` (still
 │   │                                 genuinely manual — root-password auth, no wrapper removes
 │   │                                 that) → verify, chained into one script call
 │   ├── 02-k3s-preflight.sh      ✅  Phase 4a: verify hosts reachable/clustered/storage present
@@ -42,7 +42,7 @@ platforms/proxmox/
     │                                  playbooks/, not nested under it)
     ├── playbooks/
     │   ├── storage-ensure.yml   ✅  heavy lifting for 00 — the actual zpool/zfs/pvesm commands
-    │   ├── cluster-join.yml     🔲  heavy lifting for 01 — ported + generalized from the
+    │   ├── cluster-join.yml     ✅  heavy lifting for 01 — ported + generalized from the
     │   │                            maintainer's private-lab original (preflight/pause/verify
     │   │                            split, the two real `pvecm add` gotchas documented in-line)
     │   ├── vm-ensure.yml         ✅  existing — creates a Proxmox guest from a declaration
@@ -79,17 +79,19 @@ platforms/proxmox/
                                         from config.sh on every run
 ```
 
-## Why numbering starts at 00 but today's chain still breaks after 00
+## Why numbering starts at 00
 
-`01-cluster-join.sh` doesn't exist yet — this platform originally shipped (`#532`/`#533`) with only
-the k3s phase (then `02`/`03`/`04` in this numbering), on the understanding that storage setup and
-cluster formation were manual prerequisites documented in prose in README.md's "Before you start."
-`00-storage-ensure.sh` (+ `storage-ensure.yml`) is now written and verified against a real 3-node
-lab — idempotent, confirmed `changed=0` on a clean re-run. `01-cluster-join.sh` still doesn't exist;
-`up.sh` chains storage-ensure automatically, then prints a manual reminder for cluster join (same
-gap README.md already documents) before continuing to the k3s phase. This structure reserves
-cluster-join's place in the sequence rather than leaving a permanent documentation-only gap —
-`up.sh` will become one unbroken chain once it's written.
+This platform originally shipped (`#532`/`#533`) with only the k3s phase (then `02`/`03`/`04` in
+this numbering), on the understanding that storage setup and cluster formation were manual
+prerequisites documented in prose in README.md's "Before you start." Both are now written and
+verified against a real 3-node lab: `00-storage-ensure.sh` (idempotent, `changed=0` on a clean
+re-run) and `01-cluster-join.sh` (the already-clustered guard and the verify path both confirmed
+for real; the actual live `pvecm add` join itself wasn't re-tested — doing so would mean
+un-joining our own production cluster first, too disruptive just to prove it, and the underlying
+mechanism already has a real track record: `PLAN-storage-cluster-001-formation.md` used an earlier
+version of this exact playbook to join `odin` for real). `up.sh` chains both automatically now
+(storage-ensure fully safe by default, cluster-join idempotent — skips cleanly if already
+clustered), and continues to the k3s phase in one unbroken run when there's nothing left to do.
 
 ## Why one platform, not three
 

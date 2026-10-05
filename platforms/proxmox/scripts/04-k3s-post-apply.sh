@@ -58,6 +58,12 @@ print_section "PROXMOX-K3S — POST-APPLY SETUP"
 write_kubeconf() {
     local cluster_name="$1" init_ip="$2" dest="$3"
     local raw
+    # 🔴 Same address, new host key, every rebuild — this platform's whole design is destroy +
+    # recreate VMs at fixed IPs, so a known_hosts entry from the PREVIOUS incarnation at this
+    # address is the routine case, not an anomaly. StrictHostKeyChecking=accept-new only accepts
+    # addresses never seen before; it correctly still refuses a CHANGED key for one it has. Scrub
+    # first — same precaution vm-ensure.yml already takes for the same reason.
+    ssh-keygen -f ~/.ssh/known_hosts -R "${init_ip}" >/dev/null 2>&1 || true
     raw="$(ssh -i "$PROXMOX_SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
         "${VM_CIUSER}@${init_ip}" sudo cat /etc/rancher/k3s/k3s.yaml)"
     echo "$raw" \

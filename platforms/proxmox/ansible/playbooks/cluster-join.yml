@@ -1,0 +1,183 @@
+---
+# cluster-join — join an EMPTY Proxmox node to an existing cluster, and leave it verified.
+#
+#   ansible-playbook -i <addr>, playbooks/cluster-join.yml -e join_via=<existing-member-addr>
+#   ansible-playbook ... --tags preflight    # checks + prints the exact manual command
+#   # — a human runs `pvecm add <join_via>` by hand, or 01-cluster-join.sh does it via ssh -t —
+#   ansible-playbook ... --tags verify       # quorum check + re-apply the control key
+#
+# 🔵 GENERALIZED FROM a private-lab original (proxmox-cluster-join.yml) written after a real
+# join cost a stalled session and a re-run chasing three gotchas as if they were new. They are
+# tasks here, not just text, so the next join hits them as a clear instruction, not a surprise.
+#
+# 🔴 WHAT THIS DOES NOT DO, and must not pretend to. `pvecm add` authenticates over the Proxmox
+# API/HTTPS with the TARGET cluster member's root PASSWORD, typed interactively — see GOTCHA 1
+# below. No ssh key, and no amount of ansible `become`, gets around that. This playbook verifies
+# the node is ready to join, tells you the exact command, waits for a human to run it and type
+# the password, then verifies and repairs what the join leaves behind. It does not, and should
+# not, ever hold that password.
+#
+# 🔴 ALSO NOT DONE HERE: stopping, backing up, and destroying guests that must be off this node
+# before it can join (`man pvecm`: "a joining node cannot hold any guests"). On a fresh lab this
+# never applies — a freshly-installed node has no guests — but the check still refuses loudly if
+# it ever does, rather than letting `pvecm add` fail confusingly mid-join.
+- name: Join an empty Proxmox node to an existing cluster
+  hosts: all
+  gather_facts: false
+  become: false          # already root on a Proxmox node
+
+  vars:
+    # The existing cluster member to join through. Required — there is no sane default.
+    join_via: ""
+    # This platform's own control key, re-applied after the join — see GOTCHA 3 below.
+    control_pubkey_file: ""
+
+  tasks:
+    # ── 0. refuse without a target to join through ───────────────────────────────────────────
+    - name: Refuse to run without -e join_via=<existing cluster member>
+      tags: [preflight]
+      ansible.builtin.assert:
+        that:
+          - join_via | length > 0
+        fail_msg: >-
+          No join_via given. This playbook joins {{ inventory_hostname }} to the cluster through
+          an EXISTING member — e.g. -e join_via=192.168.1.10. It will not guess one.
+        quiet: true
+
+    - name: Refuse without an explicit control_pubkey_file
+      tags: [preflight]
+      ansible.builtin.assert:
+        that:
+          - control_pubkey_file | length > 0
+        fail_msg: >-
+          No control_pubkey_file given — pass -e control_pubkey_file=<path to your
+          PROXMOX_SSH_KEY>.pub.
+        quiet: true
+
+    # ── 1. this must be a Proxmox node, and not already clustered ────────────────────────────
+    - name: This must be a Proxmox node
+      tags: [preflight]
+      ansible.builtin.command: pveversion
+      register: pvever
+      changed_when: false
+      failed_when: pvever.rc != 0
+
+    - name: Is this node already in a cluster
+      tags: [preflight]
+      ansible.builtin.stat:
+        path: /etc/pve/corosync.conf
+      register: corosync_conf
+
+    - name: Already clustered — report and stop here, not an error
+      tags: [preflight]
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} already has /etc/pve/corosync.conf — already in a cluster.
+          Nothing to do. `pvecm status` to see which one.
+      when: corosync_conf.stat.exists
+
+    # ── 2. the precondition `man pvecm` states and nothing enforces automatically ─────────────
+    - name: Any containers still on this node
+      tags: [preflight]
+      ansible.builtin.command: pct list
+      register: pct_list
+      changed_when: false
+      when: not corosync_conf.stat.exists
+
+    - name: Any VMs still on this node
+      tags: [preflight]
+      ansible.builtin.command: qm list
+      register: qm_list
+      changed_when: false
+      when: not corosync_conf.stat.exists
+
+    - name: Refuse to join while guests remain
+      tags: [preflight]
+      ansible.builtin.assert:
+        that:
+          - pct_list.stdout_lines | length <= 1
+          - qm_list.stdout_lines | length <= 1
+        fail_msg: >-
+          {{ inventory_hostname }} still holds guests — `man pvecm`: "a joining node cannot hold
+          any guests". Stop, back up, and destroy each one first; this never applies on a fresh
+          lab, only a node being re-added after already running something.
+        quiet: true
+      when: not corosync_conf.stat.exists
+
+    # ── 3. trust the join target's host key up front ─────────────────────────────────────────
+    - name: Trust the join target's host key before attempting the join
+      tags: [preflight]
+      ansible.builtin.shell:
+        cmd: "ssh-keyscan -H {{ join_via }} >> /root/.ssh/known_hosts"
+        executable: /bin/bash
+      changed_when: true
+      when: not corosync_conf.stat.exists
+
+    # ── 4. the half that genuinely cannot be automated ────────────────────────────────────────
+    - name: What to run by hand, and why this playbook cannot run it for you
+      tags: [preflight]
+      ansible.builtin.debug:
+        msg: |
+          Run this on {{ inventory_hostname }}, at its console or an interactive ssh session:
+
+              pvecm add {{ join_via }}
+
+          🔴 GOTCHA 1 — this is NOT ssh-key auth. `pvecm add` goes over the Proxmox API/HTTPS and
+          wants {{ join_via }}'s root PASSWORD, typed interactively. No ssh key on either side
+          changes that — a human has to be at the prompt.
+
+          🔴 GOTCHA 2 — the fingerprint confirmation wants the literal word "yes". A bare "y"
+          fails it ("Fingerprint not verified, abort!") with no retry — a wasted round trip, not
+          partial damage, but worth getting right the first time.
+
+          Once `pvecm add` reports success, run this playbook again with --tags verify.
+      when: not corosync_conf.stat.exists
+
+    # ── 5. verify the join actually happened — never assume ──────────────────────────────────
+    - name: Cluster status after the join
+      tags: [verify]
+      ansible.builtin.command: pvecm status
+      register: pvecm_after
+      changed_when: false
+
+    # 🔴 Extracting "Yes"/"No" into its own set_fact and comparing with `== "Yes"` does NOT work
+    # — Ansible implicitly casts a templated scalar that reads as a YAML boolean into a native
+    # Python bool, so the fact silently becomes `True` and `True == "Yes"` is false. Asserting
+    # directly against the raw text with the `search` test sidesteps the cast entirely.
+    - name: The node must now be quorate
+      tags: [verify]
+      ansible.builtin.assert:
+        that:
+          - pvecm_after.stdout is search('Quorate:\s*Yes')
+        fail_msg: >-
+          {{ inventory_hostname }} does not report Quorate: Yes after the join:
+          {{ pvecm_after.stdout }}
+        quiet: true
+
+    # ── 6. the join can drop a key this same session just added ──────────────────────────────
+    # The join's "merge authorized SSH keys" step can drop a key added moments earlier directly
+    # to the raw file on the joining node — /root/.ssh/authorized_keys on a cluster member is
+    # pmxcfs-managed (/etc/pve/priv/authorized_keys), and whatever synced from the other side's
+    # copy doesn't always carry the new key forward. Re-apply unconditionally rather than assume.
+    - name: Re-apply this platform's key — the join may have dropped it
+      tags: [verify]
+      ansible.posix.authorized_key:
+        user: root
+        key: "{{ lookup('file', control_pubkey_file) }}"
+        state: present
+
+    - name: Confirm the control key can still reach this host
+      tags: [verify]
+      ansible.builtin.command: "echo ok"
+      register: keycheck
+      changed_when: false
+      failed_when: keycheck.rc != 0 or keycheck.stdout != "ok"
+
+    # ── 7. the report ──────────────────────────────────────────────────────────────────────
+    - name: What this node is now
+      tags: [verify]
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }} — joined via {{ join_via }}
+          {{ pvecm_after.stdout }}
+          control key: re-applied and confirmed reachable
