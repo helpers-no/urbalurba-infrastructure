@@ -217,6 +217,6 @@
       Garage {{ garage_version }} · S3 on :{{ garage_s3_port }} · bucket '{{ garage_default_bucket }}' ·
       replication {{ garage_replication_factor }} · unsigned → 403 ·
       bootstrap key can create buckets: {{ garage_cancreate.stdout | default('n/a') | trim }}
-      ⚠️ NOT DONE HERE: MinIO's 84 MB of Loki chunks are not migrated, and Loki still points at
-      MinIO. A second bucket for Tempo needs the operator step — which the deny above is exactly
-      what makes necessary.
+      ⚠️ NOT DONE HERE: no consumer is pointed at this bucket yet (Loki, Tempo, etc.) — whichever
+      service is installed next needs its own bucket/key, created with the same deny-create-bucket
+      step above, not handed this bootstrap key.

@@ -41,7 +41,10 @@ garage_db_engine: sqlite
 garage_access_key: ""
 garage_secret_key: ""
 garage_rpc_secret: ""
-garage_default_bucket: loki       # the only live consumer MinIO ever had
+# 🔵 Matches UIS's own rancher-desktop default (GARAGE_DEFAULT_BUCKET in manifests/047-garage-
+# config.yaml) — not Loki's bucket. Loki isn't installed by this platform yet; when it is, that
+# service's own role/declaration should set its own bucket, not this one.
+garage_default_bucket: default-bucket
 
 # 🔴 THE STEP THAT MUST NOT BE SKIPPED. `--single-node --default-bucket` sets the bootstrap key's
 # ACCOUNT-LEVEL `can_create_buckets=true`, and nothing narrows it back down. UIS shipped that as
