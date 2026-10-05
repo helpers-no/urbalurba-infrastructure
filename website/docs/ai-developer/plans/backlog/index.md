@@ -15,12 +15,15 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-10-05 |
+| [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-10-05 |
+| [Investigate: migrate `hosts-to-be-deleted/*` to `platforms/*` (or formally retire)](INVESTIGATE-system-migrate-hosts-to-platforms.md) | — | 2026-10-05 |
 | [Investigate: Dagster Orchestration Platform for UIS](INVESTIGATE-service-dagster.md) | UIS today has no data-pipeline orchestrator. Applications that need to ingest, transform, and catalogue data have three options — each with drawbacks: | 2026-10-05 |
+| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-05 |
 | [---](PLAN-secrets-ansible-credentials-in-output.md) | — | 2026-10-01 |
 | [---](PLAN-extensions-in-app-databases.md) | — | 2026-10-01 |
 | [---](INVESTIGATE-system-loki-tempo-minio-dependency.md) | — | 2026-10-01 |
 | [---](INVESTIGATE-service-minio-to-garage.md) | — | 2026-10-01 |
-| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-01 |
 | [---](PLAN-undeploy-purge-verb.md) | — | 2026-09-29 |
 | [---](INVESTIGATE-provisioning-declaration.md) | — | 2026-09-29 |
 | [---](INVESTIGATE-merges-that-build-nothing.md) | — | 2026-09-29 |
@@ -39,7 +42,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Plan: the install verifies the IngressRoute was created, not that it routes](PLAN-cli-ingress-verifies-creation-not-routing.md) | an install must not report a working URL for a route that cannot serve | 2026-09-12 |
 | [Plan: `uis dagster run` launches duplicates silently](PLAN-cli-dagster-run-duplicate-guard.md) | launching a job that is already running must be a deliberate act, not | 2026-09-12 |
 | [Plan: what UIS's workflows would need from a self-hosted runner, and why they should not move yet](PLAN-system-ci-self-hosted-runner-readiness.md) | If UIS's CI ever moves to self-hosted runners, the three properties | 2026-09-11 |
-| [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-09-10 |
 | [Plan: pin and verify the binaries the image installs](PLAN-system-pin-provisioned-binaries.md) | — | 2026-09-10 |
 | [Plan: four dependency alerts on the docs site, and why bumping does not clear them](PLAN-docs-website-dependency-alerts.md) | The repository's open dependency alerts are either cleared or | 2026-09-10 |
 | [Plan: an unmarked proxy and no StatefulSet is the one revert that warns nothing](PLAN-cli-unmarked-proxy-silent-overlay.md) | `uis deploy <svc>` cannot roll out an in-cluster workload on top of a | 2026-09-10 |
@@ -89,8 +91,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Investigate: OpenBao — deployable on a laptop, and the same interface in production](INVESTIGATE-service-openbao.md) | — | 2026-08-14 |
 | [Investigate: a secret that works in dev, and what happens to it in production](INVESTIGATE-secrets-dev-to-production.md) | — | 2026-08-14 |
 | [Plan: AKS Manual Setup — variable-by-variable runbook for first-run provisioning](PLAN-platform-aks-001b-manual-setup.md) | Provide a self-contained runbook for the first manual run-through of `platforms/azure-aks/` against an Azure subscription. Explains every config variable (what it is, where to find it, what changes if you change it), every authentication step, and every script in the order it must run. Companion to [PLAN-001-aks-step1-verification.md](../completed/PLAN-001-aks-step1-verification.md) — that plan's Phase 2 lists the eight scripts to run; this plan is the detailed *how* and *why* for someone doing it for the first time. | 2026-08-13 |
-| [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-08-13 |
-| [Investigate: migrate `hosts-to-be-deleted/*` to `platforms/*` (or formally retire)](INVESTIGATE-system-migrate-hosts-to-platforms.md) | — | 2026-08-13 |
 | [Investigate: Metabase Internal BI / Data Exploration for UIS](INVESTIGATE-service-metabase.md) | Deploy Metabase as the internal data-exploration and validation tool for UIS-hosted applications, providing visual SQL exploration, ad-hoc questions, and dashboards for development teams — starting with Atlas, with reusability for future apps. | 2026-08-13 |
 | [Investigate: DCT One-Command ArgoCD Deployment](INVESTIGATE-service-argocd-dct-deploy.md) | Enable a developer to deploy their current project to the UIS Kubernetes cluster from inside the DCT devcontainer with a single command. | 2026-08-13 |
 | [Investigate: `./uis deploy <service>` semantics for services without a playbook](INVESTIGATE-cli-deploy-no-playbook-semantics.md) | Decide what `./uis deploy <service>` should do when the target service has `SCRIPT_PLAYBOOK=""` (and `SCRIPT_MANIFEST=""`) — the "metadata-only" case introduced when [`service-postgrest.sh`](https://github.com/helpers-no/urbalurba-infrastructure/blob/main/provision-host/uis/services/integration/service-postgrest.sh) shipped without a playbook (PLAN-001 documentation gate; PLAN-002 will add the playbook). | 2026-08-13 |
