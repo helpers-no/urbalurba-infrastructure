@@ -19,15 +19,15 @@ reconciles this file against the consumer requirement and lists the six points
 where they diverged. Read the plan first; use this for the reasoning behind the
 options.
 
-Also now in flight: a real deadlock from unbounded schedule overlap
+Also now resolved: a real deadlock from unbounded schedule overlap
 ([urb-agents#1847](https://github.com/terchris/urb-agents/issues/1847)) shipped
 tag-based run concurrency limits (`concurrency.runs.tagConcurrencyLimits`, PR #535), and
-[PLAN-service-dagster-version-upgrade](../active/PLAN-service-dagster-version-upgrade.md)
-moved the pin from `1.13.19` to `1.13.25` to pick up a related connection-leak fix. Platform
-side is done (chart bumped, every version-specific claim in `360-dagster-config.yaml`
-re-verified against real source and the actual published chart image); what's left is a real
-cluster deploy by `imac` to confirm it end-to-end, which is why the plan lives in `active/`
-rather than `completed/`.
+[PLAN-service-dagster-version-upgrade](../completed/PLAN-service-dagster-version-upgrade.md)
+moved the pin from `1.13.19` to `1.13.25` to pick up a related connection-leak fix. Confirmed
+end-to-end on a real cluster by `imac` (`urb-agents#1854`, 2026-10-05) — webserver/daemon
+healthy, atlas's code location `LOADED` at the correct digest, and the actual verification bar
+met by deliberately colliding two marts-touching runs: the first `STARTED`, the second
+correctly `QUEUED` rather than stacking.
 
 **Goal**: Deploy Dagster as the data orchestration platform in UIS, providing scheduling, observability, and lineage for data pipelines across applications — starting with Atlas, with reusability for future apps.
 
