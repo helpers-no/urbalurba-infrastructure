@@ -15,6 +15,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Plan: Registry cache — provision the cache itself (zot, not registry:2)](PLAN-system-registry-cache-001-provision.md) | Provision a single zot instance as UIS's pull-through registry cache — the | 2026-10-05 |
 | [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-10-05 |
 | [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-10-05 |
 | [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-10-05 |
@@ -24,6 +25,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Investigate: Backup and scheduling — UIS deploys stateful services it cannot back up](INVESTIGATE-system-backup-and-scheduling.md) | Give UIS (a) a backup capability for the stateful services it deploys, | 2026-10-05 |
 | [Investigate: an external watchdog — does Uptime Kuma overlap the observability stack?](INVESTIGATE-service-uptime-kuma.md) | Decide whether UIS needs an availability watchdog that runs *outside* | 2026-10-05 |
 | [Investigate: SemaphoreUI as a UIS service](INVESTIGATE-service-semaphore.md) | Make [SemaphoreUI](https://semaphoreui.com) — a web UI and API for running | 2026-10-05 |
+| [Investigate: OpenBao — deployable on a laptop, and the same interface in production](INVESTIGATE-service-openbao.md) | — | 2026-10-05 |
 | [Investigate: Dagster Orchestration Platform for UIS](INVESTIGATE-service-dagster.md) | UIS today has no data-pipeline orchestrator. Applications that need to ingest, transform, and catalogue data have three options — each with drawbacks: | 2026-10-05 |
 | [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-05 |
 | [---](PLAN-secrets-ansible-credentials-in-output.md) | — | 2026-10-01 |
@@ -93,7 +95,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [INVESTIGATE: Verification Playbooks Usage and Coverage](INVESTIGATE-system-verification-playbooks-usage.md) | The `ansible/playbooks/utility/` folder contains a mix of verification playbooks, task includes, setup helpers, and one-off utilities. Several of these files appear to have no active caller in the current repo. | 2026-08-21 |
 | [Analysis: NAIS and UIS — what transfers, what doesn't, and what UIS already does better](ANALYSIS-nais-uis.md) | — | 2026-08-21 |
 | [Investigate: services that run outside the cluster in production, and inside it on a laptop](INVESTIGATE-system-external-or-in-cluster-services.md) | Make every UIS service deployable on a developer's laptop, including the | 2026-08-14 |
-| [Investigate: OpenBao — deployable on a laptop, and the same interface in production](INVESTIGATE-service-openbao.md) | — | 2026-08-14 |
 | [Investigate: a secret that works in dev, and what happens to it in production](INVESTIGATE-secrets-dev-to-production.md) | — | 2026-08-14 |
 | [Plan: AKS Manual Setup — variable-by-variable runbook for first-run provisioning](PLAN-platform-aks-001b-manual-setup.md) | Provide a self-contained runbook for the first manual run-through of `platforms/azure-aks/` against an Azure subscription. Explains every config variable (what it is, where to find it, what changes if you change it), every authentication step, and every script in the order it must run. Companion to [PLAN-001-aks-step1-verification.md](../completed/PLAN-001-aks-step1-verification.md) — that plan's Phase 2 lists the eight scripts to run; this plan is the detailed *how* and *why* for someone doing it for the first time. | 2026-08-13 |
 | [Investigate: Metabase Internal BI / Data Exploration for UIS](INVESTIGATE-service-metabase.md) | Deploy Metabase as the internal data-exploration and validation tool for UIS-hosted applications, providing visual SQL exploration, ad-hoc questions, and dashboards for development teams — starting with Atlas, with reusability for future apps. | 2026-08-13 |
