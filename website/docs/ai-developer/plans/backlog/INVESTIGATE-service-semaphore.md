@@ -276,8 +276,15 @@ blocker.
 
 ```
 PLAN-service-semaphore-001-deploy.md   ← manifest + ansible playbook, clean install
-PLAN-service-semaphore-002-docs.md     ← website/docs/services/ page (or folded into 001)
+PLAN-service-semaphore-002-docs.md     ← website/docs/services/ page
 ```
+
+**Status, 2026-10-05**: PLAN-002 is done —
+[completed/PLAN-service-semaphore-002-docs.md](../completed/PLAN-service-semaphore-002-docs.md).
+PLAN-001's manifests/playbooks/service-wrapper/secrets wiring merged in the
+same PR (#548) and are in `active/`, not yet `completed/` — no real cluster
+has run `./uis deploy semaphore` yet, which is the one thing still open. See
+that file for exactly what is and isn't verified.
 
 ### PLAN-001 — Deploy
 
