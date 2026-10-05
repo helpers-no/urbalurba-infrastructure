@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — blocked on Phase 0 (atlas's pinned version), asked 2026-10-05
+## Status: Backlog — Phase 0 answered 2026-10-05; re-scoped to a coordinated bump
 
 **Goal**: Move the pinned Dagster chart/core version from `1.13.19` to the current latest
 stable (`1.13.25`) — same minor line, zero breaking changes between them — picking up a
@@ -20,12 +20,17 @@ just shipped.
 `manifests/360-dagster-config.yaml`'s `concurrency.runs.tagConcurrencyLimits`) — "plan for a
 Dagster upgrade as part of the safety work added to prevent jobs from colliding."
 
-**Blocked on**: [urb-agents#1852](https://github.com/terchris/urb-agents/issues/1852) — asked
-atlas what `dagster`/`dagster-postgres` version `atlas-data`'s code-location image currently
-pins. Not a formality: `manifests/360-dagster-config.yaml`'s own header says the platform pin
-is load-bearing — *"a code-location image pins its own `dagster~=X.Y`... Platform and tenants
-move together"* — and a tenant meaningfully behind the new platform version changes this from
-a platform-only bump into a coordinated one.
+**Phase 0 answer** ([urb-agents#1852](https://github.com/terchris/urb-agents/issues/1852),
+atlas, 2026-10-05): atlas-data's `uv.lock`-resolved versions are **`dagster==1.13.4` /
+`dagster-postgres==0.29.4`** — same `1.13` minor line, but **15 patch versions behind the
+platform's current `1.13.19`, 21 behind the `1.13.25` target.** Not "already basically there."
+Per this plan's own Phase 0.3, that moves this from a platform-only bump to a **coordinated**
+one — see Phase 1 below. Atlas also raised a real argument for not sequencing the platform
+first and atlas-data later: atlas-data is currently behind *both* fixes motivating this bump
+(`1.13.21`'s connection-leak fix, `1.13.22`'s faster dequeuing under tag/pool concurrency
+limits) and just started depending on the concurrency mechanism `1.13.22` improves
+(`atlas/serialises-on: marts`, PR #535) — so the dequeue fix isn't hypothetical for atlas, it's
+directly relevant to the thing atlas just turned on.
 
 ---
 
@@ -83,40 +88,74 @@ the webserver/daemon and a code location's gRPC server. The real risk is schema 
 maintains compatibility for across nearby versions but doesn't guarantee indefinitely. A
 same-minor-line patch bump (`1.13.19` → `1.13.25`) is about as low-risk a version skew as
 exists in this ecosystem — but "low risk" is not "no risk," and the one number that actually
-determines it — what `atlas-data` currently pins — is asked, not assumed, in
-[urb-agents#1852](https://github.com/terchris/urb-agents/issues/1852).
+determines it — what `atlas-data` currently pins — turned out to matter: confirmed in
+[urb-agents#1852](https://github.com/terchris/urb-agents/issues/1852) at `1.13.4`, 15–21
+patch versions behind, not the near-miss a same-minor-line skew might suggest.
 
 ---
 
-## Phase 0: Confirm tenant compatibility (blocking)
+## Phase 0: Confirm tenant compatibility — ANSWERED 2026-10-05
 
 ### Tasks
 
-- [ ] 0.1 Get atlas-data's current `dagster`/`dagster-postgres` pin from
+- [x] 0.1 Get atlas-data's current `dagster`/`dagster-postgres` pin from
   [urb-agents#1852](https://github.com/terchris/urb-agents/issues/1852).
-- [ ] 0.2 If at or near `1.13.x`: proceed with Phase 1 as a platform-only change.
-- [ ] 0.3 If meaningfully behind: this plan's scope grows to a coordinated bump — atlas's own
-  pin needs to move too, which is atlas's repository and atlas's call on timing, not a UIS
-  platform change. Re-scope before touching any UIS file if this is the outcome.
-- [ ] 0.4 Check whether any other code location exists on any live installation (this repo has
-  no visibility into any installation's `.uis.extend/dagster-code-locations.yaml` — ask
-  whoever operates one, starting with imac per the #1847 incident).
+- [ ] 0.2 ~~If at or near `1.13.x`: proceed with Phase 1 as a platform-only change.~~ Not the
+  outcome — see 0.3.
+- [x] 0.3 Meaningfully behind (`1.13.4` vs. a `1.13.19`→`1.13.25` platform move — 15–21 patch
+  versions): this plan's scope grows to a coordinated bump, per the sequencing Phase 1 below.
+- [ ] 0.4 Check whether any other code location exists on any live installation (still open —
+  atlas is the only tenant confirmed so far; ask whoever operates an installation other than
+  atlas's, starting with imac per the #1847 incident, before treating Phase 1 as covering
+  every tenant).
+
+### Validation — met
+
+Atlas's pinned version is known: `dagster==1.13.4` / `dagster-postgres==0.29.4`
+(`uv.lock`-resolved, not just the `pyproject.toml` pin range `dagster~=1.13`). Real gap, not a
+near-miss — re-scoped to Phase 1 below rather than proceeding as a platform-only change.
+
+---
+
+## Phase 1: Coordinate the bump — atlas-data moves with the platform, not after
+
+Atlas's own argument (#1852): atlas-data is currently behind *both* fixes motivating this
+bump, and just started depending on the mechanism `1.13.22`'s dequeue fix improves. Bumping
+the platform without atlas-data would leave the tenant that most needs this on the version
+with the slower dequeue path and the connection leak, while the platform documentation would
+read as if the fix had landed for everyone. Sequencing atlas-data's bump with the platform's,
+not after it, is the point of calling this "coordinated" rather than "platform, then maybe
+atlas eventually."
+
+### Tasks
+
+- [ ] 1.1 Atlas drafts the `atlas-data` bump — `pyproject.toml`'s `dagster~=1.13` /
+  `dagster-postgres~=0.29` pins are already wide enough to resolve `1.13.25`/`0.29.25`;
+  the real work is re-running `uv lock` and testing atlas-data's own jobs against the new
+  resolved versions (atlas's own repo, atlas's own call on exact timing — they've already
+  offered to draft this once the coordinated plan is settled).
+- [ ] 1.2 Agree the rollout order with atlas: build and publish the new atlas-data
+  code-location image first (so it exists and is tagged before the platform bump lands), then
+  bump the platform pin (Phase 2) and update `.uis.extend/dagster-code-locations.yaml`'s
+  `tag`/`digest` to the new atlas-data image in the same change, so the installation never
+  runs an old-pin code location against a new-pin instance (or vice versa) for longer than a
+  single deploy cycle.
+- [ ] 1.3 Confirm with atlas once their image is published and tagged before starting Phase 2.
 
 ### Validation
 
-Atlas's (and any other known tenant's) pinned version is known and judged close enough to
-`1.13.19`/`1.13.25` that a platform-only bump is the right scope. If not, this plan stops here
-and a different plan (coordinated multi-repo bump) is filed instead.
+Atlas-data's new code-location image is built, tagged, and ready to deploy; the rollout order
+is agreed before any platform file changes.
 
 ---
 
-## Phase 1: Bump the platform pin
+## Phase 2: Bump the platform pin
 
 ### Tasks
 
-- [ ] 1.1 `ansible/playbooks/360-setup-dagster.yml`: `dagster_chart_version: "1.13.19"` →
+- [ ] 2.1 `ansible/playbooks/360-setup-dagster.yml`: `dagster_chart_version: "1.13.19"` →
   `"1.13.25"`.
-- [ ] 1.2 **Re-verify, don't relabel, every version-specific source citation in
+- [ ] 2.2 **Re-verify, don't relabel, every version-specific source citation in
   `manifests/360-dagster-config.yaml`.** The file's own history is explicit about why this
   step cannot be skipped — a prior version of this exact comment block was wrong twice because
   a reading "fifteen patch releases behind gave a version-fragile answer." Confirmed already
@@ -124,25 +163,34 @@ and a different plan (coordinated multi-repo bump) is filed instead.
   `pool_size=1/max_overflow=20` and `store_event_batch`'s fast-path list are unchanged at
   `1.13.25` — carry that confirmation into the comment rather than leaving it saying "verified
   in dagster 1.13.19" once the pin no longer says that.
-  - [ ] 1.2.1 Update every `(verified at the pinned 1.13.19)` / `dagster 1.13.19 /
+  - [ ] 2.2.1 Update every `(verified at the pinned 1.13.19)` / `dagster 1.13.19 /
     dagster_postgres 0.29.19` citation to name `1.13.25`/`0.29.25`, with the re-verification
     date.
-  - [ ] 1.2.2 Add one line noting the `1.13.21` connection-leak fix on the `has_table` check as
+  - [ ] 2.2.2 Add one line noting the `1.13.21` connection-leak fix on the `has_table` check as
     context for the pool-pressure discussion — it doesn't change the documented ceiling, but a
     reader comparing this file against a future Dagster version benefits from knowing which
     specific leak was already closed upstream.
-  - [ ] 1.2.3 The SQLAlchemy version mismatch this file documents (webserver ships 2.0.52, a
+  - [ ] 2.2.3 The SQLAlchemy version mismatch this file documents (webserver ships 2.0.52, a
     tenant's code-location image resolved 2.0.54 — same cluster, two versions) is a `dagster`
     dependency range (`sqlalchemy<3,>=1.0`), not something this bump changes by itself — note
     whether `1.13.25`'s dependency range differs, but do not assume it resolved the mismatch
-    without checking the new lockfile/resolution.
-- [ ] 1.3 `provision-host/uis/tests/static/test-dagster-tag-concurrency-documented.sh` and
-  `test-dagster-pool-ceiling-documented.sh`: re-run after 1.2's edits — both grep for specific
+    without checking the new lockfile/resolution. Re-check against whatever atlas-data's
+    Phase 1 bump actually resolves, too — the mismatch was measured between the webserver and
+    atlas's own image, and both are changing.
+  - [ ] 2.2.4 Update the webserver/daemon-vs-code-location version table in that same comment:
+    it currently reads 2.0.52 (webserver) against 2.0.54 (atlas's image, pre-bump). After
+    Phase 1, re-measure both.
+- [ ] 2.3 `provision-host/uis/tests/static/test-dagster-tag-concurrency-documented.sh` and
+  `test-dagster-pool-ceiling-documented.sh`: re-run after 2.2's edits — both grep for specific
   strings this plan's edits will touch.
-- [ ] 1.4 `website/docs/services/analytics/dagster.md`: any version-specific text (the pool
+- [ ] 2.4 `website/docs/services/analytics/dagster.md`: any version-specific text (the pool
   numbers are the chart's own, not expected to change, but check `grep -n "1.13.19" `  across
   the repo for anywhere this plan missed).
-- [ ] 1.5 `version.txt`: bump — `ansible/`, `manifests/`, and `provision-host/uis/tests/` all
+- [ ] 2.5 Update `.uis.extend/dagster-code-locations.yaml`'s real installation entry to atlas's
+  newly-published `tag`/`digest` (Phase 1.1) in the same deploy — this is per-installation
+  config, not this repo, but the sequencing matters: do not bump the platform pin on an
+  installation that is still running atlas-data's old image, or vice versa.
+- [ ] 2.6 `version.txt`: bump — `ansible/`, `manifests/`, and `provision-host/uis/tests/` all
   changing means this ships to every installation.
 
 ### Validation
@@ -153,29 +201,30 @@ fixed in 1.13.21" — that is correctly dated rather than silently stale).
 
 ---
 
-## Phase 2: Verify, the same way #535 was verified
+## Phase 3: Verify, the same way #535 was verified
 
 ### Tasks
 
-- [ ] 2.1 `ansible-playbook 360-setup-dagster.yml --syntax-check` with the pinned collections
+- [ ] 3.1 `ansible-playbook 360-setup-dagster.yml --syntax-check` with the pinned collections
   installed.
-- [ ] 2.2 Full static + unit suite, with `yq` genuinely installed (not silently skipped — see
+- [ ] 3.2 Full static + unit suite, with `yq` genuinely installed (not silently skipped — see
   the static suite's own `yq` dependency).
-- [ ] 2.3 `npm run build` in `website/` — clean, no broken anchors.
-- [ ] 2.4 **Real cluster deploy — not optional, and not mine to run.** Per this repo's own
+- [ ] 3.3 `npm run build` in `website/` — clean, no broken anchors.
+- [ ] 3.4 **Real cluster deploy — not optional, and not mine to run.** Per this repo's own
   division of labor, UIS does not build or test its own work; `imac` does. `helm upgrade` the
-  chart to `1.13.25` on a real installation, confirm:
-  - [ ] 2.4.1 Webserver and daemon pods come up healthy at the new version.
-  - [ ] 2.4.2 Atlas's existing code location still loads (`LOADED`, not a gRPC handshake
-    failure) — the thing Phase 0 is meant to have already de-risked, confirmed for real here.
-  - [ ] 2.4.3 A real run launches and completes successfully.
-  - [ ] 2.4.4 The thing this bump is *for*: apply atlas's `tag_concurrency_limits` rule (the
-    installation-side step from #1850, if not already applied) and confirm two overlapping
-    marts-touching runs actually queue — the same verification bar #1847 has been waiting on.
+  chart to `1.13.25` on a real installation, with atlas-data's new image already in place
+  (Phase 1/2.5), and confirm:
+  - [ ] 3.4.1 Webserver and daemon pods come up healthy at the new version.
+  - [ ] 3.4.2 Atlas's code location (now on its own new pin, not the old `1.13.4`) loads
+    (`LOADED`, not a gRPC handshake failure).
+  - [ ] 3.4.3 A real run launches and completes successfully.
+  - [ ] 3.4.4 The thing this bump is *for*: confirm two overlapping marts-touching runs
+    actually queue — the same verification bar #1847 has been waiting on, now with both sides
+    of the connection on current patch versions.
 
 ### Validation
 
-A tester (imac) confirms 2.4 end-to-end on a real cluster and reports back on
+A tester (imac) confirms 3.4 end-to-end on a real cluster and reports back on
 [urb-agents#1847](https://github.com/terchris/urb-agents/issues/1847) and this plan's tracking
 issue.
 
@@ -183,15 +232,20 @@ issue.
 
 ## Acceptance Criteria
 
-- [ ] Atlas's (and any other known tenant's) version compatibility is confirmed, not assumed,
-  before any platform file changes.
+- [x] Atlas's version is confirmed, not assumed, before any platform file changes —
+  `1.13.4`/`0.29.4`, meaningfully behind.
+- [ ] Any other known tenant's version compatibility is confirmed too (Phase 0.4, still open).
+- [ ] Atlas-data's own bump is published and tagged before the platform pin moves (Phase 1).
 - [ ] `dagster_chart_version` is `1.13.25`.
 - [ ] Every version-specific technical claim in `manifests/360-dagster-config.yaml` is
-  re-verified against `1.13.25` source, not merely relabeled.
+  re-verified against `1.13.25` source, not merely relabeled — including the
+  webserver-vs-code-location SQLAlchemy version table, re-measured after Phase 1.
+- [ ] `.uis.extend/dagster-code-locations.yaml`'s real entry points at atlas's new image
+  tag/digest in the same deploy the platform pin moves in.
 - [ ] Full static + unit suite passes with `yq` present.
 - [ ] `website/` builds clean.
-- [ ] A real cluster deploy confirms the webserver, daemon, and atlas's existing code location
-  all come up healthy at the new version, and that a real run completes.
+- [ ] A real cluster deploy confirms the webserver, daemon, and atlas's (now also bumped) code
+  location all come up healthy at the new version, and that a real run completes.
 - [ ] The tag-concurrency fix's own verification bar (#1847: two overlapping runs queue
   instead of stacking) is confirmed on the upgraded instance.
 
@@ -203,18 +257,23 @@ issue.
   file's own history (the `startTimeoutSeconds` saga, the SQLAlchemy pool-churn
   misattribution, both documented in `manifests/360-dagster-config.yaml`) is a record of this
   exact repository getting Dagster's internals wrong by reasoning instead of reading the
-  source at the actual pinned version. This plan's Phase 1.2 exists so the bump doesn't add a
+  source at the actual pinned version. This plan's Phase 2.2 exists so the bump doesn't add a
   seventh entry to that list.
 - **The gRPC-compatibility risk is real but not a hard gate** — confirmed by reading the gRPC
-  layer directly, there's no version check to trip. That makes Phase 0 a judgment call (how
-  close is close enough) rather than a pass/fail test, which is exactly why it needs a human
-  answer (atlas's actual pin) rather than a grep.
-- **This plan deliberately stops at Phase 0 if atlas is meaningfully behind** rather than
-  scoping in a cross-repo coordinated bump speculatively. Re-scope when that answer arrives,
-  don't pre-build for every possible answer.
+  layer directly, there's no version check to trip. That's exactly why Phase 0 needed a human
+  answer (atlas's actual pin) rather than a grep, and why the answer — a real 15–21 patch
+  version gap, not a near-miss — changed the plan's shape rather than just confirming it.
+- **This plan re-scoped exactly the way it said it would once Phase 0 answered "meaningfully
+  behind."** Phase 1 (atlas-data's own bump, coordinated) exists because that was the real
+  answer, not a hypothetical one planned for in the abstract.
+- **Cross-repo coordination means I don't own Phase 1's execution.** Drafting atlas-data's
+  `pyproject.toml`/`uv.lock` bump and publishing the new image is atlas's own repository and
+  atlas's own call on timing — Phase 2 (the platform pin) should not start until Phase 1 is
+  confirmed done, not just requested.
 
 ## Files to Modify
 
+**In this repository** (Phase 2+):
 - `ansible/playbooks/360-setup-dagster.yml`
 - `manifests/360-dagster-config.yaml`
 - `website/docs/services/analytics/dagster.md`
@@ -224,6 +283,13 @@ issue.
   unchanged)
 - `version.txt`
 
+**In `atlas-data`** (Phase 1, atlas's own repository, not this one):
+- `pyproject.toml` (pin range already wide enough — `dagster~=1.13`)
+- `uv.lock` (the resolved version this plan actually cares about)
+
+**Per-installation, not committed to either repository** (Phase 2.5):
+- `.uis.extend/dagster-code-locations.yaml`'s real tenant entry
+
 ## Related
 
 - [urb-agents#1847](https://github.com/terchris/urb-agents/issues/1847) — the deadlock
@@ -231,8 +297,8 @@ issue.
 - [urb-agents#1850](https://github.com/terchris/urb-agents/issues/1850) /
   [#1851](https://github.com/terchris/urb-agents/issues/1851) — the tag-concurrency-limits fix,
   shipped as PR #535.
-- [urb-agents#1852](https://github.com/terchris/urb-agents/issues/1852) — the blocking
-  question to atlas.
+- [urb-agents#1852](https://github.com/terchris/urb-agents/issues/1852) — atlas's answer:
+  `1.13.4`/`0.29.4`, meaningfully behind, with the argument for coordinated timing.
 - [INVESTIGATE-service-dagster.md](INVESTIGATE-service-dagster.md) — original design record.
 - [PLAN-service-dagster-001-deploy.md](../completed/PLAN-service-dagster-001-deploy.md) — the
   original deploy, including the version-pin rationale this plan inherits.
