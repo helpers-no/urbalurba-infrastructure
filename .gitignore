@@ -16,8 +16,8 @@ debugging
 hosts/azure-microk8s/azure-vm-config-redcross-sandbox.sh
 hosts/azure-aks/azure-aks-config.sh
 
-# proxmox-k3s platform config (names your own machines)
-platforms/proxmox-k3s/config.sh
+# proxmox platform config (names your own machines)
+platforms/proxmox/config.sh
 
 troubleshooting/*.txt
 troubleshooting/output/*

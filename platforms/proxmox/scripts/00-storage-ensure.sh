@@ -83,7 +83,7 @@ for i in 0 1 2; do
         fi
         print_warning "Key auth failed — will ask for ${name}'s ROOT PASSWORD once, to install it"
         echo
-        if ! ansible-playbook -i "${addr}," "$PLAYBOOK" \
+        if ! ansible-playbook -i "${addr}," -u root "$PLAYBOOK" \
                 -e "control_pubkey_file=${PROXMOX_SSH_KEY}.pub" \
                 -e "storage_id=${PROXMOX_STORAGE}" \
                 -k; then
@@ -98,7 +98,7 @@ for i in 0 1 2; do
 
     if [[ "$CREATE_POOL" == "1" ]]; then
         # Ask once, read-only, what this host's pool situation already is.
-        ansible-playbook -i "${addr}," --private-key "$PROXMOX_SSH_KEY" "$PLAYBOOK" "${EXTRA_ARGS[@]}"
+        ansible-playbook -i "${addr}," -u root --private-key "$PROXMOX_SSH_KEY" "$PLAYBOOK" "${EXTRA_ARGS[@]}"
 
         print_status "Looking for a candidate disk on $name..."
         disk_id="$(ssh -i "$PROXMOX_SSH_KEY" -o BatchMode=yes "root@${addr}" \
@@ -121,10 +121,10 @@ for i in 0 1 2; do
             continue
         fi
 
-        ansible-playbook -i "${addr}," --private-key "$PROXMOX_SSH_KEY" "$PLAYBOOK" \
+        ansible-playbook -i "${addr}," -u root --private-key "$PROXMOX_SSH_KEY" "$PLAYBOOK" \
             "${EXTRA_ARGS[@]}" -e create_pool=true -e "pool_disk_id=${disk_id}"
     else
-        ansible-playbook -i "${addr}," --private-key "$PROXMOX_SSH_KEY" "$PLAYBOOK" "${EXTRA_ARGS[@]}"
+        ansible-playbook -i "${addr}," -u root --private-key "$PROXMOX_SSH_KEY" "$PLAYBOOK" "${EXTRA_ARGS[@]}"
     fi
 done
 

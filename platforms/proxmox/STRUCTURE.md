@@ -14,7 +14,8 @@ platforms/proxmox/
 ├── README.md                    ✅  "Before you start" + all phases + troubleshooting (colocated
 │                                    with the code deliberately, not split into a separate docs tree)
 ├── STRUCTURE.md                 ✅  this file
-├── .gitignore                   ✅  config.sh, ansible/generated/
+(no platform-local .gitignore — config.sh and ansible/generated/ are covered by entries in the
+ repo root's own .gitignore, fixed 2026-10-05 to match the rename: platforms/proxmox/config.sh)
 │
 ├── scripts/
 │   ├── 00-storage-ensure.sh     ✅  Phase 2: per-host SSH key install (one password, once) +
