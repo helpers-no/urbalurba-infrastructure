@@ -99,7 +99,7 @@ Documentation is organized into logical sections:
 website/docs/
 ├── index.md                    # Homepage
 ├── getting-started/            # Quick start guides
-├── hosts/                      # Platform documentation
+├── platforms/                   # Platform documentation
 │   └── cloud-init/            # Cloud-init subsection
 ├── services/                   # Service documentation
 │   ├── ai/                    # AI & ML services

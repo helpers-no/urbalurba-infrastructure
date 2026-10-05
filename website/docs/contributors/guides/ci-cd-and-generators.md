@@ -82,7 +82,7 @@ Both workflows use the same `pages` concurrency group, so they won't run simulta
 **File**: `build-uis-container.yml`
 
 **Triggers when these paths change on main:**
-- `ansible/**`, `manifests/**`, `hosts/**`, `cloud-init/**`, `networking/**`
+- `ansible/**`, `manifests/**`, `hosts-to-be-deleted/**`, `cloud-init/**`, `networking/**`
 - `provision-host/**`, `scripts/**`
 - `Dockerfile.uis-provision-host`
 

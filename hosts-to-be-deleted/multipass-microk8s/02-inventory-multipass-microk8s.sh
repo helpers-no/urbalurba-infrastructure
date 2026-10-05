@@ -26,7 +26,7 @@ check_command_success() {
 # Ensure the script is run from the correct directory
 CURRENT_DIR=${PWD##*/}
 if [ "$CURRENT_DIR" != "multipass-microk8s" ]; then
-    echo "This script must be run from the folder hosts/multipass-microk8s"
+    echo "This script must be run from the folder hosts-to-be-deleted/multipass-microk8s"
     exit 1
 fi
 

@@ -161,13 +161,21 @@ This makes the execution order self-documenting and consistent across all cloud 
 
 ### Relationship to hosts/
 
-`hosts/` is not deleted. It is kept as a reference and fallback while `platforms/` is built
-out. Migration happens platform by platform:
+⚠️ **Renamed `hosts/` → `hosts-to-be-deleted/` on 2026-10-05** — a visible marker that this
+whole directory is not staying as-is, while the per-platform retire/migrate decisions below
+are still pending. References to `hosts/<name>/` elsewhere in this file (and in dated
+historical findings) describe the state at the time they were written and are left as-is;
+read them as `hosts-to-be-deleted/<name>/` today.
 
-1. `platforms/azure-aks/` replaces `hosts/azure-aks/` and `hosts/install-azure-aks.sh`
-2. `platforms/microk8s-vm/` replaces `hosts/azure-microk8s/`, `hosts/multipass-microk8s/`
-3. `platforms/microk8s-rpi/` replaces `hosts/raspberry-microk8s/`
-4. `hosts/` is archived or deleted after all platforms are migrated
+`hosts-to-be-deleted/` is not deleted yet. It is kept as a reference and fallback while
+`platforms/` is built out. Migration happens platform by platform:
+
+1. `platforms/azure-aks/` replaces `hosts-to-be-deleted/azure-aks/` and
+   `hosts-to-be-deleted/install-azure-aks.sh`
+2. `platforms/microk8s-vm/` replaces `hosts-to-be-deleted/azure-microk8s/`,
+   `hosts-to-be-deleted/multipass-microk8s/`
+3. `platforms/microk8s-rpi/` replaces `hosts-to-be-deleted/raspberry-microk8s/`
+4. `hosts-to-be-deleted/` is archived or deleted after all platforms are migrated
 
 ---
 

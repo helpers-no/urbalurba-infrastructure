@@ -1,7 +1,7 @@
 # Azure MicroK8s Host Documentation
 
-:::caution Legacy `hosts/*` path — not yet migrated to UIS CLI
-This platform still runs through the legacy `hosts/azure-microk8s/` scripts; it has not been migrated to the `platforms/*` + `./uis platform <verb>` CLI shape that [Rancher Desktop](./rancher-kubernetes.md) and [Azure AKS](./azure-aks.md) use. Concretely, **`./uis platform list/use/init/up/status/down` do not work for this target yet** — you'll see it omitted from the platform list output. The instructions below describe the legacy flow and may be outdated.
+:::caution Legacy `hosts-to-be-deleted/*` path — not yet migrated to UIS CLI
+This platform still runs through the legacy `hosts-to-be-deleted/azure-microk8s/` scripts; it has not been migrated to the `platforms/*` + `./uis platform <verb>` CLI shape that [Rancher Desktop](./rancher-kubernetes.md) and [Azure AKS](./azure-aks.md) use. Concretely, **`./uis platform list/use/init/up/status/down` do not work for this target yet** — you'll see it omitted from the platform list output. The instructions below describe the legacy flow and may be outdated.
 
 The migration is tracked at [INVESTIGATE-system-migrate-hosts-to-platforms.md](../ai-developer/plans/backlog/INVESTIGATE-system-migrate-hosts-to-platforms.md). For most use cases, [Azure AKS](./azure-aks.md) (managed Kubernetes) is a better target than self-managed MicroK8s on a VM.
 :::
@@ -37,7 +37,7 @@ We've created an improved script (`01-azure-vm-create-redcross-v2.sh`) that hand
 
 1. **Copy the template file**:
    ```bash
-   cd hosts/azure-microk8s
+   cd hosts-to-be-deleted/azure-microk8s
    cp azure-vm-config-redcross-sandbox.sh-template azure-vm-config-redcross-sandbox.sh
    ```
 
@@ -432,7 +432,7 @@ To SSH to the VM, use:
 
 === STEP 1: Checking current directory ===
   → Current directory: azure-microk8s
-  ✓ Correct directory confirmed: hosts/azure-microk8s
+  ✓ Correct directory confirmed: hosts-to-be-deleted/azure-microk8s
 
 === STEP 2: Loading configuration ===
   → Checking if ./azure-vm-config-redcross-sandbox.sh exists
