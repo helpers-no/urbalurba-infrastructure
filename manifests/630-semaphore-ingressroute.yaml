@@ -1,0 +1,37 @@
+# 630-semaphore-ingressroute.yaml
+#
+# Description:
+# Traefik IngressRoute for SemaphoreUI — INTERNAL ONLY.
+#
+# Semaphore is an operator tool: it runs Ansible/Terraform/OpenTofu playbooks
+# with access keys to every host and service it is pointed at. It is
+# deliberately not public on any installation, and there is no requirement
+# for it ever to be. Same pattern as Dagster's webserver
+# (360-dagster-ingressroute.yaml).
+#
+# Semaphore has its own built-in authentication (unlike Dagster OSS), but
+# network-level restriction is still the right default for a tool this
+# sensitive.
+#
+# Usage:
+#   kubectl apply -f 630-semaphore-ingressroute.yaml
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: semaphore
+  namespace: semaphore
+  labels:
+    app: semaphore
+  annotations:
+    urbalurba.io/description: "SemaphoreUI — internal operator tool, no public exposure"
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: HostRegexp(`semaphore\..+`)
+      kind: Rule
+      priority: 10
+      services:
+        - name: semaphore
+          port: 3000

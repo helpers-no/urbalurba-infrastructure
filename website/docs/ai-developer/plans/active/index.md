@@ -15,4 +15,5 @@ Plans currently being implemented. Maximum 1-2 at a time.
 
 | Plan | Goal | Updated |
 |------|------|---------|
+| [Plan: Deploy SemaphoreUI as a standard UIS service](PLAN-service-semaphore-001-deploy.md) | `uis deploy semaphore` on a clean installation produces a reachable | 2026-10-05 |
 | [Plan: a template can install an application that spans several services](PLAN-templates-001-multi-instance-deploy.md) | `uis template install <app>` can deploy and configure a multi-instance | 2026-09-29 |

@@ -1,0 +1,231 @@
+---
+# 630-setup-semaphore.yml
+# Deploy SemaphoreUI - web UI and API for running Ansible, Terraform,
+# OpenTofu and PowerShell.
+#
+# Ships with zero projects, repositories, inventories, templates or access
+# keys configured - see INVESTIGATE-service-semaphore.md F5. That emptiness
+# is deliberate: an operator wires their own automation in afterwards, the
+# same way dagster-user-deployments ships empty.
+#
+# Usage:
+#   ansible-playbook 630-setup-semaphore.yml -e "target_host=rancher-desktop"
+
+- name: Deploy SemaphoreUI
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    _target: "{{ target_host | default('rancher-desktop') }}"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    namespace: "semaphore"
+    component_name: "semaphore"
+    manifests_folder: "/mnt/urbalurbadisk/manifests"
+    statefulset_file: "{{ manifests_folder }}/630-semaphore-statefulset.yaml"
+    ingressroute_file: "{{ manifests_folder }}/630-semaphore-ingressroute.yaml"
+
+  tasks:
+    - name: "1. Create {{ namespace }} namespace"
+      kubernetes.core.k8s:
+        name: "{{ namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: "2. Deploy ConfigMap + PVC + StatefulSet + Service"
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ statefulset_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: "3. Deploy IngressRoute"
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ ingressroute_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: "4. Wait for {{ component_name }} to be running"
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - "app={{ component_name }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: semaphore_pods
+      retries: 30
+      delay: 10
+      until: >
+        semaphore_pods.resources | length > 0 and
+        semaphore_pods.resources[0].status.phase == "Running"
+
+    # Do not report success on a pod that is Running but not yet serving - a
+    # pod still migrating the SQLite schema answers nothing on 3000 yet.
+    - name: "5. Wait for the web UI to actually answer"
+      ansible.builtin.shell: >
+        kubectl run semaphore-ready-check-{{ 999 | random }}
+        -n {{ namespace }} --rm -i --restart=Never --quiet
+        --image=curlimages/curl:latest --
+        curl -s -o /dev/null -w '%{http_code}'
+        -m 10 http://{{ component_name }}.{{ namespace }}.svc.cluster.local:3000/api/ping
+        < /dev/null | tail -c 3
+      environment:
+        # kubectl reads this. Do NOT pass --kubeconfig after the `--`:
+        # everything after `--` is the CONTAINER's argv.
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: semaphore_http
+      retries: 20
+      delay: 6
+      until: semaphore_http.stdout is search('200')
+      changed_when: false
+
+    - name: "6. Verify the data volume is mounted"
+      ansible.builtin.shell: >
+        kubectl exec -n {{ namespace }} {{ component_name }}-0
+        --kubeconfig {{ merged_kubeconf_file }} -- sh -c 'test -d /var/lib/semaphore && echo MOUNTED'
+      register: semaphore_data
+      changed_when: false
+      failed_when: "'MOUNTED' not in semaphore_data.stdout"
+
+    # ---- unattended admin setup -------------------------------------------
+    # Semaphore ships a real CLI for this (INVESTIGATE F4), so unlike Uptime
+    # Kuma this needs no raw-SQL/bcrypt hack - `users add --admin` and
+    # `users change-by-login` do it directly.
+    - name: "7. Read admin credentials from urbalurba-secrets"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ namespace }}"
+        name: urbalurba-secrets
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: semaphore_secret
+      no_log: true
+
+    - name: "7.1 Fail clearly if the credentials are missing"
+      ansible.builtin.assert:
+        that:
+          - semaphore_secret.resources | length > 0
+          - "'semaphore-admin-user' in semaphore_secret.resources[0].data"
+          - "'semaphore-admin-email' in semaphore_secret.resources[0].data"
+          - "'semaphore-admin-password' in semaphore_secret.resources[0].data"
+        fail_msg: >-
+          urbalurba-secrets in {{ namespace }} has no semaphore-admin-user /
+          semaphore-admin-email / semaphore-admin-password. Run
+          `./uis secrets apply` first.
+
+    # `users get` exits 0 if the login exists, 1 if not - distinct from `users
+    # add`, which panics with a raw Go stack trace on a UNIQUE constraint
+    # violation if the login already exists (verified locally against the
+    # real v2.19.12 binary). Branching on `get` avoids ever calling `add` on
+    # an existing account.
+    - name: "8. Does the admin account already exist?"
+      ansible.builtin.command: >
+        kubectl exec -n {{ namespace }} {{ component_name }}-0
+        --kubeconfig {{ merged_kubeconf_file }} --
+        semaphore users get --login {{ semaphore_secret.resources[0].data['semaphore-admin-user'] | b64decode }}
+        --config /etc/semaphore/config.json
+      register: semaphore_user_check
+      changed_when: false
+      failed_when: false
+
+    - name: "9. Create the admin account (first install)"
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl exec -n {{ namespace }} {{ component_name }}-0 \
+          --kubeconfig {{ merged_kubeconf_file }} -- \
+          semaphore users add --admin \
+            --login "$SEMAPHORE_USER" \
+            --email "$SEMAPHORE_EMAIL" \
+            --name Admin \
+            --password "$SEMAPHORE_PW" \
+            --config /etc/semaphore/config.json
+      args:
+        executable: /bin/bash
+      environment:
+        SEMAPHORE_USER: "{{ semaphore_secret.resources[0].data['semaphore-admin-user'] | b64decode }}"
+        SEMAPHORE_EMAIL: "{{ semaphore_secret.resources[0].data['semaphore-admin-email'] | b64decode }}"
+        SEMAPHORE_PW: "{{ semaphore_secret.resources[0].data['semaphore-admin-password'] | b64decode }}"
+      register: semaphore_seed
+      when: semaphore_user_check.rc != 0
+      no_log: true
+
+    # ⚠️ THE REDEPLOY CASE, same as Uptime Kuma's 230-setup-uptime-kuma.yml
+    # task 11.2: `uis undeploy` keeps the PVC by design, so a redeploy finds
+    # an account seeded earlier - with whatever password urbalurba-secrets
+    # held then. The secret is the declared source of truth, so bring the
+    # account into line with it rather than failing.
+    - name: "9.1 Reconcile the admin password (redeploy case)"
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl exec -n {{ namespace }} {{ component_name }}-0 \
+          --kubeconfig {{ merged_kubeconf_file }} -- \
+          semaphore users change-by-login \
+            --login "$SEMAPHORE_USER" \
+            --password "$SEMAPHORE_PW" \
+            --config /etc/semaphore/config.json
+      args:
+        executable: /bin/bash
+      environment:
+        SEMAPHORE_USER: "{{ semaphore_secret.resources[0].data['semaphore-admin-user'] | b64decode }}"
+        SEMAPHORE_PW: "{{ semaphore_secret.resources[0].data['semaphore-admin-password'] | b64decode }}"
+      register: semaphore_reconcile
+      when: semaphore_user_check.rc == 0
+      changed_when: true
+      no_log: true
+
+    # Verify the credential actually authenticates, not just that the row
+    # exists - the same standard Uptime Kuma's playbook applies (its own
+    # comment: "a row existing is not the same as it working").
+    - name: "10. Verify the admin credential actually authenticates"
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl run semaphore-auth-check-{{ 999 | random }} \
+          -n {{ namespace }} --rm -i --restart=Never --quiet \
+          --image=curlimages/curl:latest -- \
+          curl -s -o /dev/null -w '%{http_code}' -m 10 \
+          -X POST http://{{ component_name }}.{{ namespace }}.svc.cluster.local:3000/api/auth/login \
+          -H 'Content-Type: application/json' \
+          -d "{\"auth\":\"$SEMAPHORE_USER\",\"password\":\"$SEMAPHORE_PW\"}" \
+          < /dev/null | tail -c 3
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+        SEMAPHORE_USER: "{{ semaphore_secret.resources[0].data['semaphore-admin-user'] | b64decode }}"
+        SEMAPHORE_PW: "{{ semaphore_secret.resources[0].data['semaphore-admin-password'] | b64decode }}"
+      register: semaphore_auth
+      changed_when: false
+      no_log: true
+
+    - name: "10.1 Fail clearly if the credential does not authenticate"
+      ansible.builtin.assert:
+        that: "'204' in semaphore_auth.stdout"
+        fail_msg: >-
+          The semaphore-admin-user/semaphore-admin-password in urbalurba-secrets
+          ({{ namespace }} namespace) do not authenticate against the running
+          service (got HTTP {{ semaphore_auth.stdout }}, expected 204).
+          Data volume note: `uis undeploy` keeps the PVC by design, so an
+          account created by an earlier install survives. To start clean:
+          kubectl delete pvc -n {{ namespace }} semaphore-data
+        success_msg: >-
+          Admin credential verified{{ ' (password reconciled to match the secret on this run)'
+          if (semaphore_reconcile is defined and semaphore_reconcile.changed | default(false)) else '' }}.
+
+    - name: "11. Deployment complete"
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "SemaphoreUI deployed"
+          - "==============================================="
+          - ""
+          - "URL: http://semaphore.localhost"
+          - "Health: HTTP {{ semaphore_http.stdout }}   Data volume: mounted"
+          - ""
+          - "Admin account: {{ semaphore_secret.resources[0].data['semaphore-admin-user'] | b64decode }}"
+          - "Password: the shared DEFAULT_ADMIN_PASSWORD from urbalurba-secrets"
+          - "{{ 'Account created on this run.' if (semaphore_seed.changed | default(false)) else 'Account already existed - password kept in step with the secret.' }}"
+          - ""
+          - "Zero projects, repositories, inventories or templates are configured."
+          - "That is intentional (INVESTIGATE-service-semaphore.md F5) - wire in"
+          - "your own project, repository and credentials from the UI."

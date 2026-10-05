@@ -1,0 +1,177 @@
+# 630-semaphore-statefulset.yaml
+#
+# Description:
+# SemaphoreUI - web UI and API for running Ansible, Terraform, OpenTofu and
+# PowerShell. StatefulSet pattern: no maintained official Helm chart, and the
+# application keeps all state (including every stored credential, encrypted)
+# in an embedded SQLite database, so it needs stable storage identity and
+# exactly one writer. Same pattern as Uptime Kuma
+# (230-uptime-kuma-statefulset.yaml).
+#
+# Ships with zero projects, repositories, inventories, templates or access
+# keys configured - that emptiness is deliberate. See
+# INVESTIGATE-service-semaphore.md F5.
+#
+# Usage:
+#   kubectl apply -f 630-semaphore-statefulset.yaml
+#
+# Prerequisites:
+# - semaphore namespace created
+#
+# Ports:
+# - 3000: web UI and API
+#
+# Secrets: semaphore-admin-user / semaphore-admin-password (inherits the
+# shared DEFAULT_ADMIN_PASSWORD, same as Grafana/ArgoCD/Uptime Kuma) and
+# semaphore-cookie-hash / semaphore-cookie-encryption /
+# semaphore-access-key-encryption, all in urbalurba-secrets (semaphore
+# namespace). The three internal secrets are injected as env vars
+# (SEMAPHORE_COOKIE_HASH etc.) rather than templated into config.json -
+# verified against the real v2.19.12 binary that it reads them from the
+# environment.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: semaphore-config
+  namespace: semaphore
+  labels:
+    app: semaphore
+data:
+  # Non-sensitive settings only. cookie_hash / cookie_encryption /
+  # access_key_encryption are deliberately absent here - injected as env vars
+  # instead (see Secrets note above). Verified locally: the binary starts
+  # cleanly with a config file that omits all three.
+  #
+  # "port" is a Go net.Listen address, not a bare port number - it must keep
+  # the leading colon.
+  config.json: |
+    {
+      "dialect": "sqlite",
+      "sqlite": {
+        "host": "/var/lib/semaphore/database.sqlite"
+      },
+      "port": ":3000",
+      "tmp_path": "/tmp/semaphore",
+      "max_parallel_tasks": 2
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: semaphore-data
+  namespace: semaphore
+  labels:
+    app: semaphore
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  # No storageClassName: use the cluster default. The reference instance's
+  # database was 51 MB after weeks of real use (INVESTIGATE F9) - 2Gi is
+  # headroom, not a measured need.
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: semaphore
+  namespace: semaphore
+  labels:
+    app: semaphore
+spec:
+  serviceName: semaphore
+  replicas: 1
+  selector:
+    matchLabels:
+      app: semaphore
+  template:
+    metadata:
+      labels:
+        app: semaphore
+    spec:
+      # The image's own user is uid 1001, group 0 (Dockerfile: `adduser -D -u
+      # 1001 -G root semaphore`, then `chown -R semaphore:0 /var/lib/semaphore`
+      # with no group-write chmod). A freshly provisioned PVC mounts owned by
+      # root with no group access, so without this the container cannot create
+      # database.sqlite. fsGroup: 0 makes kubelet chown the volume to group 0
+      # and set the setgid bit, which uid 1001 (a member of group 0) can then
+      # write to - the same convention the image itself already uses.
+      securityContext:
+        fsGroup: 0
+      containers:
+        - name: semaphore
+          # Pinned to the exact reference-instance version, verified
+          # byte-identical to the real production binary via Go BuildID.
+          image: semaphoreui/semaphore:v2.19.12
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: SEMAPHORE_COOKIE_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: urbalurba-secrets
+                  key: semaphore-cookie-hash
+            - name: SEMAPHORE_COOKIE_ENCRYPTION
+              valueFrom:
+                secretKeyRef:
+                  name: urbalurba-secrets
+                  key: semaphore-cookie-encryption
+            - name: SEMAPHORE_ACCESS_KEY_ENCRYPTION
+              valueFrom:
+                secretKeyRef:
+                  name: urbalurba-secrets
+                  key: semaphore-access-key-encryption
+          volumeMounts:
+            - name: config
+              mountPath: /etc/semaphore
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/semaphore
+          resources:
+            requests:
+              cpu: 50m
+              memory: 200Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /api/ping
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/ping
+              port: 3000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+      volumes:
+        - name: config
+          configMap:
+            name: semaphore-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: semaphore-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: semaphore
+  namespace: semaphore
+  labels:
+    app: semaphore
+spec:
+  type: ClusterIP
+  selector:
+    app: semaphore
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
