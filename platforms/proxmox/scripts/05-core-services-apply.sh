@@ -83,6 +83,7 @@ POOL_NAME="${PROXMOX_STORAGE%-vm}"
 # ─── per-service: guest -> install -> replicate to both other nodes -> HA member ───────────────
 VMID_LIST=()
 REGISTRY_IP=""
+BAO_IP=""
 
 for svc in $CORE_SERVICES; do
     decl="generated/vars/core-services/${svc}.yml"
@@ -114,6 +115,9 @@ for svc in $CORE_SERVICES; do
     # runs at all if "registry" is actually in CORE_SERVICES (see after this loop).
     if [[ "$svc" == "registry" ]]; then
         REGISTRY_IP="$guest_ip"
+    fi
+    if [[ "$svc" == "bao" ]]; then
+        BAO_IP="$guest_ip"
     fi
 
     print_status "service-${svc} (${guest_ip})..."
@@ -152,6 +156,20 @@ if [[ -n "$REGISTRY_IP" ]]; then
     ansible-playbook -i generated/inventory.yml --limit guests \
         playbooks/k3s-registry-ensure.yml -e "registry_host=${REGISTRY_IP}"
     print_success "Every k3s node now mirrors every registry upstream through ${REGISTRY_IP}"
+fi
+
+# ─── wire ESO + a ClusterSecretStore to bao, ONLY if the lab owner selected it ─────────────────
+# 🔵 Same conditional shape as the registry wiring above — a lab owner who never puts "bao" in
+# CORE_SERVICES never has this playbook run at all; their k3s clusters are untouched. See
+# k3s-bao-ensure.yml for why each cluster gets its own auth mount and why the root token never
+# leaves the bao guest.
+if [[ -n "$BAO_IP" ]]; then
+    print_section "Wire ESO + a ClusterSecretStore to bao"
+    print_status "Deploying ESO, configuring bao's kubernetes auth per cluster, via ${BAO_IP}..."
+    ansible-playbook -i "${BAO_IP}," -u root --private-key "$PROXMOX_SSH_KEY" \
+        --ssh-common-args "-o StrictHostKeyChecking=accept-new" \
+        playbooks/k3s-bao-ensure.yml -e "bao_host=${BAO_IP}"
+    print_success "ClusterSecretStore 'openbao' is Ready on both clusters, proven end to end"
 fi
 
 # ─── the one flat rule, naming every node + every service this run touched ─────────────────────

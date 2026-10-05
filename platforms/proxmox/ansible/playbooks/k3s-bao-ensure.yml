@@ -1,0 +1,420 @@
+---
+# k3s-bao-ensure — wire ESO + a ClusterSecretStore on each k3s cluster this platform builds
+# (production "proxmox", test "proxmox-test") to the bao guest, IF bao was selected. Run once,
+# right after the bao guest exists and is verified — see 05-core-services-apply.sh, which only
+# calls this when "bao" is in CORE_SERVICES.
+#
+#   ansible-playbook -i "<bao guest IP>," playbooks/k3s-bao-ensure.yml \
+#       -e bao_host=<the bao guest's real IP, resolved at apply time — NEVER hardcode>
+#
+# 🔵 ARCHITECTURE — see website/docs/ai-developer/plans/backlog/INVESTIGATE-service-openbao.md
+# Part 6 for the full reasoning. The short version: OpenBao's contract is NOT an address, it's
+# the `ClusterSecretStore` object named "openbao", plus the `kubernetes` auth method — and that
+# auth is BIDIRECTIONAL. The cluster calls bao for secrets; bao calls BACK into the cluster's
+# TokenReview API to validate who's asking. ⚠️ Each k3s cluster gets its OWN auth mount on the
+# shared bao instance: Vault/OpenBao's kubernetes auth config (kubernetes_host/ca/reviewer-jwt) is
+# per-MOUNT, not per-role, so two different clusters cannot share one mount — hence
+# `kubernetes-proxmox` / `kubernetes-proxmox-test` below, not one shared "kubernetes" mount.
+#
+# 🔴 THE ROOT TOKEN NEVER LEAVES THE BAO GUEST, AND IS NEVER LOGGED. Every task that touches it
+# carries no_log: true, matching the bao role's own discipline (see roles/bao/tasks/main.yml).
+# It is read once per run directly on the guest and used only to authenticate bao CLI calls run
+# on that same guest — never passed to a k8s resource, never echoed, never registered without
+# no_log alongside it.
+#
+# ⚠️ DEGRADES GRACEFULLY: a lab owner who never selects "bao" never has this playbook run against
+# them — their k3s clusters are untouched, same as the registry wiring.
+
+- name: Deploy ESO and gather each cluster's auth facts
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    bao_host: ""
+    clusters:
+      - { context: proxmox,      mount: kubernetes-proxmox }
+      - { context: proxmox-test, mount: kubernetes-proxmox-test }
+
+  tasks:
+    - name: bao_host is required
+      ansible.builtin.assert:
+        that:
+          - bao_host | length > 0
+        fail_msg: >-
+          Pass -e bao_host=<ip> — resolved at apply time by 05-core-services-apply.sh, never
+          hardcoded here.
+        quiet: true
+
+    - name: external-secrets namespace, per cluster
+      kubernetes.core.k8s:
+        name: external-secrets
+        api_version: v1
+        kind: Namespace
+        state: present
+        context: "{{ item.context }}"
+      loop: "{{ clusters }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: ESO Helm repository
+      kubernetes.core.helm_repository:
+        name: external-secrets
+        repo_url: https://charts.external-secrets.io
+
+    - name: Install/upgrade ESO, per cluster
+      kubernetes.core.helm:
+        name: external-secrets
+        chart_ref: external-secrets/external-secrets
+        release_namespace: external-secrets
+        create_namespace: true
+        state: present
+        context: "{{ item.context }}"
+      loop: "{{ clusters }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: Wait for ESO's own pod to be ready, per cluster
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: external-secrets
+        label_selectors:
+          - app.kubernetes.io/name=external-secrets
+        context: "{{ item.context }}"
+      register: eso_pods
+      retries: 20
+      delay: 10
+      until: >
+        eso_pods.resources | length > 0 and
+        eso_pods.resources[0].status.phase == "Running" and
+        eso_pods.resources[0].status.containerStatuses[0].ready == true
+      loop: "{{ clusters }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    # ── bao's half of BAO-F3's bidirectional auth: a reviewer ServiceAccount bao can present ───
+    # when it calls the cluster's TokenReview API. Same shape as UIS's own hand-built
+    # hosts/asgard/bao-reviewer.yaml (see the investigation) — now declarative, per cluster.
+    - name: bao-auth-reviewer ServiceAccount, per cluster
+      kubernetes.core.k8s:
+        state: present
+        context: "{{ item.context }}"
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata: { name: bao-auth-reviewer, namespace: external-secrets }
+      loop: "{{ clusters }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: bao-auth-reviewer may call TokenReview (system:auth-delegator), per cluster
+      kubernetes.core.k8s:
+        state: present
+        context: "{{ item.context }}"
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata: { name: "bao-auth-reviewer-{{ item.context }}" }
+          roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:auth-delegator }
+          subjects:
+            - kind: ServiceAccount
+              name: bao-auth-reviewer
+              namespace: external-secrets
+      loop: "{{ clusters }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    # 🔵 A long-lived token Secret, not `kubectl create token` — bao's kubernetes auth config uses
+    # this token on every login call, ongoing, not once. Same annotation-triggered mechanism the
+    # reference file uses; still supported on this k3s version (confirmed, not assumed).
+    - name: bao-auth-reviewer's long-lived token Secret, per cluster
+      kubernetes.core.k8s:
+        state: present
+        context: "{{ item.context }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: bao-auth-reviewer-token
+            namespace: external-secrets
+            annotations: { kubernetes.io/service-account.name: bao-auth-reviewer }
+          type: kubernetes.io/service-account-token
+      loop: "{{ clusters }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: Wait for the token controller to populate it, per cluster
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: bao-auth-reviewer-token
+        namespace: external-secrets
+        context: "{{ item.context }}"
+      register: reviewer_secret
+      retries: 12
+      delay: 5
+      until: (reviewer_secret.resources | length > 0) and ('token' in reviewer_secret.resources[0].data | default({}))
+      loop: "{{ clusters }}"
+      loop_control: { label: "{{ item.context }}" }
+      no_log: true
+
+    # ── facts every cluster needs bao configured with — read from the kubeconfig itself, which
+    # already embeds them, rather than a second SSH hop into a k3s node for the same bytes ──────
+    - name: Each cluster's real API server address and CA (from the merged kubeconfig)
+      ansible.builtin.shell:
+        cmd: >-
+          echo "$(kubectl config view --raw -o jsonpath='{.clusters[?(@.name=="{{ item.context }}")].cluster.server}')
+          $(kubectl config view --raw -o jsonpath='{.clusters[?(@.name=="{{ item.context }}")].cluster.certificate-authority-data}')"
+      register: cluster_facts_raw
+      changed_when: false
+      loop: "{{ clusters }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: Keep every cluster's facts in one place for the next play — reviewer token stays no_log
+      ansible.builtin.set_fact:
+        cluster_wiring: "{{ cluster_wiring | default([]) + [{
+          'context': item.0.context,
+          'mount': item.0.mount,
+          'api_server': (item.1.stdout.split(' ')[0]),
+          'ca_cert_b64': (item.1.stdout.split(' ')[1]),
+          'reviewer_jwt': (reviewer_secret.results[idx].resources[0].data.token | b64decode)
+        }] }}"
+      no_log: true
+      loop: "{{ clusters | zip(cluster_facts_raw.results) | list }}"
+      loop_control:
+        loop_var: item
+        index_var: idx
+        label: "{{ item.0.context }}"
+
+- name: Configure bao — kubernetes auth per cluster, KV mount, policy, role
+  hosts: all
+  gather_facts: false
+
+  vars:
+    bao_kv_mount: platform
+    bao_eso_policy: eso-read
+
+  tasks:
+    - name: Read bao's root token — never logged, never leaves this guest
+      ansible.builtin.command:
+        cmd: "python3 -c \"import json; print(json.load(open('/etc/openbao/init-output.json'))['root_token'])\""
+      register: bao_root_token_raw
+      no_log: true
+      changed_when: false
+
+    - name: Keep it as a fact, still never logged
+      ansible.builtin.set_fact:
+        bao_env: { BAO_ADDR: "https://127.0.0.1:8200", BAO_SKIP_VERIFY: "true", BAO_TOKEN: "{{ bao_root_token_raw.stdout | trim }}" }
+      no_log: true
+
+    - name: Is the KV-v2 mount already enabled
+      ansible.builtin.command: "bao secrets list -format=json"
+      environment: "{{ bao_env }}"
+      register: bao_secrets_list
+      changed_when: false
+      no_log: true
+
+    - name: Enable it, if not
+      ansible.builtin.command: "bao secrets enable -path={{ bao_kv_mount }} -version=2 kv"
+      environment: "{{ bao_env }}"
+      when: (bao_kv_mount ~ '/') not in (bao_secrets_list.stdout | default('') | from_json)
+      no_log: true
+
+    - name: Read-only policy for ESO, scoped to its own mount
+      ansible.builtin.copy:
+        content: |
+          path "{{ bao_kv_mount }}/data/*" {
+            capabilities = ["read", "list"]
+          }
+          path "{{ bao_kv_mount }}/metadata/*" {
+            capabilities = ["read", "list"]
+          }
+        dest: "/tmp/{{ bao_eso_policy }}.hcl"
+        mode: "0600"
+
+    - name: Write the policy
+      ansible.builtin.command: "bao policy write {{ bao_eso_policy }} /tmp/{{ bao_eso_policy }}.hcl"
+      environment: "{{ bao_env }}"
+      no_log: true
+
+    - name: Is each cluster's auth mount already enabled
+      ansible.builtin.command: "bao auth list -format=json"
+      environment: "{{ bao_env }}"
+      register: bao_auth_list
+      changed_when: false
+      no_log: true
+
+    - name: Enable each cluster's own kubernetes auth mount, if not
+      ansible.builtin.command: "bao auth enable -path={{ item.mount }} kubernetes"
+      environment: "{{ bao_env }}"
+      when: (item.mount ~ '/') not in (bao_auth_list.stdout | default('') | from_json)
+      loop: "{{ hostvars['localhost'].cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+      no_log: true
+
+    # 🔴 FOUND RUNNING THIS FOR REAL: tasks run in FILE ORDER, not by reference dependency — this
+    # CA-decode task must come BEFORE the "configure auth mount" task that reads the file it
+    # writes. An earlier draft had them the other way round and failed with a no_log-censored
+    # error, which is exactly why no_log must never be the ONLY signal — see the fix below too.
+    - name: Each cluster's CA cert, decoded, for the config command below
+      ansible.builtin.copy:
+        content: "{{ item.ca_cert_b64 | b64decode }}"
+        dest: "/tmp/{{ item.context }}-ca.crt"
+        mode: "0600"
+      loop: "{{ hostvars['localhost'].cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    # 🔴 written on EVERY run, not only when missing — this is config, not a one-time bootstrap
+    # step. A rebuilt k3s node changes the API server's address; a stale config here would
+    # silently keep validating against an address nobody answers on anymore.
+    - name: Configure each cluster's auth mount with its real API server, CA and reviewer token
+      ansible.builtin.command:
+        cmd: >-
+          bao write auth/{{ item.mount }}/config
+          kubernetes_host={{ item.api_server }}
+          kubernetes_ca_cert=@/tmp/{{ item.context }}-ca.crt
+          token_reviewer_jwt={{ item.reviewer_jwt }}
+      environment: "{{ bao_env }}"
+      loop: "{{ hostvars['localhost'].cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+      no_log: true
+
+    - name: Each cluster's role — binds its ESO ServiceAccount to the read-only policy
+      ansible.builtin.command: >-
+        bao write auth/{{ item.mount }}/role/eso
+        bound_service_account_names=external-secrets
+        bound_service_account_namespaces=external-secrets
+        policies={{ bao_eso_policy }}
+        ttl=1h
+      environment: "{{ bao_env }}"
+      loop: "{{ hostvars['localhost'].cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+      no_log: true
+
+    # 🔵 Written here, not via a later pct exec hop — bao CLI + BAO_TOKEN are already set up on
+    # this exact guest for the auth/policy/role tasks above. One shared secret; each cluster's
+    # ClusterSecretStore is proven against it independently in the next play.
+    - name: Write one real test secret in bao, for the end-to-end proof in the next play
+      ansible.builtin.command: "bao kv put {{ bao_kv_mount }}/k3s-bao-ensure-selftest value=proven-2026-10-05"
+      environment: "{{ bao_env }}"
+      no_log: true
+      changed_when: true
+
+    - name: This guest's own TLS certificate, for the ClusterSecretStore's caBundle
+      ansible.builtin.slurp:
+        src: "{{ bao_tls_dir | default('/opt/openbao/tls') }}/bao.crt"
+      register: bao_cert_slurp
+
+    - name: Tidy the temp policy/CA files — they carry no secret, but no reason to leave them
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/{{ bao_eso_policy }}.hcl"
+        - "/tmp/proxmox-ca.crt"
+        - "/tmp/proxmox-test-ca.crt"
+
+- name: Apply the ClusterSecretStore and prove it actually resolves a secret
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    bao_kv_mount: platform
+
+  tasks:
+    - name: ClusterSecretStore "openbao", per cluster — same name everywhere, per BAO-F1
+      kubernetes.core.k8s:
+        state: present
+        context: "{{ item.context }}"
+        definition:
+          apiVersion: external-secrets.io/v1
+          kind: ClusterSecretStore
+          metadata: { name: openbao }
+          spec:
+            provider:
+              vault:
+                server: "https://{{ bao_host }}:8200"
+                path: "{{ bao_kv_mount }}"
+                version: "v2"
+                caBundle: "{{ hostvars[groups['all'][0]].bao_cert_slurp.content }}"
+                auth:
+                  kubernetes:
+                    mountPath: "{{ item.mount }}"
+                    role: eso
+                    serviceAccountRef: { name: external-secrets, namespace: external-secrets }
+      loop: "{{ cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: Wait for the store to report Valid, per cluster
+      kubernetes.core.k8s_info:
+        kind: ClusterSecretStore
+        name: openbao
+        context: "{{ item.context }}"
+      register: css_status
+      retries: 12
+      delay: 5
+      until: >
+        css_status.resources | length > 0 and
+        css_status.resources[0].status.conditions | selectattr('type', 'equalto', 'Ready') | map(attribute='status') | list == ['True']
+      loop: "{{ cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    # ── prove it, rather than trusting that objects exist ───────────────────────────────────────
+    # 🔴 A ClusterSecretStore reporting Ready means ESO could authenticate — it does NOT mean a
+    # real secret written in bao actually reaches a real k8s Secret. The previous play already
+    # wrote one real test secret directly on the bao guest; request it here, read it back, then
+    # remove the test fixture.
+    - name: An ExternalSecret requesting it, per cluster
+      kubernetes.core.k8s:
+        state: present
+        context: "{{ item.context }}"
+        definition:
+          apiVersion: external-secrets.io/v1
+          kind: ExternalSecret
+          metadata: { name: k3s-bao-ensure-selftest, namespace: default }
+          spec:
+            refreshInterval: 10s
+            secretStoreRef: { name: openbao, kind: ClusterSecretStore }
+            target: { name: k3s-bao-ensure-selftest }
+            data:
+              - secretKey: value
+                remoteRef: { key: k3s-bao-ensure-selftest, property: value }
+      loop: "{{ cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: The real k8s Secret must materialise with the real value, per cluster
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: k3s-bao-ensure-selftest
+        namespace: default
+        context: "{{ item.context }}"
+      register: selftest_secret
+      retries: 12
+      delay: 5
+      until: (selftest_secret.resources | length > 0) and ('value' in selftest_secret.resources[0].data | default({}))
+      loop: "{{ cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: It must be the value actually written, not merely present
+      ansible.builtin.assert:
+        that:
+          - (selftest_secret.results[idx].resources[0].data.value | b64decode) == 'proven-2026-10-05'
+        fail_msg: >-
+          {{ item.context }}'s secret decoded to something other than what was written in bao —
+          the store resolves to the WRONG place or the WRONG bao, not merely "not yet".
+        quiet: true
+      loop: "{{ cluster_wiring }}"
+      loop_control: { loop_var: item, index_var: idx, label: "{{ item.context }}" }
+
+    - name: Remove the test fixtures — leave the real wiring in place
+      kubernetes.core.k8s:
+        state: absent
+        context: "{{ item.context }}"
+        definition:
+          apiVersion: external-secrets.io/v1
+          kind: ExternalSecret
+          metadata: { name: k3s-bao-ensure-selftest, namespace: default }
+      loop: "{{ cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: >-
+          ClusterSecretStore "openbao" is Ready on {{ cluster_wiring | map(attribute='context') | join(' and ') }},
+          each on its own auth mount ({{ cluster_wiring | map(attribute='mount') | join(', ') }}),
+          proven end to end: a secret written in bao's "{{ bao_kv_mount }}" KV mount reached a
+          real k8s Secret with the correct value, then was cleaned up.
+          ⚠️ NOT DONE HERE: nothing deploys an actual ExternalSecret for a real workload yet — this
+          proves the PLUMBING, not that any service on this platform consumes it.
