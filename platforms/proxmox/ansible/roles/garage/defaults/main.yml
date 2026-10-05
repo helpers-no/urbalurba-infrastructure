@@ -1,21 +1,34 @@
 ---
-# ── the image ───────────────────────────────────────────────────────────────────────────────
-# 🔴 PINNED BY DIGEST, and for a sharper reason than usual. Garage publishes a static binary but
-# NO .sha256sum beside it (404, checked 2026-10-01), so a binary install could not be verified.
-# The image digest is a cryptographic pin that the binary route simply does not offer.
-# ⚠️ Garage publishes NO `latest` tag — Docker Hub carries version tags and commit hashes only —
-# so there is nothing to default to and the version must always be stated.
-garage_version: "v2.3.0"
-garage_image: "dxflrs/garage@sha256:866bd13ed2038ba7e7190e840482bc27234c4afaf77be8cfa439ae088c1e4690"
+# ── read live from UIS's own manifest — the single source, not a copy ───────────────────────
+# 🔴 the SAME file ansible/playbooks/047-setup-garage.yml applies to the rancher-desktop
+# cluster (`manifests/047-garage-config.yaml`). Reading it here, the same way the postgres role
+# now reads postgres-extensions.conf, means a version or port bump on rancher-desktop is picked
+# up here automatically instead of silently drifting. ⚠️ Requires manifests/047-garage-config.yaml
+# to exist in whatever /mnt/urbalurbadisk checkout this platform runs from.
+garage_manifest: "{{ lookup('file', '/mnt/urbalurbadisk/manifests/047-garage-config.yaml') }}"
+garage_version: "{{ (garage_manifest | regex_search('dxflrs/garage:(v[0-9.]+)', '\\1'))[0] }}"
 
 # ── ports ───────────────────────────────────────────────────────────────────────────────────
 # 🔵 NOT MinIO's 9000/9001. This is a different server, not a drop-in: anything pointing at the
-# old ports must be repointed deliberately rather than discovering it at runtime.
-garage_s3_port: 3900
-garage_rpc_port: 3901
+# old ports must be repointed deliberately rather than discovering it at runtime. Also read live
+# (see above) rather than copied, so a port change on rancher-desktop can't go unnoticed here.
+garage_s3_port: "{{ (garage_manifest | regex_search('name: s3-api\\s+containerPort: (\\d+)', '\\1'))[0] }}"
+garage_rpc_port: "{{ (garage_manifest | regex_search('name: rpc\\s+containerPort: (\\d+)', '\\1'))[0] }}"
 # 🔴 3902 (web) and 3903 (admin) deliberately NOT enabled, matching UIS. Nothing here calls an
 # admin API — bucket and key administration goes through the `garage` CLI — and an unused listener
 # on a service holding every object is surface for nothing.
+
+# ── the image, pinned by digest — the one thing deliberately NOT read live ──────────────────
+# 🔴 PINNED BY DIGEST, and for a sharper reason than usual. Garage publishes a static binary but
+# NO .sha256sum beside it (404, checked 2026-10-01), so a binary install could not be verified.
+# The image digest is a cryptographic pin that the binary route simply does not offer, and UIS's
+# own manifest only pins by tag — stronger here on purpose, not a drift bug.
+# ⚠️ A digest can't be derived from a version bump; resolving one is an irreducible human step.
+# garage_image_version is the version this digest was last resolved against — tasks/main.yml
+# asserts it still equals the live garage_version above, so a rancher-desktop version bump this
+# role hasn't caught up with fails loudly instead of silently installing the stale digest.
+garage_image_version: "v2.3.0"
+garage_image: "dxflrs/garage@sha256:866bd13ed2038ba7e7190e840482bc27234c4afaf77be8cfa439ae088c1e4690"
 
 garage_data_dir: /var/lib/garage
 garage_replication_factor: 1      # single node

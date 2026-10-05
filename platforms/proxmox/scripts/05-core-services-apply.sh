@@ -64,7 +64,11 @@ for addr in "$PROXMOX_HOST1_ADDR" "$PROXMOX_HOST2_ADDR" "$PROXMOX_HOST3_ADDR"; d
     # Proxmox's own default driver is named "softdog", which does not contain the substring
     # "watchdog" at all. Checking for the device Proxmox's HA stack actually opens is robust to
     # whichever driver (software or hardware) provides it, unlike grepping for one module name.
-    if ! ssh -i "$PROXMOX_SSH_KEY" -o BatchMode=yes "root@${addr}" "test -c /dev/watchdog"; then
+    # 🔴 accept-new, matching ssh_h1 above — found running this for real against a genuinely
+    # fresh known_hosts (a real new lab owner's first run): host1 only passed because ssh_h1's
+    # call moments earlier happened to cache its key first; host2 had never been touched by
+    # anything that accepts a new key, so it hit "Host key verification failed" outright.
+    if ! ssh -i "$PROXMOX_SSH_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@${addr}" "test -c /dev/watchdog"; then
         print_error "No /dev/watchdog on ${addr}. HA needs one so a node that loses quorum"
         echo "  reliably resets itself, rather than risking split-brain. softdog is the Proxmox"
         echo "  default when no hardware watchdog exists — 'modprobe softdog' and re-run."

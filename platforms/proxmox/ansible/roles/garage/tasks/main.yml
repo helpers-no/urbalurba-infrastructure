@@ -12,6 +12,22 @@
     quiet: true
   no_log: true
 
+# 🔴 THE DIGEST MUST STILL MATCH THE VERSION UIS'S OWN MANIFEST CURRENTLY DECLARES. garage_version
+# is read live from manifests/047-garage-config.yaml; garage_image_version is the version this
+# role's pinned digest was last resolved against by hand. If rancher-desktop bumps Garage and
+# nobody re-pins the digest here, this fails loudly instead of installing a stale image under a
+# version label that no longer matches it.
+- name: This role's pinned digest must match the version UIS's own manifest currently declares
+  ansible.builtin.assert:
+    that:
+      - garage_image_version == garage_version
+    fail_msg: >-
+      manifests/047-garage-config.yaml now declares {{ garage_version }}, but this role is still
+      pinned to garage_image_version {{ garage_image_version }} (digest {{ garage_image }}).
+      Garage publishes no checksum file, so the digest cannot be derived automatically — resolve
+      and pin the new digest by hand, then update garage_image_version to match.
+    quiet: true
+
 - name: Docker
   ansible.builtin.apt:
     name: [docker.io, curl, ca-certificates]

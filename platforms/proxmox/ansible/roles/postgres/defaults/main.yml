@@ -72,11 +72,18 @@ pg_repo1_retention_full: 2
 pg_repo1_retention_diff: 4
 
 # ── what UIS expects to exist ───────────────────────────────────────────────────────────────
-# 🔴 THE CONTRACT, taken verbatim from UIS's own `provision-host/uis/lib/postgres-extensions.conf`.
-# ⚠️ Measured on odin 2026-10-01: only `vector`, `postgis` and `btree_gin` exist, and only in
-# two databases. hstore, ltree, uuid-ossp, pg_trgm and pgcrypto are created NOWHERE — so a UIS
-# service that assumes them would fail on this database and nothing says why.
-pg_required_extensions: [vector, postgis, hstore, ltree, uuid-ossp, pg_trgm, btree_gin, pgcrypto]
+# 🔴 READ LIVE FROM UIS'S OWN SINGLE SOURCE — not copied. ansible/playbooks/040-database-
+# postgresql.yml (the rancher-desktop install) reads this exact file with this exact filter
+# chain; this role now reads the identical file the identical way, so a developer who adds or
+# removes an extension on rancher-desktop gets the same contract the moment they move to test
+# or production on this platform — the two installs cannot silently drift apart.
+# ⚠️ Requires provision-host/uis/lib/postgres-extensions.conf to exist in whatever
+# /mnt/urbalurbadisk checkout this platform runs from (shipped from UIS 1.6.178 on — absent in
+# any image older than that, found running this for real against a 1.6.116 image on 2026-10-05).
+pg_required_extensions: "{{ lookup('file', '/mnt/urbalurbadisk/provision-host/uis/lib/postgres-extensions.conf').splitlines()
+                           | reject('match', '^\\s*#')
+                           | reject('match', '^\\s*$')
+                           | map('trim') | list }}"
 
 # ⚠️ DATABASES AND ROLES ARE SITE DATA — supplied by the inventory, not by this role. And the role
 # creates roles WITHOUT passwords: a password in a declaration is a password in git.
