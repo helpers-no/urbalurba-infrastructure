@@ -82,6 +82,7 @@ POOL_NAME="${PROXMOX_STORAGE%-vm}"
 
 # ─── per-service: guest -> install -> replicate to both other nodes -> HA member ───────────────
 VMID_LIST=()
+REGISTRY_IP=""
 
 for svc in $CORE_SERVICES; do
     decl="generated/vars/core-services/${svc}.yml"
@@ -109,6 +110,12 @@ for svc in $CORE_SERVICES; do
     # DHCP-leased address a previous incarnation may have had.
     ssh-keygen -f ~/.ssh/known_hosts -R "${guest_ip}" >/dev/null 2>&1 || true
 
+    # 🔵 Captured here, dynamically — NEVER hardcoded — for the k3s-wiring step below, which only
+    # runs at all if "registry" is actually in CORE_SERVICES (see after this loop).
+    if [[ "$svc" == "registry" ]]; then
+        REGISTRY_IP="$guest_ip"
+    fi
+
     print_status "service-${svc} (${guest_ip})..."
     extra_vars_file="generated/vars/core-services/_extra-vars.yml"
     ansible-playbook -i "${guest_ip}," -u root --private-key "$PROXMOX_SSH_KEY" \
@@ -132,6 +139,20 @@ for svc in $CORE_SERVICES; do
 
     print_success "$svc fully protected: replicated + HA-registered"
 done
+
+# ─── wire k3s to the registry cache, ONLY if the lab owner selected it ─────────────────────────
+# 🔵 A CLEAR, CONDITIONAL STEP — not something every lab owner's cluster silently gets. A lab
+# owner who never puts "registry" in CORE_SERVICES never has k3s-registry-ensure.yml run against
+# them at all; their k3s nodes behave exactly as before. See that playbook for why a restart is
+# required and why registry_port/registry_upstreams are read from the registry role's own
+# defaults rather than duplicated here.
+if [[ -n "$REGISTRY_IP" ]]; then
+    print_section "Wire k3s to the registry cache"
+    print_status "Rendering registries.yaml on every k3s node (both clusters) via ${REGISTRY_IP}..."
+    ansible-playbook -i generated/inventory.yml --limit guests \
+        playbooks/k3s-registry-ensure.yml -e "registry_host=${REGISTRY_IP}"
+    print_success "Every k3s node now mirrors every registry upstream through ${REGISTRY_IP}"
+fi
 
 # ─── the one flat rule, naming every node + every service this run touched ─────────────────────
 if [[ "${#VMID_LIST[@]}" -gt 0 ]]; then

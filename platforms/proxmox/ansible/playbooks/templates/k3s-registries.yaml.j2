@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+# One entry per upstream the registry cache fronts — read from roles/registry/defaults/main.yml's
+# registry_upstreams, not duplicated here. See k3s-registry-ensure.yml.
+mirrors:
+{% for u in registry_upstreams %}
+  {{ u.domain }}:
+    endpoint: ["http://{{ registry_host }}:{{ registry_port }}{{ u.destination }}"]
+{% endfor %}

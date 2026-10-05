@@ -31,14 +31,18 @@ registry_port: 5000
 # ⚠️ Docker Hub MUST stay onDemand-only, no pollInterval: it rate-limits pulls and does not
 # support catalog listing, so periodic polling against it is actively harmful (documented by
 # zot itself, not guessed).
+# domain: the name a CLIENT uses in an image reference (docker.io/alpine, ghcr.io/org/repo) — NOT
+# always the same host zot connects to upstream (Docker Hub's real API host is registry-1.docker.io,
+# not docker.io). k3s-registry-ensure.yml reads THIS SAME LIST for its registries.yaml `mirrors:`
+# keys, so the domain→path mapping cannot drift between the cache and the clients pointed at it.
 # warm_path/warm_tag: a small, stable, public image per upstream, verified reachable directly
 # AND through a real local zot instance on 2026-10-05 — used only to prove the mirror actually
 # works (see tasks/main.yml), never deployed by anything.
 registry_upstreams:
-  - { name: dockerhub, destination: /docker, upstream: "https://registry-1.docker.io", warm_path: "library/alpine",        warm_tag: latest }
-  - { name: k8s,       destination: /k8s,    upstream: "https://registry.k8s.io",      warm_path: "pause",                 warm_tag: "3.9" }
-  - { name: ghcr,      destination: /ghcr,   upstream: "https://ghcr.io",              warm_path: "stefanprodan/podinfo",  warm_tag: latest }
-  - { name: quay,      destination: /quay,   upstream: "https://quay.io",              warm_path: "quay/busybox",          warm_tag: latest }
+  - { name: dockerhub, domain: docker.io,       destination: /docker, upstream: "https://registry-1.docker.io", warm_path: "library/alpine",        warm_tag: latest }
+  - { name: k8s,       domain: registry.k8s.io, destination: /k8s,    upstream: "https://registry.k8s.io",      warm_path: "pause",                 warm_tag: "3.9" }
+  - { name: ghcr,      domain: ghcr.io,         destination: /ghcr,   upstream: "https://ghcr.io",              warm_path: "stefanprodan/podinfo",  warm_tag: latest }
+  - { name: quay,      domain: quay.io,         destination: /quay,   upstream: "https://quay.io",              warm_path: "quay/busybox",          warm_tag: latest }
 
 registry_data_dir: /var/lib/registry
 
