@@ -1,11 +1,23 @@
 ---
-# k3s-bao-ensure — wire ESO + a ClusterSecretStore on each k3s cluster this platform builds
-# (production "proxmox", test "proxmox-test") to the bao guest, IF bao was selected. Run once,
-# right after the bao guest exists and is verified — see 05-core-services-apply.sh, which only
-# calls this when "bao" is in CORE_SERVICES.
+# k3s-bao-ensure — wire ESO + a REAL vault-backed ClusterSecretStore, on whichever k3s cluster(s)
+# you name, to the bao guest, IF bao was selected. Run once, right after the bao guest exists and
+# is verified — see 05-core-services-apply.sh, which only calls this when "bao" is in
+# CORE_SERVICES, and only for "proxmox" (production) by default.
 #
 #   ansible-playbook -i "<bao guest IP>," playbooks/k3s-bao-ensure.yml \
-#       -e bao_host=<the bao guest's real IP, resolved at apply time — NEVER hardcode>
+#       -e bao_host=<the bao guest's real IP, resolved at apply time — NEVER hardcode> \
+#       -e target_contexts='["proxmox"]'            # default — production only
+#       -e target_contexts='["proxmox-test"]'        # upgrade the test cluster later, on its own
+#       -e target_contexts='["proxmox","proxmox-test"]'   # both, e.g. a from-scratch rebuild
+#
+# 🔵 PRODUCTION GETS THE REAL THING; TEST GETS THE SIMPLE ONE, BY DEFAULT. See
+# k3s-bao-simple-ensure.yml for the test cluster's default (ESO + a plain-Kubernetes-Secret-backed
+# ClusterSecretStore, same name, no vault auth at all) — matching Terje's call (2026-10-05): a
+# laptop/test tier doesn't need real vault semantics, only the SAME `ExternalSecret` interface, so
+# apps behave identically regardless of which backend answers "openbao" underneath. This playbook
+# is how a lab owner UPGRADES a cluster from that simple default to the real one, on demand —
+# see scripts/upgrade-test-cluster-to-bao.sh for the one-line wrapper that does exactly this for
+# proxmox-test specifically.
 #
 # 🔵 ARCHITECTURE — see website/docs/ai-developer/plans/backlog/INVESTIGATE-service-openbao.md
 # Part 6 for the full reasoning. The short version: OpenBao's contract is NOT an address, it's
@@ -31,19 +43,28 @@
 
   vars:
     bao_host: ""
-    clusters:
-      - { context: proxmox,      mount: kubernetes-proxmox }
-      - { context: proxmox-test, mount: kubernetes-proxmox-test }
+    target_contexts: ["proxmox"]
 
   tasks:
     - name: bao_host is required
       ansible.builtin.assert:
         that:
           - bao_host | length > 0
+          - target_contexts | length > 0
         fail_msg: >-
           Pass -e bao_host=<ip> — resolved at apply time by 05-core-services-apply.sh, never
-          hardcoded here.
+          hardcoded here. target_contexts must name at least one real k3s context.
         quiet: true
+
+    # 🔵 the auth mount name is derived, not hand-paired per context — one less place a typo
+    # could silently mismatch a cluster to the wrong mount. Accumulated via loop, not a single
+    # Jinja-string expression — a scalar that is anything more than one bare {{ }} renders as a
+    # STRING that merely looks like a list, not a real one `loop:` can iterate below.
+    - name: Derive each target cluster's own auth mount name
+      ansible.builtin.set_fact:
+        clusters: "{{ clusters | default([]) + [{'context': item, 'mount': 'kubernetes-' ~ item}] }}"
+      loop: "{{ target_contexts }}"
+      loop_control: { label: "{{ item }}" }
 
     - name: external-secrets namespace, per cluster
       kubernetes.core.k8s:
@@ -297,14 +318,17 @@
         src: "{{ bao_tls_dir | default('/opt/openbao/tls') }}/bao.crt"
       register: bao_cert_slurp
 
-    - name: Tidy the temp policy/CA files — they carry no secret, but no reason to leave them
+    - name: Tidy the temp CA files, one per cluster actually targeted this run
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "/tmp/{{ item.context }}-ca.crt"
         state: absent
-      loop:
-        - "/tmp/{{ bao_eso_policy }}.hcl"
-        - "/tmp/proxmox-ca.crt"
-        - "/tmp/proxmox-test-ca.crt"
+      loop: "{{ hostvars['localhost'].cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: Tidy the temp policy file
+      ansible.builtin.file:
+        path: "/tmp/{{ bao_eso_policy }}.hcl"
+        state: absent
 
 - name: Apply the ClusterSecretStore and prove it actually resolves a secret
   hosts: localhost
@@ -314,6 +338,21 @@
     bao_kv_mount: platform
 
   tasks:
+    # 🔴 FOUND RUNNING THIS FOR REAL (in k3s-bao-simple-ensure.yml first, same fix needed here):
+    # `spec.provider` is a union — a merge-patch onto an existing store with a DIFFERENT provider
+    # (e.g. the simple plain-Secret one) adds the new provider alongside the old rather than
+    # replacing it, which the CRD rejects outright. Delete first, in either direction.
+    - name: Remove any existing "openbao" store with a different provider shape, per cluster
+      kubernetes.core.k8s:
+        state: absent
+        context: "{{ item.context }}"
+        definition:
+          apiVersion: external-secrets.io/v1
+          kind: ClusterSecretStore
+          metadata: { name: openbao }
+      loop: "{{ cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+
     - name: ClusterSecretStore "openbao", per cluster — same name everywhere, per BAO-F1
       kubernetes.core.k8s:
         state: present

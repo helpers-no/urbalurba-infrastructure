@@ -160,16 +160,27 @@ fi
 
 # ─── wire ESO + a ClusterSecretStore to bao, ONLY if the lab owner selected it ─────────────────
 # 🔵 Same conditional shape as the registry wiring above — a lab owner who never puts "bao" in
-# CORE_SERVICES never has this playbook run at all; their k3s clusters are untouched. See
-# k3s-bao-ensure.yml for why each cluster gets its own auth mount and why the root token never
-# leaves the bao guest.
+# CORE_SERVICES never has either playbook below run at all; their k3s clusters are untouched.
+#
+# 🔵 PRODUCTION GETS THE REAL THING; TEST GETS THE SIMPLE ONE (Terje, 2026-10-05). "proxmox" is
+# wired to the real vault-backed store (k3s-bao-ensure.yml — see that file for why each cluster
+# needs its own auth mount and why the root token never leaves the bao guest). "proxmox-test"
+# gets the SAME ClusterSecretStore name, backed by a plain Kubernetes Secret instead
+# (k3s-bao-simple-ensure.yml) — no vault auth, no bidirectional TokenReview, far less to go wrong
+# for a tier that doesn't need real vault semantics. Upgrade proxmox-test to the real thing later,
+# on demand, with ./scripts/upgrade-test-cluster-to-bao.sh — it never runs automatically.
 if [[ -n "$BAO_IP" ]]; then
     print_section "Wire ESO + a ClusterSecretStore to bao"
-    print_status "Deploying ESO, configuring bao's kubernetes auth per cluster, via ${BAO_IP}..."
+
+    print_status "Production (proxmox): the real vault-backed store, via ${BAO_IP}..."
     ansible-playbook -i "${BAO_IP}," -u root --private-key "$PROXMOX_SSH_KEY" \
         --ssh-common-args "-o StrictHostKeyChecking=accept-new" \
-        playbooks/k3s-bao-ensure.yml -e "bao_host=${BAO_IP}"
-    print_success "ClusterSecretStore 'openbao' is Ready on both clusters, proven end to end"
+        playbooks/k3s-bao-ensure.yml -e "bao_host=${BAO_IP}" -e 'target_contexts=["proxmox"]'
+    print_success "ClusterSecretStore 'openbao' is Ready on proxmox, proven end to end"
+
+    print_status "Test (proxmox-test): the simple plain-Secret-backed store..."
+    ansible-playbook playbooks/k3s-bao-simple-ensure.yml -e 'target_contexts=["proxmox-test"]'
+    print_success "ClusterSecretStore 'openbao' is Ready on proxmox-test (plain Secret, no vault)"
 fi
 
 # ─── the one flat rule, naming every node + every service this run touched ─────────────────────
