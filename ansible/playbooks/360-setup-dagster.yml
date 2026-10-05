@@ -35,7 +35,7 @@
     # Helm chart references — PINNED, see header.
     dagster_release_name: "dagster"
     dagster_chart: "dagster/dagster"
-    dagster_chart_version: "1.13.19"   # chart version tracks the Dagster version
+    dagster_chart_version: "1.13.25"   # chart version tracks the Dagster version
     dagster_repo_url: "https://dagster-io.github.io/helm"
 
     # Config files
@@ -320,7 +320,8 @@
     - name: "22b1. Require the fields a tag-concurrency rule cannot work without"
       # Mirrors Dagster's own tag_concurrency_limits schema
       # (dagster._core.run_coordinator.queued_run_coordinator.QueuedRunCoordinator.config_type,
-      # verified at the pinned 1.13.19) rather than inventing a shape of our own.
+      # verified at the pinned 1.13.25, byte-identical to 1.13.19) rather than
+      # inventing a shape of our own.
       ansible.builtin.assert:
         that:
           - item.key is defined and (item.key | trim | length) > 0

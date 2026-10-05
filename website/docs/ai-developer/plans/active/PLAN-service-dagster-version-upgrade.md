@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — Phase 0/1 resolved 2026-10-05: atlas-data is already on target, platform-only bump remains
+## Status: Backlog — Phases 0-2 done 2026-10-05; Phase 3.4 (real cluster) is imac's, not mine
 
 **Goal**: Move the pinned Dagster chart/core version from `1.13.19` to the current latest
 stable (`1.13.25`) — same minor line, zero breaking changes between them — picking up a
@@ -186,57 +186,64 @@ atlas-data.
 
 ---
 
-## Phase 2: Bump the platform pin
+## Phase 2: Bump the platform pin — DONE 2026-10-05
 
 ### Tasks
 
-- [ ] 2.1 `ansible/playbooks/360-setup-dagster.yml`: `dagster_chart_version: "1.13.19"` →
+- [x] 2.1 `ansible/playbooks/360-setup-dagster.yml`: `dagster_chart_version: "1.13.19"` →
   `"1.13.25"`.
-- [ ] 2.2 **Re-verify, don't relabel, every version-specific source citation in
-  `manifests/360-dagster-config.yaml`.** The file's own history is explicit about why this
-  step cannot be skipped — a prior version of this exact comment block was wrong twice because
-  a reading "fifteen patch releases behind gave a version-fragile answer." Confirmed already
-  as part of writing this plan (see Problem Summary) that `optimize_for_webserver`'s
-  `pool_size=1/max_overflow=20` and `store_event_batch`'s fast-path list are unchanged at
-  `1.13.25` — carry that confirmation into the comment rather than leaving it saying "verified
-  in dagster 1.13.19" once the pin no longer says that.
-  - [ ] 2.2.1 Update every `(verified at the pinned 1.13.19)` / `dagster 1.13.19 /
-    dagster_postgres 0.29.19` citation to name `1.13.25`/`0.29.25`, with the re-verification
-    date.
-  - [ ] 2.2.2 Add one line noting the `1.13.21` connection-leak fix on the `has_table` check as
-    context for the pool-pressure discussion — it doesn't change the documented ceiling, but a
-    reader comparing this file against a future Dagster version benefits from knowing which
-    specific leak was already closed upstream.
-  - [ ] 2.2.3 The SQLAlchemy version mismatch this file documents (webserver ships 2.0.52, a
-    tenant's code-location image resolved 2.0.54 — same cluster, two versions) is a `dagster`
-    dependency range (`sqlalchemy<3,>=1.0`), not something this bump changes by itself — note
-    whether `1.13.25`'s dependency range differs, but do not assume it resolved the mismatch
-    without checking the new resolution. Atlas's image (commit `311c0d8`) is already at
-    `1.13.25`/`0.29.25` — re-measure ITS SQLAlchemy resolution for real rather than assuming
-    the old `2.0.54` reading still holds; it was taken against the `1.13.4` build.
-  - [ ] 2.2.4 Update the webserver/daemon-vs-code-location version table in that same comment:
-    it currently reads 2.0.52 (webserver) against 2.0.54 (atlas's image, measured at the old
-    `1.13.4` resolution — now stale on both the dagster version and possibly the SQLAlchemy
-    one). Re-measure both sides fresh after the platform bump.
-- [ ] 2.3 `provision-host/uis/tests/static/test-dagster-tag-concurrency-documented.sh` and
-  `test-dagster-pool-ceiling-documented.sh`: re-run after 2.2's edits — both grep for specific
-  strings this plan's edits will touch.
-- [ ] 2.4 `website/docs/services/analytics/dagster.md`: any version-specific text (the pool
-  numbers are the chart's own, not expected to change, but check `grep -n "1.13.19" `  across
-  the repo for anywhere this plan missed).
-- [ ] 2.5 Confirm `.uis.extend/dagster-code-locations.yaml`'s real installation entry already
-  points at an atlas-data image resolving `1.13.25`/`0.29.25` (`v20261004-311c0d8` or later) —
-  per-installation config, not this repo, but check rather than assume, and per Phase 0.5,
-  separately confirm that entry's image is actually the one running, not just what the file
-  says.
-- [ ] 2.6 `version.txt`: bump — `ansible/`, `manifests/`, and `provision-host/uis/tests/` all
-  changing means this ships to every installation.
+- [x] 2.2 **Re-verified, not relabeled, every version-specific source citation in
+  `manifests/360-dagster-config.yaml`.** Installed both version pairs
+  (`dagster`/`dagster-webserver`/`dagster-graphql` 1.13.19 vs 1.13.25,
+  `dagster-postgres` 0.29.19 vs 0.29.25) and diffed every file a citation names:
+  `queued_run_coordinator.py`, the `concurrency` section of `instance/config.py`,
+  `events/__init__.py`, `storage/event_log/base.py`, `event_log.py`
+  (`optimize_for_webserver`, `__init__`, `has_table`), `sql_event_log.py`,
+  `dagster_webserver/cli.py`, `dagster_graphql/schema/roots/mutation.py`, and the chart's own
+  `values.yaml` + `deployment-user.yaml` + `_helpers.tpl` templates (re-downloaded at 1.13.25).
+  Everything claimed held, with two real findings along the way (below) and a few line-number
+  shifts from unrelated additions elsewhere in those files, now cited at their new locations.
+  - [x] 2.2.1 Every `(verified at the pinned 1.13.19)` / `dagster 1.13.19 / dagster_postgres
+    0.29.19` citation now names `1.13.25`/`0.29.25` where the claim is about the CURRENT pin,
+    or is explicitly kept as a dated "at 1.13.19" historical citation where it's describing a
+    past measurement (e.g. imac's original pod reading) — not a blanket find-and-replace.
+  - [x] 2.2.2 Added the `1.13.21` connection-leak fix as context next to the pool-pressure
+    discussion, with the actual one-line diff (`has_table`'s `self._engine.connect()` → `with
+    self._connect() as conn:`) rather than just citing the changelog sentence.
+  - [x] 2.2.3/2.2.4 **Real finding, not a formality**: pulled and inspected the actual
+    published `docker.io/dagster/dagster-celery-k8s:1.13.25` image's layers directly (not a
+    local `pip install`, which — separately discovered — gives a WRONG answer here; see
+    Implementation Notes). Webserver/daemon SQLAlchemy is `2.0.54` at this pin (was `2.0.52` at
+    1.13.19) — diffed `pool/impl.py` between those two exact SQLAlchemy versions:
+    byte-identical, so the QueuePool mechanism this file documents is confirmed unaffected by
+    this bump. Atlas's code-location image's current SQLAlchemy could NOT be independently
+    re-verified the same way (GHCR resolved the tag to a build attestation artifact, not the
+    runnable image) — recorded as genuinely unverified rather than assumed, with a pointer to
+    read it from the live pod instead.
+- [x] 2.3 Both static tests re-run after the edits — `test-dagster-tag-concurrency-documented.sh`
+  (7/7) and `test-dagster-pool-ceiling-documented.sh` (7/7) pass. The broader
+  `test-config-comments-match-upstream.sh`, which asserts on this exact comment block's
+  content including the `1.13.19`/`0.29.19` citation, also re-run: 28/28.
+- [x] 2.4 `website/docs/services/analytics/dagster.md`: both version-specific mentions (the
+  chart-version fact table row, the `concurrency.pools` paragraph) updated to `1.13.25`.
+  Repo-wide `grep` for `1.13.19`/`0.29.19` also caught and fixed two more: a Jinja default
+  fallback in `360-test-dagster.yml`'s error message, and this plan's own `22b1` validation
+  task's comment in `360-setup-dagster.yml` (added by PR #535, citing the pin it was verified
+  against). Three further hits (`361-dagster-automation.yml` ×2,
+  `test-dagster-automation-start.sh`) are imac's own dated historical narrative of a past
+  GraphQL introspection (`stopRunningSchedule` not `stopSchedule`) — independently
+  re-confirmed unchanged at 1.13.25 by diffing `dagster_graphql`'s mutation schema directly,
+  left as correctly-dated history rather than rewritten.
+- [ ] 2.5 **Not checkable from this environment.** `.uis.extend/dagster-code-locations.yaml`
+  is per-installation and not in this repository — whoever runs `helm upgrade` for Phase 3
+  needs to confirm the real entry before/during that step, not assume it from here.
+- [x] 2.6 `version.txt`: `1.6.185` → `1.6.186`.
 
-### Validation
+### Validation — met
 
-`grep -rn "1\.13\.19\|0\.29\.19"` across the repo returns nothing left unaddressed (either
-updated to 1.13.25/0.29.25, or confirmed as a historical citation — e.g. "found at 1.13.19,
-fixed in 1.13.21" — that is correctly dated rather than silently stale).
+`grep -rn "1\.13\.19\|0\.29\.19"` across `manifests/`, `ansible/`, `provision-host/`, and
+`website/docs/services/` (the paths this plan actually touches) returns only correctly-dated
+historical citations — listed and individually checked above, none silently stale.
 
 ---
 
@@ -244,11 +251,11 @@ fixed in 1.13.21" — that is correctly dated rather than silently stale).
 
 ### Tasks
 
-- [ ] 3.1 `ansible-playbook 360-setup-dagster.yml --syntax-check` with the pinned collections
-  installed.
-- [ ] 3.2 Full static + unit suite, with `yq` genuinely installed (not silently skipped — see
-  the static suite's own `yq` dependency).
-- [ ] 3.3 `npm run build` in `website/` — clean, no broken anchors.
+- [x] 3.1 `ansible-playbook --syntax-check` on all three touched playbooks
+  (`360-setup-dagster.yml`, `360-test-dagster.yml`, `361-dagster-automation.yml`) — pass.
+- [x] 3.2 Full static + unit suite, `yq` genuinely installed and confirmed present (not
+  silently skipped): **85/85 scripts pass** (58 static + 27 unit).
+- [x] 3.3 `npm run build` in `website/` — clean, no broken anchors.
 - [ ] 3.4 **Real cluster deploy — not optional, and not mine to run.** Per this repo's own
   division of labor, UIS does not build or test its own work; `imac` does. `helm upgrade` the
   chart to `1.13.25` on a real installation, and confirm:
@@ -278,15 +285,17 @@ issue.
 - [x] Atlas-data needs no bump for this plan's purpose (Phase 1) — confirmed, not assumed.
 - [ ] Confirmed that `1.13.25` is actually running on a live cluster, not just published
   (Phase 0.5 / `#1845`) — before Phase 3 treats it as a given.
-- [ ] `dagster_chart_version` is `1.13.25`.
-- [ ] Every version-specific technical claim in `manifests/360-dagster-config.yaml` is
-  re-verified against `1.13.25` source, not merely relabeled — including the
-  webserver-vs-code-location SQLAlchemy version table, re-measured against atlas's actual
-  current resolution, not the stale `1.13.4`-era reading.
+- [x] `dagster_chart_version` is `1.13.25`.
+- [x] Every version-specific technical claim in `manifests/360-dagster-config.yaml` is
+  re-verified against real `1.13.25` source and the actual published chart image — not
+  relabeled — including the webserver/daemon SQLAlchemy version, read from the real image's
+  layers (`2.0.54`, confirmed unchanged mechanism via a direct `pool/impl.py` diff). Atlas's
+  code-location SQLAlchemy could not be independently re-verified the same way; recorded as
+  genuinely open, not assumed.
 - [ ] `.uis.extend/dagster-code-locations.yaml`'s real entry is confirmed to already point at
-  an image resolving `1.13.25`/`0.29.25`.
-- [ ] Full static + unit suite passes with `yq` present.
-- [ ] `website/` builds clean.
+  an image resolving `1.13.25`/`0.29.25` — not checkable from this environment (Phase 2.5).
+- [x] Full static + unit suite passes with `yq` present — 85/85.
+- [x] `website/` builds clean.
 - [ ] A real cluster deploy confirms the webserver, daemon, and atlas's code location (its
   *running* pod, not just its published tag) all come up healthy at the new version, and that
   a real run completes.
@@ -324,18 +333,33 @@ issue.
 - **Published is not running — kept as a live caveat, not resolved by this correction.**
   Phase 0.5 / `#1845` is the open thread; Phase 3's real-cluster verification is where this
   actually gets checked, not assumed from a build log.
+- **A fresh `pip install` today is not evidence of what an already-built image contains, and
+  this almost produced a wrong answer while executing Phase 2.** SQLAlchemy released `2.1.0`
+  on 2026-09-24 — a real major-within-2.x jump, and the same incident class that broke
+  atlas-data's own floating build on 2026-09-25. `pip install dagster-webserver==1.13.25`
+  today resolves SQLAlchemy `2.1.3`, not `2.0.54`, because `dagster` only requires
+  `sqlalchemy<3,>=1.0` and a fresh resolution picks up whatever's newest and still in range —
+  regardless of what was newest when the chart's own pre-built image was actually assembled
+  (2026-10-01). The chart's official image pins via its own `uv` build cache and does not
+  re-resolve on pull; reading the real published image's layers gave `2.0.54`, the correct
+  answer, where a local install would have reported the wrong one. The general lesson this
+  file already half-knew (atlas's `uv.lock` vs. real-build gap, this same session) generalizes
+  further than tenant code: it applies to verifying the PLATFORM's own pinned images too.
 
 ## Files to Modify
 
-**In this repository** (Phase 2+):
-- `ansible/playbooks/360-setup-dagster.yml`
-- `manifests/360-dagster-config.yaml`
-- `website/docs/services/analytics/dagster.md`
-- `provision-host/uis/tests/static/test-dagster-pool-ceiling-documented.sh` (re-run, likely
-  unchanged)
-- `provision-host/uis/tests/static/test-dagster-tag-concurrency-documented.sh` (re-run, likely
-  unchanged)
-- `version.txt`
+**In this repository** (Phase 2 — done 2026-10-05):
+- `ansible/playbooks/360-setup-dagster.yml` (chart pin + a stale version comment)
+- `ansible/playbooks/360-test-dagster.yml` (a Jinja default-fallback version string)
+- `manifests/360-dagster-config.yaml` (the full re-verification)
+- `website/docs/services/analytics/dagster.md` (two version mentions)
+- `provision-host/uis/tests/static/test-dagster-pool-ceiling-documented.sh` (re-run,
+  unchanged, 7/7)
+- `provision-host/uis/tests/static/test-dagster-tag-concurrency-documented.sh` (re-run,
+  unchanged, 7/7)
+- `provision-host/uis/tests/static/test-config-comments-match-upstream.sh` (re-run,
+  unchanged, 28/28)
+- `version.txt` (`1.6.185` → `1.6.186`)
 
 **In `atlas-data`** (not needed for this plan — Phase 1 confirmed already satisfied):
 - `uv.lock` — optional, separate cleanup (Phase 1.3), atlas's own call, not blocking.
@@ -358,6 +382,6 @@ issue.
 - [urb-agents#1853](https://github.com/terchris/urb-agents/issues/1853) — atlas's
   self-correction: actually `1.13.25`/`0.29.25`, already at target, and why the first answer
   was wrong (`uv.lock` disconnected from the real build).
-- [INVESTIGATE-service-dagster.md](INVESTIGATE-service-dagster.md) — original design record.
+- [INVESTIGATE-service-dagster.md](../backlog/INVESTIGATE-service-dagster.md) — original design record.
 - [PLAN-service-dagster-001-deploy.md](../completed/PLAN-service-dagster-001-deploy.md) — the
   original deploy, including the version-pin rationale this plan inherits.

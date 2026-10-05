@@ -386,7 +386,7 @@
           in about 5 seconds with stepsSucceeded=0 — while the location keeps
           reporting LOADED and this platform keeps reporting healthy.
           Fix in the TENANT image: add `dagster-postgres` matching the platform's
-          Dagster line ({{ dagster_chart_version | default('1.13.19') }} ->
+          Dagster line ({{ dagster_chart_version | default('1.13.25') }} ->
           dagster-postgres 0.29.x). See the code-location contract in
           /docs/services/analytics/dagster.
         success_msg: >-
