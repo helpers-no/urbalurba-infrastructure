@@ -3,7 +3,7 @@
 OpenTofu-based provisioning for Azure Kubernetes Service (AKS).
 
 This is the **platform layer** — it creates everything needed before services
-(PostgreSQL, Redis, etc.) are deployed via UIS. It replaces the old `hosts/azure-aks/` scripts.
+(PostgreSQL, Redis, etc.) are deployed via UIS. It replaces the old `hosts-to-be-deleted/azure-aks/` scripts (renamed from `hosts/` 2026-10-05, pending deletion).
 
 ## What this provisions (Step 1)
 

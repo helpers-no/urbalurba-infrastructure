@@ -60,11 +60,11 @@ Only platforms in `running` state get selectable numbers — switching to a `not
 |---|---|---|---|
 | [Rancher Desktop](./rancher-kubernetes.md) | Local development on your laptop (single-node k3s) | Install [Rancher Desktop](https://rancherdesktop.io/) → enable Kubernetes → `./uis start`. No `init` step. | ✅ Default |
 | [Azure AKS](./azure-aks.md) | Production cloud cluster | `./uis tools install azure-aks` → `./uis platform init azure-aks` → `./uis platform up azure-aks` | ✅ Verified end-to-end |
-| [Azure VM (MicroK8s)](./azure-microk8s.md) | Azure VM with MicroK8s instead of managed AKS | Pre-UIS-CLI scripts under `hosts/azure-microk8s/` | ⚠ Not yet migrated to `uis platform` |
-| [Multipass MicroK8s](./multipass-microk8s.md) | Local virtualised cluster. **Superseded by Rancher Desktop.** | Pre-UIS-CLI scripts under `hosts/multipass-microk8s/` | ⚠ Kept for historical reference |
-| [Raspberry Pi MicroK8s](./raspberry-microk8s.md) | Edge / ARM-based deployments | Pre-UIS-CLI scripts under `hosts/raspberry-microk8s/`, manual provisioning, Tailscale for remote access | ⚠ Not yet migrated |
+| [Azure VM (MicroK8s)](./azure-microk8s.md) | Azure VM with MicroK8s instead of managed AKS | Pre-UIS-CLI scripts under `hosts-to-be-deleted/azure-microk8s/` | ⚠ Not yet migrated to `uis platform` |
+| [Multipass MicroK8s](./multipass-microk8s.md) | Local virtualised cluster. **Superseded by Rancher Desktop.** | Pre-UIS-CLI scripts under `hosts-to-be-deleted/multipass-microk8s/` | ⚠ Kept for historical reference |
+| [Raspberry Pi MicroK8s](./raspberry-microk8s.md) | Edge / ARM-based deployments | Pre-UIS-CLI scripts under `hosts-to-be-deleted/raspberry-microk8s/`, manual provisioning, Tailscale for remote access | ⚠ Not yet migrated |
 
-The "not yet migrated" platforms work — they use the older `hosts/` script flow — but they don't speak the `uis platform list / use / init / up / status / down` vocabulary yet. Migration is tracked at [INVESTIGATE-system-migrate-hosts-to-platforms.md](../ai-developer/plans/backlog/INVESTIGATE-system-migrate-hosts-to-platforms.md).
+The "not yet migrated" platforms work — they use the older `hosts-to-be-deleted/` script flow — but they don't speak the `uis platform list / use / init / up / status / down` vocabulary yet. Migration is tracked at [INVESTIGATE-system-migrate-hosts-to-platforms.md](../ai-developer/plans/backlog/INVESTIGATE-system-migrate-hosts-to-platforms.md).
 
 ## How it works — cluster targeting
 

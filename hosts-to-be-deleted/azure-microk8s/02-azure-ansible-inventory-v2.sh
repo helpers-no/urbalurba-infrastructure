@@ -126,13 +126,13 @@ check_current_directory() {
     display_substep "Current directory: $CURRENT_DIR"
     
     if [ "$CURRENT_DIR" != "azure-microk8s" ]; then
-        add_error "Directory Check" "This script must be run from the folder hosts/azure-microk8s"
+        add_error "Directory Check" "This script must be run from the folder hosts-to-be-deleted/azure-microk8s"
         echo -e "${RED}Current directory: $CURRENT_DIR${NC}"
         echo -e "${RED}Full path: $PWD${NC}"
         return 1
     fi
     
-    display_success "Correct directory confirmed: hosts/azure-microk8s"
+    display_success "Correct directory confirmed: hosts-to-be-deleted/azure-microk8s"
     add_status "Environment" "Directory" "OK"
     return 0
 }

@@ -32,7 +32,7 @@ Two populations remain, and they are different questions:
 
 ### 1. `hosts/<name>/` — an installation's own manifests
 
-`hosts/asgard/` holds real addresses, container ids and bridge names, correctly:
+`hosts-to-be-deleted/asgard/` (renamed from `hosts/asgard/` 2026-10-05) holds real addresses, container ids and bridge names, correctly:
 they are that installation's configuration, and a proxy manifest without an
 address is not a manifest. The question is not whether the values are right. It
 is **whether one installation's private topology belongs in a public repository

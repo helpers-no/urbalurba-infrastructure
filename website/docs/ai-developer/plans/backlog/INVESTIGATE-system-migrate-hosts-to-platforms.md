@@ -1,4 +1,4 @@
-# Investigate: migrate `hosts/*` to `platforms/*` (or formally retire)
+# Investigate: migrate `hosts-to-be-deleted/*` to `platforms/*` (or formally retire)
 
 > **IMPLEMENTATION RULES:** Before implementing this plan, read and follow:
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
@@ -6,9 +6,31 @@
 
 ## Status: Backlog (Tier 3 — design question, not urgent)
 
-**Last Updated**: 2026-05-10
+**Last Updated**: 2026-10-05
 
-**Source**: surfaced during the platform-docs refresh (PR #150 + content PR-B). PR #149 shipped `platforms/azure-aks/` as the modern UIS-CLI-driven AKS path. The legacy `hosts/aks/`, `hosts/azure-microk8s/`, `hosts/multipass-microk8s/`, `hosts/raspberry-microk8s/`, and `hosts/rancher-kubernetes/` directories are still in tree, with their own deprecated scripts and "not migrated to UIS CLI" caution banners on the docs site.
+**2026-10-05 update (Terje, prompted by ops's Proxmox work raising the same `hosts/` vs
+`platforms/` confusion fresh):**
+
+- Renamed the top-level `hosts/` → `hosts-to-be-deleted/` repo-wide — a visible, low-risk
+  signal that the whole area is leaving, without forcing the two still-open per-platform
+  decisions below. Confirmed first that nothing in the live `./uis` CLI or any actively-run
+  ansible playbook depends on this directory's name or location — the only live reference was
+  the Dockerfile's `COPY`, updated to the new source path (destination inside the container is
+  deliberately unchanged, so any still-working legacy manual flow doesn't break mid-decision).
+- **Confirmed safe to delete now, independently re-verified rather than taken on faith:**
+  `azure-aks/` (fully superseded, matches this doc's existing finding), `multipass-microk8s/`
+  (doc already says "replaced by Rancher Desktop," unmaintained 1+ year), and
+  `rancher-kubernetes/` (audited both scripts directly — nothing live references them;
+  `./uis start` for Rancher Desktop runs entirely through `platforms/rancher-desktop/` today).
+  Plus their `install-*.sh` wrappers. **Still not deleted** — renamed and staged, actual
+  deletion deferred per Terje's call, tracked as its own follow-up.
+- **`azure-microk8s/` and `raspberry-microk8s/` remain genuinely open** — "does anyone still
+  want this" is a usage question this repo can't answer from the code, not a technical one.
+- **`asgard/`, `assist/`, `mac-ollama/` are a different kind of problem, deliberately not
+  touched here beyond the rename**: real per-installation config, not legacy platform code —
+  see [PLAN-system-public-repo-internal-detail.md](PLAN-system-public-repo-internal-detail.md).
+
+**Original source**: surfaced during the platform-docs refresh (PR #150 + content PR-B). PR #149 shipped `platforms/azure-aks/` as the modern UIS-CLI-driven AKS path. The legacy `hosts-to-be-deleted/aks/`, `hosts-to-be-deleted/azure-microk8s/`, `hosts-to-be-deleted/multipass-microk8s/`, `hosts-to-be-deleted/raspberry-microk8s/`, and `hosts-to-be-deleted/rancher-kubernetes/` directories are still in tree, with their own deprecated scripts and "not migrated to UIS CLI" caution banners on the docs site.
 
 ---
 
@@ -19,18 +41,18 @@ UIS today has **two parallel platform shapes** that don't share infrastructure:
 | Shape | Code | Driven by | Verified |
 |---|---|---|---|
 | **New (`platforms/*`)** | `platforms/azure-aks/scripts/{00-bootstrap,01-apply,02-post-apply,03-destroy}.sh`, `platforms/azure-aks/tofu/`, etc. | `./uis` CLI flow + sourced helpers + ansible playbooks for cross-cluster bits | ✅ AKS Tier A retry №4 (PR #149) |
-| **Legacy (`hosts/*`)** | `hosts/azure-aks/`, `hosts/azure-microk8s/`, `hosts/multipass-microk8s/`, `hosts/raspberry-microk8s/`, `hosts/rancher-kubernetes/` + `hosts/install-*.sh` driver scripts | Bash scripts invoked manually inside the provision-host container | ❓ Last verified pre-UIS-CLI; current status unknown for each |
+| **Legacy (`hosts-to-be-deleted/*`)** | `hosts-to-be-deleted/azure-aks/`, `hosts-to-be-deleted/azure-microk8s/`, `hosts-to-be-deleted/multipass-microk8s/`, `hosts-to-be-deleted/raspberry-microk8s/`, `hosts-to-be-deleted/rancher-kubernetes/` + `hosts-to-be-deleted/install-*.sh` driver scripts | Bash scripts invoked manually inside the provision-host container | ❓ Last verified pre-UIS-CLI; current status unknown for each |
 
 The new shape ships per-platform scripts that integrate with `./uis deploy <service>`, the merged kubeconfig, and `cluster-config.sh`. The legacy shape predates all of that — it stands up a cluster but doesn't wire it into UIS's deploy flow consistently.
 
-**The question isn't "should we migrate"** (the duplication is obvious tech debt). **The question is "which legacy platforms still warrant first-class support, and what does the migration look like?"** Answers determine whether each legacy `hosts/<x>/` directory becomes `platforms/<x>/` or gets formally retired.
+**The question isn't "should we migrate"** (the duplication is obvious tech debt). **The question is "which legacy platforms still warrant first-class support, and what does the migration look like?"** Answers determine whether each legacy `hosts-to-be-deleted/<x>/` directory becomes `platforms/<x>/` or gets formally retired.
 
 ---
 
-## What's currently in `hosts/`
+## What's currently in `hosts-to-be-deleted/`
 
 ```
-hosts/
+hosts-to-be-deleted/
 ├── azure-aks/              # superseded by platforms/azure-aks/ (PR #146 + #149); pure dead code
 ├── azure-microk8s/         # MicroK8s on an Azure VM (instead of managed AKS); CAF-compliant tooling
 ├── multipass-microk8s/     # MicroK8s in Multipass on macOS/Linux; explicitly "replaced by Rancher Desktop"
@@ -43,20 +65,20 @@ hosts/
 └── 03-setup-microk8s-v2.sh # shared MicroK8s setup invoked by multiple flavours
 ```
 
-`hosts/azure-aks/` is the clearest case: it's been completely superseded by `platforms/azure-aks/`. The other five each have a different story.
+`hosts-to-be-deleted/azure-aks/` is the clearest case: it's been completely superseded by `platforms/azure-aks/`. The other five each have a different story.
 
 ---
 
 ## Per-platform questions
 
-### `hosts/azure-aks/` — superseded; safe to delete
+### `hosts-to-be-deleted/azure-aks/` — superseded; safe to delete
 
 - ✅ Replaced by `platforms/azure-aks/` (PR #146).
 - ✅ Tier A retry №4 verified the new path end-to-end.
-- ❓ Does any tool / script / CI workflow still reference `hosts/azure-aks/`?
+- ❓ Does any tool / script / CI workflow still reference `hosts-to-be-deleted/azure-aks/`?
 - 📝 If grep returns clean, **delete the directory and the `install-azure-aks.sh` driver** as a follow-up code-cleanup PR. Pure dead code.
 
-### `hosts/azure-microk8s/` — does anyone still want it?
+### `hosts-to-be-deleted/azure-microk8s/` — does anyone still want it?
 
 Use case: an Azure VM running MicroK8s, instead of managed AKS. Trade-offs vs. AKS: cheaper at idle (no AKS control-plane overhead), more manual operations (no cluster autoscaler, no Azure-managed upgrades), CAF-compliant networking via Tailscale.
 
@@ -64,12 +86,12 @@ Use case: an Azure VM running MicroK8s, instead of managed AKS. Trade-offs vs. A
 - ❓ Does AKS sufficiently cover the use case now that we have `platforms/azure-aks/` working? AKS is roughly ~€1/day for a 1-node test cluster — comparable to a B2s_v2 VM running MicroK8s, but with AKS's autoscaler + managed control plane.
 - 📝 If no active user, deprecate and retire. If yes, scope `platforms/azure-microk8s/` migration: reuse `platforms/azure-aks/`'s shape (00-bootstrap-state.sh equivalent for the Azure VM, 01-apply.sh for OpenTofu-driven VM provisioning + cloud-init, 02-post-apply.sh for the kubeconfig-merge and Traefik install — Traefik playbook already platform-agnostic per PR #149).
 
-### `hosts/multipass-microk8s/` — formally retire
+### `hosts-to-be-deleted/multipass-microk8s/` — formally retire
 
 - ✅ Already documented as "replaced by Rancher Desktop" in the existing `multipass-microk8s.md` page.
-- 📝 No migration. Delete the directory + the `install-multipass-microk8s.sh` driver in the same code-cleanup PR as `hosts/azure-aks/`. Update the docs page to add a "this content is preserved for historical reference" header.
+- 📝 No migration. Delete the directory + the `install-multipass-microk8s.sh` driver in the same code-cleanup PR as `hosts-to-be-deleted/azure-aks/`. Update the docs page to add a "this content is preserved for historical reference" header.
 
-### `hosts/raspberry-microk8s/` — design question
+### `hosts-to-be-deleted/raspberry-microk8s/` — design question
 
 Use case: edge / IoT / development on ARM hardware. Currently requires Tailscale for remote access and manual provisioning of the Pi.
 
@@ -78,9 +100,9 @@ Use case: edge / IoT / development on ARM hardware. Currently requires Tailscale
 - ❓ If we keep it, what does `platforms/raspberry-microk8s/` look like? RPi is fundamentally manual — the Pi has to be physically prepared with an SD card, networked, etc. The `platforms/*` shape assumes scripts can drive everything; an RPi `platforms/` entry would be more "here's the runbook" than "here's the OpenTofu module".
 - 📝 If kept, migrate as a "manual platform" with a `platforms/raspberry-microk8s/README.md` runbook + lightweight scripts. If retired, delete and add a note about ARM workloads going to AKS's ARM-capable node pools or another cloud.
 
-### `hosts/rancher-kubernetes/` — already implicit
+### `hosts-to-be-deleted/rancher-kubernetes/` — already implicit
 
-- ❓ The `platforms/rancher-kubernetes.md` doc says install Rancher Desktop and run `./uis start` — no script needed. The `hosts/rancher-kubernetes/` directory has scripts; what do they do that the docs don't describe?
+- ❓ The `platforms/rancher-kubernetes.md` doc says install Rancher Desktop and run `./uis start` — no script needed. The `hosts-to-be-deleted/rancher-kubernetes/` directory has scripts; what do they do that the docs don't describe?
 - 📝 Audit the scripts. Likely they're old setup wrappers that Rancher Desktop made obsolete. If so, delete the directory + `install-rancher-kubernetes.sh` driver. Rancher Desktop is its own installer.
 
 ---
@@ -109,7 +131,7 @@ A child PLAN per platform that's worth migrating, plus one cleanup PR for the de
 
 1. **Decision**: keep & migrate / retire & delete / hibernate (keep code, don't promise support)?
 2. **For "keep & migrate"**: scope the migration PR — which scripts, what state, what verification gate.
-3. **For "retire & delete"**: scope a single code-cleanup PR that removes all `hosts/<x>/` directories at once and updates the platform doc to note "preserved for historical reference, not supported".
+3. **For "retire & delete"**: scope a single code-cleanup PR that removes all `hosts-to-be-deleted/<x>/` directories at once and updates the platform doc to note "preserved for historical reference, not supported".
 
 ---
 
@@ -121,12 +143,18 @@ The legacy host documentation pages still describe the manual-script approach (`
 
 | Page | Path | Notes |
 |------|------|-------|
-| Azure AKS | `website/docs/hosts/azure-aks.md` | Full AKS deployment guide with az CLI — superseded by `platforms/azure-aks/` shipping. |
-| Azure MicroK8s | `website/docs/hosts/azure-microk8s.md` | Azure VM + MicroK8s via CAF — depends on the "keep & migrate" vs "retire" decision above. |
-| Multipass MicroK8s | `website/docs/hosts/multipass-microk8s.md` | Legacy, already marked "USE RANCHER DESKTOP INSTEAD" — formally retire alongside the code. |
-| Raspberry Pi | `website/docs/hosts/raspberry-microk8s.md` | Edge/IoT — depends on the design decision below. |
-| Cloud-Init | `website/docs/hosts/cloud-init/index.md` | Cloud-init templates — retain only if VM-based platforms are kept. |
-| Cloud-Init Secrets | `website/docs/hosts/cloud-init/secrets.md` | SSH key setup for cloud-init — same gate. |
+⚠️ **Corrected 2026-10-05**: these doc pages are not under `website/docs/hosts-to-be-deleted/`
+(a mechanical rename-script error briefly put them there) — they already moved to
+`website/docs/platforms/` as part of PR #150, well before today's `hosts/` →
+`hosts-to-be-deleted/` script-directory rename. The two renames are unrelated; don't conflate
+the doc path with the script path below.
+
+| Azure AKS | `website/docs/platforms/azure-aks.md` | Full AKS deployment guide with az CLI — superseded by `platforms/azure-aks/` shipping. |
+| Azure MicroK8s | `website/docs/platforms/azure-microk8s.md` | Azure VM + MicroK8s via CAF — depends on the "keep & migrate" vs "retire" decision above. |
+| Multipass MicroK8s | `website/docs/platforms/multipass-microk8s.md` | Legacy, already marked "USE RANCHER DESKTOP INSTEAD" — formally retire alongside the code. |
+| Raspberry Pi | `website/docs/platforms/raspberry-microk8s.md` | Edge/IoT — depends on the design decision below. |
+| Cloud-Init | `website/docs/platforms/cloud-init/index.md` | Cloud-init templates — retain only if VM-based platforms are kept. |
+| Cloud-Init Secrets | `website/docs/platforms/cloud-init/secrets.md` | SSH key setup for cloud-init — same gate. |
 
 ### Doc-side questions
 
@@ -138,18 +166,18 @@ The legacy host documentation pages still describe the manual-script approach (`
 
 The doc rewrite for each page lands as part of that page's parent decision in "Per-platform questions" above:
 
-- `hosts/azure-aks.md` — delete; the canonical AKS guide is `platforms/azure-aks.md`. ✓ already done (the legacy host page survives only as a redirect/caution banner).
-- `hosts/azure-microk8s.md` — depends on keep-or-retire decision.
-- `hosts/multipass-microk8s.md` — retire alongside the code.
-- `hosts/raspberry-microk8s.md` — depends on design decision.
-- `hosts/cloud-init/*` — retain only if at least one platform still uses cloud-init provisioning.
+- `website/docs/platforms/azure-aks.md` — delete; the canonical AKS guide is `platforms/azure-aks.md`. ✓ already done (the legacy host page survives only as a redirect/caution banner).
+- `website/docs/platforms/azure-microk8s.md` — depends on keep-or-retire decision.
+- `website/docs/platforms/multipass-microk8s.md` — retire alongside the code.
+- `website/docs/platforms/raspberry-microk8s.md` — depends on design decision.
+- `website/docs/platforms/cloud-init/*` — retain only if at least one platform still uses cloud-init provisioning.
 
 ---
 
 ## Out of scope for this investigation
 
 - **Adding new platforms** that don't currently exist (GCP/EKS/etc.) — that's a separate "second cloud" investigation. The shared playbook in `ansible/playbooks/003-setup-traefik.yml` plus the `platforms/azure-aks/` shape gives that work a clean starting point, but it's not the same scope as legacy migration.
-- **Removing `hosts/` entirely.** Until the per-platform decisions are made, `hosts/` stays.
+- **Removing `hosts-to-be-deleted/` entirely.** Until the per-platform decisions are made, `hosts-to-be-deleted/` stays.
 
 ---
 

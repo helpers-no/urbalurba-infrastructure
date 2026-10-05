@@ -97,7 +97,7 @@ prompt_overwrite_if_exists() {
 
 # az_login_if_needed — check current az session; run device-code login if not
 # signed in. Device code (not browser) because the provision-host container
-# has no display. Mines hosts/azure-aks/01-azure-aks-create.sh:128-140.
+# has no display. Mines hosts-to-be-deleted/azure-aks/01-azure-aks-create.sh:128-140 (renamed from hosts/ 2026-10-05).
 az_login_if_needed() {
     set -euo pipefail
     if az account show >/dev/null 2>&1; then
@@ -169,8 +169,9 @@ pick_subscription() {
 }
 
 # check_owner_or_contributor — role check with PIM-activation retry loop.
-# Mines hosts/azure-microk8s/01-azure-vm-create-redcross-v2.sh:36-83 (retry-3x
-# with portal link + "press Enter") and combines it with PR #149's
+# Mines hosts-to-be-deleted/azure-microk8s/01-azure-vm-create-redcross-v2.sh:36-83
+# (renamed from hosts/ 2026-10-05; retry-3x with portal link + "press Enter") and
+# combines it with PR #149's
 # --include-inherited --include-groups flags for broader role visibility.
 #
 # Retry-3x is preserved per the maintainer's principle: "if I once made 3
@@ -239,7 +240,7 @@ pick_region() {
     done
 }
 
-# check_quota — port from hosts/azure-aks/check-aks-quota.sh:56-170. Verifies
+# check_quota — port from hosts-to-be-deleted/azure-aks/check-aks-quota.sh:56-170 (renamed from hosts/ 2026-10-05). Verifies
 # the chosen region has enough Standard_B-family vCPUs for the default
 # AZURE_NODE_COUNT (1) × AZURE_NODE_SIZE (Standard_B2s_v2, 2 vCPUs) = 2 vCPUs.
 # Fail-fast per Q7 — surface the quota issue inside the wizard, not 5 minutes

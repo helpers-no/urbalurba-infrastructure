@@ -19,13 +19,13 @@ on:
       - '.github/workflows/test-uis.yml'
       # ⚠️ The remaining shipping paths are here ONLY so the version-bump guard
       # below can run when they change. Without them, a PR touching just
-      # manifests/ or hosts/ would ship code to every host and the guard that
-      # exists to catch exactly that would never execute — a paths filter
-      # narrower than what the job depends on, which is the third time this
-      # repository has hit that shape (ansible/** above, version.txt in
-      # docs.yml, and this). Keep in step with build-uis-container.yml.
+      # manifests/ or hosts-to-be-deleted/ would ship code to every host and
+      # the guard that exists to catch exactly that would never execute — a
+      # paths filter narrower than what the job depends on, which is the third
+      # time this repository has hit that shape (ansible/** above, version.txt
+      # in docs.yml, and this). Keep in step with build-uis-container.yml.
       - 'manifests/**'
-      - 'hosts/**'
+      - 'hosts-to-be-deleted/**' # renamed from hosts/ 2026-10-05 — keep this in step with that rename
       - 'cloud-init/**'
       - 'networking/**'
       - 'platforms/**'
@@ -73,7 +73,7 @@ jobs:
           set -euo pipefail
           changed=$(git diff --name-only "$BASE" "$HEAD")
           ships=$(printf '%s\n' "$changed" | grep -E \
-            '^(ansible/|manifests/|hosts/|cloud-init/|networking/|provision-host/|platforms/|scripts/|Dockerfile\.uis-provision-host)' \
+            '^(ansible/|manifests/|hosts-to-be-deleted/|cloud-init/|networking/|provision-host/|platforms/|scripts/|Dockerfile\.uis-provision-host)' \
             || true)
           if [ -z "$ships" ]; then
             echo "No shipped paths changed - no version bump required."

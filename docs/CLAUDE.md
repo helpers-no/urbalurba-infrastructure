@@ -64,7 +64,7 @@ All documentation is in `website/docs/` (Docusaurus):
 
 - Getting started: `website/docs/getting-started/`
 - Packages: `website/docs/packages/`
-- Hosts: `website/docs/hosts/`
+- Platforms: `website/docs/platforms/`
 - AI developer docs: `website/docs/ai-developer/`
 - Plans: `website/docs/ai-developer/plans/`
 

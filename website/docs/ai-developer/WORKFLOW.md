@@ -229,7 +229,7 @@ invisible to everyone who has one.
 [`build-uis-container.yml`](https://github.com/helpers-no/urbalurba-infrastructure/blob/main/.github/workflows/build-uis-container.yml):
 
 ```
-ansible/  manifests/  hosts/  cloud-init/  networking/  provision-host/
+ansible/  manifests/  hosts-to-be-deleted/  cloud-init/  networking/  provision-host/
 platforms/  scripts/  Dockerfile.uis-provision-host  version.txt
 ```
 

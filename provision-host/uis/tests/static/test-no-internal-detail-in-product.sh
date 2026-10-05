@@ -11,7 +11,8 @@
 # usage line together named a backplane address, a container id and a bridge
 # name, plus a doc that does not exist in this repository.
 #
-# ⚠️ SCOPE IS DELIBERATELY NARROW. `hosts/<name>/` holds one installation's OWN
+# ⚠️ SCOPE IS DELIBERATELY NARROW. `hosts-to-be-deleted/<name>/` (renamed from
+# `hosts/<name>/` 2026-10-05) holds one installation's OWN
 # manifests, where its own addresses belong; whether they should be in a public
 # repository at all is a separate decision and is not this lint's business.
 # Examples in product files should use RFC 5737 documentation addresses

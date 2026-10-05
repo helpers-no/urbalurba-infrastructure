@@ -1,9 +1,9 @@
 # Multipass MicroK8s Host Documentation
 
 :::caution Legacy — replaced by Rancher Desktop, not migrated to UIS CLI
-This platform was the original local-development target for UIS but has been **superseded by [Rancher Desktop](./rancher-kubernetes.md)**, which is the supported local-dev path today. The Multipass + MicroK8s setup still works via the legacy `hosts/multipass-microk8s/` scripts, but it is not maintained and not migrated to the `platforms/*` + `./uis platform <verb>` CLI shape — **`./uis platform list/use/init/up/status/down` do not work for this target**. Use Rancher Desktop instead for new installations.
+This platform was the original local-development target for UIS but has been **superseded by [Rancher Desktop](./rancher-kubernetes.md)**, which is the supported local-dev path today. The Multipass + MicroK8s setup still works via the legacy `hosts-to-be-deleted/multipass-microk8s/` scripts, but it is not maintained and not migrated to the `platforms/*` + `./uis platform <verb>` CLI shape — **`./uis platform list/use/init/up/status/down` do not work for this target**. Use Rancher Desktop instead for new installations.
 
-Tracking for the migration of all legacy `hosts/*` platforms (or formal removal): [INVESTIGATE-system-migrate-hosts-to-platforms.md](../ai-developer/plans/backlog/INVESTIGATE-system-migrate-hosts-to-platforms.md).
+Tracking for the migration of all legacy `hosts-to-be-deleted/*` platforms (or formal removal): [INVESTIGATE-system-migrate-hosts-to-platforms.md](../ai-developer/plans/backlog/INVESTIGATE-system-migrate-hosts-to-platforms.md).
 :::
 **Last Updated**: September 22, 2024
 
@@ -33,7 +33,7 @@ The host that is created is named: `multipass-microk8s`
 
 ## create the VM named multipass-microk8s
 
-Make sure you are in the folder `hosts/multipass-microk8s` when you run the script.
+Make sure you are in the folder `hosts-to-be-deleted/multipass-microk8s` when you run the script.
 
 By default, the script will create a VM with minimal resources that can only be used to verify that GitOps works. If you want to use it for development you must provide parameters that give it more resources.
 Run it with the command:
@@ -42,14 +42,14 @@ Run it with the command:
 For development (we use this):
 
 ```bash
-cd hosts/multipass-microk8s
+cd hosts-to-be-deleted/multipass-microk8s
 ./01-create-multipass-microk8s.sh --cpus 6 --memory "10G" --disk "50G"
 ```
 
 Just for testing use a smaller VM.:
 
 ```bash
-cd hosts/multipass-microk8s
+cd hosts-to-be-deleted/multipass-microk8s
 ./01-create-multipass-microk8s.sh
 ```
 
@@ -74,13 +74,13 @@ Then return here for instructions on how to install the kubernetes cluster on th
 ### The automatic way of installing microk8s on the multipass-microk8s VM
 
 
-In the folder `hosts/multipass-microk8s`run the script to install microk8s on the VM multipass-microk8s.
+In the folder `hosts-to-be-deleted/multipass-microk8s`run the script to install microk8s on the VM multipass-microk8s.
 A lot of things are done in the script. It will install microk8s, set up the dashboard and set up metallb.
 
 The below example will install microk8s on the VM multipass-microk8s and set up metallb to provide IP addresses in a suitable range for the cluster. Replace the IP range with values appropriate for your network.
 
 ```bash
-cd hosts/multipass-microk8s
+cd hosts-to-be-deleted/multipass-microk8s
 ./03-setup-multipass-microk8s.sh 192.168.x.240-192.168.x.242  # Replace x with your network
 ```
 

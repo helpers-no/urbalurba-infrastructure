@@ -16,7 +16,7 @@ on:
       - 'version.txt'
       - 'ansible/**'
       - 'manifests/**'
-      - 'hosts/**'
+      - 'hosts-to-be-deleted/**' # renamed from hosts/ 2026-10-05
       - 'cloud-init/**'
       - 'networking/**'
       - 'provision-host/**'

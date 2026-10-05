@@ -56,7 +56,7 @@ RUN mkdir -p /mnt/urbalurbadisk && \
 # Copy UIS product files (baked in)
 COPY --chown=ansible:ansible ansible/ /mnt/urbalurbadisk/ansible/
 COPY --chown=ansible:ansible manifests/ /mnt/urbalurbadisk/manifests/
-COPY --chown=ansible:ansible hosts/ /mnt/urbalurbadisk/hosts/
+COPY --chown=ansible:ansible hosts-to-be-deleted/ /mnt/urbalurbadisk/hosts/
 COPY --chown=ansible:ansible cloud-init/ /mnt/urbalurbadisk/cloud-init/
 COPY --chown=ansible:ansible networking/ /mnt/urbalurbadisk/networking/
 COPY --chown=ansible:ansible platforms/ /mnt/urbalurbadisk/platforms/
