@@ -36,6 +36,58 @@
 
 code_locations: []
 
+# WHICH RUNS MAY NOT OVERLAP — this installation's tag-based concurrency rules.
+#
+# The platform ships the MECHANISM (manifests/360-dagster-config.yaml's
+# `concurrency.runs.tagConcurrencyLimits`), empty, on purpose — a rule here names
+# a specific tenant's tag and value, and that belongs to this installation and
+# that tenant, not to the product every installation gets. Same reasoning as
+# code_locations above.
+#
+# A tenant's job code sets the tag (e.g. `atlas/serialises-on: marts` on every
+# job that touches its marts tables); this is where an installation says what to
+# DO about runs carrying it. Empty is correct for an installation with no tenant
+# that needs this.
+#
+# ⚠️ ONLY A TENANT'S OWN TAG CAN BE LIMITED THIS WAY. There is no mechanism that
+# serialises runs an application never tagged — the tag is how a run becomes
+# visible to this at all. A tenant that never tags anything is still covered by
+# the platform's blanket `maxConcurrentRuns` cap, just not by anything finer.
+#
+# After changing this file:  ./uis deploy dagster
+tag_concurrency_limits: []
+
+# Worked example — the real incident this mechanism exists for (atlas,
+# urb-agents#1847/#1850): a 30-minute schedule kept firing while a previous run
+# was stuck slow, stacked 4 overlapping runs, and two deadlocked in PostgreSQL.
+# Atlas's own job code already tags all four marts-touching jobs with
+# `atlas/serialises-on: marts` — tenant-namespaced, the convention every future
+# tenant should follow so one tenant's tag can never collide with another's.
+# This is what an installation running atlas adds to enforce it:
+#
+# tag_concurrency_limits:
+#   - key: "atlas/serialises-on"
+#     value: "marts"
+#     limit: 1
+#
+# Fields (mirrors Dagster's own tag_concurrency_limits schema verbatim —
+# https://docs.dagster.io/deployment/run-coordinator#usage):
+#   key     required  the tag key to match
+#   value   optional  match only this value. Omit to limit across ALL values of
+#                      that key regardless of what they are. `{applyLimitPerUniqueValue:
+#                      true}` instead of a plain string limits the number of
+#                      DISTINCT values seen at once rather than any one value —
+#                      rarely what a single-tenant rule like the one above wants.
+#   limit   required  max runs with a matching tag allowed RUNNING at once; every
+#                      run past it QUEUES (via QueuedRunCoordinator, already the
+#                      chart's default coordinator) rather than stacking.
+#
+# ⚠️ limit: 1 has a real queuing cost, not just a safety win — a queued run can
+# wait behind a long one sharing the same tag. Measure your longest job sharing
+# this tag before setting 1 as a reflex; a second key scoped to just the
+# schedule that actually needs it (trading some staleness for not queuing behind
+# an unrelated long job) is a legitimate alternative if that cost bites.
+
 # Worked example — an application called `atlas`:
 #
 # code_locations:

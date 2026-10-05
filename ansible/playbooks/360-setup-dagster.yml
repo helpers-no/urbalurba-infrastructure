@@ -313,7 +313,24 @@
         # downstream uses — which is the same reason the configure argument
         # list became one function.
         _code_locations: "{{ (_cl_raw.content | b64decode | from_yaml).code_locations | default([], true) }}"
+        # Same file, same null-vs-undefined trap as code_locations above, same fix.
+        _tag_concurrency_limits: "{{ (_cl_raw.content | b64decode | from_yaml).tag_concurrency_limits | default([], true) }}"
       when: _cl_raw.content is defined
+
+    - name: "22b1. Require the fields a tag-concurrency rule cannot work without"
+      # Mirrors Dagster's own tag_concurrency_limits schema
+      # (dagster._core.run_coordinator.queued_run_coordinator.QueuedRunCoordinator.config_type,
+      # verified at the pinned 1.13.19) rather than inventing a shape of our own.
+      ansible.builtin.assert:
+        that:
+          - item.key is defined and (item.key | trim | length) > 0
+          - item.limit is defined and (item.limit | int) >= 0
+        fail_msg: >-
+          A tag_concurrency_limits entry in .uis.extend/dagster-code-locations.yaml
+          is missing `key` or a non-negative `limit`. `value` is optional —
+          omitting it limits across every value of that key, not just one.
+      loop: "{{ _tag_concurrency_limits | default([]) }}"
+      loop_control: { label: "{{ item.key | default('<unkeyed>') }}" }
 
     - name: "22c. Require the fields a code location cannot work without"
       ansible.builtin.assert:
@@ -552,6 +569,7 @@
         dest: "/tmp/dagster-code-locations.generated.yaml"
         mode: "0644"
         content: |
+          {% if (_code_locations | default([]) | length) > 0 %}
           dagster-user-deployments:
             enabled: true
             deployments:
@@ -585,7 +603,23 @@
           {% endfor %}
           {% endif %}
           {% endfor %}
-      when: (_code_locations | default([]) | length) > 0
+          {% endif %}
+          {% if (_tag_concurrency_limits | default([]) | length) > 0 %}
+          concurrency:
+            runs:
+              tagConcurrencyLimits:
+          {% for t in _tag_concurrency_limits | default([]) %}
+                - key: "{{ t.key }}"
+          {% if t.value is defined and t.value is mapping %}
+                  value:
+                    applyLimitPerUniqueValue: {{ (t.value.applyLimitPerUniqueValue | default(true)) | lower }}
+          {% elif t.value is defined and t.value %}
+                  value: "{{ t.value }}"
+          {% endif %}
+                  limit: {{ t.limit }}
+          {% endfor %}
+          {% endif %}
+      when: (_code_locations | default([]) | length) > 0 or (_tag_concurrency_limits | default([]) | length) > 0
 
     - name: "22f. Report what will be registered"
       ansible.builtin.debug:
@@ -593,13 +627,15 @@
           {{ (_code_locations | default([]) | length) }} code location(s)
           declared in .uis.extend/dagster-code-locations.yaml
           {{ (_code_locations | default([]) | map(attribute='name') | list) | join(', ') }}
+          — {{ (_tag_concurrency_limits | default([]) | length) }} tag_concurrency_limits
+          rule(s): {{ (_tag_concurrency_limits | default([]) | map(attribute='key') | list) | join(', ') }}
 
     - name: "23. Deploy Dagster via Helm (chart version pinned)"
       ansible.builtin.command: >
         helm upgrade --install {{ dagster_release_name }} {{ dagster_chart }}
         --version {{ dagster_chart_version }}
         -f {{ dagster_config_file }}
-        {{ ((_code_locations | default([]) | length) > 0) | ternary('-f /tmp/dagster-code-locations.generated.yaml', '') }}
+        {{ (((_code_locations | default([]) | length) > 0) or ((_tag_concurrency_limits | default([]) | length) > 0)) | ternary('-f /tmp/dagster-code-locations.generated.yaml', '') }}
         --namespace {{ dagster_namespace }}
         --timeout {{ installation_timeout }}s
         --wait
