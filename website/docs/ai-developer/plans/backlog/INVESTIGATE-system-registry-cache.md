@@ -214,10 +214,7 @@ enabled services; the outage test passes.
    interesting design question — UIS's unit of composition is an in-cluster
    service, and this cannot be one. Same shape as an external database, external
    object store, or the secret store: a growing class of "platform components
-   beside the cluster" that may deserve first-class support. Fifth instance as
-   of 2026-10-05: [INVESTIGATE-service-semaphore](./INVESTIGATE-service-semaphore.md)
-   F8 — a real, already-running fleet-automation control plane hits this exact
-   gap.
+   beside the cluster" that may deserve first-class support.
 3. **Private registries.** `ghcr.io` pulls of private images need credentials in
    the cache. Out of scope for a first pass, but worth designing for.
 4. **TLS.** Plain HTTP is acceptable on a trusted segment (and simplest), but

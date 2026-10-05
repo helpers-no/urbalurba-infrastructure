@@ -23,11 +23,10 @@ capability. SemaphoreUI is a concrete, already-running answer to both — UIS ju
 doesn't know about it yet.
 
 **Related**: [INVESTIGATE-system-registry-cache](./INVESTIGATE-system-registry-cache.md)
-(F1, Part 3 Q2 — the "components beside the cluster" class),
-[INVESTIGATE-system-backup-and-scheduling](./INVESTIGATE-system-backup-and-scheduling.md)
+(F1, the "components beside the cluster" class that F8 below first mis-assigned
+this investigation to, then corrected), [INVESTIGATE-system-backup-and-scheduling](./INVESTIGATE-system-backup-and-scheduling.md)
 (Part 4 Q1, same class), [INVESTIGATE-service-uptime-kuma](./INVESTIGATE-service-uptime-kuma.md)
-(F8, same class, and the precedent this investigation follows for resolving it — see
-Part 2), [INVESTIGATE-system-platform-provisioning-layer](./INVESTIGATE-system-platform-provisioning-layer.md).
+(F8, same class), [INVESTIGATE-system-platform-provisioning-layer](./INVESTIGATE-system-platform-provisioning-layer.md).
 
 **Created**: 2026-10-05 — investigated read-only against a real, actively-used
 reference instance (dedicated SSH access provisioned specifically for this; the
@@ -170,22 +169,33 @@ table** — all task execution happens in-process on the server
 self-hosted-CI question (Part 2, below) but out of scope for a first UIS service
 PLAN — nothing here needs it to ship a working `uis deploy semaphore`.
 
-### F8 — 🔴 The reference instance's real job is fleet automation beside the cluster, which is exactly what a UIS service cannot be
+### F8 — Corrected: this is NOT the registry-cache's bootstrap-circularity problem
 
 The reference instance's one project holds dozens of playbook templates — health
-checks, patch-ring rollouts, inventory-drift detection, state tracking — run
-against the lab's own physical hosts and the guests on them. None of it targets
-anything inside a Kubernetes cluster. This is deliberate, not incidental: a tool
-whose job includes recovering infrastructure needs to run independently of the
-thing it might need to recover, the same bootstrap-circularity argument
-[`INVESTIGATE-system-registry-cache`](./INVESTIGATE-system-registry-cache.md)'s F1
-makes for a registry cache, and the same "components beside the cluster" class
-named across three other investigations in this repo
-(`INVESTIGATE-system-backup-and-scheduling` Part 4 Q1,
-`INVESTIGATE-system-monitor-definitions-with-services`,
-`INVESTIGATE-service-uptime-kuma` F8). **This is the fifth time this exact
-architectural gap has surfaced.** `uis deploy <service>` targets a cluster;
-nothing in UIS expresses "this deliberately does not run where the rest runs."
+checks, patch-ring rollouts, inventory-drift detection, state tracking, pushing
+monitor config to a watchdog — run against the lab's own physical hosts and the
+guests on them.
+
+**First pass at this finding, wrong, kept here because the correction is the
+useful part**: this read as the registry cache's F1 bootstrap-circularity
+argument again — "a tool whose job includes recovering infrastructure needs to
+run independently of the thing it might need to recover" — and was written up
+as a fifth instance of the "components beside the cluster" class named across
+three other investigations in this repo. That conclusion did not survive
+checking it against the actual evidence already in hand, rather than the shape
+of the problem (Terje, 2026-10-05, directly: "that role it can do even if it run
+inside the rancher desktop cluster").
+
+**What's actually true, checked against every template name recorded above**:
+every one of them targets a *different* host or service reachable over the
+network — SSH to a VM or physical machine, HTTP to a watchdog's API. None of
+them is "recover the specific cluster this pod's own node depends on." That is
+the one case where the registry cache's circularity argument would actually
+apply, and it isn't what any of the observed playbooks do. A pod inside a
+Rancher Desktop cluster can SSH out and patch a VM, or push config to Uptime
+Kuma's API, exactly as capably as a process running anywhere else — it only
+needs network egress, which a pod already has. **In-cluster is not a
+compromise shape for this tool's actual job; it is the fully-capable one.**
 
 Per the task that opened this investigation, **the reference instance's actual
 project, repository, inventory and template wiring is personal to this
@@ -200,32 +210,35 @@ profile if deployed in-cluster.
 
 ---
 
-## Part 2: Which path — in-cluster service, or beside-the-cluster component?
+## Part 2: In-cluster by default; where it runs in production is a config choice, not a different build
 
-F8 is the real decision this investigation exists to make, and it has a direct
-precedent already in this repository: **`INVESTIGATE-service-uptime-kuma`'s F8**
-hit the identical tension (a watchdog that should, in principle, run outside the
-cluster it watches) and resolved it by shipping Uptime Kuma as a normal in-cluster
-`uis deploy uptime-kuma` service anyway — accepting the scope limitation rather
-than blocking the ship on the unresolved cross-cutting "components beside the
-cluster" question, which stayed open for a future, dedicated investigation.
+Not the fork the first pass at F8 framed it as. Terje's own UIS principle,
+stated directly (2026-10-05): a developer installs and runs the full thing on
+Rancher Desktop while building and testing; moving to production runs the
+**same** install, unchanged, just reconfigured for where production actually
+puts it. For Semaphore specifically, given production today is a Proxmox LXC:
+first it exists in UIS as a service — that's what a developer gets on Rancher
+Desktop, and per F8's correction, that shape is genuinely sufficient for the
+tool's real job, not a limited stand-in for it — and a config change retargets
+*that same service* to run as an LXC instead, for the installation that wants
+it there.
 
-**Recommendation: follow the same precedent.** Ship `uis deploy semaphore` as a
-standard in-cluster service — official Docker image, Postgres-backed, no
-pre-wired projects — scoped explicitly to **application/service-level ansible
-automation that the cluster can already reach**, not a replacement for
-hypervisor-level fleet automation like the reference instance's actual job. State
-the limitation in the service doc rather than silently implying parity with what
-the reference instance does.
+**What this PLAN ships**: `uis deploy semaphore` as a standard in-cluster
+service — official Docker image, Postgres-backed, no pre-wired projects. Works
+fully on Rancher Desktop today; nothing about F8 limits what it can actually do
+from there.
 
-**Not recommended for this PLAN**: treating Semaphore as a platform/host-layer
-component (the registry-cache's own Option B shape). It would be the more
-architecturally honest answer to F8, but it doesn't match what was actually asked
-for (`urb-agents#1856` explicitly says "a manifest + ansible playbook following
-this repo's existing service conventions"), and it would be the fifth place this
-repository re-raises the same unresolved cross-cutting question without making
-progress on it. That question deserves its own investigation, consolidating all
-five instances, rather than a sixth partial answer bolted onto a service PLAN.
+**What this PLAN does not build**: the general mechanism to retarget *any* UIS
+service's deployment shape via config (in-cluster vs. LXC vs. elsewhere).
+Nothing in UIS has that today — `uis deploy <service>` always means "into the
+active cluster." Building it generically would also be the real resolution to
+the "components beside the cluster" question named across
+`INVESTIGATE-system-registry-cache` (F1), `INVESTIGATE-system-backup-and-scheduling`
+(Part 4 Q1) and `INVESTIGATE-system-monitor-definitions-with-services` — but
+that is a cross-cutting capability worth its own investigation, not something
+to invent as a one-off inside this service's PLAN. Semaphore ships fully
+functional without it; the LXC-retargeting path is a named follow-up, not a
+blocker.
 
 ---
 
@@ -279,10 +292,14 @@ plaintext-token fact from F6 stated plainly rather than discovered the hard way.
 
 ## Part 5: Open questions
 
-1. **The "components beside the cluster" class, fifth instance (F8).** Worth a
-   dedicated, consolidating investigation across all five (registry cache,
-   backup scheduling, monitor definitions, Uptime Kuma, this one) rather than
-   resolving it piecemeal per-service. Not blocking PLAN-001.
+1. **Does any UIS service actually need the generic deployment-shape-retargeting
+   mechanism Part 2 names (in-cluster vs. LXC vs. elsewhere, chosen by config)?**
+   Semaphore, corrected (F8), does not strictly need it — in-cluster already
+   does its real job fully. Worth checking whether the registry cache / backup
+   scheduler / monitor-definitions "beside the cluster" instances have the same
+   property before assuming the generic mechanism is actually required anywhere,
+   rather than building it on the strength of a pattern-match that didn't hold
+   up here. Not blocking PLAN-001.
 2. **Does the distributed `runner` mode (F7) matter for `#1805`'s self-hosted-CI
    question later?** Not used by the reference instance, not needed for a
    working `uis deploy semaphore`. Worth revisiting only if a dedicated
