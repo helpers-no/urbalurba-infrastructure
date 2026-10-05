@@ -1,0 +1,124 @@
+---
+# k3s — the role that installs and joins k3s inside a VM vm-ensure.yml already built. One role,
+# `k3s_role: init` or `join` switches behavior — not two separate roles.
+#
+# 🔴 THE JOIN TOKEN IS NEVER IN A COMMITTED FILE. k3s generates its own random token on the
+# `--cluster-init` node when none is given — holding it is equivalent to full node-level cluster
+# access, so it is treated as a real secret: read once from the init node's output, passed to join
+# nodes as a runtime `-e k3s_token=...` flag, never written to any `vars/vms/*.yml` declaration or
+# anywhere else in git. The exact sequence (see scripts/03-k3s-apply.sh, which drives this):
+#
+#   ansible-playbook playbooks/k3s-ensure.yml --limit host1-k3s -e vm_file=generated/vars/vms/host1-k3s.yml
+#   ansible host1-k3s -i generated/inventory.yml -m command -a "cat /var/lib/rancher/k3s/server/node-token" --become
+#   # (copy the printed token into your own shell, do not save it to a file)
+#   ansible-playbook playbooks/k3s-ensure.yml --limit host2-k3s -e vm_file=generated/vars/vms/host2-k3s.yml -e "k3s_token=$TOKEN"
+#   ansible-playbook playbooks/k3s-ensure.yml --limit host3-k3s -e vm_file=generated/vars/vms/host3-k3s.yml -e "k3s_token=$TOKEN"
+#
+# Repeat for the test cluster against host1-k3s-test / host2-k3s-test / host3-k3s-test.
+
+- name: Only init or join are valid
+  ansible.builtin.assert:
+    that:
+      - k3s_role in ['init', 'join']
+    fail_msg: "k3s.role must be 'init' or 'join' in the declaration — got '{{ k3s_role }}'."
+    quiet: true
+
+- name: A join node needs a server URL and a token
+  ansible.builtin.assert:
+    that:
+      - k3s_server_url | length > 0
+      - k3s_token | default('') | length > 0
+    fail_msg: >-
+      role: join needs both k3s.server_url (in the declaration) and -e k3s_token=<value> (read
+      from the init node — see this role's own header comment for the exact sequence). Never
+      guess or invent a token.
+    quiet: true
+  when: k3s_role == 'join'
+
+# ── is it already installed — this role installs, it does not reconfigure a live node ──────────
+- name: Is k3s already running here
+  ansible.builtin.command: systemctl is-active k3s
+  register: k3s_active
+  changed_when: false
+  failed_when: false
+
+- name: Say so and stop if it is
+  ansible.builtin.debug:
+    msg: >-
+      k3s is already {{ k3s_active.stdout }} on {{ inventory_hostname }}.
+      ⚠️ This role installs; it does not reconfigure a live node. Nothing changed.
+  when: k3s_active.stdout == 'active'
+
+# ── build the install arguments ─────────────────────────────────────────────────────────────
+- name: Render the server arguments
+  ansible.builtin.set_fact:
+    k3s_server_args: >-
+      {{ '--cluster-init' if k3s_role == 'init' else ('--server ' ~ k3s_server_url ~ ' --token ' ~ k3s_token) }}
+      {{ ('--cluster-cidr ' ~ k3s_cluster_cidr) if k3s_cluster_cidr | length > 0 else '' }}
+      {{ ('--service-cidr ' ~ k3s_service_cidr) if k3s_service_cidr | length > 0 else '' }}
+  when: k3s_active.stdout != 'active'
+
+- name: What would be run
+  ansible.builtin.debug:
+    msg: >-
+      INSTALL_K3S_VERSION={{ k3s_version }} sh -s - server
+      {{ k3s_server_args | regex_replace('\s+', ' ') | trim }}
+  when: k3s_active.stdout != 'active'
+
+- name: Install k3s
+  ansible.builtin.shell:
+    cmd: >-
+      curl -sfL https://get.k3s.io |
+      INSTALL_K3S_VERSION={{ k3s_version }} sh -s - server
+      {{ k3s_server_args | regex_replace('\s+', ' ') | trim }}
+  become: true
+  when: k3s_active.stdout != 'active'
+
+# ── prove it, rather than trusting the exit code ───────────────────────────────────────────
+# 🔴 THE NODE OBJECT DOESN'T EXIST THE INSTANT THE SERVICE STARTS. Found live: `systemctl` reports
+# the unit active, but `kubectl wait --for=condition=Ready node/X` immediately errors
+# `nodes "X" not found` — the apiserver needs a few more seconds to come up and the kubelet to
+# register before the node object exists at all, let alone reports Ready. Retrying rather than
+# adding a blind sleep, since the real time varies.
+- name: Wait for this node to report Ready
+  ansible.builtin.command: >-
+    kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
+    wait --for=condition=Ready node/{{ ansible_hostname }} --timeout=30s
+  become: true
+  changed_when: false
+  register: k3s_ready
+  until: k3s_ready.rc == 0
+  retries: 10
+  delay: 5
+  when: k3s_active.stdout != 'active'
+
+# ── a node declared control-plane-only contributes a vote, not a workload — e.g. your weakest/
+# slowest-disk host (see README.md's "Sizing") ──────────────────────────────────────────────
+- name: Taint this node control-plane-only, if the declaration asks for it
+  ansible.builtin.command: >-
+    kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
+    taint node {{ ansible_hostname }}
+    node-role.kubernetes.io/control-plane=true:NoSchedule --overwrite
+  become: true
+  changed_when: true
+  when: k3s_taint_control_plane_only | bool
+
+# ── the one thing an init node's run must surface — the token the join nodes need ──────────
+- name: Read the generated join token, to hand to the operator — NEVER written to a file
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/node-token
+  become: true
+  register: k3s_node_token
+  when:
+    - k3s_role == 'init'
+    - k3s_active.stdout != 'active'
+
+- name: Result
+  ansible.builtin.debug:
+    msg: |
+      {{ inventory_hostname }} — k3s {{ k3s_role }}, {{ k3s_version }}
+      {% if k3s_role == 'init' and k3s_active.stdout != 'active' %}
+      🔑 Join token (copy this now, it is never written anywhere — pass as -e k3s_token=<this>):
+      {{ (k3s_node_token.content | b64decode).strip() }}
+      {% endif %}
+      ⚠️ NOT DONE HERE: the other two nodes of this cluster, if this was the init node.

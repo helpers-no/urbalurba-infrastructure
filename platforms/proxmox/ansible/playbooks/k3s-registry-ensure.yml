@@ -1,0 +1,95 @@
+---
+# k3s-registry-ensure — point every k3s node (both clusters) at the registry cache, IF one was
+# built. Run once, right after the registry guest exists and is verified — see
+# 05-core-services-apply.sh, which only calls this when "registry" is in CORE_SERVICES.
+#
+#   ansible-playbook -i generated/inventory.yml --limit guests playbooks/k3s-registry-ensure.yml \
+#       -e registry_host=<the registry guest's real IP, resolved at apply time — NEVER hardcode>
+#
+# 🔵 SINGLE SOURCE OF TRUTH: registry_port and registry_upstreams (including each upstream's
+# domain → mirror path) come from the SAME file roles/registry/defaults/main.yml already uses to
+# build zot's own config.json — the mapping cannot drift between the cache and the clients
+# pointed at it.
+#
+# 🔴 A RESTART IS REQUIRED — verified for real on 2026-10-05 against a live k3s v1.36.5+k3s1 node:
+# writing registries.yaml and waiting does NOT regenerate containerd's certs.d/ on its own. Only
+# after `systemctl restart k3s` did certs.d appear, and a real `k3s ctr images pull` (not just a
+# file check) routed through the mirror and the image landed in the cache's own /v2/_catalog.
+# Re-prove this if the pinned k3s version ever changes — do not assume hot-reload.
+#
+# ⚠️ DEGRADES GRACEFULLY: a lab owner who never selects "registry" in CORE_SERVICES never has this
+# playbook run against them at all (05-core-services-apply.sh's own condition), so a k3s node with
+# no registries.yaml behaves exactly as it always did — current behaviour, unchanged.
+- name: Wire k3s nodes to the registry cache
+  hosts: guests
+  gather_facts: false
+
+  vars_files:
+    - "{{ playbook_dir }}/../roles/registry/defaults/main.yml"
+
+  vars:
+    registry_host: ""
+
+  tasks:
+    - name: A registry host is required
+      ansible.builtin.assert:
+        that:
+          - registry_host | length > 0
+        fail_msg: >-
+          Pass -e registry_host=<ip> — the registry guest's IP, resolved at apply time by
+          05-core-services-apply.sh. This playbook never guesses or hardcodes one.
+        quiet: true
+      run_once: true
+
+    - name: registries.yaml — every upstream behind the one cache
+      ansible.builtin.template:
+        src: templates/k3s-registries.yaml.j2
+        dest: /etc/rancher/k3s/registries.yaml
+        mode: "0644"
+      become: true
+      notify: restart k3s
+
+    - name: Apply pending restarts BEFORE verifying anything
+      ansible.builtin.meta: flush_handlers
+
+    # 🔴 PROVE IT, rather than trusting that the template task "changed". A node that already had
+    # the right registries.yaml reports changed=false and never restarts — correct, since nothing
+    # needs to change — but that must not be mistaken for "therefore it's wired"; check the actual
+    # evidence a restart leaves behind, every run, regardless of whether this run changed anything.
+    - name: containerd must have generated certs.d for every configured upstream
+      ansible.builtin.stat:
+        path: "/var/lib/rancher/k3s/agent/etc/containerd/certs.d/{{ item.domain }}"
+      loop: "{{ registry_upstreams }}"
+      loop_control: { label: "{{ item.domain }}" }
+      register: certsd
+      become: true
+
+    - name: Each upstream's certs.d must actually exist
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: >-
+          /var/lib/rancher/k3s/agent/etc/containerd/certs.d/{{ item.item.domain }} is missing —
+          k3s has not regenerated its containerd config from registries.yaml. A restart is
+          required (see the note above); confirm the restart handler actually ran.
+        quiet: true
+      loop: "{{ certsd.results }}"
+      loop_control: { label: "{{ item.item.domain }}" }
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} mirrors {{ registry_upstreams | map(attribute='domain') | join(', ') }}
+          through {{ registry_host }}:{{ registry_port }}.
+          ⚠️ NOT PROVEN HERE: that a pull actually succeeds with upstream unreachable — that is the
+          documented acceptance test (PLAN-system-registry-cache-003-warm-verify, not yet run
+          against this platform). This confirms the wiring exists and containerd picked it up,
+          not that an outage survives it.
+
+  handlers:
+    - name: restart k3s
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+      become: true
+      listen: restart k3s

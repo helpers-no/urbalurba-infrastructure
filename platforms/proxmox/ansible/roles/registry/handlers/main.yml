@@ -1,0 +1,7 @@
+---
+- name: restart zot
+  ansible.builtin.systemd:
+    name: zot.service
+    state: restarted
+    daemon_reload: true
+  listen: restart zot

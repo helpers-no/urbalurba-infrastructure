@@ -1,0 +1,9 @@
+---
+# service-garage — L3: install/configure garage on an already-created guest.
+#
+#   ansible-playbook -i <addr>, playbooks/service-garage.yml -e @vars.yml
+- name: garage
+  hosts: all
+  gather_facts: true
+  roles:
+    - garage

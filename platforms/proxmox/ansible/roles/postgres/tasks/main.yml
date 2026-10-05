@@ -1,0 +1,326 @@
+---
+- name: The site must say which networks may connect
+  ansible.builtin.assert:
+    that:
+      - pg_allowed_networks | length > 0
+    fail_msg: >-
+      pg_allowed_networks is empty. The role ships only loopback by default and will not guess a
+      LAN — a database reachable from a network nobody declared is how a stale backplane range
+      and a dead VPN overlay range ended up in the reference installation's pg_hba without anyone
+      deciding.
+    quiet: true
+
+# ── packages, from the official repository ──────────────────────────────────────────────────
+# ⚠️ A fresh debian-13-standard container has no curl and no ca-certificates.
+- name: Prerequisites the base image does not carry
+  ansible.builtin.apt:
+    # ⚠️ `sudo` is here because Ansible's `become_user: postgres` requires it, and a
+    # debian-13-standard container does not ship it — the failure is `/bin/sh: 1: sudo: not
+    # found` from the module, which reads like a module bug rather than a missing package.
+    # 🔵 `python3-psycopg2` is the postgresql_* modules' driver; without it they fail with a
+    # message about the library that does not say which package provides it.
+    name: [curl, ca-certificates, gnupg, sudo, python3-psycopg2, acl]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# 🔴 `get_url` IS NOT USED, FOR THE THIRD TIME IN THIS REPO. On Debian 13 (Python 3.13) both
+# `get_url` and `uri` fail against HTTPS with
+#   "HTTPSConnection.__init__() got an unexpected keyword argument 'cert_file'".
+# It has now bitten roles/bao, roles/node-backup and this role. It is HTTPS-specific — the
+# registry role's plain-HTTP `uri` checks work fine. Anything that must speak TLS goes through
+# curl, and the checksum/verification becomes an explicit step rather than a module argument.
+- name: PGDG signing key
+  ansible.builtin.command:
+    cmd: "curl -fsSL -o /usr/share/keyrings/pgdg.asc {{ pg_apt_key_url }}"
+    creates: /usr/share/keyrings/pgdg.asc
+
+- name: It must actually be a PGP key, not an error page
+  ansible.builtin.command:
+    cmd: "grep -q 'BEGIN PGP PUBLIC KEY BLOCK' /usr/share/keyrings/pgdg.asc"
+  changed_when: false
+  check_mode: false
+
+- name: Readable by apt
+  ansible.builtin.file:
+    path: /usr/share/keyrings/pgdg.asc
+    mode: "0644"
+    owner: root
+    group: root
+
+- name: PGDG repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/pgdg.asc] {{ pg_apt_repo }} {{ ansible_distribution_release }}-pgdg main"
+    filename: pgdg
+    state: present
+    update_cache: true
+
+# 🔴 BEFORE the package, not after — see the note in defaults. Generating the locale afterwards
+# changes nothing: the cluster has already been initialised.
+- name: Locale support
+  ansible.builtin.apt:
+    name: locales
+    state: present
+
+- name: The locale the cluster will be initialised with
+  community.general.locale_gen:
+    name: "{{ pg_locale }}"
+    state: present
+
+# 🔴 FOUND RUNNING THIS FOR REAL (2026-10-05): locale_gen GENERATES a locale — it does not make
+# it the SYSTEM DEFAULT. A fresh debian-13-standard container's /etc/default/locale is LANG="C",
+# and postgresql-common's pg_createcluster (triggered by the package's own postinst hook, a
+# non-interactive dpkg process — not an interactive shell, which can show a different LANG from
+# SSH/profile sourcing and make this look fine when it isn't) reads THAT file, not locale -a's
+# output. `locale -a` showing en_US.utf8 generated proved nothing about what initdb actually used.
+- name: Make it the system default too — pg_createcluster reads /etc/default/locale, not locale -a
+  ansible.builtin.command: "update-locale LANG={{ pg_locale }}"
+  changed_when: true
+
+- name: PostgreSQL and its extensions
+  ansible.builtin.apt:
+    name: "{{ pg_packages }}"
+    state: present
+
+# 🔴 REFUSE TO BUILD ON A CLUSTER THAT CANNOT HOLD UTF-8. Encoding is fixed at initdb, so this
+# cannot be repaired by configuration — only by dropping and recreating the cluster, which this
+# role will NOT do silently because it destroys every database on it.
+- name: What encoding was the cluster actually initialised with
+  ansible.builtin.command:
+    cmd: psql -At -c "select pg_encoding_to_char(encoding) from pg_database where datname='template1'"
+  become: true
+  become_user: postgres
+  register: pg_encoding
+  changed_when: false
+  check_mode: false
+
+- name: It must be able to hold UTF-8
+  ansible.builtin.assert:
+    that:
+      - pg_encoding.stdout | trim == 'UTF8'
+    fail_msg: >-
+      The cluster is {{ pg_encoding.stdout | trim }}, not UTF8. 🔴 Encoding is fixed at initdb and
+      cannot be changed by configuration. This happens when the locale was not GENERATED before
+      the package initialised the cluster — LANG can be set and the locale still absent.
+      On an EMPTY cluster, fix with:
+        pg_dropcluster {{ pg_version }} main --stop
+        pg_createcluster --locale {{ pg_locale }} {{ pg_version }} main --start
+      ⚠️ That destroys every database on it. This role will not do it for you.
+    quiet: true
+
+# ── 🔴 MEASURE THE FILESYSTEM BEFORE TUNING FOR IT ──────────────────────────────────────────
+- name: What filesystem is the data directory actually on
+  ansible.builtin.command:
+    cmd: "df --output=fstype /var/lib/postgresql"
+  register: pg_fs
+  changed_when: false
+  check_mode: false
+
+- name: Record it
+  ansible.builtin.set_fact:
+    pg_data_fstype: "{{ pg_fs.stdout_lines[-1] | trim }}"
+    pg_zfs_optimisations: "{{ (pg_fs.stdout_lines[-1] | trim) == 'zfs' }}"
+
+# 🔴 The guard that makes this role safe to hand over. `full_page_writes = off` is correct on ZFS
+# and risks silent, unrecoverable corruption on anything else — so it must never be settable by
+# declaration, only derivable from measurement.
+- name: Refuse a hand-set ZFS optimisation that the filesystem does not support
+  ansible.builtin.assert:
+    that:
+      - (pg_zfs_optimisations | bool) == (pg_data_fstype == 'zfs')
+    fail_msg: >-
+      pg_zfs_optimisations is {{ pg_zfs_optimisations }} but the data directory is on
+      '{{ pg_data_fstype }}'. 🔴 full_page_writes=off on a non-copy-on-write filesystem risks a
+      TORN PAGE after a crash — half-old, half-new — which PostgreSQL cannot detect or repair.
+      This value is derived from measurement and must not be set by hand.
+    quiet: true
+
+- name: Say which way it went, so it is in the run log and not just in a file
+  ansible.builtin.debug:
+    msg: >-
+      data directory is on '{{ pg_data_fstype }}' →
+      {{ 'ZFS optimisations ON (full_page_writes off, wal_init_zero off, wal_recycle off)'
+         if pg_zfs_optimisations | bool
+         else 'ZFS optimisations OFF — full_page_writes stays at its safe default' }}
+
+# ── configuration ───────────────────────────────────────────────────────────────────────────
+- name: Tuning and archiving
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/postgresql/{{ pg_version }}/main/conf.d/{{ item.dest }}"
+    owner: postgres
+    group: postgres
+    mode: "0644"
+  loop:
+    - { src: tuning.conf.j2, dest: 50-tuning.conf }
+    - { src: archive.conf.j2, dest: 60-archive.conf }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Restart postgresql
+
+- name: Who may connect
+  ansible.builtin.template:
+    src: pg_hba.conf.j2
+    dest: "/etc/postgresql/{{ pg_version }}/main/pg_hba.conf"
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  notify: Reload postgresql
+
+# ── pgBackRest ──────────────────────────────────────────────────────────────────────────────
+# 🔴 WITHOUT THIS THE ARCHIVE COMMAND FAILS SILENTLY. `archive_mode = on` with no pgBackRest
+# config leaves the database running, every query working, and `pg_stat_archiver.failed_count`
+# climbing — WAL accumulating in pg_wal until the disk fills. Measured on the first run of this
+# role: archive_mode on, 9 failures, last successful archive "never". The health check caught it;
+# nothing else would have.
+- name: pgBackRest directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0750"
+  loop:
+    - "{{ pg_backup_dir }}"
+    - "{{ pg_backup_dir }}/pgbackrest"
+    - /var/log/pgbackrest
+    # ⚠️ The Debian pgbackrest package does not create /etc/pgbackrest — it ships an example
+    # elsewhere and leaves the config directory to you, so the template lands nowhere.
+    # The same omission as the sanoid package in roles/node-backup.
+    - /etc/pgbackrest
+
+- name: pgBackRest configuration
+  ansible.builtin.template:
+    src: pgbackrest.conf.j2
+    dest: /etc/pgbackrest/pgbackrest.conf
+    owner: postgres
+    group: postgres
+    mode: "0640"
+
+- name: Running
+  ansible.builtin.systemd:
+    name: "postgresql@{{ pg_version }}-main"
+    enabled: true
+    state: started
+
+- name: Apply pending restarts BEFORE verifying anything
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for it to accept connections
+  ansible.builtin.command: "pg_isready -q"
+  register: pg_ready
+  retries: 12
+  delay: 5
+  until: pg_ready.rc == 0
+  changed_when: false
+  check_mode: false
+
+- name: Create the stanza, if it does not exist
+  ansible.builtin.command:
+    cmd: "pgbackrest --stanza={{ pg_stanza }} stanza-create"
+    creates: "{{ pg_backup_dir }}/pgbackrest/backup/{{ pg_stanza }}"
+  become: true
+  become_user: postgres
+
+# 🔵 ASKS pgBackRest WHETHER ARCHIVING WORKS, rather than trusting that the config is present.
+# `check` pushes a WAL segment and reads it back — the only thing that distinguishes "configured"
+# from "working".
+- name: Prove archiving actually works
+  ansible.builtin.command:
+    cmd: "pgbackrest --stanza={{ pg_stanza }} check"
+  become: true
+  become_user: postgres
+  changed_when: false
+
+# ── roles and databases — site data ─────────────────────────────────────────────────────────
+# ⚠️ NO PASSWORDS. The role creates the role; the password is set out of band. A password in a
+# declaration is a password in git, and these are the credentials to every application's data.
+- name: Login roles
+  community.postgresql.postgresql_user:
+    name: "{{ item.name }}"
+    role_attr_flags: "{{ item.flags | default('LOGIN') }}"
+    state: present
+  become: true
+  become_user: postgres
+  loop: "{{ pg_roles }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# 🔴 UIS'S CONTRACT IS APPLIED TO template1, NOT PER DATABASE — and that is the right shape.
+# From UIS's own 040-database-postgresql.yml: *"Activate the extensions in template1, so every
+# database created from here on has them"*, with the note that until 1.6.178 the CREATE EXTENSION
+# statements lived only in the chart's initdb script, *"which runs once against the `postgres`
+# database"* — so every other database silently lacked them.
+# ⚠️ ops made a smaller version of the same mistake: six of the eight, declared per database. A
+# database created later by a UIS service would have inherited nothing.
+# 🔵 template1 is the template every CREATE DATABASE copies, so doing it here means the contract
+# holds for databases that do not exist yet — which is the only way a contract can hold.
+- name: Activate the UIS extension contract in template1
+  community.postgresql.postgresql_ext:
+    name: "{{ item }}"
+    login_db: template1
+    state: present
+  become: true
+  become_user: postgres
+  loop: "{{ pg_required_extensions }}"
+  loop_control:
+    label: "template1 → {{ item }}"
+
+- name: Databases
+  community.postgresql.postgresql_db:
+    name: "{{ item.name }}"
+    owner: "{{ item.owner | default(omit) }}"
+    encoding: UTF8
+    state: present
+  become: true
+  become_user: postgres
+  loop: "{{ pg_databases }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# 🔵 ANYTHING EXTRA a specific database needs, beyond the template1 contract above. Databases
+# created BEFORE template1 was seeded do not inherit retroactively, so this also repairs those.
+- name: Extensions a particular database needs on top
+  community.postgresql.postgresql_ext:
+    name: "{{ item.1 }}"
+    login_db: "{{ item.0.name }}"
+    state: present
+  become: true
+  become_user: postgres
+  loop: "{{ pg_databases | subelements('extensions', skip_missing=True) }}"
+  loop_control:
+    label: "{{ item.0.name }} → {{ item.1 }}"
+
+# ── verify by asking the running server ─────────────────────────────────────────────────────
+- name: What is actually running
+  ansible.builtin.command:
+    cmd: psql -At -c "select current_setting('server_version_num'), current_setting('full_page_writes'), current_setting('shared_buffers'), current_setting('archive_mode')"
+  become: true
+  become_user: postgres
+  register: pg_final
+  changed_when: false
+  check_mode: false
+
+- name: The server must match what was intended
+  ansible.builtin.assert:
+    that:
+      - (pg_final.stdout.split('|')[0] | int) >= (pg_version | int) * 10000
+      - pg_final.stdout.split('|')[1] == ('off' if pg_zfs_optimisations | bool else 'on')
+      - pg_final.stdout.split('|')[3] == 'on'
+    fail_msg: >-
+      version={{ pg_final.stdout.split('|')[0] }} full_page_writes={{ pg_final.stdout.split('|')[1] }}
+      archive_mode={{ pg_final.stdout.split('|')[3] }} (wanted full_page_writes
+      {{ 'off' if pg_zfs_optimisations | bool else 'on' }}, archive_mode on).
+      ⚠️ archive_mode off means no point-in-time recovery, and nothing else reports it.
+    quiet: true
+
+- name: Result
+  ansible.builtin.debug:
+    msg: >-
+      PostgreSQL {{ pg_final.stdout.split('|')[0] }} · {{ pg_data_fstype }} ·
+      shared_buffers {{ pg_final.stdout.split('|')[2] }} ·
+      full_page_writes {{ pg_final.stdout.split('|')[1] }} ·
+      archiving to stanza '{{ pg_stanza }}' ·
+      {{ pg_databases | length }} databases, {{ pg_roles | length }} roles
+      ⚠️ NOT PROVEN HERE: that a restore produces a working database. pgBackRest `check` proves
+      archiving works; only a rehearsed restore proves recovery does.

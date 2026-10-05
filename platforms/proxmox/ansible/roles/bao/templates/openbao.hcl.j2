@@ -1,0 +1,50 @@
+# MANAGED BY ANSIBLE — roles/bao/templates/openbao.hcl.j2. Local edits are lost on the next run.
+ui = true
+
+# 🔴 Not a node name. The reference installation's handwritten config sets cluster_name to its
+# own hostname, which bakes the machine into a guest whose purpose is to outlive it.
+cluster_name = "{{ bao_cluster_name }}"
+
+# 🔵 disable_mlock = true because this runs in an unprivileged LXC, which cannot grant
+# CAP_IPC_LOCK. Stated rather than copied: with mlock off, secrets can reach swap, so the guest
+# is given a small swap and the host's pool is encrypted at rest by nothing — that is the
+# accepted trade of running a vault in a container instead of on metal.
+disable_mlock = true
+
+storage "raft" {
+  path    = "{{ bao_data_dir }}"
+  node_id = "{{ bao_node_id }}"
+}
+
+listener "tcp" {
+  address       = "0.0.0.0:{{ bao_port }}"
+  tls_cert_file = "{{ bao_tls_dir }}/bao.crt"
+  tls_key_file  = "{{ bao_tls_dir }}/bao.key"
+}
+
+# 🔵 DISCOVERED, not hardcoded. The reference installation's config pins one IP; this reads the
+# address the guest actually has, so the same role produces a correct config on any node it is
+# built on.
+api_addr     = "https://{{ bao_advertise_addr }}:{{ bao_port }}"
+cluster_addr = "https://{{ bao_advertise_addr }}:{{ bao_cluster_port }}"
+
+{% if bao_seal == 'static' %}
+# ⚠️ Static auto-unseal. Upstream recommends this only where another source of trust exists; it
+# is used here so the vault returns unattended after a power cut. The key is on the ROOTFS, never
+# on the data mount, so a leak of the data volume alone yields ciphertext. See roles/bao/defaults.
+seal "static" {
+  current_key_id = "{{ bao_seal_key_id }}"
+  current_key    = "file://{{ bao_seal_key_path }}"
+}
+{% else %}
+# Shamir seal: the vault starts SEALED and needs `bao operator unseal` with
+# {{ bao_init_key_threshold }} of {{ bao_init_key_shares }} keys after every restart.
+{% endif %}
+
+audit "file" {
+  type = "file"
+  path = "file/"
+  options = {
+    file_path = "{{ bao_audit_path }}"
+  }
+}

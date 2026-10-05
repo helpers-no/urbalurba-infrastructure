@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+# 🔴 ONE instance, ONE unit — replaces four `registry-mirror@<name>.service` instances and the
+# docker dependency they needed. zot is a static binary; nothing here requires Docker at all.
+[Unit]
+Description=zot — pull-through image cache (all upstreams)
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=zot
+Group=zot
+Restart=always
+RestartSec=10
+ExecStart=/usr/local/bin/zot serve {{ registry_data_dir }}/config.json
+
+[Install]
+WantedBy=multi-user.target

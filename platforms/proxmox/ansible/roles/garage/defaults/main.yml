@@ -1,0 +1,60 @@
+---
+# ── read live from UIS's own manifest — the single source, not a copy ───────────────────────
+# 🔴 the SAME file ansible/playbooks/047-setup-garage.yml applies to the rancher-desktop
+# cluster (`manifests/047-garage-config.yaml`). Reading it here, the same way the postgres role
+# now reads postgres-extensions.conf, means a version or port bump on rancher-desktop is picked
+# up here automatically instead of silently drifting. ⚠️ Requires manifests/047-garage-config.yaml
+# to exist in whatever /mnt/urbalurbadisk checkout this platform runs from.
+garage_manifest: "{{ lookup('file', '/mnt/urbalurbadisk/manifests/047-garage-config.yaml') }}"
+garage_version: "{{ (garage_manifest | regex_search('dxflrs/garage:(v[0-9.]+)', '\\1'))[0] }}"
+
+# ── ports ───────────────────────────────────────────────────────────────────────────────────
+# 🔵 NOT MinIO's 9000/9001. This is a different server, not a drop-in: anything pointing at the
+# old ports must be repointed deliberately rather than discovering it at runtime. Also read live
+# (see above) rather than copied, so a port change on rancher-desktop can't go unnoticed here.
+garage_s3_port: "{{ (garage_manifest | regex_search('name: s3-api\\s+containerPort: (\\d+)', '\\1'))[0] }}"
+garage_rpc_port: "{{ (garage_manifest | regex_search('name: rpc\\s+containerPort: (\\d+)', '\\1'))[0] }}"
+# 🔴 3902 (web) and 3903 (admin) deliberately NOT enabled, matching UIS. Nothing here calls an
+# admin API — bucket and key administration goes through the `garage` CLI — and an unused listener
+# on a service holding every object is surface for nothing.
+
+# ── the image, pinned by digest — the one thing deliberately NOT read live ──────────────────
+# 🔴 PINNED BY DIGEST, and for a sharper reason than usual. Garage publishes a static binary but
+# NO .sha256sum beside it (404, checked 2026-10-01), so a binary install could not be verified.
+# The image digest is a cryptographic pin that the binary route simply does not offer, and UIS's
+# own manifest only pins by tag — stronger here on purpose, not a drift bug.
+# ⚠️ A digest can't be derived from a version bump; resolving one is an irreducible human step.
+# garage_image_version is the version this digest was last resolved against — tasks/main.yml
+# asserts it still equals the live garage_version above, so a rancher-desktop version bump this
+# role hasn't caught up with fails loudly instead of silently installing the stale digest.
+garage_image_version: "v2.3.0"
+garage_image: "dxflrs/garage@sha256:866bd13ed2038ba7e7190e840482bc27234c4afaf77be8cfa439ae088c1e4690"
+
+garage_data_dir: /var/lib/garage
+garage_replication_factor: 1      # single node
+garage_db_engine: sqlite
+
+# ── the bootstrap credential ────────────────────────────────────────────────────────────────
+# 🔵 Garage accepts a CHOSEN key pair, not only a minted one, so the credential can come from a
+# secret store the same way MinIO's root user did. ⚠️ Supplied at run time, never declared: a key
+# in a declaration is a key in git.
+garage_access_key: ""
+garage_secret_key: ""
+garage_rpc_secret: ""
+# 🔵 Matches UIS's own rancher-desktop default (GARAGE_DEFAULT_BUCKET in manifests/047-garage-
+# config.yaml) — not Loki's bucket. Loki isn't installed by this platform yet; when it is, that
+# service's own role/declaration should set its own bucket, not this one.
+garage_default_bucket: default-bucket
+
+# 🔴 THE STEP THAT MUST NOT BE SKIPPED. `--single-node --default-bucket` sets the bootstrap key's
+# ACCOUNT-LEVEL `can_create_buckets=true`, and nothing narrows it back down. UIS shipped that as
+# "a key scoped to one bucket"; testing disproved it with a single `aws s3api create-bucket` call
+# that succeeded, leaving three buckets owned by one credential (`urb-agents#1802`).
+# ⚠️ This is Garage's own behaviour, not a Kubernetes gap — confirmed in `urb-agents#1804`:
+# *"your role needs the same fix step, or it ships the same hole."*
+garage_deny_create_bucket: true
+
+# 🔴 BOOTSTRAP: keep the image on local disk so this can start with no internet and a cold docker
+# cache. Without it the object store depends on the registry or the internet being up first, which
+# is the circular dependency the registry exists to avoid. See platform/BOOTSTRAP.md.
+garage_seed_image: true

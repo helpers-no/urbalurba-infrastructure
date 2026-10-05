@@ -1,0 +1,36 @@
+{
+  "distSpecVersion": "1.1.0",
+  "storage": {
+    "rootDirectory": "{{ registry_data_dir }}/storage",
+    "dedupe": true,
+    "gc": {{ registry_gc | lower }},
+    "gcDelay": "{{ registry_gc_delay }}",
+    "gcInterval": "{{ registry_gc_interval }}"
+  },
+  "http": {
+    "address": "0.0.0.0",
+    "port": "{{ registry_port }}"
+  },
+  "log": {
+    "level": "{{ registry_log_level }}"
+  },
+  "extensions": {
+    "sync": {
+      "enable": true,
+      "registries": [
+{% for u in registry_upstreams %}
+        {
+          "urls": ["{{ u.upstream }}"],
+          "onDemand": true,
+          "tlsVerify": true,
+          "content": [{ "prefix": "**", "destination": "{{ u.destination }}" }]
+        }{{ "," if not loop.last else "" }}
+{% endfor %}
+      ]
+    },
+    "metrics": {
+      "enable": {{ registry_metrics_enabled | lower }},
+      "prometheus": { "path": "{{ registry_metrics_path }}" }
+    }
+  }
+}

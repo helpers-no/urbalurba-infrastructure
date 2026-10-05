@@ -170,10 +170,17 @@ run, or the cache grows without bound as tags churn.
 ## Part 2: Proposed plans (ordered)
 
 ```
-PLAN-system-registry-cache-001-provision.md      ← the cache host/role itself
-PLAN-system-registry-cache-002-cluster-wiring.md ← generate registries.yaml on provision
-PLAN-system-registry-cache-003-warm-verify.md    ← `uis registry warm` + outage test
+PLAN-system-registry-cache-001-provision.md      ← written 2026-10-05, Status: Backlog, ready to implement
+PLAN-system-registry-cache-002-cluster-wiring.md ← generate registries.yaml on provision — not written yet
+PLAN-system-registry-cache-003-warm-verify.md    ← `uis registry warm` + outage test — not written yet
 ```
+
+> **Update, 2026-10-05:** [PLAN-system-registry-cache-001-provision.md](./PLAN-system-registry-cache-001-provision.md)
+> now exists and is ready to implement — see it for the resolved engine decision (zot, not
+> `registry:2` — open question 1 below) and a validated reference implementation to port from
+> (`platforms/proxmox/ansible/roles/registry/`, built and verified against a real 3-node Proxmox
+> lab, outside UIS proper). PLAN-002 and PLAN-003 are still unwritten; their scope below remains
+> accurate.
 
 ### PLAN-001 — Provision the cache
 
@@ -208,8 +215,10 @@ enabled services; the outage test passes.
 
 ## Part 3: Open questions
 
-1. **Engine:** four `registry:2` instances, or one multi-upstream tool (`zot`)?
-   Fewer moving parts is worth a lot for a self-hosted platform.
+1. ~~**Engine:** four `registry:2` instances, or one multi-upstream tool (`zot`)?~~ **Resolved
+   2026-10-05: zot.** One instance fronting every upstream beats adding a container+port+GC-unit
+   per upstream forever — see PLAN-001. Harbor was also considered and ruled out (needs its own
+   Postgres+Redis).
 2. **Where does a non-cluster component live in the UIS model?** This is the
    interesting design question — UIS's unit of composition is an in-cluster
    service, and this cannot be one. Same shape as an external database, external

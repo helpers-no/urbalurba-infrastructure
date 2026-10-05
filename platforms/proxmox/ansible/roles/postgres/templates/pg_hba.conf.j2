@@ -1,0 +1,13 @@
+# MANAGED BY ANSIBLE — roles/postgres/templates/pg_hba.conf.j2
+# 🔵 Networks are DECLARED in the inventory, not written here. The reference installation's
+# hand-written pg_hba carries a VPN overlay range (dead since that VPN was removed from that
+# guest on 2026-10-01) and a host-local backplane range that exists on exactly one node. Neither
+# is wrong exactly; both are invisible until someone reads the file.
+local   all             postgres                                peer
+local   all             all                                     peer
+local   replication     all                                     peer
+{% for n in pg_allowed_networks %}
+# {{ n.why }}
+host    all             all             {{ n.cidr }}{{ ' ' * (20 - n.cidr | length if n.cidr | length < 20 else 1) }}scram-sha-256
+host    replication     all             {{ n.cidr }}{{ ' ' * (20 - n.cidr | length if n.cidr | length < 20 else 1) }}scram-sha-256
+{% endfor %}

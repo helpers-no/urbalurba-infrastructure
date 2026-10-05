@@ -1,0 +1,19 @@
+# MANAGED BY ANSIBLE — roles/garage/templates/garage.toml.j2
+# ⚠️ CARRIES rpc_secret. Mode 0600, and it must never reach a declaration or git.
+metadata_dir = "{{ garage_data_dir }}/meta"
+data_dir     = "{{ garage_data_dir }}/data"
+db_engine    = "{{ garage_db_engine }}"
+
+# Single node: one copy, no peers.
+replication_factor = {{ garage_replication_factor }}
+
+rpc_bind_addr   = "127.0.0.1:{{ garage_rpc_port }}"
+rpc_public_addr = "127.0.0.1:{{ garage_rpc_port }}"
+rpc_secret      = "{{ garage_rpc_secret }}"
+
+[s3_api]
+s3_region   = "garage"
+api_bind_addr = "0.0.0.0:{{ garage_s3_port }}"
+root_domain = ".s3.garage"
+
+# 🔴 [s3_web] and [admin] are deliberately absent — see roles/garage/defaults/main.yml.

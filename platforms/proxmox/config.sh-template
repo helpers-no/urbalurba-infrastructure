@@ -1,0 +1,113 @@
+# platforms/proxmox/config.sh-template
+#
+# Copy to config.sh (git-ignored — never commit this file, it names your own
+# machines) and fill in your own values. Sourced by every script in
+# platforms/proxmox/scripts/.
+#
+# Before filling this in: each of the 3 hosts below needs Proxmox already
+# installed, a ZFS pool/storage already created, and the three joined into
+# one Proxmox cluster. That part is NOT scripted — see README.md's
+# "Before you start" section for why (one step genuinely needs a human
+# typing a password) and the exact commands to run it yourself.
+
+# ── The three Proxmox hosts ──────────────────────────────────────────────
+# host3 is assumed the weakest machine of the three in the defaults below
+# (it gets a lighter VM and a control-plane-only k3s role) — reorder which
+# physical machine is host1/2/3 to match your own hardware, not the names.
+PROXMOX_HOST1_NAME="host1"
+PROXMOX_HOST1_ADDR="192.168.1.10"
+PROXMOX_HOST2_NAME="host2"
+PROXMOX_HOST2_ADDR="192.168.1.11"
+PROXMOX_HOST3_NAME="host3"
+PROXMOX_HOST3_ADDR="192.168.1.12"
+
+# 🔴 THE LAN EVERY K3S NODE AND EVERY CORE-SERVICES GUEST SHARES — not optional metadata.
+# Found running this for real (2026-10-05): a k3s pod talking to an external-service proxy (e.g.
+# `uis deploy postgresql` pointed at "pg" or "pg-test") has its traffic SNAT'd to the k3s NODE's
+# own address before it reaches the guest — postgres then sees a connection from THAT address,
+# not from inside the cluster, and refuses it outright with "no pg_hba.conf entry for host
+# ...". Same CIDR as your three Proxmox hosts' own addresses above, just wide enough to also
+# cover every k3s VM and core-services guest DHCP hands out. If you widened/narrowed the subnet
+# from the default /22, update this to match.
+CORE_SERVICES_LAN_CIDR="192.168.1.0/22"
+
+# The SSH key ansible uses to reach every Proxmox host AND every k3s VM this
+# creates. scripts/00-storage-ensure.sh generates it on first run and installs
+# it on all 3 hosts; every later script just assumes it already works.
+PROXMOX_SSH_KEY="${HOME}/.ssh/id_ed25519_proxmox"
+
+# Proxmox cluster name (what `pvecm create <name>` was run with) and the ZFS
+# storage name every host registered (see README) — must be identical on all
+# three hosts, that's what makes a guest movable between them.
+PROXMOX_CLUSTER_NAME="homelab"
+PROXMOX_STORAGE="tank-vm"
+
+# ── Networking ────────────────────────────────────────────────────────────
+# The k3s VMs need 6 free static addresses on the SAME subnet as the 3
+# Proxmox hosts above (2 per host: production + mirror test cluster). Must
+# not already be in use or handed out by your DHCP server.
+NETWORK_PREFIX_LENGTH="24"          # match your LAN's netmask (e.g. 22, 24)
+NETWORK_GATEWAY="192.168.1.1"
+NETWORK_DNS="192.168.1.1"
+NETWORK_SEARCH_DOMAIN="lan"
+
+K3S_VM_HOST1_IP="192.168.1.30"       # production, --cluster-init
+K3S_VM_HOST1_TEST_IP="192.168.1.31"  # mirror test cluster, --cluster-init
+K3S_VM_HOST2_IP="192.168.1.32"       # production, joins host1
+K3S_VM_HOST2_TEST_IP="192.168.1.33"  # test, joins host1-test
+K3S_VM_HOST3_IP="192.168.1.34"       # production, control-plane-only — see README
+K3S_VM_HOST3_TEST_IP="192.168.1.35"  # test, joins host1-test
+
+# ── VM sizing ──────────────────────────────────────────────────────────────
+# Defaults are what the reference lab used — see README's "Sizing" section
+# for the reasoning (host2 had the most headroom, host3 the least). Tune for
+# your own hardware; these are the only numbers that matter for that.
+K3S_VM_HOST1_CORES=2;      K3S_VM_HOST1_MEMORY_MB=4096;      K3S_VM_HOST1_DISK_GB=20
+K3S_VM_HOST1_TEST_CORES=1; K3S_VM_HOST1_TEST_MEMORY_MB=2048; K3S_VM_HOST1_TEST_DISK_GB=10
+K3S_VM_HOST2_CORES=4;      K3S_VM_HOST2_MEMORY_MB=6144;      K3S_VM_HOST2_DISK_GB=20
+K3S_VM_HOST2_TEST_CORES=2; K3S_VM_HOST2_TEST_MEMORY_MB=2048; K3S_VM_HOST2_TEST_DISK_GB=10
+K3S_VM_HOST3_CORES=2;      K3S_VM_HOST3_MEMORY_MB=3072;      K3S_VM_HOST3_DISK_GB=10
+K3S_VM_HOST3_TEST_CORES=1; K3S_VM_HOST3_TEST_MEMORY_MB=2048; K3S_VM_HOST3_TEST_DISK_GB=10
+
+# host3's PRODUCTION k3s node contributes its HA vote and nothing else — no
+# workload pods are scheduled there. Set to false if host3 isn't your
+# weakest/slowest-disk machine. See README for why this exists.
+K3S_VM_HOST3_CONTROL_PLANE_ONLY=true
+
+# VMIDs — must be free on each respective Proxmox host.
+K3S_VM_HOST1_VMID=490;  K3S_VM_HOST1_TEST_VMID=491
+K3S_VM_HOST2_VMID=290;  K3S_VM_HOST2_TEST_VMID=291
+K3S_VM_HOST3_VMID=190;  K3S_VM_HOST3_TEST_VMID=191
+
+# ── VM identity ────────────────────────────────────────────────────────────
+VM_CLOUD_IMAGE="noble-server-cloudimg-amd64.img"
+VM_CLOUD_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+VM_CIUSER="k3s"
+
+# ── k3s ────────────────────────────────────────────────────────────────────
+# Pin an EXACT version, not a floating channel — see README for why. Check
+# the current one at https://update.k3s.io/v1-release/channels (the "stable"
+# channel's value) rather than trusting a value in this template to still be
+# current.
+K3S_VERSION="v1.36.5+k3s1"
+
+# Deliberately different from production's k3s defaults (10.42.0.0/16 /
+# 10.43.0.0/16) so `ip route`/`kubectl` output is never ambiguous about which
+# cluster you're looking at.
+K3S_TEST_CLUSTER_CIDR="10.52.0.0/16"
+K3S_TEST_SERVICE_CIDR="10.53.0.0/16"
+
+# ── Core services — LXC, not k3s pods ──────────────────────────────────────
+# pg (database), bao (secrets), garage (object storage), registry (image
+# cache). Remove any you don't want; order doesn't matter.
+# All build on host1 by default — not a hardware-strength ranking like k3s's
+# host3 rule (see README): every node is an equal HA failover target
+# regardless of strength, so concentrating them is just the simplest layout,
+# not a safety requirement.
+#
+# 🔵 pg-test (a SEPARATE, smaller postgres instance — not a database inside
+# "pg") is available but not included by default: add it only if you want the
+# test k3s cluster to have its own database, isolated from production's. See
+# scripts/point-postgresql-at.sh for switching which one the active cluster
+# target actually talks to.
+CORE_SERVICES="pg bao garage registry"

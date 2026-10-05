@@ -1,0 +1,9 @@
+---
+# service-bao — L3: install/configure bao on an already-created guest.
+#
+#   ansible-playbook -i <addr>, playbooks/service-bao.yml -e @vars.yml
+- name: bao
+  hosts: all
+  gather_facts: true
+  roles:
+    - bao
