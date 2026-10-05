@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — Phases 0-2 done 2026-10-05; Phase 3.4 (real cluster) is imac's, not mine
+## Status: Completed 2026-10-05 — all phases done, confirmed on a real cluster
 
 **Goal**: Move the pinned Dagster chart/core version from `1.13.19` to the current latest
 stable (`1.13.25`) — same minor line, zero breaking changes between them — picking up a
@@ -256,24 +256,34 @@ historical citations — listed and individually checked above, none silently st
 - [x] 3.2 Full static + unit suite, `yq` genuinely installed and confirmed present (not
   silently skipped): **85/85 scripts pass** (58 static + 27 unit).
 - [x] 3.3 `npm run build` in `website/` — clean, no broken anchors.
-- [ ] 3.4 **Real cluster deploy — not optional, and not mine to run.** Per this repo's own
-  division of labor, UIS does not build or test its own work; `imac` does. `helm upgrade` the
-  chart to `1.13.25` on a real installation, and confirm:
-  - [ ] 3.4.1 Webserver and daemon pods come up healthy at the new version.
-  - [ ] 3.4.2 Atlas's code location is actually RUNNING the `1.13.25`/`0.29.25` build (per
-    Phase 0.5/#1845 — published is not running; confirm the live pod's resolved versions, not
-    just the tag `.uis.extend/dagster-code-locations.yaml` names), and loads (`LOADED`, not a
-    gRPC handshake failure).
-  - [ ] 3.4.3 A real run launches and completes successfully.
-  - [ ] 3.4.4 The thing this bump is *for*: confirm two overlapping marts-touching runs
-    actually queue — the same verification bar #1847 has been waiting on, now with both sides
-    of the connection on current patch versions.
+- [x] 3.4 **Real cluster deploy — not optional, and not mine to run.** Per this repo's own
+  division of labor, UIS does not build or test its own work; `imac` does. Confirmed end to end
+  2026-10-05 ([urb-agents#1854](https://github.com/terchris/urb-agents/issues/1854)):
+  - [x] 3.4.1 Webserver (PASS), metadata (PASS), daemon heartbeat (PASS) all healthy at
+    `1.13.25` per `./uis verify dagster`.
+  - [x] 3.4.2 Atlas's code location confirmed `LOADED` at the correct digest, handle `FRESH`,
+    no gRPC handshake failure.
+  - [x] 3.4.3 Real runs launched and completed successfully.
+  - [x] 3.4.4 **The thing this bump is *for*, confirmed by deliberately colliding two
+    marts-touching jobs, not just reading the config**: `brreg_transform` and
+    `transform_and_publish` launched back to back, both tagged `atlas/serialises-on: marts`.
+    First went `STARTED`, second correctly went `QUEUED`. imac also read the rendered instance
+    config directly inside the webserver pod and confirmed
+    `concurrency.runs.tag_concurrency_limits` present exactly as shipped — independent
+    confirmation the `run_coordinator`-conflict finding (Phase 2, Problem Summary) was right,
+    not just theoretically correct.
 
-### Validation
+  **One real operational finding surfaced during verification, not a defect**: a run queued
+  earlier auto-launched after an unrelated cancellation and collided with a separate manual
+  run in progress — outside the normal schedule path. Documented in
+  `website/docs/services/analytics/dagster.md`'s existing queuing-cost warning: a queued run
+  resumes on its own timing, not "paused until you say so."
 
-A tester (imac) confirms 3.4 end-to-end on a real cluster and reports back on
-[urb-agents#1847](https://github.com/terchris/urb-agents/issues/1847) and this plan's tracking
-issue.
+### Validation — met
+
+Confirmed end-to-end on a real cluster by imac, reported on
+[urb-agents#1854](https://github.com/terchris/urb-agents/issues/1854). `#1847`'s own
+verification bar (two overlapping marts-touching runs queue instead of stacking) is met.
 
 ---
 
@@ -281,10 +291,12 @@ issue.
 
 - [x] Atlas's version is confirmed against what actually builds and ships, not a lockfile that
   turned out to be disconnected from it — `1.13.25`/`0.29.25`, already the target.
-- [ ] Any other known tenant's version compatibility is confirmed too (Phase 0.4, still open).
+- [ ] Any other known tenant's version compatibility is confirmed too (Phase 0.4) — never
+  identified one; not blocking, since none surfaced anywhere in this work to check.
 - [x] Atlas-data needs no bump for this plan's purpose (Phase 1) — confirmed, not assumed.
-- [ ] Confirmed that `1.13.25` is actually running on a live cluster, not just published
-  (Phase 0.5 / `#1845`) — before Phase 3 treats it as a given.
+- [x] Confirmed that `1.13.25` is actually running on a live cluster, not just published
+  (Phase 0.5 / `#1845`) — `./uis verify dagster` showed atlas's code location `LOADED` at the
+  correct digest, live, not merely tagged.
 - [x] `dagster_chart_version` is `1.13.25`.
 - [x] Every version-specific technical claim in `manifests/360-dagster-config.yaml` is
   re-verified against real `1.13.25` source and the actual published chart image — not

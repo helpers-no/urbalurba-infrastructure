@@ -615,6 +615,15 @@ one. Measure your longest job carrying this tag before reaching for `limit: 1` a
 a reflex; if the queuing cost bites in practice, a second, narrower tag scoped to
 just the job that can't afford to wait is a legitimate alternative, trading some
 staleness risk for not queuing behind an unrelated long run.
+
+**A queued run can resume later than you expect, not just "wait its turn."**
+Verified live (imac, 2026-10-05): a run queued earlier auto-launched after an
+unrelated run was cancelled, and collided with a separate manual/ad-hoc run in
+progress at that moment — outside the normal schedule cadence entirely. Not a
+bug in this mechanism; a reminder that "queued" means "will run when a slot
+frees," on its own timing, not "paused until you say so." Treat any queued run
+as something that can start at any moment when planning manual or ad-hoc work
+against the same tag.
 :::
 
 Not the only concurrency mechanism Dagster ships, and not an accident that this
