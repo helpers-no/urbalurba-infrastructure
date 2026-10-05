@@ -13,6 +13,15 @@
 # website/docs/.../INVESTIGATE-service-openbao.md's own "Option C" recommendation for UIS's dev
 # tier (same store name, a `kubernetes` provider reading an ordinary Secret instead of a vault).
 #
+# 🔴 "NO DIFF COMING FROM RANCHER DESKTOP" (Terje, 2026-10-05) — this means matching UIS's ACTUAL
+# dev convention byte-for-byte, not just "some" plain Secret. Confirmed directly:
+# provision-host/uis/templates/secrets-templates/00-master-secrets.yml.template creates exactly
+# ONE Secret, named `urbalurba-secrets`, in namespace `default` — and every UIS manifest that
+# reads a secret references it by that exact name (`secretKeyRef: {name: urbalurba-secrets, ...}`).
+# So this role ensures that SAME Secret exists (empty if nothing else created it yet — never
+# overwriting real content), in the SAME namespace, under the SAME name. An `ExternalSecret`
+# written against rancher-desktop's `urbalurba-secrets` resolves unchanged here.
+#
 # 🔵 ESO's `kubernetes` provider can point at ANY cluster's API, including its own — confirmed for
 # real (2026-10-05): ESO's own chart already grants its ServiceAccount cluster-wide read/list on
 # Secrets (needed for its general operation anyway), so no new RBAC, no reviewer ServiceAccount,
@@ -148,20 +157,49 @@
       loop: "{{ cluster_wiring }}"
       loop_control: { label: "{{ item.context }}" }
 
-    # ── prove it, rather than trusting that objects exist ───────────────────────────────────────
-    - name: Write one real plain Secret, for the end-to-end proof
-      kubernetes.core.k8s:
-        state: present
+    # ── the SAME Secret UIS's own rancher-desktop convention uses, not a different one ──────────
+    # 🔴 CREATED ONLY IF MISSING. A lab owner's real keys (or UIS's own master-secrets render, if
+    # this cluster is ever also provisioned as a UIS target) must never be touched by this role.
+    - name: Does urbalurba-secrets already exist, per cluster
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: urbalurba-secrets
+        namespace: "{{ bao_simple_namespace }}"
         context: "{{ item.context }}"
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata: { name: k3s-bao-simple-selftest, namespace: "{{ bao_simple_namespace }}" }
-          stringData: { value: "proven-2026-10-05" }
+      register: existing_urbalurba_secrets
       loop: "{{ cluster_wiring }}"
       loop_control: { label: "{{ item.context }}" }
 
-    - name: An ExternalSecret requesting it, per cluster
+    - name: Create urbalurba-secrets empty, per cluster, only where it doesn't exist yet
+      kubernetes.core.k8s:
+        state: present
+        context: "{{ item.0.context }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: { name: urbalurba-secrets, namespace: "{{ bao_simple_namespace }}" }
+          type: Opaque
+      loop: "{{ cluster_wiring | zip(existing_urbalurba_secrets.results) | list }}"
+      loop_control: { loop_var: item, label: "{{ item.0.context }}" }
+      when: (item.1.resources | default([]) | length) == 0
+
+    # ── prove it against the REAL secret, rather than trusting that objects exist ───────────────
+    # 🔵 A temporary KEY inside urbalurba-secrets, not a separate Secret object — this proves the
+    # actual path a real ExternalSecret will use (remoteRef.key: urbalurba-secrets), not a parallel
+    # one. Added and removed via a JSON merge patch, so any other keys already present survive.
+    - name: Patch a temporary test key into urbalurba-secrets, per cluster
+      kubernetes.core.k8s:
+        state: patched
+        context: "{{ item.context }}"
+        kind: Secret
+        name: urbalurba-secrets
+        namespace: "{{ bao_simple_namespace }}"
+        definition:
+          stringData: { K3S_BAO_SIMPLE_SELFTEST: "proven-2026-10-05" }
+      loop: "{{ cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: An ExternalSecret requesting that one key, per cluster
       kubernetes.core.k8s:
         state: present
         context: "{{ item.context }}"
@@ -175,7 +213,7 @@
             target: { name: k3s-bao-simple-selftest-target }
             data:
               - secretKey: value
-                remoteRef: { key: k3s-bao-simple-selftest, property: value }
+                remoteRef: { key: urbalurba-secrets, property: K3S_BAO_SIMPLE_SELFTEST }
       loop: "{{ cluster_wiring }}"
       loop_control: { label: "{{ item.context }}" }
 
@@ -200,7 +238,7 @@
       loop: "{{ cluster_wiring }}"
       loop_control: { loop_var: item, index_var: idx, label: "{{ item.context }}" }
 
-    - name: Remove the test ExternalSecret — leave the real wiring in place
+    - name: Remove the test ExternalSecret and its target — leave the real wiring in place
       kubernetes.core.k8s:
         state: absent
         context: "{{ item.context }}"
@@ -211,14 +249,17 @@
       loop: "{{ cluster_wiring }}"
       loop_control: { label: "{{ item.context }}" }
 
-    - name: Remove the test plain Secret
-      kubernetes.core.k8s:
-        state: absent
+    # 🔵 Removes only the ONE test key this run added — a JSON patch with a null value deletes
+    # that key from stringData without touching anything else a lab owner has since put there.
+    - name: Remove the temporary test key from urbalurba-secrets, per cluster
+      kubernetes.core.k8s_json_patch:
+        kind: Secret
+        name: urbalurba-secrets
+        namespace: "{{ bao_simple_namespace }}"
         context: "{{ item.context }}"
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata: { name: k3s-bao-simple-selftest, namespace: "{{ bao_simple_namespace }}" }
+        patch:
+          - op: remove
+            path: "/data/K3S_BAO_SIMPLE_SELFTEST"
       loop: "{{ cluster_wiring }}"
       loop_control: { label: "{{ item.context }}" }
 
@@ -226,9 +267,10 @@
       ansible.builtin.debug:
         msg: >-
           ClusterSecretStore "openbao" is Ready on {{ cluster_wiring | map(attribute='context') | join(' and ') }},
-          backed by a plain Kubernetes Secret (namespace "{{ bao_simple_namespace }}") — no vault,
-          no bao, no bidirectional auth. Proven end to end: a plain Secret reached a real target
-          Secret with the correct value via an ExternalSecret, then was cleaned up.
+          backed by the SAME Secret UIS's rancher-desktop uses — "urbalurba-secrets" in namespace
+          "{{ bao_simple_namespace }}" — no vault, no bao, no bidirectional auth. An ExternalSecret
+          written against rancher-desktop's urbalurba-secrets resolves here unchanged. Proven end
+          to end against that real secret (a temporary key, not a parallel one), then cleaned up.
           ⚠️ To upgrade a cluster to the REAL bao-backed store instead, see
           scripts/upgrade-test-cluster-to-bao.sh (or run k3s-bao-ensure.yml directly, naming it in
           target_contexts) — it overwrites the SAME ClusterSecretStore name, so existing
