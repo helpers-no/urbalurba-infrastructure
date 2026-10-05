@@ -13,11 +13,14 @@
 #   has no idea two clusters exist — it just reads whatever this one file says. This script is
 #   what keeps the file's answer correct for whichever cluster is actually active.
 #
-#   ⚠️ THE SHARED pf_lockstep_flip MECHANISM ONLY COVERS "proxmox" (production) — switching TO
-#   "proxmox-test" today is just `kubectl config use-context`, bypassing cluster-config.sh
-#   entirely (see 04-k3s-post-apply.sh's own printed instructions). This script does the right
-#   thing for both: the blessed lockstep flip for production, a plain context switch for test —
-#   and updates external-services.yaml either way.
+#   🔴 CORRECTED 2026-10-05, found running this for real: pf_lockstep_flip is fully generic (any
+#   kubectl context name, not only registered UIS platforms) — it keeps kubectl's current-context
+#   AND cluster-config.sh's CLUSTER_TYPE/TARGET_HOST in lockstep for whichever target you give it.
+#   An earlier version of this script used it only for "proxmox" and a bare
+#   `kubectl config use-context` for "proxmox-test", wrongly assuming the lockstep writer was
+#   production-only. Consequence: `uis deploy`/`uis verify` read cluster-config.sh, not kubectl's
+#   live context, so they kept reporting "Target cluster: proxmox" after switching to test. Now
+#   uses the real lockstep writer for both — see the fix at the call site below.
 #
 #   ⚠️ THIS FILE MAY ALREADY HOLD REAL, UNRELATED PRODUCTION CONFIG for a different installation
 #   entirely (found 2026-10-05: a stale `postgresql:`/`minio:` pointing at a now-wiped host).
@@ -80,13 +83,41 @@ yq -i "
 
 print_status "Switching the active cluster target to ${TARGET}..."
 source /mnt/urbalurbadisk/provision-host/uis/lib/platform-switching.sh
-if [[ "$TARGET" == "proxmox" ]]; then
-    # The blessed path — keeps cluster-config.sh in lockstep too.
-    pf_lockstep_flip "proxmox"
-else
-    kubectl config use-context "$TARGET"
-fi
+# 🔴 FOUND RUNNING THIS FOR REAL: pf_lockstep_flip is fully generic — it just does
+# `kubectl config use-context "$1"` plus syncs cluster-config.sh's CLUSTER_TYPE/TARGET_HOST to
+# match, for ANY context name, not only registered UIS platforms. An earlier version of this
+# script used a plain `kubectl config use-context` for "proxmox-test" on the (wrong) assumption
+# that the lockstep writer was production-only. Consequence: `uis deploy`/`uis verify` read
+# cluster-config.sh's TARGET_HOST, not kubectl's live context — so they kept reporting
+# "Target cluster: proxmox" even after switching kubectl to proxmox-test. Use the real lockstep
+# writer for both targets; it's the only way "the active target" means the same thing to both
+# kubectl and every uis command that trusts cluster-config.sh.
+pf_lockstep_flip "$TARGET"
 
 print_success "Active target: ${TARGET}. 'uis deploy postgresql' there now proxies to ${PG_NAME} (${PG_IP})."
 echo "  Existing in-cluster consumers (PGHOST=postgresql.default) are unaffected — only the"
 echo "  external address the proxy forwards to changed."
+
+# ── sync the postgres superuser's password to match what the cluster already expects ─────────
+# 🔴 FOUND RUNNING THIS FOR REAL: the postgres role never sets a password on the `postgres`
+# superuser (loopback-only access didn't need one). The external-service proxy connects over the
+# network, and `uis verify postgresql` (and anything else using PGPASSWORD from
+# urbalurba-secrets) authenticates with a REAL password — so without this, every such connection
+# fails "password authentication failed", even once pg_hba.conf correctly allows the address.
+# ⚠️ ONLY RUNS IF urbalurba-secrets ALREADY EXISTS — on a brand-new lab, core-services get built
+# before any `uis deploy`/`uis secrets generate` has ever run, so this secret may not exist yet.
+# That's fine: this step is specifically "wire an existing cluster to this postgres", which by
+# definition happens after the cluster has secrets. Skipping quietly here, not failing, is correct
+# for that ordering — rerun this script once secrets exist if this skips.
+PGPASSWORD_B64="$(kubectl get secret urbalurba-secrets -n default -o jsonpath='{.data.PGPASSWORD}' 2>/dev/null || true)"
+if [[ -n "$PGPASSWORD_B64" ]]; then
+    print_status "Syncing ${PG_NAME}'s postgres superuser password to match urbalurba-secrets..."
+    REAL_PG_PASSWORD="$(echo "$PGPASSWORD_B64" | base64 -d)"
+    ssh -i "$PROXMOX_SSH_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@${PG_IP}" \
+        "sudo -u postgres psql -c \"ALTER ROLE postgres WITH PASSWORD '${REAL_PG_PASSWORD}'\"" >/dev/null
+    print_success "${PG_NAME}'s postgres password now matches urbalurba-secrets's PGPASSWORD."
+else
+    echo "  (urbalurba-secrets not found on ${TARGET} yet — skipping password sync. Run this"
+    echo "   script again after 'uis secrets generate' / a first deploy if postgresql verify"
+    echo "   fails with \"password authentication failed\".)"
+fi

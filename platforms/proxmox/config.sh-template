@@ -21,6 +21,16 @@ PROXMOX_HOST2_ADDR="192.168.1.11"
 PROXMOX_HOST3_NAME="host3"
 PROXMOX_HOST3_ADDR="192.168.1.12"
 
+# 🔴 THE LAN EVERY K3S NODE AND EVERY CORE-SERVICES GUEST SHARES — not optional metadata.
+# Found running this for real (2026-10-05): a k3s pod talking to an external-service proxy (e.g.
+# `uis deploy postgresql` pointed at "pg" or "pg-test") has its traffic SNAT'd to the k3s NODE's
+# own address before it reaches the guest — postgres then sees a connection from THAT address,
+# not from inside the cluster, and refuses it outright with "no pg_hba.conf entry for host
+# ...". Same CIDR as your three Proxmox hosts' own addresses above, just wide enough to also
+# cover every k3s VM and core-services guest DHCP hands out. If you widened/narrowed the subnet
+# from the default /22, update this to match.
+CORE_SERVICES_LAN_CIDR="192.168.1.0/22"
+
 # The SSH key ansible uses to reach every Proxmox host AND every k3s VM this
 # creates. scripts/00-storage-ensure.sh generates it on first run and installs
 # it on all 3 hosts; every later script just assumes it already works.
