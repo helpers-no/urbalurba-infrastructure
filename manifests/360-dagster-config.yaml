@@ -138,6 +138,62 @@ concurrency:
   runs:
     maxConcurrentRuns: 4
 
+    # ⚠️ TAG-BASED RUN SERIALISATION — THE MECHANISM, SHIPPED EMPTY ON PURPOSE.
+    #
+    # maxConcurrentRuns above is a blanket ceiling that needs no cooperation from
+    # any tenant's code. This is the finer-grained lever: "no more than N runs
+    # carrying this tag at once" — for a tenant whose own jobs can collide with
+    # each other on a shared table even while comfortably under the blanket cap.
+    # Real incident, not hypothetical: a tenant's 30-minute schedule kept firing
+    # while a previous run was stuck slow (unrelated table bloat), stacked FOUR
+    # overlapping runs well under this cap of 4, and two of them deadlocked in
+    # PostgreSQL (imac/atlas, urb-agents#1847/#1850).
+    #
+    # 🔴 THIS BLOCK, NOT `dagsterDaemon.runCoordinator.config.queuedRunCoordinator`,
+    # AND NOT A HAND-ROLLED `run_coordinator:` BLOCK. Read out of the pinned
+    # chart's own values.yaml (dagster-1.13.19, line ~1478): "This is the
+    # recommended way to configure concurrency settings. Do NOT set these values
+    # if you are also configuring maxConcurrentRuns, tagConcurrencyLimits, or
+    # blockOpConcurrencyLimitedRuns in dagsterDaemon.runCoordinator.config." And
+    # it is not advisory-only: dagster 1.13.19's own instance config validator
+    # (_core/instance/config.py, validate_concurrency_config) REFUSES to start
+    # with both set at once — "incompatible with the `concurrency > runs`
+    # config" — once this top-level block is in use (which maxConcurrentRuns
+    # above already was), a `run_coordinator`-level tag_concurrency_limits is not
+    # a redundant alternative, it is a deploy that will not come up. The original
+    # fix proposal for this (urb-agents#1848/#1849, atlas/ops-dev) used that
+    # shape — correct Dagster feature, wrong application point for this chart.
+    #
+    # 🔵 WHY EMPTY HERE, NOT ATLAS'S OWN RULE. Atlas already ships the convention
+    # this needs — `atlas/serialises-on: marts` on its four marts-touching jobs,
+    # tenant-namespaced, which is the right pattern for every tenant to follow.
+    # But the rule's VALUE (which tag, which limit) is this installation's and
+    # that tenant's business, not this product's — the same reason code locations
+    # are never declared in this file either (see the section below). An
+    # installation adds its own tenants' rules in
+    # `.uis.extend/dagster-code-locations.yaml`'s `tag_concurrency_limits:` key;
+    # 360-setup-dagster.yml merges them into this same `concurrency.runs` shape
+    # via the tenant overlay, the same mechanism code_locations already uses.
+    #
+    # ⚠️ A LIMIT OF 1 HAS A REAL COST, NOT JUST A SAFETY WIN. A queued run can
+    # wait behind a long one sharing the same tag — atlas measured a 1978s
+    # (~33min) run on 2026-09-21, so a 30-minute-cadence schedule can queue
+    # repeatedly behind it. That tradeoff is the tenant's and installation's to
+    # make when they populate this, not this file's to pre-judge with a number.
+    #
+    # 🔵 A NEWER MECHANISM EXISTS AND IS DELIBERATELY NOT USED HERE. Dagster
+    # 1.13.19 also ships `concurrency.pools` (global op/asset concurrency,
+    # `granularity: run` makes it run-scoped too) — current, not deprecated, not
+    # experimental in this version's source. It is a different axis: slots are
+    # consumed by code declaring `pool="name"` on an op/asset, not by a run tag,
+    # so adopting it would mean changing the tenant's own job code, not this
+    # platform's config. tag_concurrency_limits matches what tenant code already
+    # ships today and is not the thing Dagster deprecated — that was the older
+    # flat `default_op_concurrency_limit` key, which this file does not use.
+    # Worth revisiting if a future tenant's jobs are written with pools from the
+    # start; not a reason to hold this fix for the tenant that needs it now.
+    tagConcurrencyLimits: []
+
 # ── Scheduling ────────────────────────────────────────────────────────────────
 scheduler:
   type: DagsterDaemonScheduler
