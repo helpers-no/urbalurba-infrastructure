@@ -79,9 +79,6 @@ platforms/proxmox/
     │   │                            fronting every upstream (docker.io, registry.k8s.io, ghcr.io,
     │   │                            quay.io), swapped from four separate `registry:2` containers
     │   │                            on 2026-10-05 (see roles/registry/defaults/main.yml for why)
-    │   ├── service-nas.yml     ✅  install/configure Samba — **guest-owned volumes only, never
-    │   │                            a host bind mount** (a bind-mounted guest cannot be
-    │   │                            replicated by Proxmox at all, found the expensive way)
     │   ├── replication-ensure.yml ✅  idempotent `pvesr create-local-job`, one guest → both
     │   │                              other nodes
     │   │                              ⚠️ DESTROYING A GUEST DOES NOT CLEAN UP WHAT IT ALREADY
@@ -167,16 +164,25 @@ platforms/proxmox/
     │   │                            not exist" on a genuinely fresh guest). Fixed to match
     │   │                            registry's already-correct check → load-from-seed → pull →
     │   │                            save-last order.
-    │   ├── registry/            ✅
-    │   └── nas/                 ✅
+    │   └── registry/            ✅
     └── generated/                 ✅  gitignored — inventory.yml, vars/vms/*.yml, and
                                         vars/core-services/*.yml (one guest/service declaration
                                         per configured service, plus a gitignored _extra-vars.yml
-                                        for secrets/site-data — garage's credentials, nas's
-                                        default share), all built fresh from config.sh on every
-                                        run by generate-ansible-config.sh. No bind mounts, ever,
-                                        in any of these.
+                                        for secrets/site-data — garage's credentials), all built
+                                        fresh from config.sh on every run by
+                                        generate-ansible-config.sh. No bind mounts, ever, in any
+                                        of these.
 ```
+
+## nas — deliberately not part of this platform (2026-10-05)
+
+A `nas` role (Samba) existed here briefly, generalized from the maintainer's private lab. Removed
+at Terje's instruction: it's something he needs for his own lab work, not something worth
+maintaining as generic IaC for other lab owners — there's also nothing in UIS itself to single-
+source its config from or connect it to (confirmed when investigating bao/garage/registry's own
+UIS counterparts the same week — nas has no UIS equivalent at all, unlike the other four). The
+real guest this platform once built for it is untouched and still runs; it's simply no longer
+something `CORE_SERVICES`/this code declares or manages.
 
 ## Why numbering starts at 00
 
