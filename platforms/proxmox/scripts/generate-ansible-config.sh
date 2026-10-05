@@ -190,6 +190,9 @@ for svc in $CORE_SERVICES; do
     bao)      write_core_service bao      408 2 1024 512  "order=2" ""                  8  /var/lib/openbao    10  ""  bao ;;
     garage)   write_core_service garage   407 2 2048 512  "order=3" "nesting=1,keyctl=1" 8  /var/lib/garage     100 ""  garage ;;
     registry) write_core_service registry 409 2 1024 512  "order=1" "nesting=1,keyctl=1" 8  /var/lib/registry   60  ""  registry ;;
+    # 🔵 A SEPARATE guest, not a database inside "pg" — the test cluster must never be able to
+    # read or corrupt production data. Smaller than pg on purpose: test data, test stakes.
+    pg-test)  write_core_service pg-test  406 2 2048 512  "order=5" ""                  8  /var/lib/postgresql 20  16K postgres ;;
     *) echo "⚠️  Unknown core service '$svc' in CORE_SERVICES — skipped" >&2 ;;
   esac
 done

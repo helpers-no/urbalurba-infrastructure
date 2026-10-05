@@ -90,8 +90,14 @@ K3S_TEST_SERVICE_CIDR="10.53.0.0/16"
 # ── Core services — LXC, not k3s pods ──────────────────────────────────────
 # pg (database), bao (secrets), garage (object storage), registry (image
 # cache). Remove any you don't want; order doesn't matter.
-# All five build on host1 by default — not a hardware-strength ranking like
-# k3s's host3 rule (see README): every node is an equal HA failover target
+# All build on host1 by default — not a hardware-strength ranking like k3s's
+# host3 rule (see README): every node is an equal HA failover target
 # regardless of strength, so concentrating them is just the simplest layout,
 # not a safety requirement.
+#
+# 🔵 pg-test (a SEPARATE, smaller postgres instance — not a database inside
+# "pg") is available but not included by default: add it only if you want the
+# test k3s cluster to have its own database, isolated from production's. See
+# scripts/point-postgresql-at.sh for switching which one the active cluster
+# target actually talks to.
 CORE_SERVICES="pg bao garage registry"

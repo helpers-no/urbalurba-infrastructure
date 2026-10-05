@@ -1,0 +1,11 @@
+---
+# service-pg-test — L3: install/configure postgres on an already-created guest.
+# Same role as production's "pg" — a SEPARATE guest/instance, not a database
+# inside the same one. See roles/postgres for the install itself.
+#
+#   ansible-playbook -i <addr>, playbooks/service-pg-test.yml -e @vars.yml
+- name: postgres (test instance)
+  hosts: all
+  gather_facts: true
+  roles:
+    - postgres
