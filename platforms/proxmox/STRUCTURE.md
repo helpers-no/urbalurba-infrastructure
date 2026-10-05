@@ -60,12 +60,39 @@ platforms/proxmox/
     │   ├── service-pg.yml       ✅  install/configure PostgreSQL
     │   ├── service-bao.yml      ✅  install/configure OpenBao
     │   ├── service-garage.yml  ✅  install/configure Garage (S3-compatible object store)
-    │   ├── service-registry.yml ✅  install/configure the 4 pull-through registry mirrors
+    │   ├── service-registry.yml ✅  install/configure zot — ONE pull-through cache instance
+    │   │                            fronting every upstream (docker.io, registry.k8s.io, ghcr.io,
+    │   │                            quay.io), swapped from four separate `registry:2` containers
+    │   │                            on 2026-10-05 (see roles/registry/defaults/main.yml for why)
     │   ├── service-nas.yml     ✅  install/configure Samba — **guest-owned volumes only, never
     │   │                            a host bind mount** (a bind-mounted guest cannot be
     │   │                            replicated by Proxmox at all, found the expensive way)
     │   ├── replication-ensure.yml ✅  idempotent `pvesr create-local-job`, one guest → both
     │   │                              other nodes
+    │   │                              ⚠️ DESTROYING A GUEST DOES NOT CLEAN UP WHAT IT ALREADY
+    │   │                              REPLICATED. `pct destroy --purge` only purges the SOURCE
+    │   │                              node's dataset; the ZFS copies already pushed to the other
+    │   │                              two nodes (`tank/vm/subvol-<vmid>-disk-*` there) are
+    │   │                              orphaned, not removed. Rebuild that same VMID and the new
+    │   │                              guest's replication job fails with "No common base
+    │   │                              snapshot" — the stale copy on the target has no shared
+    │   │                              history with the brand-new dataset. Found running this for
+    │   │                              real on 2026-10-05 after destroying+rebuilding garage (407)
+    │   │                              and registry (409) twice in one session: `pvesr status`
+    │   │                              showed jobs stuck in `pending`/error 5, and
+    │   │                              `journalctl -u pvescheduler` gave the exact cause and fix
+    │   │                              Proxmox itself suggests. **Fix:** on each OTHER node (not
+    │   │                              the one you rebuilt), `zfs destroy -r tank/vm/subvol-<vmid>-
+    │   │                              disk-N` for every disk of that VMID, after confirming no
+    │   │                              `pct config <vmid>` exists there (i.e. it's a replication
+    │   │                              target copy, not a live guest) — then `pvesr schedule-now
+    │   │                              <jobid>` to force a fresh full sync. This is an operational
+    │   │                              gotcha of Proxmox's own replication model, not a bug in any
+    │   │                              playbook here — nothing in this platform's code needs to
+    │   │                              change, but whoever rebuilds a core-services guest by hand
+    │   │                              (destroy + let the orchestrator recreate it) needs to know
+    │   │                              this, or replication silently sits broken until someone
+    │   │                              checks `pvesr status`.
     │   └── ha-ensure.yml        ✅  `ha-manager add ct:<id>` per guest, then one flat
     │                                 `node-affinity` rule naming every node with no priority
     │                                 (every node an equal failover target). ⚠️ This Proxmox
