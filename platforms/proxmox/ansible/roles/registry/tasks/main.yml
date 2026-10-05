@@ -1,174 +1,160 @@
 ---
-# registry — four pull-through image caches, as code.
+# registry — ONE zot instance, fronting every configured upstream.
 #
-# 🔴 WHAT THIS REPLACES. On odin these are four `docker run` commands that exist nowhere on disk:
-# no compose file, no unit, no record. `restart: always` has kept them alive since August, which
-# is exactly why nobody noticed. Remove one and there is no way to recreate it.
+# 🔴 WHAT THIS REPLACES. Four `registry:2` containers (see git history of this file for the
+# previous version) — one per upstream, no built-in GC, Docker as a dependency this cache then
+# needed to survive without. Swapped to zot 2026-10-05 so a new upstream is a config list entry,
+# not a new container+port+GC-unit, and GC is no longer hand-rolled.
 
-- name: Docker, for the registry containers
-  ansible.builtin.apt:
-    name: [docker.io, curl]
-    state: present
-    update_cache: true
+- name: zot system group
+  ansible.builtin.group:
+    name: zot
+    system: true
 
-- name: Docker running and enabled
-  ansible.builtin.systemd:
-    name: docker
-    state: started
-    enabled: true
+- name: zot system user
+  ansible.builtin.user:
+    name: zot
+    group: zot
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
 
-# ── break the circular dependency: load the image from a local tarball if we have one ───────
-# 🔴 WHY. These mirrors ARE `registry:2` from docker.io. Without a local copy, starting the cache
-# needs the internet — the thing the cache exists to survive without. 25 MB of tarball removes
-# that for every case except a from-scratch node with an empty data mount.
-- name: Somewhere to keep the seed image
+- name: Data, storage and seed directories
   ansible.builtin.file:
-    path: "{{ registry_seed_path | dirname }}"
+    path: "{{ item }}"
     state: directory
-    mode: "0755"
-  when: registry_seed_image | bool
+    owner: zot
+    group: zot
+    mode: "0750"
+  loop:
+    - "{{ registry_data_dir }}"
+    - "{{ registry_data_dir }}/storage"
+    - "{{ registry_data_dir }}/_seed"
 
-- name: Is the registry image already here
-  ansible.builtin.command: "docker image inspect {{ registry_image }}"
-  register: haveimg
-  changed_when: false
-  failed_when: false
+# ── breaking the circular dependency: the BINARY, not an image this time ────────────────────
+# 🔵 zot is a single static binary — no Docker, no image pull, so the whole "mirror images are
+# themselves pulled from docker.io" circularity this role used to carry is just gone. What's
+# left is the same shape of problem one layer down: the binary itself still has to come from
+# somewhere, and a from-scratch node has no internet-free way to get it without a seed copy.
+- name: Is the correct zot binary already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/zot
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: installed_binary
 
-- name: Is there a seed tarball to load from
+- name: Is there a seed copy to install from
   ansible.builtin.stat:
     path: "{{ registry_seed_path }}"
-  register: seedfile
-  when: registry_seed_image | bool
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: seed_binary
+  when: registry_seed_binary | bool
 
-- name: Load the image from the seed — no internet needed
-  ansible.builtin.command: "docker load -i {{ registry_seed_path }}"
-  when:
-    - registry_seed_image | bool
-    - haveimg.rc != 0
-    - seedfile.stat.exists | default(false)
-
-- name: Otherwise pull it (this is the step that needs the internet)
-  ansible.builtin.command: "docker pull {{ registry_image }}"
-  when:
-    - haveimg.rc != 0
-    - not (registry_seed_image | bool and (seedfile.stat.exists | default(false)))
-
-# 🔵 Written on EVERY run, not only when missing: the tarball must track the pinned digest, or a
-# version bump leaves a seed that silently restores the old one.
-- name: Keep the seed tarball current
-  ansible.builtin.shell:
-    cmd: "docker save {{ registry_image }} -o {{ registry_seed_path }}.tmp && mv {{ registry_seed_path }}.tmp {{ registry_seed_path }}"
-    creates: "{{ registry_seed_path }}"
-  when: registry_seed_image | bool
-
-- name: Data directory for each mirror
-  ansible.builtin.file:
-    path: "{{ registry_data_root }}/mirror-{{ item.name }}"
-    state: directory
+- name: Install the binary from the seed — no internet needed
+  ansible.builtin.copy:
+    src: "{{ registry_seed_path }}"
+    dest: /usr/local/bin/zot
     mode: "0755"
-  loop: "{{ registry_mirrors }}"
-  loop_control: { label: "{{ item.name }}" }
+    remote_src: true
+  when:
+    - registry_seed_binary | bool
+    - (installed_binary.stat.checksum | default('')) != (registry_checksum | regex_replace('^sha256:', ''))
+    - seed_binary.stat.exists | default(false)
+    - (seed_binary.stat.checksum | default('')) == (registry_checksum | regex_replace('^sha256:', ''))
+  notify: restart zot
 
-- name: Per-mirror settings
-  ansible.builtin.template:
-    src: mirror.env.j2
-    dest: "{{ registry_data_root }}/{{ item.name }}.env"
-    mode: "0644"
-  loop: "{{ registry_mirrors }}"
-  loop_control: { label: "{{ item.name }}" }
-  notify: restart mirrors
+- name: Otherwise download it (this is the step that needs the internet)
+  ansible.builtin.get_url:
+    url: "{{ registry_download_url }}"
+    dest: /usr/local/bin/zot
+    mode: "0755"
+    checksum: "{{ registry_checksum }}"
+  when:
+    - (installed_binary.stat.checksum | default('')) != (registry_checksum | regex_replace('^sha256:', ''))
+    - not (registry_seed_binary | bool and (seed_binary.stat.exists | default(false)) and (seed_binary.stat.checksum | default('')) == (registry_checksum | regex_replace('^sha256:', '')))
+  notify: restart zot
 
-- name: The templated unit — one file, four instances
-  ansible.builtin.template:
-    src: registry-mirror@.service.j2
-    dest: /etc/systemd/system/registry-mirror@.service
+# 🔵 Written on EVERY run, not only when missing: the seed must track the pinned version, or a
+# version bump leaves a seed that silently reinstalls the old one. copy's own idempotency means
+# this is a no-op once the seed already matches.
+- name: Keep the seed copy current
+  ansible.builtin.copy:
+    src: /usr/local/bin/zot
+    dest: "{{ registry_seed_path }}"
     mode: "0644"
-  notify: restart mirrors
+    remote_src: true
+  when: registry_seed_binary | bool
 
-- name: Garbage collection — service and timer
+- name: Configuration
   ansible.builtin.template:
-    src: "registry-gc.{{ item }}.j2"
-    dest: "/etc/systemd/system/registry-gc.{{ item }}"
+    src: zot-config.json.j2
+    dest: "{{ registry_data_dir }}/config.json"
+    owner: zot
+    group: zot
+    mode: "0640"
+  notify: restart zot
+
+- name: Unit
+  ansible.builtin.template:
+    src: zot.service.j2
+    dest: /etc/systemd/system/zot.service
     mode: "0644"
-  loop: [service, timer]
+  notify: restart zot
 
 - name: systemd reload
   ansible.builtin.systemd:
     daemon_reload: true
 
-- name: Each mirror enabled and running
+- name: Running
   ansible.builtin.systemd:
-    name: "registry-mirror@{{ item.name }}.service"
-    state: started
-    enabled: true
-  loop: "{{ registry_mirrors }}"
-  loop_control: { label: "{{ item.name }}" }
-
-- name: Garbage collection scheduled
-  ansible.builtin.systemd:
-    name: registry-gc.timer
+    name: zot.service
     state: started
     enabled: true
 
-# 🔴 HANDLERS RUN AT THE END OF A PLAY — so without this, every check below tests the containers
-# as they were BEFORE this run changed them. That is exactly what happened: the unit on disk had
-# the metrics ports, the env file had the ports, and the verification failed with "connection
-# refused" because the running containers were still the previous ones. A check that runs before
-# the change it is verifying will pass when it should fail, and fail when it should pass.
 - name: Apply pending restarts BEFORE verifying anything
   ansible.builtin.meta: flush_handlers
 
-# 🔴 AND A CONVERGENCE CHECK, because flush_handlers alone is not enough.
-# A handler only fires on the run where its template CHANGED. If that run then failed after the
-# template was written but before the restart — which is exactly what happened here — the unit on
-# disk is new, the container is old, and the NEXT run sees changed=0 and does nothing. The system
-# sits permanently half-applied and every subsequent run agrees it is fine.
-# So: compare what the unit asks for against what the container actually has, and restart on a
-# mismatch. This is the difference between "ansible reported success" and "the thing is true".
-- name: Is each container running with the configuration the unit specifies
+# 🔴 A CONVERGENCE CHECK, because flush_handlers alone is not enough — learned the expensive way
+# on this same role when it was registry:2 (see git history): a handler only fires on the run
+# where its template CHANGED, so a run that writes a new config/unit and then fails before the
+# restart leaves the process permanently out of sync with what's on disk, and every later run
+# sees changed=0 and agrees it's fine. Compare what's actually running against what should be.
+- name: When did the process last start, vs when the config it should be serving was last written
   ansible.builtin.shell:
     cmd: >-
-      docker inspect mirror-{{ item.name }} --format '{{ "{{" }}.Config.Image{{ "}}" }}' 2>/dev/null
-      | grep -qF '{{ registry_image }}'
-      && docker port mirror-{{ item.name }} 2>/dev/null | grep -q '{{ item.metrics_port }}'
-      && echo match || echo drift
-  register: drifted
+      start="$(systemctl show zot.service --property=ActiveEnterTimestamp --value)";
+      start_epoch="$(date -d "$start" +%s 2>/dev/null || echo 0)";
+      conf_epoch="$(stat -c %Y {{ registry_data_dir }}/config.json)";
+      [ "$start_epoch" -ge "$conf_epoch" ] && echo fresh || echo stale
+  register: convergence
   changed_when: false
-  failed_when: false
-  loop: "{{ registry_mirrors }}"
-  loop_control: { label: "{{ item.name }}" }
-  when: registry_metrics_enabled | bool
+  check_mode: false
 
-- name: Restart any that drifted from their unit
+- name: Restart if the running process predates the config it should be serving
   ansible.builtin.systemd:
-    name: "registry-mirror@{{ item.item.name }}.service"
+    name: zot.service
     state: restarted
     daemon_reload: true
-  loop: "{{ drifted.results | default([]) }}"
-  loop_control: { label: "{{ item.item.name }}" }
-  when:
-    - registry_metrics_enabled | bool
-    - "'drift' in (item.stdout | default(''))" 
+  when: "'stale' in (convergence.stdout | default(''))"
+
+- name: Apply that restart before verifying, if it just happened
+  ansible.builtin.meta: flush_handlers
 
 # ── prove it, rather than trusting systemd's opinion ────────────────────────────────────────
-# 🔴 `systemctl is-active` says the unit started, not that a registry is answering. containerd
-# FALLS BACK to upstream when a mirror is silent, so a dead cache looks exactly like a working
-# one from the outside — for months, until the internet is also down. Ask the API.
-- name: Does each mirror answer the registry API
+- name: Does zot answer
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ item.port }}/v2/"
+    url: "http://127.0.0.1:{{ registry_port }}/v2/"
     status_code: [200]
     timeout: 10
   register: answered
   retries: 12
   delay: 5
   until: answered is succeeded
-  loop: "{{ registry_mirrors }}"
-  loop_control: { label: "{{ item.name }}:{{ item.port }}" }
 
-- name: Do the metrics endpoints answer
+- name: Do metrics answer
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ item.metrics_port }}/metrics"
+    url: "http://127.0.0.1:{{ registry_port }}{{ registry_metrics_path }}"
     status_code: [200]
     timeout: 10
     return_content: false
@@ -176,17 +162,60 @@
   retries: 6
   delay: 5
   until: metrics_ok is succeeded
-  loop: "{{ registry_mirrors }}"
-  loop_control: { label: "{{ item.name }} metrics:{{ item.metrics_port }}" }
   when: registry_metrics_enabled | bool
 
-- name: What is running
+# 🔴 PROVE THE PULL-THROUGH ACTUALLY WORKS — not just that the daemon answers. THE DOCUMENTED
+# TRAP (website/docs/production/registry-cache.md, and the backlog investigation behind it):
+# `crictl pull` — or any tool that already has the image locally — never contacts the mirror at
+# all, so "the daemon answers 200" can be true for months while caching has never once happened.
+# Request a small, known-good, PUBLIC image through each upstream's own mirror path — verified
+# directly against a real local zot instance on 2026-10-05, not guessed — and only believe the
+# catalog, never the request's exit code.
+- name: Warm one known-good image through each upstream's mirror path
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ registry_port }}/v2{{ item.destination }}/{{ item.warm_path }}/manifests/{{ item.warm_tag }}"
+    headers:
+      Accept: "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json"
+    status_code: [200]
+    timeout: 60
+  loop: "{{ registry_upstreams }}"
+  loop_control: { label: "{{ item.name }}" }
+  register: warmed
+  retries: 3
+  delay: 5
+  until: warmed is succeeded
+
+- name: What the catalog actually holds — never trust the warm request's exit code alone
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ registry_port }}/v2/_catalog"
+    status_code: [200]
+    return_content: true
+  register: catalog
+  changed_when: false
+
+- name: Each warmed upstream must actually be in the catalog
+  ansible.builtin.assert:
+    that:
+      - (item.destination ~ '/' ~ item.warm_path) | trim('/') in (catalog.content | from_json).repositories
+    fail_msg: >-
+      {{ (item.destination ~ '/' ~ item.warm_path) | trim('/') }} did not appear in /v2/_catalog
+      after a warm request that returned 200. A 200 alone does not prove a cache hit happened —
+      see the trap documented above.
+    quiet: true
+  loop: "{{ registry_upstreams }}"
+  loop_control: { label: "{{ item.name }}" }
+
+- name: Result
   ansible.builtin.debug:
     msg: >-
-      {{ registry_mirrors | length }} mirrors answering on
-      {{ registry_mirrors | map(attribute='port') | join(', ') }}
-      · gc timer: {{ registry_gc_oncalendar }}
-      · metrics on {{ registry_mirrors | map(attribute='metrics_port') | join(', ') }}
-      · seed image {{ 'kept at ' ~ registry_seed_path if registry_seed_image | bool else 'disabled' }}
-      ⚠️ NOT PROVEN HERE: that a pull SUCCEEDS through a mirror with upstream blocked. That is the
-      only test of what this service is for, and it is still unbuilt — see vars/guests/registry.yml
+      zot {{ registry_version }} · one instance on :{{ registry_port }} ·
+      upstreams: {{ registry_upstreams | map(attribute='name') | join(', ') }} ·
+      gc {{ 'on (delay ' ~ registry_gc_delay ~ ', interval ' ~ registry_gc_interval ~ ')' if registry_gc | bool else 'off' }} ·
+      metrics {{ 'on ' ~ registry_metrics_path if registry_metrics_enabled | bool else 'off' }} ·
+      seed binary {{ 'kept at ' ~ registry_seed_path if registry_seed_binary | bool else 'disabled' }}
+      ⚠️ NOT DONE HERE: no cluster is wired to use this cache yet — nothing in this platform's k3s
+      role generates registries.yaml / containerd hosts.toml pointing at it. The cache works;
+      nothing asks it for anything yet. ⚠️ ALSO NOT DONE HERE: the documented acceptance test —
+      block internet egress on both this guest and a cluster node, delete a cached image there,
+      and confirm it still pulls. Warming proves zot can fetch and serve; it does not prove a
+      cluster survives an outage, only that this cache is ready to be wired to one.

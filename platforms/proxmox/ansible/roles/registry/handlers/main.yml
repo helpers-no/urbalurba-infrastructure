@@ -1,9 +1,7 @@
 ---
-- name: restart mirrors
+- name: restart zot
   ansible.builtin.systemd:
-    name: "registry-mirror@{{ item.name }}.service"
+    name: zot.service
     state: restarted
     daemon_reload: true
-  loop: "{{ registry_mirrors }}"
-  loop_control: { label: "{{ item.name }}" }
-  listen: restart mirrors
+  listen: restart zot

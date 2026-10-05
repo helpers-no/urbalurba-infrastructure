@@ -1,56 +1,66 @@
 ---
-# The four upstreams this cache fronts. Override per site — nothing here is lab-specific.
-# 🔵 metrics_port is STATED, not derived. The first version computed it from the loop index,
-# which (a) fails in a module-rendered template, where Jinja's `loop` does not exist, and (b)
-# would silently change every port if someone reordered the list.
-registry_mirrors:
-  - { name: dockerhub, port: 5000, metrics_port: 5100, upstream: "https://registry-1.docker.io" }
-  - { name: k8s,       port: 5001, metrics_port: 5101, upstream: "https://registry.k8s.io" }
-  - { name: ghcr,      port: 5002, metrics_port: 5102, upstream: "https://ghcr.io" }
-  - { name: quay,      port: 5003, metrics_port: 5103, upstream: "https://quay.io" }
+# registry — ONE zot instance fronting every upstream, not one registry:2 per upstream.
+# 🔴 SWAPPED FROM registry:2 ON 2026-10-05, Terje's call: the real requirement is "cache every
+# image this lab ever deploys, including from upstreams nobody's picked yet" — registry:2 only
+# gets there by hand-adding a new container+port+GC-unit per upstream, forever. zot takes any
+# number of upstreams in ONE instance (see `registry_upstreams` below): a new upstream is a list
+# entry, not a new service. Harbor was considered and ruled out — it needs its own Postgres+Redis,
+# which is exactly the kind of dependency a bootstrap-critical cache cannot have.
+# ⚠️ Evaluated, not guessed: github.com/project-zot/zot, CNCF Sandbox (youngest tier — smaller
+# community/more roadmap risk than registry:2, which is Docker's own reference implementation).
+# Accepted because the downside is cheap: this cache is reconstructible and fails open to
+# upstream, so the worst case if zot has a bad day is identical to having no cache at all.
 
-# 🔴 PINNED BY DIGEST, not by the floating `registry:2` tag. Two reasons:
-#   - IaC that resolves a moving tag is not reproducible: the same play on two days builds two
-#     different things, and the difference only shows up when one of them misbehaves.
-#   - ⚠️ THE CIRCULAR ONE. These mirrors ARE `registry:2`, pulled from docker.io. On a node that
-#     does not already hold the image, starting the cache requires the internet — the thing the
-#     cache exists to survive without. Pinning does not break the circle, but it makes the
-#     version explicit so the image can be deliberately pre-seeded.
-# Bump this consciously; `docker inspect registry:2 --format '{{index .RepoDigests 0}}'`.
-registry_image: "registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+# 🔴 PINNED BY DIGEST-EQUIVALENT (a checksum, since zot ships a raw binary, not an image).
+# Verified against the real release asset on 2026-10-05:
+#   curl -sL https://github.com/project-zot/zot/releases/download/v2.1.21/checksums.sha256.txt
+# IaC that resolves a moving "latest" is not reproducible — the same play on two days would
+# install two different things, and the difference only shows up when one misbehaves.
+registry_version: "v2.1.21"
+registry_checksum: "sha256:8751cc0daf739634835a3bd8206e3094c84d552e2c462e4a4baf80f40dd92685"
+registry_download_url: "https://github.com/project-zot/zot/releases/download/{{ registry_version }}/zot-linux-amd64"
 
-# Resource limits. 🔵 Not performance tuning — a bound so one runaway cache cannot take the whole
-# container with it. The guest has 1 GB; four unbounded mirrors could use all of it.
-registry_mem_limit: "192m"
-registry_cpu_limit: "0.5"
+# One port, every upstream behind it — see `content[].destination` below for how a client picks
+# which upstream it wants. ⚠️ THE OCI-REFORMAT CAVEAT: zot is OCI-only, so a Docker-format image
+# pulled through it is re-encoded to OCI on the way in. The digest changes. A client pulling
+# `image@sha256:...` (a pinned digest, not a tag) will NOT get a hit through this cache — only
+# tag-based pulls work. Verified directly: https://zotregistry.dev/v2.1.3/articles/mirroring/
+registry_port: 5000
 
-# 🔴 Docker's default json-file driver has NO size limit, and docker logs live on the ROOTFS —
-# 7.8 GB here, not the 60 GB data mount. Four chatty containers can fill it, and a full root
-# filesystem on a container is a much worse day than a full cache.
-registry_log_max_size: "10m"
-registry_log_max_file: "3"
+# 🔵 Every upstream this cache fronts, in ONE instance. Override/extend per site.
+# ⚠️ Docker Hub MUST stay onDemand-only, no pollInterval: it rate-limits pulls and does not
+# support catalog listing, so periodic polling against it is actively harmful (documented by
+# zot itself, not guessed).
+# warm_path/warm_tag: a small, stable, public image per upstream, verified reachable directly
+# AND through a real local zot instance on 2026-10-05 — used only to prove the mirror actually
+# works (see tasks/main.yml), never deployed by anything.
+registry_upstreams:
+  - { name: dockerhub, destination: /docker, upstream: "https://registry-1.docker.io", warm_path: "library/alpine",        warm_tag: latest }
+  - { name: k8s,       destination: /k8s,    upstream: "https://registry.k8s.io",      warm_path: "pause",                 warm_tag: "3.9" }
+  - { name: ghcr,      destination: /ghcr,   upstream: "https://ghcr.io",              warm_path: "stefanprodan/podinfo",  warm_tag: latest }
+  - { name: quay,      destination: /quay,   upstream: "https://quay.io",              warm_path: "quay/busybox",          warm_tag: latest }
 
-# ── metrics — prepared now, consumed when UIS observability arrives (Terje, 2026-10-01) ──────
-# registry:2 serves Prometheus metrics on a SEPARATE debug port, not on the registry port.
-# 🔵 Turned on ahead of the scrapers deliberately: the question "is the cache actually being
-# used" cannot be answered retrospectively. odin's 19 MB raises exactly that question and there
-# is no history to answer it with, because nothing was ever collecting.
+registry_data_dir: /var/lib/registry
+
+# 🔵 GARBAGE COLLECTION IS BUILT IN — no hand-rolled GC timer needed (registry:2 shipped none;
+# this role had to build one). Defaults match zot's own: enabled, run once after gcDelay, then
+# every gcInterval. https://zotregistry.dev/v2.1.3/articles/storage/
+registry_gc: true
+registry_gc_delay: "1h"
+registry_gc_interval: "24h"
+
+registry_log_level: "info"
+
+# 🔵 Metrics on the SAME port as the registry API (zot serves them from extensions.metrics, not a
+# separate debug port like registry:2 needed) — prepared now, consumed when UIS observability
+# arrives (Terje, 2026-10-01).
 registry_metrics_enabled: true
-# (each mirror's metrics_port is stated in the list above, alongside its service port)
+registry_metrics_path: "/metrics"
 
-# ── breaking the circular dependency ─────────────────────────────────────────────────────────
-# 🔴 THE PROBLEM. These mirrors ARE `registry:2`, pulled from docker.io. On a node that does not
-# already hold that image, starting the cache requires the internet — the exact thing the cache
-# exists to survive without. Pinning the digest makes the version explicit; it does not help a
-# machine that has no copy.
-# 🔵 THE FIX: keep a tarball of the image on the DATA mount and load from it when the image is
-# absent. 25 MB. The role then starts with no internet at all.
-# ⚠️ WHAT IT DOES NOT FIX: a from-scratch node rebuild, where the data mount is new and empty
-# too. With three nodes at least one should hold it — and it also belongs on the break-glass
-# media alongside the other things a rebuild cannot proceed without.
-registry_seed_image: true
-registry_seed_path: "{{ registry_data_root }}/_seed/registry-image.tar"
-registry_data_root: /var/lib/registry
-# Weekly. ⚠️ Garbage collection only removes blobs NO manifest references, so it reclaims less
-# than people expect — it is not a retention policy, it is a tidy-up after one.
-registry_gc_oncalendar: "Sun *-*-* 04:30:00"
+# ── breaking the circular dependency, for the BINARY this time ─────────────────────────────────
+# 🔴 THE SAME PROBLEM AS BEFORE, one layer down. zot is a single static binary, not a Docker
+# image — no docker/image bootstrap circularity at all now, which drops an entire category of
+# complexity this role used to carry. But the binary itself still has to come from somewhere, and
+# a from-scratch node has no internet-free way to get it without a seed copy.
+registry_seed_binary: true
+registry_seed_path: "{{ registry_data_dir }}/_seed/zot-linux-amd64"
