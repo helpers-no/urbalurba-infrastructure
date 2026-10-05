@@ -1,19 +1,22 @@
 ---
 # ── the binary: pinned, checksummed, and from a source that actually exists ──────────────────
-# 🔴 odin's install has NO apt source — the package sits only in /var/lib/dpkg/status, so it can
-# be neither reinstalled nor upgraded by any recorded step. This fetches a named release asset and
-# verifies it, which is the whole difference between "installed" and "reproducible".
-# 🔵 The standard build, not `openbao-hsm`. odin runs the HSM variant and never needed it: the
-# static seal is built into the standard binary. v2.6.1 shipped both; the name misleads.
+# 🔴 The reference installation's own install has NO apt source — the package sits only in
+# /var/lib/dpkg/status, so it can be neither reinstalled nor upgraded by any recorded step. This
+# fetches a named release asset and verifies it, which is the whole difference between
+# "installed" and "reproducible".
+# 🔵 The standard build, not `openbao-hsm`. The reference installation runs the HSM variant and
+# never needed it: the static seal is built into the standard binary. v2.6.1 shipped both; the
+# name misleads.
 # Checksum read from the release's own checksums.txt on 2026-10-01. Bump both together, never one.
 bao_version: "2.7.0"
 bao_deb_url: "https://github.com/openbao/openbao/releases/download/v{{ bao_version }}/openbao_{{ bao_version }}_linux_amd64.deb"
 bao_deb_sha256: "7412233fef6bbe0e5093aa5461f493dd3a0f6193c8d5a5ba3a7ff475f96f34a2"
 
 # ── identity ────────────────────────────────────────────────────────────────────────────────
-# 🔴 NOT a node name. odin's config says `cluster_name = "odin"`, which bakes the machine into a
-# guest whose entire purpose is to survive that machine. If this guest migrates to frigg, a
-# cluster called "odin" is a lie that nothing will correct.
+# 🔴 NOT a node name. The reference installation's config sets `cluster_name` to its own hostname,
+# which bakes the machine into a guest whose entire purpose is to survive that machine. If this
+# guest migrates to another host, a cluster named after the old one is a lie that nothing will
+# correct.
 bao_cluster_name: "lab"
 bao_node_id: "bao"
 
@@ -29,8 +32,9 @@ bao_cluster_port: 8201
 # It is `static` anyway, for a reason worth stating rather than hiding:
 #   `shamir` leaves the vault SEALED after every boot, needing a human with the unseal keys.
 #   The cluster authenticates to this vault constantly (36,000 `auth/kubernetes/login` calls in a
-#   sampled window on odin), so a sealed vault after a power cut is a cluster-wide auth outage
-#   that waits for a person. The lab's stated goal is to survive a machine dying unattended.
+#   sampled window on the reference installation), so a sealed vault after a power cut is a
+#   cluster-wide auth outage that waits for a person. The lab's stated goal is to survive a
+#   machine dying unattended.
 #
 # What makes the deviation defensible, and all three must hold:
 #   1. The key lives on the ROOTFS, never on the data mount — so a leak of the data volume alone
@@ -49,13 +53,15 @@ bao_seal_key_path: "{{ bao_seal_key_dir }}/unseal-{{ bao_seal_key_id }}.key"
 # ── storage + TLS ───────────────────────────────────────────────────────────────────────────
 bao_data_dir: /var/lib/openbao/data
 bao_tls_dir: /opt/openbao/tls
-bao_tls_days: 1825        # 🔵 5 years, not odin's 10. Nothing watches this cert; a shorter life
-                          # means the renewal is somebody's problem sooner rather than never.
+bao_tls_days: 1825        # 🔵 5 years, not the reference installation's 10. Nothing watches this
+                          # cert; a shorter life means the renewal is somebody's problem sooner
+                          # rather than never.
 
 # ── audit ───────────────────────────────────────────────────────────────────────────────────
-# 🔴 odin's audit.log reached 256 MB logical with NO rotation, which is most of the "81 MB of
-# secrets" people quote for that guest. Audit logging is not optional — a vault that cannot say
-# who read what is not auditable — so the fix is rotation, not switching it off.
+# 🔴 The reference installation's audit.log reached 256 MB logical with NO rotation, which is
+# most of the "81 MB of secrets" people quote for that guest. Audit logging is not optional — a
+# vault that cannot say who read what is not auditable — so the fix is rotation, not switching it
+# off.
 bao_audit_path: /var/lib/openbao/logs/audit.log
 bao_audit_rotate_size: "64M"
 bao_audit_rotate_keep: 7

@@ -5,7 +5,7 @@
 #
 #   ansible-playbook -i <proxmox-host-addr>, playbooks/ha-ensure.yml --tags member -e vmid=405
 #   ansible-playbook -i <proxmox-host-addr>, playbooks/ha-ensure.yml --tags rule \
-#       -e "resources=ct:404,ct:405,ct:407,ct:408,ct:409" -e "nodes=frigg,tor,odin"
+#       -e "resources=ct:404,ct:405,ct:407,ct:408,ct:409" -e "nodes=host1,host2,host3"
 #
 # 🔴 THIS PROXMOX VERSION USES "RULES", NOT THE OLDER "GROUPS" MECHANISM. Found running this for
 # real (2026-10-05, Proxmox 9.2): `ha-manager groupadd` is gone — "ha groups have been migrated to

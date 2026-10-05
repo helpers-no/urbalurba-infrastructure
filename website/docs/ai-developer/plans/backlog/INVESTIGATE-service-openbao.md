@@ -264,7 +264,7 @@ connected to anything" question already asked of postgres/garage/registry on tha
 
 **`platforms/proxmox/ansible/roles/bao/`** is a working, validated OpenBao install — built and
 proven against a real 3-node lab, same session as the registry-cache work above. It was ported
-from the **same reference installation (`odin`)** this investigation describes, independently
+from the **same reference installation** this investigation describes, independently
 arriving at the identical architecture this doc's Part 1 measured:
 
 - `storage=raft`, `seal=static` — same deliberate deviation BAO-F4 describes, same reasoning
@@ -272,13 +272,14 @@ arriving at the identical architecture this doc's Part 1 measured:
   key lives on the rootfs, never the data mount, so a leaked data volume alone yields ciphertext).
 - TLS with a private, self-signed CA — but **generated fresh per guest, with SANs derived from
   the guest's own discovered address**, and asserted to still match on every run. This closes a
-  latent fault BAO-F2 states `odin`'s own cert actually has today: "SANs pinned to one IP, valid
-  until 2036" — a migration or address change there produces a cert that silently stops matching,
+  latent fault BAO-F2 states the reference installation's own cert actually has today: "SANs
+  pinned to one IP, valid until 2036" — a migration or address change there produces a cert that
+  silently stops matching,
   exactly the TLS-verification failure BAO-F2 warns a proxy would cause, except here it's the
   reference install's *own* certificate that would eventually cause it, not a hypothetical proxy.
-- Audit log rotation, which `odin`'s install still lacks (BAO-F4's neighbourhood: this doc doesn't
-  mention it, but the role's own header notes `odin`'s audit log reached 256 MB with nothing
-  rotating it).
+- Audit log rotation, which the reference installation's install still lacks (BAO-F4's
+  neighbourhood: this doc doesn't mention it, but the role's own header notes that installation's
+  audit log reached 256 MB with nothing rotating it).
 
 **So proposal #3 ("make the production topology declarative") is now partially real** — for the
 *external* half only (the OpenBao instance itself: package, TLS, seal, storage, audit). The
@@ -288,7 +289,7 @@ checking `platforms/proxmox` directly: its `bao` role has no `kubernetes` auth m
 ESO deployed on either k3s cluster it builds (production or test), and nothing resembling
 `bao-reviewer.yaml`. **BAO-F1 and BAO-F3's bidirectional-auth problem is exactly as unsolved there
 as it is here** — a second, independent confirmation that ESO-as-prerequisite (Q5, already
-answered "yes") is the real blocker, not something specific to the `odin` installation.
+answered "yes") is the real blocker, not something specific to the reference installation.
 
 **What this changes for proposal #3:** the work remaining is now *only* the in-cluster half — the
 `ClusterSecretStore`, the `kubernetes` auth method + role on the OpenBao side, and a

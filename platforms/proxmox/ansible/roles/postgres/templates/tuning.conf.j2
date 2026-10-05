@@ -1,6 +1,7 @@
 # MANAGED BY ANSIBLE — roles/postgres/templates/tuning.conf.j2
-# 🔵 Named for its JOB, not for a node. odin's equivalent is `99-odin.conf`, which bakes one
-# machine's name into a file that is meant to be identical on every node.
+# 🔵 Named for its JOB, not for a node. The reference installation's equivalent is named after its
+# own hostname, which bakes one machine's name into a file that is meant to be identical on every
+# node.
 
 listen_addresses = '*'
 max_connections = {{ pg_max_connections }}
@@ -29,6 +30,7 @@ wal_init_zero = off
 wal_recycle = off
 {% else %}
 # 🔵 Data directory is {{ pg_data_fstype }}, not ZFS — so full_page_writes stays ON (the default).
-# Turning it off here would risk torn pages on a crash. odin's config has it OFF and is correct,
-# because odin's data directory is a ZFS dataset; copying that file to a non-ZFS host would not be.
+# Turning it off here would risk torn pages on a crash. The reference installation's config has
+# it OFF and is correct, because that data directory is a ZFS dataset; copying that file to a
+# non-ZFS host would not be.
 {% endif %}

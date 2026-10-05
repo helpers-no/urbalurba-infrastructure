@@ -1,7 +1,8 @@
 ---
 # ── 0. the address this node will advertise ──────────────────────────────────────────────────
-# 🔵 DISCOVERED. odin's config hardcodes one IP, so the same file on another node would advertise
-# an address that machine does not have — and raft would accept it and then fail to form.
+# 🔵 DISCOVERED. The reference installation's config hardcodes one IP, so the same file on
+# another node would advertise an address that machine does not have — and raft would accept it
+# and then fail to form.
 - name: The address this guest actually has
   ansible.builtin.set_fact:
     bao_advertise_addr: "{{ bao_advertise_addr | default(ansible_default_ipv4.address) }}"
@@ -26,7 +27,8 @@
       - curl           # fetch the release asset
       - ca-certificates
       - openssl        # the listener's self-signed certificate
-      - logrotate      # 🔴 odin's audit log reached 256 MB because nothing rotated it
+      - logrotate      # 🔴 the reference installation's audit log reached 256 MB because nothing
+                       #    rotated it
     state: present
     update_cache: true
     cache_valid_time: 3600
@@ -96,8 +98,9 @@
     label: "{{ item.p }}"
 
 # ── 3. TLS ──────────────────────────────────────────────────────────────────────────────────
-# 🔵 SANs are derived from the address discovered above. odin's cert names one IP and was valid
-# for ten years, so a migration would have produced a cert that silently no longer matched.
+# 🔵 SANs are derived from the address discovered above. The reference installation's cert names
+# one IP and was valid for ten years, so a migration would have produced a cert that silently no
+# longer matched.
 - name: Is there already a certificate
   ansible.builtin.stat:
     path: "{{ bao_tls_dir }}/bao.crt"
@@ -110,7 +113,8 @@
 # and a static below .50 is to be assigned later. A cert whose SANs name the OLD address keeps
 # existing, so the role would never replace it, and every client would fail a TLS verification
 # whose message names the certificate rather than the address that moved.
-# 🔵 odin's bao has exactly this latent fault: SANs pinned to one IP, valid until 2036.
+# 🔵 The reference installation's bao has exactly this latent fault: SANs pinned to one IP, valid
+# until 2036.
 - name: Does the existing certificate still name this address
   ansible.builtin.command:
     cmd: "openssl x509 -in {{ bao_tls_dir }}/bao.crt -noout -ext subjectAltName"

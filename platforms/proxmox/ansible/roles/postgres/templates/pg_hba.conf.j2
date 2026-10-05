@@ -1,8 +1,8 @@
 # MANAGED BY ANSIBLE — roles/postgres/templates/pg_hba.conf.j2
-# 🔵 Networks are DECLARED in the inventory, not written here. odin's hand-written pg_hba carries
-# 100.64.0.0/10 (the tailnet — dead since tailscale was removed from that guest on 2026-10-01)
-# and 10.10.0.0/24 (a host-local backplane that exists on exactly one node). Neither is wrong
-# exactly; both are invisible until someone reads the file.
+# 🔵 Networks are DECLARED in the inventory, not written here. The reference installation's
+# hand-written pg_hba carries a VPN overlay range (dead since that VPN was removed from that
+# guest on 2026-10-01) and a host-local backplane range that exists on exactly one node. Neither
+# is wrong exactly; both are invisible until someone reads the file.
 local   all             postgres                                peer
 local   all             all                                     peer
 local   replication     all                                     peer

@@ -5,8 +5,9 @@
       - pg_allowed_networks | length > 0
     fail_msg: >-
       pg_allowed_networks is empty. The role ships only loopback by default and will not guess a
-      LAN — a database reachable from a network nobody declared is how 10.10.0.0/24 and a dead
-      tailnet range ended up in odin's pg_hba without anyone deciding.
+      LAN — a database reachable from a network nobody declared is how a stale backplane range
+      and a dead VPN overlay range ended up in the reference installation's pg_hba without anyone
+      deciding.
     quiet: true
 
 # ── packages, from the official repository ──────────────────────────────────────────────────

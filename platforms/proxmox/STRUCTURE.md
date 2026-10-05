@@ -209,7 +209,7 @@ re-run) and `01-cluster-join.sh` (the already-clustered guard and the verify pat
 for real; the actual live `pvecm add` join itself wasn't re-tested — doing so would mean
 un-joining our own production cluster first, too disruptive just to prove it, and the underlying
 mechanism already has a real track record: `PLAN-storage-cluster-001-formation.md` used an earlier
-version of this exact playbook to join `odin` for real). `up.sh` chains both automatically now
+version of this exact playbook to join a real host to a real cluster). `up.sh` chains both automatically now
 (storage-ensure fully safe by default, cluster-join idempotent — skips cleanly if already
 clustered), and continues to the k3s phase in one unbroken run when there's nothing left to do.
 

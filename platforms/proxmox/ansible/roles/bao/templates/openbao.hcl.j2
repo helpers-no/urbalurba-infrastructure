@@ -1,8 +1,8 @@
 # MANAGED BY ANSIBLE — roles/bao/templates/openbao.hcl.j2. Local edits are lost on the next run.
 ui = true
 
-# 🔴 Not a node name. odin's handwritten config says cluster_name = "odin", which bakes the
-# machine into a guest whose purpose is to outlive it.
+# 🔴 Not a node name. The reference installation's handwritten config sets cluster_name to its
+# own hostname, which bakes the machine into a guest whose purpose is to outlive it.
 cluster_name = "{{ bao_cluster_name }}"
 
 # 🔵 disable_mlock = true because this runs in an unprivileged LXC, which cannot grant
@@ -22,8 +22,9 @@ listener "tcp" {
   tls_key_file  = "{{ bao_tls_dir }}/bao.key"
 }
 
-# 🔵 DISCOVERED, not hardcoded. odin's config pins one IP; this reads the address the guest
-# actually has, so the same role produces a correct config on any node it is built on.
+# 🔵 DISCOVERED, not hardcoded. The reference installation's config pins one IP; this reads the
+# address the guest actually has, so the same role produces a correct config on any node it is
+# built on.
 api_addr     = "https://{{ bao_advertise_addr }}:{{ bao_port }}"
 cluster_addr = "https://{{ bao_advertise_addr }}:{{ bao_cluster_port }}"
 
