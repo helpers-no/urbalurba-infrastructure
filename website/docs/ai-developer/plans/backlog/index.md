@@ -15,6 +15,8 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Plan: Bump Dagster from 1.13.19 to 1.13.25](PLAN-service-dagster-version-upgrade.md) | Move the pinned Dagster chart/core version from `1.13.19` to the current latest | 2026-10-05 |
+| [Investigate: Dagster Orchestration Platform for UIS](INVESTIGATE-service-dagster.md) | UIS today has no data-pipeline orchestrator. Applications that need to ingest, transform, and catalogue data have three options — each with drawbacks: | 2026-10-05 |
 | [---](PLAN-secrets-ansible-credentials-in-output.md) | — | 2026-10-01 |
 | [---](PLAN-extensions-in-app-databases.md) | — | 2026-10-01 |
 | [---](INVESTIGATE-system-loki-tempo-minio-dependency.md) | — | 2026-10-01 |
@@ -74,7 +76,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Fix: the provisioning rules teach the `kubectl run --rm -i` idiom that loses output](PLAN-docs-provisioning-unsafe-test-idiom.md) | Stop the platform's own rules document from recommending a test idiom | 2026-08-23 |
 | [Plan: Registering a verify command is a three-place change](PLAN-cli-verify-registration-fix.md) | Make every registered verify playbook reachable from both invocation | 2026-08-23 |
 | [---](PLAN-cli-uis-docs-writes-outside-repo.md) | — | 2026-08-23 |
-| [Investigate: Dagster Orchestration Platform for UIS](INVESTIGATE-service-dagster.md) | UIS today has no data-pipeline orchestrator. Applications that need to ingest, transform, and catalogue data have three options — each with drawbacks: | 2026-08-23 |
 | [Fix: `configure postgrest` cannot tell "configured" from "was configured once"](PLAN-service-postgrest-configure-drift-detection.md) | A PostgREST instance whose database no longer carries its grants is | 2026-08-22 |
 | [Review: bring Alloy in line with how other services are deployed and verified](PLAN-service-alloy-convention-review.md) | — | 2026-08-22 |
 | [Investigate: Alloy and the OTel Collector — the consequences nobody scheduled](INVESTIGATE-system-observability-alloy-collector-overlap.md) | Act on the consequences the Alloy decision recorded and nobody followed | 2026-08-22 |
