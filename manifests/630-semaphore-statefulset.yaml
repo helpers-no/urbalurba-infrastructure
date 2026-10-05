@@ -110,6 +110,16 @@ spec:
             - containerPort: 3000
               name: http
           env:
+            # SECRET-VERSION: pending — all three read urbalurba-secrets, which
+            # `uis secrets apply` re-syncs, so the value CAN change without
+            # this manifest changing. Needs the pod-template annotation
+            # before a re-applied secret reaches a running pod. Also worth
+            # noting for whoever implements it: a bare restart on a changed
+            # access_key_encryption would make every already-stored
+            # credential undecryptable — `semaphore vaults rekey` has to run
+            # BEFORE the key changes underneath the running process, not
+            # after, so this is not a drop-in case of the general mechanism.
+            # See PLAN-secret-version-propagation.
             - name: SEMAPHORE_COOKIE_HASH
               valueFrom:
                 secretKeyRef:
