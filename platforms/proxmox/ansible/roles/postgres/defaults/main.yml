@@ -38,7 +38,7 @@ pg_packages:
 # partially overwritten, so the torn page cannot occur and the protection is pure cost.
 #
 # 🔴 **On ext4, XFS or LVM this setting risks silent, unrecoverable corruption after a crash.**
-# A role handed to tor-agent for UIS would carry it to filesystems that are not ZFS.
+# A role handed to UIS would carry it to filesystems that are not ZFS.
 # So it is DERIVED FROM THE MEASURED FILESYSTEM, never declared, and asserted below.
 pg_zfs_optimisations: null     # computed in tasks; do not set by hand
 
