@@ -88,7 +88,7 @@ installations or checked into anything — equivalent in sensitivity to the
 cookie-signing and encryption keys UIS's own secrets pipeline already treats this
 way for other services.
 
-### F3 — Storage: the reference instance uses embedded SQLite, not Postgres/MySQL
+### F3 — Storage: SQLite, deliberately, not Postgres
 
 ```json
 "dialect": "sqlite",
@@ -98,13 +98,22 @@ way for other services.
 Semaphore supports `bolt` (deprecated), `sqlite`, `mysql` and `postgres` as the
 `dialect`. The reference instance's database was 51 MB after several weeks of
 real daily use (7,367 recorded task runs, 1 project, 5 stored access keys) — a
-light footprint. **For a UIS in-cluster deployment, Postgres is the better fit**:
-UIS already runs a shared PostgreSQL for every other stateful service
-(dagster, authentik, etc.) via the same `uis configure postgresql` pattern, and a
-pod-local SQLite file doesn't survive a pod reschedule onto different storage the
-way a chart's `persistentVolumeClaim` + an external Postgres both do more
-conventionally. Semaphore's own docs confirm Postgres is a first-class supported
-dialect, not an afterthought.
+light footprint, and it has run on SQLite the whole time with no problems.
+
+**First pass at this finding recommended Postgres** — "matches every other
+stateful UIS service's existing pattern." Terje corrected it (2026-10-05):
+switching would add a dependency this tool does not need, specifically working
+against the goal Part 2 settles on. A single `database.sqlite` file travels with
+the service wherever it runs — an in-cluster PVC today, an LXC's local disk in
+production tomorrow — with no network dependency on a separate database
+service. Depending on the shared cluster Postgres would make that retargeting
+*harder*: an LXC deployment would need network access back to wherever Postgres
+lives, or its own Postgres to provision just for this. **SQLite + a
+`persistentVolumeClaim`** (so the file survives a pod reschedule onto different
+storage — a volume-provisioning question, not a database-engine one) is the
+right call: it matches the already-proven reference instance, and it is one
+fewer moving part — no `uis configure postgresql` call, no new database/role,
+no DB connection secret to generate and wire.
 
 ### F4 — Non-interactive bootstrap exists; the interactive `setup` wizard is not required
 
@@ -224,9 +233,9 @@ tool's real job, not a limited stand-in for it — and a config change retargets
 it there.
 
 **What this PLAN ships**: `uis deploy semaphore` as a standard in-cluster
-service — official Docker image, Postgres-backed, no pre-wired projects. Works
-fully on Rancher Desktop today; nothing about F8 limits what it can actually do
-from there.
+service — official Docker image, SQLite on a `persistentVolumeClaim` (F3), no
+pre-wired projects. Works fully on Rancher Desktop today; nothing about F8
+limits what it can actually do from there.
 
 **What this PLAN does not build**: the general mechanism to retarget *any* UIS
 service's deployment shape via config (in-cluster vs. LXC vs. elsewhere).
@@ -246,18 +255,20 @@ blocker.
 
 1. **Fresh `cookie_hash`/`cookie_encryption`/`access_key_encryption`**, generated
    at deploy time, never reused (F2).
-2. **Postgres, not SQLite** — a new database + role via the existing
-   `uis configure postgresql` pattern (F3), matching every other stateful UIS
-   service.
+2. **SQLite on a `persistentVolumeClaim`, not Postgres** (F3) — one fewer
+   dependency, matches the already-proven reference instance, and travels with
+   the service if a later config retargets it to run as an LXC instead.
 3. **One non-interactive admin user**, created via `semaphore users add --admin`
    (F4) with a UIS-generated password through the secrets pipeline, not an
    interactive prompt during deploy.
 4. **Zero projects, repositories, inventories, templates or access keys** (F5) —
    the empty state is correct and matches this product's existing convention for
    tenant-owned configuration (code locations, code-concurrency rules, etc.).
-5. **A documented, explicit statement of scope** (F8) — this service runs
-   ansible against things the cluster can reach; it is not a replacement for
-   host/platform-level fleet automation.
+5. **A documented, honest statement of scope** (F8) — it can do real fleet
+   automation (patch a VM, alert a watchdog) from inside a cluster, because
+   those are network-reachable targets; the one thing it genuinely cannot do is
+   help recover the specific cluster its own pod depends on, the same
+   bootstrap-circularity limit every in-cluster tool has.
 
 ---
 
@@ -270,11 +281,12 @@ PLAN-service-semaphore-002-docs.md     ← website/docs/services/ page (or folde
 
 ### PLAN-001 — Deploy
 
-Helm values / manifest for the official `semaphoreui/semaphore` image, wired to
-the shared Postgres (F3), `dagsterWebserver`-style resource requests for a small
-footprint (F9), fresh secrets generated per install (F2), first admin user
-created non-interactively (F4), Traefik `IngressRoute` matching this product's
-existing pattern for internal-only operator tools (same class as the Dagster UI).
+Helm values / manifest for the official `semaphoreui/semaphore` image, SQLite on
+a `persistentVolumeClaim` rather than the shared Postgres (F3),
+`dagsterWebserver`-style resource requests for a small footprint (F9), fresh
+secrets generated per install (F2), first admin user created non-interactively
+(F4), Traefik `IngressRoute` matching this product's existing pattern for
+internal-only operator tools (same class as the Dagster UI).
 
 *Acceptance:* `uis deploy semaphore` on a clean installation produces a reachable
 UI with one working admin login, zero pre-configured projects, and the ansible
