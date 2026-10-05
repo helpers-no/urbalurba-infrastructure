@@ -1,7 +1,7 @@
 #!/bin/bash
 # up.sh — Provision both k3s clusters end-to-end.
 #
-# Entry point: uis platform up proxmox-k3s
+# Entry point: uis platform up proxmox
 #
 # Chains the three lifecycle scripts in order. All three are idempotent, so
 # a warm re-run (nothing changed since the last `up`) is a fast no-op that
@@ -11,6 +11,11 @@
 # init. init and up have different mental models (one asks questions, the
 # other builds); a surprise wizard here would be a bigger surprise than
 # refusing.
+#
+# ⚠️ Numbering starts at 02 deliberately — 00-storage-ensure.sh and
+# 01-cluster-join.sh (the storage + Proxmox-cluster-formation phases this
+# platform will also own) aren't written yet. See STRUCTURE.md. This chain
+# will grow to 5 steps; it's 3 today.
 
 set -euo pipefail
 
@@ -20,7 +25,7 @@ CONFIG_FILE="$PLATFORM_DIR/config.sh"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
     echo "✗ No config.sh found at ${CONFIG_FILE#$PLATFORM_DIR/}" >&2
-    echo "  Run './uis platform init proxmox-k3s' first." >&2
+    echo "  Run './uis platform init proxmox' first." >&2
     exit 1
 fi
 # shellcheck source=/dev/null
@@ -28,7 +33,7 @@ source "$CONFIG_FILE"
 
 echo "═══════════════════════════════════════════════════════════"
 echo " Proxmox + k3s cluster provisioning"
-echo " (uis platform up proxmox-k3s)"
+echo " (uis platform up proxmox)"
 echo " Hosts: ${PROXMOX_HOST1_NAME} ${PROXMOX_HOST2_NAME} ${PROXMOX_HOST3_NAME}"
 echo "═══════════════════════════════════════════════════════════"
 echo
@@ -38,15 +43,15 @@ echo "real disk/RAM/CPU on each host (see README.md's \"Sizing\")."
 echo
 
 echo "▶ 1/3 Preflight (verify the 3 Proxmox hosts are ready)..."
-"$SCRIPT_DIR/00-preflight.sh"
+"$SCRIPT_DIR/02-k3s-preflight.sh"
 echo
 
 echo "▶ 2/3 Apply (create 6 VMs, form both k3s clusters)..."
-"$SCRIPT_DIR/01-apply.sh"
+"$SCRIPT_DIR/03-k3s-apply.sh"
 echo
 
 echo "▶ 3/3 Post-apply (kubeconfig + Traefik + switch UIS target)..."
-"$SCRIPT_DIR/02-post-apply.sh"
+"$SCRIPT_DIR/04-k3s-post-apply.sh"
 
 echo
 echo "═══════════════════════════════════════════════════════════"
@@ -55,4 +60,4 @@ echo "════════════════════════�
 echo "  Try: kubectl get nodes"
 echo "       ./uis deploy nginx"
 echo
-echo "  Tear down: ./uis platform down proxmox-k3s"
+echo "  Tear down: ./uis platform down proxmox"

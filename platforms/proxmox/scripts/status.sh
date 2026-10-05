@@ -1,7 +1,7 @@
 #!/bin/bash
-# status.sh — Report proxmox-k3s's state.
+# status.sh — Report proxmox's state.
 #
-# Entry point: ./uis platform status proxmox-k3s
+# Entry point: ./uis platform status proxmox
 # Also invoked by pf_platform_summary (platform-switching.sh) as
 # `status.sh --summary [--offline|--deep]`, which this honors:
 # emits exactly one tab-separated line `<state>\t<hint>` on that path,
@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_FILE="$PLATFORM_DIR/config.sh"
 KUBECONFIG_ALL="/mnt/urbalurbadisk/kubeconfig/kubeconf-all"
-PROD_CONTEXT="proxmox-k3s"
+PROD_CONTEXT="proxmox"
 
 SUMMARY=0
 for arg in "$@"; do
@@ -28,16 +28,16 @@ done
 emit_summary() { echo -e "$1\t$2"; exit 0; }
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
-    (( SUMMARY )) && emit_summary "not-initialized" "run: ./uis platform init proxmox-k3s"
-    echo "not-initialized — run: ./uis platform init proxmox-k3s"
+    (( SUMMARY )) && emit_summary "not-initialized" "run: ./uis platform init proxmox"
+    echo "not-initialized — run: ./uis platform init proxmox"
     exit 0
 fi
 # shellcheck source=/dev/null
 source "$CONFIG_FILE"
 
 if [[ ! -f "$KUBECONFIG_ALL" ]] || ! KUBECONFIG="$KUBECONFIG_ALL" kubectl config get-contexts "$PROD_CONTEXT" >/dev/null 2>&1; then
-    (( SUMMARY )) && emit_summary "configured-not-running" "run: ./uis platform up proxmox-k3s"
-    echo "configured-not-running — config.sh exists, cluster not yet built — run: ./uis platform up proxmox-k3s"
+    (( SUMMARY )) && emit_summary "configured-not-running" "run: ./uis platform up proxmox"
+    echo "configured-not-running — config.sh exists, cluster not yet built — run: ./uis platform up proxmox"
     exit 0
 fi
 
@@ -52,7 +52,7 @@ if (( SUMMARY )); then
 fi
 
 # ─── Human-readable ────────────────────────────────────────────────────────
-echo "proxmox-k3s — running"
+echo "proxmox — running"
 echo
 echo "Production ($PROD_CONTEXT):"
 KUBECONFIG="$KUBECONFIG_ALL" kubectl --context "$PROD_CONTEXT" get nodes

@@ -1,5 +1,5 @@
 #!/bin/bash
-# File: platforms/proxmox-k3s/scripts/02-post-apply.sh
+# File: platforms/proxmox/scripts/04-k3s-post-apply.sh
 #
 # Description:
 #   Post-apply cluster configuration, for BOTH the production and mirror-test
@@ -13,10 +13,10 @@
 #     4. Validate and report
 #
 # Prerequisites:
-#   - scripts/01-apply.sh completed successfully
+#   - scripts/03-k3s-apply.sh completed successfully
 #
 # Usage:
-#   ./scripts/02-post-apply.sh
+#   ./scripts/04-k3s-post-apply.sh
 
 set -e
 
@@ -38,7 +38,7 @@ PLATFORM_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_FILE="$PLATFORM_DIR/config.sh"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
-    print_error "No config.sh found — run ./scripts/00-preflight.sh first."
+    print_error "No config.sh found — run ./scripts/02-k3s-preflight.sh first."
     exit 1
 fi
 # shellcheck source=/dev/null
@@ -72,8 +72,8 @@ write_kubeconf() {
 
 print_section "Step 1: kubeconfigs"
 
-PROD_CLUSTER_NAME="proxmox-k3s"
-TEST_CLUSTER_NAME="proxmox-k3s-test"
+PROD_CLUSTER_NAME="proxmox"
+TEST_CLUSTER_NAME="proxmox-test"
 
 print_status "Production ($PROD_CLUSTER_NAME, via ${K3S_VM_HOST1_IP})..."
 write_kubeconf "$PROD_CLUSTER_NAME" "$K3S_VM_HOST1_IP" "${KUBECONFIG_DIR}/${PROD_CLUSTER_NAME}-kubeconf"
@@ -152,5 +152,5 @@ echo "  kubectl config use-context $PROD_CLUSTER_NAME"
 echo "  kubectl config use-context $TEST_CLUSTER_NAME"
 echo
 echo "Manage:"
-echo "  ./uis platform status proxmox-k3s"
-echo "  ./uis platform down   proxmox-k3s"
+echo "  ./uis platform status proxmox"
+echo "  ./uis platform down   proxmox"

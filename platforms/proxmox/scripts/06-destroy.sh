@@ -1,5 +1,5 @@
 #!/bin/bash
-# File: platforms/proxmox-k3s/scripts/03-destroy.sh
+# File: platforms/proxmox/scripts/06-destroy.sh
 #
 # Description:
 #   Destroy the six k3s VMs this platform created. Does NOT touch the
@@ -10,8 +10,8 @@
 #   compute, leave the substrate alone.
 #
 # Usage:
-#   ./scripts/03-destroy.sh
-#   UIS_DESTROY_CONFIRM=proxmox-k3s ./scripts/03-destroy.sh   # non-interactive
+#   ./scripts/06-destroy.sh
+#   UIS_DESTROY_CONFIRM=proxmox ./scripts/06-destroy.sh   # non-interactive
 
 set -euo pipefail
 
@@ -42,11 +42,11 @@ echo
 if [[ -n "${UIS_DESTROY_CONFIRM:-}" ]]; then
     typed="$UIS_DESTROY_CONFIRM"
 else
-    read -r -p "Type 'proxmox-k3s' to confirm: " typed
+    read -r -p "Type 'proxmox' to confirm: " typed
 fi
 
-if [[ "$typed" != "proxmox-k3s" ]]; then
-    print_error "Confirmation did not match 'proxmox-k3s' — aborting. Nothing was destroyed."
+if [[ "$typed" != "proxmox" ]]; then
+    print_error "Confirmation did not match 'proxmox' — aborting. Nothing was destroyed."
     exit 1
 fi
 
@@ -74,10 +74,10 @@ destroy_vm "$PROXMOX_HOST3_NAME" "$PROXMOX_HOST3_ADDR" "$K3S_VM_HOST3_TEST_VMID"
 if [[ -f /mnt/urbalurbadisk/provision-host/uis/lib/platform-switching.sh ]]; then
     # shellcheck source=/dev/null
     source /mnt/urbalurbadisk/provision-host/uis/lib/platform-switching.sh
-    pf_remove_context "proxmox-k3s" || true
-    pf_remove_context "proxmox-k3s-test" || true
+    pf_remove_context "proxmox" || true
+    pf_remove_context "proxmox-test" || true
 fi
 
-rm -f /mnt/urbalurbadisk/kubeconfig/proxmox-k3s-kubeconf /mnt/urbalurbadisk/kubeconfig/proxmox-k3s-test-kubeconf 2>/dev/null || true
+rm -f /mnt/urbalurbadisk/kubeconfig/proxmox-kubeconf /mnt/urbalurbadisk/kubeconfig/proxmox-test-kubeconf 2>/dev/null || true
 
-print_success "All six VMs destroyed. config.sh is preserved — re-run ./uis platform up proxmox-k3s to rebuild."
+print_success "All six VMs destroyed. config.sh is preserved — re-run ./uis platform up proxmox to rebuild."

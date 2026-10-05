@@ -1,5 +1,5 @@
 #!/bin/bash
-# File: platforms/proxmox-k3s/scripts/01-apply.sh
+# File: platforms/proxmox/scripts/03-k3s-apply.sh
 #
 # Description:
 #   Build the six k3s VMs (one production + one mirror-test node per Proxmox
@@ -8,11 +8,11 @@
 #   cold run is a full build.
 #
 # Prerequisites:
-#   - scripts/00-preflight.sh passed (3 Proxmox hosts reachable, clustered,
+#   - scripts/02-k3s-preflight.sh passed (3 Proxmox hosts reachable, clustered,
 #     storage present)
 #
 # Usage:
-#   ./scripts/01-apply.sh
+#   ./scripts/03-k3s-apply.sh
 
 set -euo pipefail
 
@@ -29,7 +29,7 @@ ANSIBLE_DIR="$PLATFORM_DIR/ansible"
 CONFIG_FILE="$PLATFORM_DIR/config.sh"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
-    print_error "No config.sh found — run ./scripts/00-preflight.sh first."
+    print_error "No config.sh found — run ./scripts/02-k3s-preflight.sh first."
     exit 1
 fi
 # shellcheck source=/dev/null
@@ -116,4 +116,4 @@ unset TOKEN
 print_success "Mirror test cluster formed"
 
 print_section "APPLY COMPLETE"
-echo "Both k3s clusters are up. Next: ./scripts/02-post-apply.sh (or ./uis platform up proxmox-k3s)"
+echo "Both k3s clusters are up. Next: ./scripts/04-k3s-post-apply.sh (or ./uis platform up proxmox)"

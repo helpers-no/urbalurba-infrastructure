@@ -1,10 +1,10 @@
 #!/bin/bash
-# down.sh — Tear down both k3s clusters (delegates to 03-destroy.sh).
+# down.sh — Tear down both k3s clusters (delegates to 06-destroy.sh).
 #
-# Entry point: uis platform down proxmox-k3s
+# Entry point: uis platform down proxmox
 #
-# Thin pass-through. 03-destroy.sh owns the typed-name confirmation prompt
-# and the UIS_DESTROY_CONFIRM=proxmox-k3s non-interactive escape hatch; this
+# Thin pass-through. 06-destroy.sh owns the typed-name confirmation prompt
+# and the UIS_DESTROY_CONFIRM=proxmox non-interactive escape hatch; this
 # wrapper inherits both for free.
 #
 # config.sh is left in place after destroy — the next `up` reuses the same
@@ -24,18 +24,18 @@ fi
 
 echo "═══════════════════════════════════════════════════════════"
 echo " Proxmox + k3s cluster tear-down"
-echo " (uis platform down proxmox-k3s)"
+echo " (uis platform down proxmox)"
 echo "═══════════════════════════════════════════════════════════"
 echo
 
-if ! "$SCRIPT_DIR/03-destroy.sh"; then
+if ! "$SCRIPT_DIR/06-destroy.sh"; then
     echo
     echo "═══════════════════════════════════════════════════════════"
     echo " ✗ Tear-down aborted or failed"
     echo "═══════════════════════════════════════════════════════════"
     echo "  One or more VMs may still exist. Check with:"
-    echo "    ./uis platform status proxmox-k3s"
-    echo "  Re-run when ready: ./uis platform down proxmox-k3s"
+    echo "    ./uis platform status proxmox"
+    echo "  Re-run when ready: ./uis platform down proxmox"
     exit 1
 fi
 
@@ -44,7 +44,7 @@ echo "════════════════════════�
 echo " ✓ Both k3s clusters destroyed"
 echo "═══════════════════════════════════════════════════════════"
 echo "  config.sh is preserved. Recreate with the same settings:"
-echo "    ./uis platform up proxmox-k3s"
+echo "    ./uis platform up proxmox"
 echo
 echo "  To fully reset (e.g. before changing which machines this targets):"
-echo "    rm platforms/proxmox-k3s/config.sh"
+echo "    rm platforms/proxmox/config.sh"

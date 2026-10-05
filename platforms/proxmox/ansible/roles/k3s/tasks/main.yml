@@ -6,7 +6,7 @@
 # `--cluster-init` node when none is given — holding it is equivalent to full node-level cluster
 # access, so it is treated as a real secret: read once from the init node's output, passed to join
 # nodes as a runtime `-e k3s_token=...` flag, never written to any `vars/vms/*.yml` declaration or
-# anywhere else in git. The exact sequence (see scripts/01-apply.sh, which drives this):
+# anywhere else in git. The exact sequence (see scripts/03-k3s-apply.sh, which drives this):
 #
 #   ansible-playbook playbooks/k3s-ensure.yml --limit host1-k3s -e vm_file=generated/vars/vms/host1-k3s.yml
 #   ansible host1-k3s -i generated/inventory.yml -m command -a "cat /var/lib/rancher/k3s/server/node-token" --become

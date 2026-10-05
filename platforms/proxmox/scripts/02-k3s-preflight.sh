@@ -1,9 +1,9 @@
 #!/bin/bash
-# File: platforms/proxmox-k3s/scripts/00-preflight.sh
+# File: platforms/proxmox/scripts/02-k3s-preflight.sh
 #
 # Description:
 #   Verify the one-time, NOT-scripted prerequisites are actually in place before
-#   01-apply.sh touches anything:
+#   03-k3s-apply.sh touches anything:
 #     1. ansible is available in this container (installs it if not)
 #     2. the SSH key config.sh names exists (generates it if not)
 #     3. all three Proxmox hosts are reachable with that key
@@ -18,7 +18,7 @@
 # job is to fail loudly and early if that part wasn't done, not to attempt it.
 #
 # Usage:
-#   ./scripts/00-preflight.sh
+#   ./scripts/02-k3s-preflight.sh
 
 set -euo pipefail
 
@@ -38,7 +38,7 @@ print_section "PROXMOX-K3S — PREFLIGHT"
 if [[ ! -f "$CONFIG_FILE" ]]; then
     print_error "No config.sh found at $CONFIG_FILE"
     echo "  Copy config.sh-template to config.sh and fill in your 3 machines first."
-    echo "  (./uis platform init proxmox-k3s does this for you interactively.)"
+    echo "  (./uis platform init proxmox does this for you interactively.)"
     exit 1
 fi
 # shellcheck source=/dev/null
@@ -67,7 +67,7 @@ print_section "Step 2: SSH key"
 if [[ ! -f "$PROXMOX_SSH_KEY" ]]; then
     print_warning "No key at $PROXMOX_SSH_KEY — generating one"
     mkdir -p "$(dirname "$PROXMOX_SSH_KEY")"
-    ssh-keygen -t ed25519 -f "$PROXMOX_SSH_KEY" -N "" -C "proxmox-k3s" >/dev/null
+    ssh-keygen -t ed25519 -f "$PROXMOX_SSH_KEY" -N "" -C "proxmox" >/dev/null
     echo
     echo "  Public key (add this to each Proxmox host's /root/.ssh/authorized_keys"
     echo "  before continuing — see README.md's \"Before you start\"):"
@@ -147,4 +147,4 @@ print_success "Storage '$PROXMOX_STORAGE' present on all three hosts"
 
 print_section "PREFLIGHT COMPLETE"
 echo "All three Proxmox hosts are reachable, clustered, and have the right storage."
-echo "Next: ./scripts/01-apply.sh (or ./uis platform up proxmox-k3s)"
+echo "Next: ./scripts/03-k3s-apply.sh (or ./uis platform up proxmox)"

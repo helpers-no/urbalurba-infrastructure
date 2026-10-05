@@ -1,4 +1,4 @@
-# proxmox-k3s — a 3-machine Proxmox lab, two k3s clusters, from your own hardware
+# proxmox — a 3-machine Proxmox lab, two k3s clusters, from your own hardware
 
 Turns three physical (or virtual) machines running Proxmox into:
 - **A production k3s cluster** — one VM per host, joined as a genuine 3-node HA control plane
@@ -15,7 +15,7 @@ for why that's the deliberate choice for this platform shape, not an AKS-style o
 
 ## Before you start — NOT scripted, read this first
 
-Three things need to be true before `./uis platform up proxmox-k3s` can do anything:
+Three things need to be true before `./uis platform up proxmox` can do anything:
 
 1. **Proxmox is installed on all three machines.** Out of scope here — that's the Proxmox
    installer's own job (write the ISO, boot it, pick the small disk for Proxmox itself). Any
@@ -59,7 +59,7 @@ Three things need to be true before `./uis platform up proxmox-k3s` can do anyth
    ```
    `PROXMOX_CLUSTER_NAME` in `config.sh` should match whatever you passed to `pvecm create`.
 
-Once all three are true, `./uis platform init proxmox-k3s` and `./uis platform up proxmox-k3s`
+Once all three are true, `./uis platform init proxmox` and `./uis platform up proxmox`
 take it from there.
 
 ---
@@ -67,17 +67,17 @@ take it from there.
 ## Quickstart
 
 ```bash
-./uis platform init proxmox-k3s     # wizard: your 3 machines' names/addresses
-# review platforms/proxmox-k3s/config.sh — especially the six VMs' addresses/sizing/VMIDs,
+./uis platform init proxmox     # wizard: your 3 machines' names/addresses
+# review platforms/proxmox/config.sh — especially the six VMs' addresses/sizing/VMIDs,
 # which default to template values that may collide with your own network or numbering
 
-./uis platform up proxmox-k3s       # preflight → create 6 VMs → form both k3s clusters →
+./uis platform up proxmox       # preflight → create 6 VMs → form both k3s clusters →
                                      # kubeconfig + Traefik → switch UIS target to production
 
 ./uis deploy nginx                  # verify: real pod scheduling, networking, ingress
 
-./uis platform status proxmox-k3s   # both clusters' node state
-./uis platform down proxmox-k3s     # destroy the 6 VMs — NOT the Proxmox cluster underneath
+./uis platform status proxmox   # both clusters' node state
+./uis platform down proxmox     # destroy the 6 VMs — NOT the Proxmox cluster underneath
 ```
 
 ---
@@ -114,7 +114,7 @@ worth keeping even if your numbers differ:
   `https://update.k3s.io/v1-release/channels` rather than trusting this template's value to still
   be current by the time you read it.
 - **The join token is never written to any file.** k3s generates its own random token on the
-  `--cluster-init` node; `01-apply.sh` reads it once over SSH and holds it only in the running
+  `--cluster-init` node; `03-k3s-apply.sh` reads it once over SSH and holds it only in the running
   script's memory for the rest of that run. Holding this token is equivalent to full node-level
   cluster access, so it's treated as a real secret throughout.
 - **Test cluster CIDRs are deliberately different from production's defaults**
@@ -150,9 +150,9 @@ defer anything without a clear need yet.
 
 ## Troubleshooting
 
-- **`00-preflight.sh` fails on SSH reachability** — the printed public key needs adding to each
+- **`02-k3s-preflight.sh` fails on SSH reachability** — the printed public key needs adding to each
   Proxmox host's `/root/.ssh/authorized_keys` by hand first.
-- **`00-preflight.sh` fails on cluster membership** — see "Before you start" above; this step is
+- **`02-k3s-preflight.sh` fails on cluster membership** — see "Before you start" above; this step is
   deliberately never auto-attempted.
 - **A VM boots but SSH never answers** — check `qm status <vmid>` on that host directly; cloud-init
   can take a few minutes on first boot if it's also running a package upgrade.

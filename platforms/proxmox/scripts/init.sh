@@ -1,20 +1,20 @@
 #!/bin/bash
-# init.sh — Interactive wizard for proxmox-k3s onboarding.
+# init.sh — Interactive wizard for proxmox onboarding.
 #
-# Entry point: ./uis platform init proxmox-k3s
+# Entry point: ./uis platform init proxmox
 #
-# Its EXISTENCE at this path is also what makes UIS recognize proxmox-k3s as
+# Its EXISTENCE at this path is also what makes UIS recognize proxmox as
 # a platform at all — pf_list_platforms (provision-host/uis/lib/
 # platform-switching.sh) discovers platforms by looking for
 # platforms/<name>/scripts/init.sh, and pf_banner's "is this a UIS platform"
 # check does the same. Found running this for real: without this file,
-# `./uis deploy` printed "Platform: proxmox-k3s (not a UIS platform —
+# `./uis deploy` printed "Platform: proxmox (not a UIS platform —
 # proceeding with kubectl context anyway)" even with a perfectly healthy
 # cluster active.
 #
 # Prompts for the one thing that can't have a sane default — your own three
 # machines — and writes config.sh. Does NOT touch Proxmox or create anything;
-# that's scripts/00-preflight.sh (verifies) and 01-apply.sh (builds).
+# that's scripts/02-k3s-preflight.sh (verifies) and 03-k3s-apply.sh (builds).
 
 set -euo pipefail
 
@@ -25,7 +25,7 @@ TEMPLATE_FILE="$PLATFORM_DIR/config.sh-template"
 
 echo "═══════════════════════════════════════════════════════════"
 echo " Proxmox + k3s lab setup wizard"
-echo " (uis platform init proxmox-k3s)"
+echo " (uis platform init proxmox)"
 echo " Writes config.sh. No Proxmox or k3s changes are made yet."
 echo "═══════════════════════════════════════════════════════════"
 echo
@@ -99,4 +99,4 @@ echo "  Review the rest of config.sh — the six k3s VMs' addresses, sizing,"
 echo "  and VMIDs still have template defaults that may collide with your"
 echo "  own network or numbering."
 echo
-echo "Next: ./uis platform up proxmox-k3s"
+echo "Next: ./uis platform up proxmox"

@@ -1,8 +1,8 @@
-# platforms/proxmox-k3s/config.sh-template
+# platforms/proxmox/config.sh-template
 #
 # Copy to config.sh (git-ignored — never commit this file, it names your own
 # machines) and fill in your own values. Sourced by every script in
-# platforms/proxmox-k3s/scripts/.
+# platforms/proxmox/scripts/.
 #
 # Before filling this in: each of the 3 hosts below needs Proxmox already
 # installed, a ZFS pool/storage already created, and the three joined into
@@ -22,7 +22,7 @@ PROXMOX_HOST3_NAME="host3"
 PROXMOX_HOST3_ADDR="192.168.1.12"
 
 # The SSH key ansible uses to reach every Proxmox host AND every k3s VM this
-# creates. scripts/00-preflight.sh generates one if this path doesn't exist.
+# creates. scripts/02-k3s-preflight.sh generates one if this path doesn't exist.
 PROXMOX_SSH_KEY="${HOME}/.ssh/id_ed25519_proxmox_k3s"
 
 # Proxmox cluster name (what `pvecm create <name>` was run with) and the ZFS
