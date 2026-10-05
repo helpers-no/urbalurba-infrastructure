@@ -22,11 +22,12 @@ options.
 Also now in flight: a real deadlock from unbounded schedule overlap
 ([urb-agents#1847](https://github.com/terchris/urb-agents/issues/1847)) shipped
 tag-based run concurrency limits (`concurrency.runs.tagConcurrencyLimits`, PR #535), and
-[PLAN-service-dagster-version-upgrade](./PLAN-service-dagster-version-upgrade.md) tracks
-moving the pin from `1.13.19` to `1.13.25` to pick up a related connection-leak fix. Tenant
-compatibility is confirmed (atlas-data already resolves `1.13.25`/`0.29.25` at build time,
-after a first, wrong `uv.lock`-based answer was self-corrected) — the platform-side bump is
-the remaining work.
+[PLAN-service-dagster-version-upgrade](../active/PLAN-service-dagster-version-upgrade.md)
+moved the pin from `1.13.19` to `1.13.25` to pick up a related connection-leak fix. Platform
+side is done (chart bumped, every version-specific claim in `360-dagster-config.yaml`
+re-verified against real source and the actual published chart image); what's left is a real
+cluster deploy by `imac` to confirm it end-to-end, which is why the plan lives in `active/`
+rather than `completed/`.
 
 **Goal**: Deploy Dagster as the data orchestration platform in UIS, providing scheduling, observability, and lineage for data pipelines across applications — starting with Atlas, with reusability for future apps.
 

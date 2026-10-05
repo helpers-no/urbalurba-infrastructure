@@ -15,7 +15,7 @@ The platform's data-asset orchestrator: scheduling, lineage, freshness and dbt-n
 | **Verify** | `./uis verify dagster` |
 | **Depends on** | PostgreSQL |
 | **Required by** | None — applications register themselves as tenants |
-| **Helm chart** | `dagster/dagster` **pinned to `1.13.19`** |
+| **Helm chart** | `dagster/dagster` **pinned to `1.13.25`** |
 | **Default namespace** | `dagster` |
 | **UI** | `http://dagster.localhost` — internal only, no authentication |
 
@@ -618,7 +618,7 @@ staleness risk for not queuing behind an unrelated long run.
 :::
 
 Not the only concurrency mechanism Dagster ships, and not an accident that this
-file uses it: 1.13.19 also has `concurrency.pools` (global op/asset concurrency),
+file uses it: 1.13.25 also has `concurrency.pools` (global op/asset concurrency),
 current and not deprecated, but a different axis — a pool slot is consumed by code
 declaring `pool="name"` on an op or asset, not by a run-level tag. Adopting it
 would mean changing a tenant's job code, not this platform's config, so it isn't a

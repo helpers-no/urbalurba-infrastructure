@@ -15,7 +15,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
-| [Plan: Bump Dagster from 1.13.19 to 1.13.25](PLAN-service-dagster-version-upgrade.md) | Move the pinned Dagster chart/core version from `1.13.19` to the current latest | 2026-10-05 |
 | [Investigate: Dagster Orchestration Platform for UIS](INVESTIGATE-service-dagster.md) | UIS today has no data-pipeline orchestrator. Applications that need to ingest, transform, and catalogue data have three options — each with drawbacks: | 2026-10-05 |
 | [---](PLAN-secrets-ansible-credentials-in-output.md) | — | 2026-10-01 |
 | [---](PLAN-extensions-in-app-databases.md) | — | 2026-10-01 |
