@@ -29,10 +29,22 @@ platforms/proxmox/
 │   │                                 to both other nodes → register under the flat HA rule, then
 │   │                                 two CONDITIONAL k3s-wiring steps (registry → registries.yaml
 │   │                                 on every node; bao → ESO + ClusterSecretStore per cluster) —
-│   │                                 each runs only if its service was actually selected
+│   │                                 each runs only if its service was actually selected. bao's
+│   │                                 wiring is a THREE-TIER model (Terje, 2026-10-05): "proxmox"
+│   │                                 (production) gets the real vault-backed store, "proxmox-test"
+│   │                                 gets the SAME store name backed by a plain Kubernetes Secret
+│   │                                 — matching how rancher-desktop/dev already works in UIS
+│   │                                 itself. See upgrade-test-cluster-to-bao.sh to promote the
+│   │                                 test cluster to the real one later, on demand.
 │   ├── 06-destroy.sh            ✅  tear down the 6 k3s VMs (core services are not torn down by
 │   │                                 this — a lab owner's databases/secrets are not something
 │   │                                 `down`/`destroy` should ever delete silently)
+│   ├── upgrade-test-cluster-to-bao.sh ✅  never runs automatically — promotes proxmox-test from
+│   │                                 the simple plain-Secret store to the real bao-backed one,
+│   │                                 for when you want to exercise real vault semantics on test
+│   │                                 before it touches production. Overwrites the SAME
+│   │                                 ClusterSecretStore name, so existing ExternalSecrets on that
+│   │                                 cluster keep working untouched — only the backend changes.
 │   ├── generate-ansible-config.sh ✅  also generates vars/core-services/*.yml + secrets now
 │   ├── init.sh                  ✅  interactive wizard → config.sh
 │   ├── up.sh                    ✅  chains all 5 numbered build steps in one unbroken run
@@ -112,19 +124,30 @@ platforms/proxmox/
     │   │                            waiting does NOT regenerate containerd's certs.d/ on its
     │   │                            own on this k3s version. Registry port/upstream→path mapping
     │   │                            read from roles/registry/defaults/main.yml, not duplicated.
-    │   └── k3s-bao-ensure.yml   ✅  wires ESO + a `ClusterSecretStore` named "openbao" to bao,
-    │                                 per k3s cluster — same conditional shape, runs only when
-    │                                 "bao" is in CORE_SERVICES. bao's contract isn't an address
-    │                                 (see roles/bao's own comments and the openbao investigation
-    │                                 this platform fed findings back into): the auth is
-    │                                 BIDIRECTIONAL — the cluster calls bao for secrets, bao calls
-    │                                 BACK into the cluster's TokenReview API, so each cluster gets
-    │                                 its own `kubernetes-<context>` auth mount on the shared bao
-    │                                 (Vault/OpenBao's auth config is per-mount, not per-role — two
-    │                                 clusters cannot share one). The root token never leaves the
-    │                                 bao guest. Proven end to end, not just "objects exist": a
-    │                                 real secret written in bao's KV reaches a real k8s Secret
-    │                                 with the correct value, verified independently afterward.
+    │   ├── k3s-bao-ensure.yml   ✅  wires ESO + the REAL vault-backed `ClusterSecretStore` named
+    │   │                            "openbao" to bao, on whichever cluster(s) you name via
+    │   │                            `target_contexts` (defaults to `["proxmox"]` — production
+    │   │                            only; 05-core-services-apply.sh also uses this default).
+    │   │                            bao's contract isn't an address (see roles/bao's own comments
+    │   │                            and the openbao investigation this platform fed findings back
+    │   │                            into): the auth is BIDIRECTIONAL — the cluster calls bao for
+    │   │                            secrets, bao calls BACK into the cluster's TokenReview API, so
+    │   │                            each cluster gets its own `kubernetes-<context>` auth mount on
+    │   │                            the shared bao (Vault/OpenBao's auth config is per-mount, not
+    │   │                            per-role — two clusters cannot share one). The root token
+    │   │                            never leaves the bao guest. Proven end to end, not just
+    │   │                            "objects exist": a real secret written in bao's KV reaches a
+    │   │                            real k8s Secret with the correct value, verified independently.
+    │   └── k3s-bao-simple-ensure.yml ✅ ESO + the SAME-NAMED "openbao" store, backed by a plain
+    │                                 Kubernetes Secret instead — no vault, no bidirectional auth,
+    │                                 no reviewer ServiceAccount at all (ESO's own ServiceAccount
+    │                                 already has cluster-wide secret read/list, confirmed for
+    │                                 real). This is proxmox-test's default. ⚠️ `spec.provider` is
+    │                                 a union (vault XOR kubernetes) — found running this for real:
+    │                                 a merge-patch onto an existing store with the OTHER provider
+    │                                 adds both and the CRD rejects it outright. Both this file and
+    │                                 k3s-bao-ensure.yml delete any existing "openbao" store first,
+    │                                 needed for switching a cluster's provider in either direction.
     ├── roles/
     │   ├── k3s/                  ✅  existing
     │   ├── postgres/             ✅  ported from the maintainer's private lab. Two real bugs
