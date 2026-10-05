@@ -20,6 +20,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-10-05 |
 | [Investigate: should a service bring its own availability probe, and can Uptime Kuma accept one?](INVESTIGATE-system-monitor-definitions-with-services.md) | Decide how the external watchdog's monitors get created and stay in | 2026-10-05 |
 | [Investigate: migrate `hosts-to-be-deleted/*` to `platforms/*` (or formally retire)](INVESTIGATE-system-migrate-hosts-to-platforms.md) | — | 2026-10-05 |
+| [Investigate: a context-aware fleet inventory, and what "patch" means once a service is a container](INVESTIGATE-system-fleet-inventory-and-patching.md) | Decide whether UIS should have a single inventory tool that reports | 2026-10-05 |
 | [Investigate: Backup and scheduling — UIS deploys stateful services it cannot back up](INVESTIGATE-system-backup-and-scheduling.md) | Give UIS (a) a backup capability for the stateful services it deploys, | 2026-10-05 |
 | [Investigate: an external watchdog — does Uptime Kuma overlap the observability stack?](INVESTIGATE-service-uptime-kuma.md) | Decide whether UIS needs an availability watchdog that runs *outside* | 2026-10-05 |
 | [Investigate: SemaphoreUI as a UIS service](INVESTIGATE-service-semaphore.md) | Make [SemaphoreUI](https://semaphoreui.com) — a web UI and API for running | 2026-10-05 |
