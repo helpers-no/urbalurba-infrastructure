@@ -220,8 +220,7 @@ backups fail silently — as F5 demonstrates.
    cluster that is down? Probably the host layer — the same "platform components
    beside the cluster" class as the external database, object store, secret store
    and registry cache. That class keeps recurring and may deserve first-class
-   modelling. Fifth instance as of 2026-10-05:
-   [INVESTIGATE-service-semaphore](./INVESTIGATE-service-semaphore.md) F8.
+   modelling.
 2. **Should backups be on by default** for stateful services, or opt-in? Argument
    for default-on: the failure mode of forgetting is unrecoverable.
 3. **Where do backups go by default?** Local disk is not a backup. MinIO is
