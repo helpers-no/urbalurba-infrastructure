@@ -26,7 +26,10 @@ platforms/proxmox/
 │   ├── 04-k3s-post-apply.sh     ✅  Phase 4c: kubeconfig + Traefik + switch UIS target
 │   ├── 05-core-services-apply.sh ✅ Phase 5: fencing/watchdog check once, then per service in
 │   │                                 CORE_SERVICES: guest → install → health check → replicate
-│   │                                 to both other nodes → register under the flat HA rule
+│   │                                 to both other nodes → register under the flat HA rule, then
+│   │                                 two CONDITIONAL k3s-wiring steps (registry → registries.yaml
+│   │                                 on every node; bao → ESO + ClusterSecretStore per cluster) —
+│   │                                 each runs only if its service was actually selected
 │   ├── 06-destroy.sh            ✅  tear down the 6 k3s VMs (core services are not torn down by
 │   │                                 this — a lab owner's databases/secrets are not something
 │   │                                 `down`/`destroy` should ever delete silently)
@@ -101,6 +104,27 @@ platforms/proxmox/
     │                                 ("ha groups have been migrated to rules"). Found running
     │                                 this for real; check `ha-manager rules add --help` on a
     │                                 newer release if this drifts again.
+    │   ├── k3s-registry-ensure.yml ✅ wires every k3s node (both clusters) to the registry
+    │   │                            cache's `registries.yaml` — runs ONLY when
+    │   │                            05-core-services-apply.sh resolved a registry guest IP, i.e.
+    │   │                            only when "registry" is in CORE_SERVICES. ⚠️ A RESTART IS
+    │   │                            REQUIRED — verified for real: writing registries.yaml and
+    │   │                            waiting does NOT regenerate containerd's certs.d/ on its
+    │   │                            own on this k3s version. Registry port/upstream→path mapping
+    │   │                            read from roles/registry/defaults/main.yml, not duplicated.
+    │   └── k3s-bao-ensure.yml   ✅  wires ESO + a `ClusterSecretStore` named "openbao" to bao,
+    │                                 per k3s cluster — same conditional shape, runs only when
+    │                                 "bao" is in CORE_SERVICES. bao's contract isn't an address
+    │                                 (see roles/bao's own comments and the openbao investigation
+    │                                 this platform fed findings back into): the auth is
+    │                                 BIDIRECTIONAL — the cluster calls bao for secrets, bao calls
+    │                                 BACK into the cluster's TokenReview API, so each cluster gets
+    │                                 its own `kubernetes-<context>` auth mount on the shared bao
+    │                                 (Vault/OpenBao's auth config is per-mount, not per-role — two
+    │                                 clusters cannot share one). The root token never leaves the
+    │                                 bao guest. Proven end to end, not just "objects exist": a
+    │                                 real secret written in bao's KV reaches a real k8s Secret
+    │                                 with the correct value, verified independently afterward.
     ├── roles/
     │   ├── k3s/                  ✅  existing
     │   ├── postgres/             ✅  ported from the maintainer's private lab. Two real bugs
