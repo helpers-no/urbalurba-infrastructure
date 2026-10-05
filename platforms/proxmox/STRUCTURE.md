@@ -14,8 +14,6 @@ platforms/proxmox/
 ├── README.md                    ✅  "Before you start" + all phases + troubleshooting (colocated
 │                                    with the code deliberately, not split into a separate docs tree)
 ├── STRUCTURE.md                 ✅  this file
-(no platform-local .gitignore — config.sh and ansible/generated/ are covered by entries in the
- repo root's own .gitignore, fixed 2026-10-05 to match the rename: platforms/proxmox/config.sh)
 │
 ├── scripts/
 │   ├── 00-storage-ensure.sh     ✅  Phase 2: per-host SSH key install (one password, once) +
@@ -26,16 +24,20 @@ platforms/proxmox/
 │   ├── 02-k3s-preflight.sh      ✅  Phase 4a: verify hosts reachable/clustered/storage present
 │   ├── 03-k3s-apply.sh          ✅  Phase 4b: create 6 VMs, form both k3s clusters
 │   ├── 04-k3s-post-apply.sh     ✅  Phase 4c: kubeconfig + Traefik + switch UIS target
-│   ├── 05-core-services-apply.sh 🔲 Phase 5: fencing/HA-group check once, then per service in
+│   ├── 05-core-services-apply.sh ✅ Phase 5: fencing/watchdog check once, then per service in
 │   │                                 CORE_SERVICES: guest → install → health check → replicate
-│   │                                 to both other nodes → add to the HA group
-│   ├── 06-destroy.sh            ✅  tear down k3s VMs (today) + core services (once 05 exists)
-│   ├── generate-ansible-config.sh ✅
+│   │                                 to both other nodes → register under the flat HA rule
+│   ├── 06-destroy.sh            ✅  tear down the 6 k3s VMs (core services are not torn down by
+│   │                                 this — a lab owner's databases/secrets are not something
+│   │                                 `down`/`destroy` should ever delete silently)
+│   ├── generate-ansible-config.sh ✅  also generates vars/core-services/*.yml + secrets now
 │   ├── init.sh                  ✅  interactive wizard → config.sh
-│   ├── up.sh                    ✅  chains the numbered scripts in order (3 of them today, 5 once
-│   │                                 00/01/05 are written)
+│   ├── up.sh                    ✅  chains all 5 numbered build steps in one unbroken run
 │   ├── down.sh                  ✅
 │   └── status.sh                ✅
+
+(no platform-local `.gitignore` — `config.sh` and `ansible/generated/` are covered by entries in
+ the repo root's own `.gitignore`, fixed 2026-10-05 to match the rename)
 │
 └── ansible/
     ├── ansible.cfg               ✅  (`roles_path = roles` — needed because roles/ sits beside
@@ -45,38 +47,61 @@ platforms/proxmox/
     │   ├── cluster-join.yml     ✅  heavy lifting for 01 — ported + generalized from the
     │   │                            maintainer's private-lab original (preflight/pause/verify
     │   │                            split, the two real `pvecm add` gotchas documented in-line)
+    │   │                            ⚠️ both this file and storage-ensure.yml originally used
+    │   │                            `ansible.posix.authorized_key`. Found running this platform
+    │   │                            for real inside the actual `uis-provision-host` image
+    │   │                            (2026-10-05): that collection isn't installed there — it
+    │   │                            only worked when run directly on ops's own separate ansible
+    │   │                            environment. Replaced with a plain `ansible.builtin.lineinfile`
+    │   │                            so no new collection is required to run this platform.
     │   ├── vm-ensure.yml         ✅  existing — creates a Proxmox guest from a declaration
     │   ├── k3s-ensure.yml        ✅  existing — installs/joins k3s on a VM
-    │   ├── guest-ensure.yml     🔲  LXC equivalent of vm-ensure.yml, for core services
-    │   ├── service-pg.yml       🔲  install/configure PostgreSQL
-    │   ├── service-bao.yml      🔲  install/configure OpenBao
-    │   ├── service-garage.yml  🔲  install/configure Garage (S3-compatible object store)
-    │   ├── service-registry.yml 🔲  install/configure the 4 pull-through registry mirrors
-    │   ├── service-nas.yml     🔲  install/configure Samba — **guest-owned volumes only, never
+    │   ├── guest-ensure.yml     ✅  LXC equivalent of vm-ensure.yml, for core services
+    │   ├── service-pg.yml       ✅  install/configure PostgreSQL
+    │   ├── service-bao.yml      ✅  install/configure OpenBao
+    │   ├── service-garage.yml  ✅  install/configure Garage (S3-compatible object store)
+    │   ├── service-registry.yml ✅  install/configure the 4 pull-through registry mirrors
+    │   ├── service-nas.yml     ✅  install/configure Samba — **guest-owned volumes only, never
     │   │                            a host bind mount** (a bind-mounted guest cannot be
     │   │                            replicated by Proxmox at all, found the expensive way)
-    │   ├── replication-ensure.yml 🔲  idempotent `pvesr create-local-job`, one guest → both
+    │   ├── replication-ensure.yml ✅  idempotent `pvesr create-local-job`, one guest → both
     │   │                              other nodes
-    │   └── ha-ensure.yml        🔲  idempotent: one flat HA group naming all 3 nodes (no
-    │                                 priority — Proxmox's own default, not a hand-ranked
-    │                                 hierarchy), then `ha-manager add` per guest
+    │   └── ha-ensure.yml        ✅  `ha-manager add ct:<id>` per guest, then one flat
+    │                                 `node-affinity` rule naming every node with no priority
+    │                                 (every node an equal failover target). ⚠️ This Proxmox
+    │                                 version (9.2) has migrated the older "HA groups" mechanism
+    │                                 to "rules" — `ha-manager groupadd` no longer exists
+    │                                 ("ha groups have been migrated to rules"). Found running
+    │                                 this for real; check `ha-manager rules add --help` on a
+    │                                 newer release if this drifts again.
     ├── roles/
     │   ├── k3s/                  ✅  existing
-    │   ├── pg/                  🔲  ported from the maintainer's private lab
-    │   ├── bao/                 🔲
-    │   ├── garage/               🔲
-    │   ├── registry/            🔲
-    │   └── nas/                 🔲
-    ├── vars/
-    │   ├── vms/                  ✅  existing (generated by generate-ansible-config.sh)
-    │   └── core-services/        🔲  one declaration per service — `guest`/`service`/
-    │       ├── pg.yml                `maintenance` shape, same convention `vars/vms/*.yml`
-    │       ├── bao.yml               already uses. No bind mounts, ever, in any of these.
-    │       ├── garage.yml
-    │       ├── registry.yml
-    │       └── nas.yml
-    └── generated/                 ✅  gitignored — inventory.yml + vars/vms/*.yml, built fresh
-                                        from config.sh on every run
+    │   ├── postgres/             ✅  ported from the maintainer's private lab. Two real bugs
+    │   │                            found running this against a genuinely fresh guest
+    │   │                            (2026-10-05): `locale_gen` generates a locale but does not
+    │   │                            set it as the system default — `pg_createcluster`'s
+    │   │                            non-interactive postinst reads `/etc/default/locale`, not
+    │   │                            `locale -a`, fixed with an explicit `update-locale` call;
+    │   │                            and `community.postgresql.postgresql_ext`'s database
+    │   │                            parameter is `login_db` on the installed collection
+    │   │                            version, not `db` — the latter fails with "missing required
+    │   │                            arguments: login_db" rather than silently doing nothing.
+    │   ├── bao/                 ✅
+    │   ├── garage/               ✅  real bug found running this for real: the docker
+    │   │                            save/load bootstrap order was backwards (tried to save an
+    │   │                            image before ever pulling or loading one — "reference does
+    │   │                            not exist" on a genuinely fresh guest). Fixed to match
+    │   │                            registry's already-correct check → load-from-seed → pull →
+    │   │                            save-last order.
+    │   ├── registry/            ✅
+    │   └── nas/                 ✅
+    └── generated/                 ✅  gitignored — inventory.yml, vars/vms/*.yml, and
+                                        vars/core-services/*.yml (one guest/service declaration
+                                        per configured service, plus a gitignored _extra-vars.yml
+                                        for secrets/site-data — garage's credentials, nas's
+                                        default share), all built fresh from config.sh on every
+                                        run by generate-ansible-config.sh. No bind mounts, ever,
+                                        in any of these.
 ```
 
 ## Why numbering starts at 00

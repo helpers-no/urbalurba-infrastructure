@@ -1,0 +1,34 @@
+# MANAGED BY ANSIBLE — roles/postgres/templates/tuning.conf.j2
+# 🔵 Named for its JOB, not for a node. odin's equivalent is `99-odin.conf`, which bakes one
+# machine's name into a file that is meant to be identical on every node.
+
+listen_addresses = '*'
+max_connections = {{ pg_max_connections }}
+
+# Sized from this guest's own RAM ({{ (ansible_memtotal_mb / 1024) | round(1) }} GB), not fixed.
+shared_buffers = {{ (ansible_memtotal_mb * pg_shared_buffers_fraction) | int }}MB
+effective_cache_size = {{ (ansible_memtotal_mb * pg_effective_cache_fraction) | int }}MB
+maintenance_work_mem = {{ pg_maintenance_work_mem }}
+work_mem = {{ pg_work_mem }}
+
+random_page_cost = {{ pg_random_page_cost }}
+effective_io_concurrency = {{ pg_effective_io_concurrency }}
+checkpoint_completion_target = {{ pg_checkpoint_completion_target }}
+max_wal_size = {{ pg_max_wal_size }}
+
+{% if pg_zfs_optimisations %}
+# 🔴 ZFS ONLY. Enabled because the data directory was MEASURED to be on ZFS at {{ pg_data_fstype }}.
+# PostgreSQL writes 8K pages and most filesystems do not make that atomic, so a crash can leave a
+# TORN PAGE — half old, half new — which `full_page_writes` defends against by writing the whole
+# page into WAL after a checkpoint. ZFS is copy-on-write: a block is never partially overwritten,
+# the torn page cannot happen, and the protection is pure cost.
+# ⚠️ ON ext4, XFS OR LVM THESE RISK SILENT, UNRECOVERABLE CORRUPTION AFTER A CRASH. They are
+# derived from the measured filesystem and must never be set by hand.
+full_page_writes = off
+wal_init_zero = off
+wal_recycle = off
+{% else %}
+# 🔵 Data directory is {{ pg_data_fstype }}, not ZFS — so full_page_writes stays ON (the default).
+# Turning it off here would risk torn pages on a crash. odin's config has it OFF and is correct,
+# because odin's data directory is a ZFS dataset; copying that file to a non-ZFS host would not be.
+{% endif %}

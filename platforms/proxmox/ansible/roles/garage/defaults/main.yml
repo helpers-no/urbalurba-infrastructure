@@ -1,0 +1,44 @@
+---
+# ── the image ───────────────────────────────────────────────────────────────────────────────
+# 🔴 PINNED BY DIGEST, and for a sharper reason than usual. Garage publishes a static binary but
+# NO .sha256sum beside it (404, checked 2026-10-01), so a binary install could not be verified.
+# The image digest is a cryptographic pin that the binary route simply does not offer.
+# ⚠️ Garage publishes NO `latest` tag — Docker Hub carries version tags and commit hashes only —
+# so there is nothing to default to and the version must always be stated.
+garage_version: "v2.3.0"
+garage_image: "dxflrs/garage@sha256:866bd13ed2038ba7e7190e840482bc27234c4afaf77be8cfa439ae088c1e4690"
+
+# ── ports ───────────────────────────────────────────────────────────────────────────────────
+# 🔵 NOT MinIO's 9000/9001. This is a different server, not a drop-in: anything pointing at the
+# old ports must be repointed deliberately rather than discovering it at runtime.
+garage_s3_port: 3900
+garage_rpc_port: 3901
+# 🔴 3902 (web) and 3903 (admin) deliberately NOT enabled, matching UIS. Nothing here calls an
+# admin API — bucket and key administration goes through the `garage` CLI — and an unused listener
+# on a service holding every object is surface for nothing.
+
+garage_data_dir: /var/lib/garage
+garage_replication_factor: 1      # single node
+garage_db_engine: sqlite
+
+# ── the bootstrap credential ────────────────────────────────────────────────────────────────
+# 🔵 Garage accepts a CHOSEN key pair, not only a minted one, so the credential can come from a
+# secret store the same way MinIO's root user did. ⚠️ Supplied at run time, never declared: a key
+# in a declaration is a key in git.
+garage_access_key: ""
+garage_secret_key: ""
+garage_rpc_secret: ""
+garage_default_bucket: loki       # the only live consumer MinIO ever had
+
+# 🔴 THE STEP THAT MUST NOT BE SKIPPED. `--single-node --default-bucket` sets the bootstrap key's
+# ACCOUNT-LEVEL `can_create_buckets=true`, and nothing narrows it back down. UIS shipped that as
+# "a key scoped to one bucket"; imac disproved it with a single `aws s3api create-bucket` call
+# that succeeded, leaving three buckets owned by one credential (`urb-agents#1802`).
+# ⚠️ This is Garage's own behaviour, not a Kubernetes gap — tor-agent's words on #1804:
+# *"your role needs the same fix step, or it ships the same hole."*
+garage_deny_create_bucket: true
+
+# 🔴 BOOTSTRAP: keep the image on local disk so this can start with no internet and a cold docker
+# cache. Without it the object store depends on the registry or the internet being up first, which
+# is the circular dependency the registry exists to avoid. See platform/BOOTSTRAP.md.
+garage_seed_image: true

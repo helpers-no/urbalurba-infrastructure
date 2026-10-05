@@ -1,0 +1,40 @@
+# MANAGED BY ANSIBLE — roles/nas/templates/smb.conf.j2. Local edits are lost on the next run.
+[global]
+	server string = {{ nas_server_string }}
+	workgroup = {{ nas_workgroup }}
+	security = USER
+	# 🔵 Named explicitly so a future package default cannot lower it.
+	server min protocol = {{ nas_min_protocol }}
+	map to guest = {{ nas_map_to_guest }}
+	idmap config * : backend = tdb
+
+	# macOS clients. 🔵 streams_xattr must come AFTER fruit — the order matters.
+	vfs objects = {{ nas_vfs_objects }}
+{% for k, v in nas_fruit_options.items() %}
+	{{ k }} = {{ v }}
+{% endfor %}
+
+{% for s in nas_shares %}
+[{{ s.name }}]
+	comment = {{ s.comment }}
+	path = {{ s.path }}
+	read only = No
+{% if s.guest_ok | default(false) %}
+	guest ok = Yes
+{% endif %}
+{% if s.valid_users is defined %}
+	valid users = {{ s.valid_users }}
+{% endif %}
+{% if s.force_group is defined %}
+	force group = {{ s.force_group }}
+{% endif %}
+	create mask = {{ s.create_mask }}
+	directory mask = {{ s.directory_mask }}
+{% if s.force_create_mode is defined %}
+	force create mode = {{ s.force_create_mode }}
+{% endif %}
+{% if s.force_directory_mode is defined %}
+	force directory mode = {{ s.force_directory_mode }}
+{% endif %}
+
+{% endfor %}

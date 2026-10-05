@@ -1,0 +1,14 @@
+# MANAGED BY ANSIBLE — roles/bao/templates/openbao-audit.logrotate.j2
+# 🔴 odin's audit log reached 256 MB with nothing rotating it. `copytruncate` is used because
+# OpenBao holds the file open and does not reopen on SIGHUP; a plain rotate would leave it
+# writing to an unlinked inode and the audit trail would silently stop.
+{{ bao_audit_path }} {
+    size {{ bao_audit_rotate_size }}
+    rotate {{ bao_audit_rotate_keep }}
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su openbao openbao
+}

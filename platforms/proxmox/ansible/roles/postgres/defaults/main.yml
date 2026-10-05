@@ -1,0 +1,84 @@
+---
+# ── the packages, from the official repository ──────────────────────────────────────────────
+# 🔵 PGDG, with its signing key. This is the one service on odin that was installed from a real
+# source, and the role keeps it that way rather than inventing something.
+pg_version: 18
+
+# 🔴 THE LOCALE MUST EXIST BEFORE THE PACKAGE INITIALISES THE CLUSTER.
+# A cluster's encoding and collation are fixed at initdb and CANNOT be changed afterwards without
+# dropping and recreating it. A fresh debian-13-standard container has LANG=en_US.UTF-8 set but
+# the locale NOT GENERATED, so initdb silently falls back to C and produces a SQL_ASCII cluster.
+# ⚠️ Measured 2026-10-01: odin's cluster is UTF8 and frigg's first attempt was SQL_ASCII — the
+# SAME ROLE producing a different database because of an environment detail nobody declared. The
+# only symptom was `new encoding (UTF8) is incompatible with the encoding of the template
+# database` when creating the first database, long after install reported success.
+pg_locale: en_US.UTF-8
+pg_apt_key_url: "https://www.postgresql.org/media/keys/ACCC4CF8.asc"
+pg_apt_repo: "https://apt.postgresql.org/pub/repos/apt"
+
+# ⚠️ postgis and pgvector are separate packages per major version. Naming them here rather than
+# relying on a metapackage means a major upgrade fails loudly at install instead of quietly
+# producing a cluster that cannot open the databases that use them.
+pg_packages:
+  - "postgresql-{{ pg_version }}"
+  - "postgresql-client-{{ pg_version }}"
+  - "postgresql-{{ pg_version }}-pgvector"
+  - "postgresql-{{ pg_version }}-postgis-3"
+  - "pgbackrest"
+
+# ── 🔴 THE SETTING THAT CAN CORRUPT DATA ON THE WRONG FILESYSTEM ────────────────────────────
+#
+# odin runs `full_page_writes = off`, `wal_init_zero = off` and `wal_recycle = off`. Those are
+# CORRECT on ZFS and DANGEROUS anywhere else.
+#
+# PostgreSQL writes 8K pages; most filesystems do not guarantee an 8K write is atomic, so a crash
+# mid-write can leave a TORN PAGE — half old, half new. `full_page_writes` defends against that by
+# writing the whole page into WAL after each checkpoint. ZFS is copy-on-write: a block is never
+# partially overwritten, so the torn page cannot occur and the protection is pure cost.
+#
+# 🔴 **On ext4, XFS or LVM this setting risks silent, unrecoverable corruption after a crash.**
+# A role handed to tor-agent for UIS would carry it to filesystems that are not ZFS.
+# So it is DERIVED FROM THE MEASURED FILESYSTEM, never declared, and asserted below.
+pg_zfs_optimisations: null     # computed in tasks; do not set by hand
+
+# ── tuning ──────────────────────────────────────────────────────────────────────────────────
+# 🔵 Sized from the guest's own RAM rather than fixed. odin's values (shared_buffers 2GB,
+# effective_cache_size 5GB) were right for an 8 GB container and would be wrong on any other.
+pg_shared_buffers_fraction: 0.25
+pg_effective_cache_fraction: 0.625
+pg_max_connections: 100
+pg_work_mem: "32MB"
+pg_maintenance_work_mem: "512MB"     # also speeds pgvector index builds
+pg_random_page_cost: 1.1             # SSD, not spinning rust
+pg_effective_io_concurrency: 200
+pg_checkpoint_completion_target: 0.9
+pg_max_wal_size: "4GB"
+
+# ── who may connect ─────────────────────────────────────────────────────────────────────────
+# 🔵 DECLARED, not hardcoded in a template. odin's pg_hba carries 100.64.0.0/10 — the tailnet —
+# which has been dead weight since tailscale was removed from that guest on 2026-10-01, and
+# 10.10.0.0/24, the host-local backplane that only exists on one node.
+pg_allowed_networks:
+  - { cidr: "127.0.0.1/32", why: "loopback" }
+  - { cidr: "::1/128", why: "loopback" }
+
+# ── archiving ───────────────────────────────────────────────────────────────────────────────
+# 🔵 The stanza is NOT the node name. odin's is `odin`, which bakes the machine into an archive
+# meant to outlive it — and a restore on another node then needs a stanza rename nobody documented.
+pg_stanza: lab
+pg_archive_timeout: 300              # force a WAL segment at least every 5 minutes
+pg_backup_dir: /var/backups/postgres
+pg_repo1_retention_full: 2
+pg_repo1_retention_diff: 4
+
+# ── what UIS expects to exist ───────────────────────────────────────────────────────────────
+# 🔴 THE CONTRACT, taken verbatim from UIS's own `provision-host/uis/lib/postgres-extensions.conf`.
+# ⚠️ Measured on odin 2026-10-01: only `vector`, `postgis` and `btree_gin` exist, and only in
+# two databases. hstore, ltree, uuid-ossp, pg_trgm and pgcrypto are created NOWHERE — so a UIS
+# service that assumes them would fail on this database and nothing says why.
+pg_required_extensions: [vector, postgis, hstore, ltree, uuid-ossp, pg_trgm, btree_gin, pgcrypto]
+
+# ⚠️ DATABASES AND ROLES ARE SITE DATA — supplied by the inventory, not by this role. And the role
+# creates roles WITHOUT passwords: a password in a declaration is a password in git.
+pg_databases: []
+pg_roles: []

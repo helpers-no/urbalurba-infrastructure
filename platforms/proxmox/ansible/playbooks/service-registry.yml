@@ -1,0 +1,9 @@
+---
+# service-registry — L3: install/configure registry on an already-created guest.
+#
+#   ansible-playbook -i <addr>, playbooks/service-registry.yml -e @vars.yml
+- name: registry
+  hosts: all
+  gather_facts: true
+  roles:
+    - registry

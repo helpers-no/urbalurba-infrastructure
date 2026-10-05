@@ -1,0 +1,69 @@
+---
+# ── the binary: pinned, checksummed, and from a source that actually exists ──────────────────
+# 🔴 odin's install has NO apt source — the package sits only in /var/lib/dpkg/status, so it can
+# be neither reinstalled nor upgraded by any recorded step. This fetches a named release asset and
+# verifies it, which is the whole difference between "installed" and "reproducible".
+# 🔵 The standard build, not `openbao-hsm`. odin runs the HSM variant and never needed it: the
+# static seal is built into the standard binary. v2.6.1 shipped both; the name misleads.
+# Checksum read from the release's own checksums.txt on 2026-10-01. Bump both together, never one.
+bao_version: "2.7.0"
+bao_deb_url: "https://github.com/openbao/openbao/releases/download/v{{ bao_version }}/openbao_{{ bao_version }}_linux_amd64.deb"
+bao_deb_sha256: "7412233fef6bbe0e5093aa5461f493dd3a0f6193c8d5a5ba3a7ff475f96f34a2"
+
+# ── identity ────────────────────────────────────────────────────────────────────────────────
+# 🔴 NOT a node name. odin's config says `cluster_name = "odin"`, which bakes the machine into a
+# guest whose entire purpose is to survive that machine. If this guest migrates to frigg, a
+# cluster called "odin" is a lie that nothing will correct.
+bao_cluster_name: "lab"
+bao_node_id: "bao"
+
+bao_port: 8200
+bao_cluster_port: 8201
+
+# ── seal ────────────────────────────────────────────────────────────────────────────────────
+# 🔴 A DELIBERATE DEVIATION FROM THE UPSTREAM RECOMMENDATION. OpenBao's own documentation says of
+# the static seal: *"only recommended when an existing source of trust, such as another
+# third-party secrets manager, already exists in the operating environment"* — and in this lab no
+# such source exists, so strictly this should be `shamir`.
+#
+# It is `static` anyway, for a reason worth stating rather than hiding:
+#   `shamir` leaves the vault SEALED after every boot, needing a human with the unseal keys.
+#   The cluster authenticates to this vault constantly (36,000 `auth/kubernetes/login` calls in a
+#   sampled window on odin), so a sealed vault after a power cut is a cluster-wide auth outage
+#   that waits for a person. The lab's stated goal is to survive a machine dying unattended.
+#
+# What makes the deviation defensible, and all three must hold:
+#   1. The key lives on the ROOTFS, never on the data mount — so a leak of the data volume alone
+#      yields ciphertext. Enforced below by keeping bao_seal_key_path outside /var/lib/openbao.
+#   2. 🔴 Both halves must be backed up, and until 2026-10-01 only ONE was: the raft data went
+#      off-box via restic while the key sat on a rootfs that restic did not back up at all. The
+#      off-box copy could be restored and never opened. Fixed by shipping the vzdump archives.
+#   3. Anyone with root on this container has both halves. The seal protects against a stolen
+#      DISK, not against a compromised HOST. Do not claim otherwise.
+# Set bao_seal: shamir to take the safer path and accept the manual unseal.
+bao_seal: static
+bao_seal_key_id: "{{ ansible_date_time.year }}-{{ '%02d' | format(ansible_date_time.month | int) }}"
+bao_seal_key_dir: /etc/openbao/seal          # rootfs, NOT the data mount — see note 1 above
+bao_seal_key_path: "{{ bao_seal_key_dir }}/unseal-{{ bao_seal_key_id }}.key"
+
+# ── storage + TLS ───────────────────────────────────────────────────────────────────────────
+bao_data_dir: /var/lib/openbao/data
+bao_tls_dir: /opt/openbao/tls
+bao_tls_days: 1825        # 🔵 5 years, not odin's 10. Nothing watches this cert; a shorter life
+                          # means the renewal is somebody's problem sooner rather than never.
+
+# ── audit ───────────────────────────────────────────────────────────────────────────────────
+# 🔴 odin's audit.log reached 256 MB logical with NO rotation, which is most of the "81 MB of
+# secrets" people quote for that guest. Audit logging is not optional — a vault that cannot say
+# who read what is not auditable — so the fix is rotation, not switching it off.
+bao_audit_path: /var/lib/openbao/logs/audit.log
+bao_audit_rotate_size: "64M"
+bao_audit_rotate_keep: 7
+
+# ── initialisation ──────────────────────────────────────────────────────────────────────────
+# `bao operator init` emits recovery keys and a root token ONCE and never again. They are written
+# to this path with mode 0400 and must then be moved off the machine by a human.
+# ⚠️ The role NEVER prints them, and never registers them in a task result that Ansible would log.
+bao_init_key_shares: 3
+bao_init_key_threshold: 2
+bao_init_output_path: /etc/openbao/init-output.json

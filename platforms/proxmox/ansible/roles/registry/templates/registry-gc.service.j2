@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+# 🔴 odin has had NO garbage collection since the registry was built. The delete API was enabled
+# and nothing ever called it. At 19 MB that was invisible; the mount is 60 GB and grows one way.
+[Unit]
+Description=Garbage-collect the pull-through caches
+
+[Service]
+Type=oneshot
+# Each mirror is collected in its own container against the same data directory. The mirror is
+# stopped first: garbage-collect is not safe to run against a registry that is serving writes.
+ExecStart=/bin/bash -c 'for m in {{ registry_mirrors | map(attribute="name") | join(" ") }}; do \
+  systemctl stop registry-mirror@$m.service; \
+  /usr/bin/docker run --rm -v {{ registry_data_root }}/mirror-$m:/var/lib/registry {{ registry_image }} \
+    bin/registry garbage-collect --delete-untagged=true /etc/docker/registry/config.yml || true; \
+  systemctl start registry-mirror@$m.service; \
+done'

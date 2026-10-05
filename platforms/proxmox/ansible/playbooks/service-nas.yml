@@ -1,0 +1,9 @@
+---
+# service-nas — L3: install/configure nas on an already-created guest.
+#
+#   ansible-playbook -i <addr>, playbooks/service-nas.yml -e @vars.yml
+- name: nas
+  hosts: all
+  gather_facts: true
+  roles:
+    - nas

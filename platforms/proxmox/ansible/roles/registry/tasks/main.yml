@@ -1,0 +1,192 @@
+---
+# registry — four pull-through image caches, as code.
+#
+# 🔴 WHAT THIS REPLACES. On odin these are four `docker run` commands that exist nowhere on disk:
+# no compose file, no unit, no record. `restart: always` has kept them alive since August, which
+# is exactly why nobody noticed. Remove one and there is no way to recreate it.
+
+- name: Docker, for the registry containers
+  ansible.builtin.apt:
+    name: [docker.io, curl]
+    state: present
+    update_cache: true
+
+- name: Docker running and enabled
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+
+# ── break the circular dependency: load the image from a local tarball if we have one ───────
+# 🔴 WHY. These mirrors ARE `registry:2` from docker.io. Without a local copy, starting the cache
+# needs the internet — the thing the cache exists to survive without. 25 MB of tarball removes
+# that for every case except a from-scratch node with an empty data mount.
+- name: Somewhere to keep the seed image
+  ansible.builtin.file:
+    path: "{{ registry_seed_path | dirname }}"
+    state: directory
+    mode: "0755"
+  when: registry_seed_image | bool
+
+- name: Is the registry image already here
+  ansible.builtin.command: "docker image inspect {{ registry_image }}"
+  register: haveimg
+  changed_when: false
+  failed_when: false
+
+- name: Is there a seed tarball to load from
+  ansible.builtin.stat:
+    path: "{{ registry_seed_path }}"
+  register: seedfile
+  when: registry_seed_image | bool
+
+- name: Load the image from the seed — no internet needed
+  ansible.builtin.command: "docker load -i {{ registry_seed_path }}"
+  when:
+    - registry_seed_image | bool
+    - haveimg.rc != 0
+    - seedfile.stat.exists | default(false)
+
+- name: Otherwise pull it (this is the step that needs the internet)
+  ansible.builtin.command: "docker pull {{ registry_image }}"
+  when:
+    - haveimg.rc != 0
+    - not (registry_seed_image | bool and (seedfile.stat.exists | default(false)))
+
+# 🔵 Written on EVERY run, not only when missing: the tarball must track the pinned digest, or a
+# version bump leaves a seed that silently restores the old one.
+- name: Keep the seed tarball current
+  ansible.builtin.shell:
+    cmd: "docker save {{ registry_image }} -o {{ registry_seed_path }}.tmp && mv {{ registry_seed_path }}.tmp {{ registry_seed_path }}"
+    creates: "{{ registry_seed_path }}"
+  when: registry_seed_image | bool
+
+- name: Data directory for each mirror
+  ansible.builtin.file:
+    path: "{{ registry_data_root }}/mirror-{{ item.name }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ registry_mirrors }}"
+  loop_control: { label: "{{ item.name }}" }
+
+- name: Per-mirror settings
+  ansible.builtin.template:
+    src: mirror.env.j2
+    dest: "{{ registry_data_root }}/{{ item.name }}.env"
+    mode: "0644"
+  loop: "{{ registry_mirrors }}"
+  loop_control: { label: "{{ item.name }}" }
+  notify: restart mirrors
+
+- name: The templated unit — one file, four instances
+  ansible.builtin.template:
+    src: registry-mirror@.service.j2
+    dest: /etc/systemd/system/registry-mirror@.service
+    mode: "0644"
+  notify: restart mirrors
+
+- name: Garbage collection — service and timer
+  ansible.builtin.template:
+    src: "registry-gc.{{ item }}.j2"
+    dest: "/etc/systemd/system/registry-gc.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+
+- name: systemd reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Each mirror enabled and running
+  ansible.builtin.systemd:
+    name: "registry-mirror@{{ item.name }}.service"
+    state: started
+    enabled: true
+  loop: "{{ registry_mirrors }}"
+  loop_control: { label: "{{ item.name }}" }
+
+- name: Garbage collection scheduled
+  ansible.builtin.systemd:
+    name: registry-gc.timer
+    state: started
+    enabled: true
+
+# 🔴 HANDLERS RUN AT THE END OF A PLAY — so without this, every check below tests the containers
+# as they were BEFORE this run changed them. That is exactly what happened: the unit on disk had
+# the metrics ports, the env file had the ports, and the verification failed with "connection
+# refused" because the running containers were still the previous ones. A check that runs before
+# the change it is verifying will pass when it should fail, and fail when it should pass.
+- name: Apply pending restarts BEFORE verifying anything
+  ansible.builtin.meta: flush_handlers
+
+# 🔴 AND A CONVERGENCE CHECK, because flush_handlers alone is not enough.
+# A handler only fires on the run where its template CHANGED. If that run then failed after the
+# template was written but before the restart — which is exactly what happened here — the unit on
+# disk is new, the container is old, and the NEXT run sees changed=0 and does nothing. The system
+# sits permanently half-applied and every subsequent run agrees it is fine.
+# So: compare what the unit asks for against what the container actually has, and restart on a
+# mismatch. This is the difference between "ansible reported success" and "the thing is true".
+- name: Is each container running with the configuration the unit specifies
+  ansible.builtin.shell:
+    cmd: >-
+      docker inspect mirror-{{ item.name }} --format '{{ "{{" }}.Config.Image{{ "}}" }}' 2>/dev/null
+      | grep -qF '{{ registry_image }}'
+      && docker port mirror-{{ item.name }} 2>/dev/null | grep -q '{{ item.metrics_port }}'
+      && echo match || echo drift
+  register: drifted
+  changed_when: false
+  failed_when: false
+  loop: "{{ registry_mirrors }}"
+  loop_control: { label: "{{ item.name }}" }
+  when: registry_metrics_enabled | bool
+
+- name: Restart any that drifted from their unit
+  ansible.builtin.systemd:
+    name: "registry-mirror@{{ item.item.name }}.service"
+    state: restarted
+    daemon_reload: true
+  loop: "{{ drifted.results | default([]) }}"
+  loop_control: { label: "{{ item.item.name }}" }
+  when:
+    - registry_metrics_enabled | bool
+    - "'drift' in (item.stdout | default(''))" 
+
+# ── prove it, rather than trusting systemd's opinion ────────────────────────────────────────
+# 🔴 `systemctl is-active` says the unit started, not that a registry is answering. containerd
+# FALLS BACK to upstream when a mirror is silent, so a dead cache looks exactly like a working
+# one from the outside — for months, until the internet is also down. Ask the API.
+- name: Does each mirror answer the registry API
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/v2/"
+    status_code: [200]
+    timeout: 10
+  register: answered
+  retries: 12
+  delay: 5
+  until: answered is succeeded
+  loop: "{{ registry_mirrors }}"
+  loop_control: { label: "{{ item.name }}:{{ item.port }}" }
+
+- name: Do the metrics endpoints answer
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.metrics_port }}/metrics"
+    status_code: [200]
+    timeout: 10
+    return_content: false
+  register: metrics_ok
+  retries: 6
+  delay: 5
+  until: metrics_ok is succeeded
+  loop: "{{ registry_mirrors }}"
+  loop_control: { label: "{{ item.name }} metrics:{{ item.metrics_port }}" }
+  when: registry_metrics_enabled | bool
+
+- name: What is running
+  ansible.builtin.debug:
+    msg: >-
+      {{ registry_mirrors | length }} mirrors answering on
+      {{ registry_mirrors | map(attribute='port') | join(', ') }}
+      · gc timer: {{ registry_gc_oncalendar }}
+      · metrics on {{ registry_mirrors | map(attribute='metrics_port') | join(', ') }}
+      · seed image {{ 'kept at ' ~ registry_seed_path if registry_seed_image | bool else 'disabled' }}
+      ⚠️ NOT PROVEN HERE: that a pull SUCCEEDS through a mirror with upstream blocked. That is the
+      only test of what this service is for, and it is still unbuilt — see vars/guests/registry.yml

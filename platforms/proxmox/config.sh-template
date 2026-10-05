@@ -86,3 +86,12 @@ K3S_VERSION="v1.36.5+k3s1"
 # cluster you're looking at.
 K3S_TEST_CLUSTER_CIDR="10.52.0.0/16"
 K3S_TEST_SERVICE_CIDR="10.53.0.0/16"
+
+# ── Core services — LXC, not k3s pods ──────────────────────────────────────
+# pg (database), bao (secrets), garage (object storage), registry (image
+# cache), nas (file share). Remove any you don't want; order doesn't matter.
+# All five build on host1 by default — not a hardware-strength ranking like
+# k3s's host3 rule (see README): every node is an equal HA failover target
+# regardless of strength, so concentrating them is just the simplest layout,
+# not a safety requirement.
+CORE_SERVICES="pg bao garage registry nas"

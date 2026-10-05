@@ -1,0 +1,81 @@
+---
+# ha-ensure — register core-service guests for Proxmox HA, then one flat node-affinity rule
+# naming all 3 nodes with no priority (every node an equal failover target — see
+# PLAN-storage-cluster-005-core-services.md's "Design decisions").
+#
+#   ansible-playbook -i <proxmox-host-addr>, playbooks/ha-ensure.yml --tags member -e vmid=405
+#   ansible-playbook -i <proxmox-host-addr>, playbooks/ha-ensure.yml --tags rule \
+#       -e "resources=ct:404,ct:405,ct:407,ct:408,ct:409" -e "nodes=frigg,tor,odin"
+#
+# 🔴 THIS PROXMOX VERSION USES "RULES", NOT THE OLDER "GROUPS" MECHANISM. Found running this for
+# real (2026-10-05, Proxmox 9.2): `ha-manager groupadd` is gone — "ha groups have been migrated to
+# rules". The equivalent of a flat group with no priority is a single `node-affinity` rule naming
+# every node with no `:priority` suffix. Check your own `ha-manager rules add --help` if this
+# drifts on a newer Proxmox release; the CLI's own help is the source of truth, not this comment.
+- name: Register core services for HA
+  hosts: all
+  gather_facts: false
+  become: false
+
+  vars:
+    vmid: ""
+    resources: ""
+    nodes: ""
+    rule_name: core-services
+
+  tasks:
+    # ── member: register one guest as an HA resource ──────────────────────────────────────────
+    - name: Is this guest already HA-managed
+      tags: [member]
+      ansible.builtin.command: "ha-manager config"
+      register: ha_config
+      changed_when: false
+      when: vmid | string | length > 0
+
+    - name: Register it, if not
+      tags: [member]
+      ansible.builtin.command: >-
+        ha-manager add ct:{{ vmid }} --max_restart 1 --max_relocate 1
+      when:
+        - vmid | string | length > 0
+        - "('ct:' ~ vmid) not in ha_config.stdout"
+
+    # ── rule: one flat node-affinity rule, every node equal ───────────────────────────────────
+    - name: Does the rule already exist
+      tags: [rule]
+      ansible.builtin.command: "ha-manager rules config"
+      register: rules_config
+      changed_when: false
+      when: resources | length > 0 and nodes | length > 0
+
+    - name: Create the rule, if not
+      tags: [rule]
+      ansible.builtin.command: >-
+        ha-manager rules add node-affinity {{ rule_name }}
+        --resources {{ resources }} --nodes "{{ nodes }}"
+        --comment "core services - every node an equal failover target, no hardware ranking"
+      when:
+        - resources | length > 0 and nodes | length > 0
+        - rule_name not in rules_config.stdout
+
+    - name: Update it, if the resource list changed
+      tags: [rule]
+      ansible.builtin.command: >-
+        ha-manager rules set node-affinity {{ rule_name }}
+        --resources {{ resources }} --nodes "{{ nodes }}"
+      when:
+        - resources | length > 0 and nodes | length > 0
+        - rule_name in rules_config.stdout
+
+    - name: Result
+      tags: [rule]
+      ansible.builtin.command: "ha-manager rules config"
+      register: final_rules
+      changed_when: false
+      when: resources | length > 0 and nodes | length > 0
+
+    - name: Show it
+      tags: [rule]
+      ansible.builtin.debug:
+        msg: "{{ final_rules.stdout_lines }}"
+      when: resources | length > 0 and nodes | length > 0

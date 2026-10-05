@@ -1,0 +1,9 @@
+---
+# service-pg — L3: install/configure postgres on an already-created guest.
+#
+#   ansible-playbook -i <addr>, playbooks/service-pg.yml -e @vars.yml
+- name: postgres
+  hosts: all
+  gather_facts: true
+  roles:
+    - postgres

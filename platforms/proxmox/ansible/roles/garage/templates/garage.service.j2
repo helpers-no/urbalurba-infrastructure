@@ -1,0 +1,35 @@
+# MANAGED BY ANSIBLE — roles/garage/templates/garage.service.j2
+[Unit]
+Description=Garage object storage ({{ garage_version }}) — S3 on :{{ garage_s3_port }}
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+# 🔵 --rm plus a fixed name: the unit owns the container's whole lifecycle, so a restart cannot
+# collide with a leftover from a previous run. Same shape as roles/registry.
+ExecStartPre=-/usr/bin/docker rm -f garage
+ExecStart=/usr/bin/docker run --rm --name garage \
+  -p {{ garage_s3_port }}:{{ garage_s3_port }} \
+  -v {{ garage_data_dir }}/garage.toml:/etc/garage.toml:ro \
+  -v {{ garage_data_dir }}/meta:{{ garage_data_dir }}/meta \
+  -v {{ garage_data_dir }}/data:{{ garage_data_dir }}/data \
+  -e GARAGE_DEFAULT_ACCESS_KEY={{ garage_access_key }} \
+  -e GARAGE_DEFAULT_SECRET_KEY={{ garage_secret_key }} \
+  -e GARAGE_DEFAULT_BUCKET={{ garage_default_bucket }} \
+  --memory={{ garage_mem_limit | default('768m') }} \
+  --log-opt max-size={{ garage_log_max_size | default('10m') }} \
+  --log-opt max-file={{ garage_log_max_file | default('3') }} \
+  {{ garage_image }} \
+  {# 🔴 --default-bucket takes NO ARGUMENT. The bucket name comes from GARAGE_DEFAULT_BUCKET;
+     passing it positionally makes garage reject the whole command line, and the error prints a
+     usage hint rather than naming the offending flag. `--default-bucket` implies
+     `--default-access-key`, which reads GARAGE_DEFAULT_ACCESS_KEY/SECRET_KEY. Both require
+     `--single-node`. Read from `garage server --help` in the pinned image, not from the docs. #}
+  /garage -c /etc/garage.toml server --single-node --default-bucket
+ExecStop=/usr/bin/docker stop garage
+
+[Install]
+WantedBy=multi-user.target

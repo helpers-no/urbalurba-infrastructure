@@ -1,0 +1,56 @@
+---
+# The four upstreams this cache fronts. Override per site — nothing here is lab-specific.
+# 🔵 metrics_port is STATED, not derived. The first version computed it from the loop index,
+# which (a) fails in a module-rendered template, where Jinja's `loop` does not exist, and (b)
+# would silently change every port if someone reordered the list.
+registry_mirrors:
+  - { name: dockerhub, port: 5000, metrics_port: 5100, upstream: "https://registry-1.docker.io" }
+  - { name: k8s,       port: 5001, metrics_port: 5101, upstream: "https://registry.k8s.io" }
+  - { name: ghcr,      port: 5002, metrics_port: 5102, upstream: "https://ghcr.io" }
+  - { name: quay,      port: 5003, metrics_port: 5103, upstream: "https://quay.io" }
+
+# 🔴 PINNED BY DIGEST, not by the floating `registry:2` tag. Two reasons:
+#   - IaC that resolves a moving tag is not reproducible: the same play on two days builds two
+#     different things, and the difference only shows up when one of them misbehaves.
+#   - ⚠️ THE CIRCULAR ONE. These mirrors ARE `registry:2`, pulled from docker.io. On a node that
+#     does not already hold the image, starting the cache requires the internet — the thing the
+#     cache exists to survive without. Pinning does not break the circle, but it makes the
+#     version explicit so the image can be deliberately pre-seeded.
+# Bump this consciously; `docker inspect registry:2 --format '{{index .RepoDigests 0}}'`.
+registry_image: "registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373"
+
+# Resource limits. 🔵 Not performance tuning — a bound so one runaway cache cannot take the whole
+# container with it. The guest has 1 GB; four unbounded mirrors could use all of it.
+registry_mem_limit: "192m"
+registry_cpu_limit: "0.5"
+
+# 🔴 Docker's default json-file driver has NO size limit, and docker logs live on the ROOTFS —
+# 7.8 GB here, not the 60 GB data mount. Four chatty containers can fill it, and a full root
+# filesystem on a container is a much worse day than a full cache.
+registry_log_max_size: "10m"
+registry_log_max_file: "3"
+
+# ── metrics — prepared now, consumed when UIS observability arrives (Terje, 2026-10-01) ──────
+# registry:2 serves Prometheus metrics on a SEPARATE debug port, not on the registry port.
+# 🔵 Turned on ahead of the scrapers deliberately: the question "is the cache actually being
+# used" cannot be answered retrospectively. odin's 19 MB raises exactly that question and there
+# is no history to answer it with, because nothing was ever collecting.
+registry_metrics_enabled: true
+# (each mirror's metrics_port is stated in the list above, alongside its service port)
+
+# ── breaking the circular dependency ─────────────────────────────────────────────────────────
+# 🔴 THE PROBLEM. These mirrors ARE `registry:2`, pulled from docker.io. On a node that does not
+# already hold that image, starting the cache requires the internet — the exact thing the cache
+# exists to survive without. Pinning the digest makes the version explicit; it does not help a
+# machine that has no copy.
+# 🔵 THE FIX: keep a tarball of the image on the DATA mount and load from it when the image is
+# absent. 25 MB. The role then starts with no internet at all.
+# ⚠️ WHAT IT DOES NOT FIX: a from-scratch node rebuild, where the data mount is new and empty
+# too. With three nodes at least one should hold it — and it also belongs on the break-glass
+# media alongside the other things a rebuild cannot proceed without.
+registry_seed_image: true
+registry_seed_path: "{{ registry_data_root }}/_seed/registry-image.tar"
+registry_data_root: /var/lib/registry
+# Weekly. ⚠️ Garbage collection only removes blobs NO manifest references, so it reclaims less
+# than people expect — it is not a retention policy, it is a tidy-up after one.
+registry_gc_oncalendar: "Sun *-*-* 04:30:00"

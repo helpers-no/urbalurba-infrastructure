@@ -1,0 +1,222 @@
+---
+# guest-ensure — create a Proxmox LXC guest from a DECLARATION (core services use this; k3s VMs
+# use vm-ensure.yml instead — same L2 idea, different guest kind).
+#
+#   ansible-playbook -i <addr>, playbooks/guest-ensure.yml \
+#       -e guest_file=vars/core-services/pg.yml -e guest_pubkey=~/.ssh/id_ed25519_proxmox.pub
+#   ... --check            # say what it would do, touch nothing
+#   ... -e vmid=405         # override the id, e.g. while the original still runs elsewhere
+#
+# 🔵 GENERALIZED FROM a private-lab original (guest-ensure.yml). Builds from a DECLARATION of
+# what a guest should be, which can create one on a host that has never had it — the other
+# direction from a tool that reads a live hypervisor and reverse-engineers its config.
+#
+# 🔴 USES `pct`, NOT THE PROXMOX API MODULE, DELIBERATELY. community.general.proxmox needs an API
+# token, and a freshly installed node has none — so the module cannot be used at the one moment
+# this playbook is most needed. `pct` is present on every node from first boot.
+#
+# ⚠️ IT CREATES, IT DOES NOT RECONFIGURE. If the guest exists, this reports and stops.
+- name: Ensure a guest exists, from its declaration
+  hosts: all
+  gather_facts: false
+
+  vars:
+    guest_file: ""
+    # The public key this platform's own control key uses — no sane default, same reasoning as
+    # cluster-join.yml and storage-ensure.yml's control_pubkey_file.
+    guest_pubkey: ""
+    # The physical ZFS pool name (not the Proxmox storage ID) — needed only for guests with a
+    # zfs_recordsize mount, to set the property on the right dataset after creation.
+    pool_name: ""
+
+  tasks:
+    - name: A declaration is required
+      ansible.builtin.assert:
+        that:
+          - guest_file | length > 0
+        fail_msg: "Pass -e guest_file=vars/core-services/<name>.yml — this playbook builds from a declaration, not from flags."
+        quiet: true
+
+    - name: A pubkey is required
+      ansible.builtin.assert:
+        that:
+          - guest_pubkey | length > 0
+        fail_msg: "Pass -e guest_pubkey=<path> — no sane default for whose key this is."
+        quiet: true
+
+    # 🔴 A CREATING playbook that fans out silently when the operator mistypes the limit is a
+    # footgun, not an inconvenience — the operator's INTENT is what's unverified here, not
+    # whether a check passed.
+    - name: Refuse to create on more than one node unless that is explicitly the intent
+      ansible.builtin.assert:
+        that:
+          - (ansible_play_hosts | length) == 1 or (allow_fanout | default(false) | bool)
+        fail_msg: >-
+          This play matched {{ ansible_play_hosts | length }} nodes
+          ({{ ansible_play_hosts | join(', ') }}) and it CREATES guests.
+          Use a single-host inventory (-i <addr>,), or pass -e allow_fanout=true if you really
+          mean to build this guest on every one of them.
+        quiet: true
+      run_once: true
+
+    - name: Read the declaration
+      ansible.builtin.include_vars:
+        file: "{{ guest_file if guest_file.startswith('/') else (playbook_dir ~ '/../' ~ guest_file) }}"
+
+    - name: Reject declaration keys that are present but empty
+      ansible.builtin.assert:
+        that:
+          - (guest.features is not defined) or (guest.features | trim | length > 0)
+        fail_msg: >-
+          guest.features is present but empty in {{ guest_file }}. Omit the key entirely rather
+          than setting it to "" — an empty optional flag shifts every pct argument after it.
+        quiet: true
+      when: guest is defined
+
+    - name: Settle the id
+      ansible.builtin.set_fact:
+        g_vmid: "{{ vmid | default(guest.vmid) }}"
+
+    - name: Does it already exist here
+      ansible.builtin.command: "pct config {{ g_vmid }}"
+      register: existing
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Say so and stop if it does
+      ansible.builtin.debug:
+        msg: >-
+          {{ guest.name }} ({{ g_vmid }}) already exists on {{ inventory_hostname }}.
+          ⚠️ This playbook creates; it does not reconfigure a live guest. Nothing changed.
+      when: existing.rc == 0
+
+    # ── the template has to be on the node before pct create can use it ──────────────────────
+    - name: Is the template cached
+      ansible.builtin.command: "pveam list local"
+      register: tmpl
+      changed_when: false
+      check_mode: false
+      when: existing.rc != 0
+
+    - name: Fetch the template
+      ansible.builtin.command: "pveam download local {{ guest.template }}"
+      when:
+        - existing.rc != 0
+        - guest.template not in (tmpl.stdout | default(''))
+
+    # ── build the pct arguments from the declaration ─────────────────────────────────────────
+    - name: Render the create arguments
+      ansible.builtin.set_fact:
+        pct_args: >-
+          --hostname {{ guest.name }}
+          --ostype {{ guest.ostype }}
+          --cores {{ guest.cores }}
+          --memory {{ guest.memory }}
+          --swap {{ guest.swap | default(0) }}
+          --unprivileged {{ 1 if guest.unprivileged | default(true) else 0 }}
+          {{ '--features ' ~ guest.features if (guest.features | default('') | trim | length > 0) else '' }}
+          --onboot {{ 1 if guest.onboot | default(true) else 0 }}
+          {{ '--startup ' ~ guest.startup if guest.startup is defined else '' }}
+          --rootfs {{ guest.rootfs.storage }}:{{ guest.rootfs.size_gb }}
+          {% for m in guest.mounts | default([]) %}
+          {# core services never use a host_path bind mount — guest-owned volumes only, see
+             STRUCTURE.md and PLAN-storage-cluster-005-core-services.md's "what we learned". #}
+          --{{ m.id }} {{ m.storage }}:{{ m.size_gb }},mp={{ m.mountpoint }}
+          {% endfor %}
+          {% for n in guest.nets | default([]) %}
+          --{{ n.id }} name={{ n.id | replace('net','eth') }},bridge={{ n.bridge }},ip={{ n.ip }},type=veth
+          {% endfor %}
+      when: existing.rc != 0
+
+    - name: What would be run
+      ansible.builtin.debug:
+        msg: "pct create {{ g_vmid }} local:vztmpl/{{ guest.template }} {{ pct_args | regex_replace('\\s+', ' ') }}"
+      when: existing.rc != 0
+
+    - name: Create it
+      ansible.builtin.command: >-
+        pct create {{ g_vmid }} local:vztmpl/{{ guest.template }}
+        {{ pct_args | regex_replace('\s+', ' ') }}
+      when: existing.rc != 0
+      register: created
+
+    - name: Start it
+      ansible.builtin.command: "pct start {{ g_vmid }}"
+      when: existing.rc != 0
+
+    # ── prove it, rather than trusting the exit code ─────────────────────────────────────────
+    - name: Install this platform's key, so the L3 role can reach this guest
+      ansible.builtin.command:
+        cmd: >-
+          pct exec {{ g_vmid }} -- bash -lc
+          'install -d -m 700 /root/.ssh &&
+           printf "%s\n" "{{ lookup("file", guest_pubkey) }}" > /root/.ssh/authorized_keys &&
+           chmod 600 /root/.ssh/authorized_keys'
+      changed_when: true
+
+    - name: Prove the login works, rather than assuming it
+      ansible.builtin.command:
+        cmd: >-
+          pct exec {{ g_vmid }} -- bash -lc
+          'grep -c "^ssh-" /root/.ssh/authorized_keys'
+      register: key_check
+      changed_when: false
+      failed_when: (key_check.stdout | trim | int) < 1
+
+    # 🔴 DATASET PROPERTIES TRAVEL WITH THE DATA AND ARE NOT OPTIONAL. PostgreSQL writes 8K
+    # pages; ZFS's 128K default turns one page write into a 128K read-modify-write. A pct
+    # declaration cannot express a ZFS property, so it is applied here, on the host, after the
+    # volume exists — and it applies to data written AFTER it is set, which is why it belongs here.
+    - name: Which volume actually backs each mount that asks for a recordsize
+      ansible.builtin.shell:
+        cmd: "pct config {{ g_vmid }} | grep '^{{ item.id }}:' | grep -oE 'subvol-[0-9]+-disk-[0-9]+'"
+      register: mount_vols
+      changed_when: false
+      check_mode: false
+      loop: "{{ guest.mounts | default([]) | selectattr('zfs_recordsize','defined') | list }}"
+      loop_control:
+        label: "{{ item.id }}"
+      when: guest.mounts | default([]) | selectattr('zfs_recordsize', 'defined') | list | length > 0
+
+    - name: Refuse a recordsize mount without pool_name
+      ansible.builtin.assert:
+        that:
+          - pool_name | length > 0
+        fail_msg: "A mount asks for zfs_recordsize but no -e pool_name=<zpool> was given."
+        quiet: true
+      when: guest.mounts | default([]) | selectattr('zfs_recordsize', 'defined') | list | length > 0
+
+    - name: ZFS properties on volumes that ask for them
+      ansible.builtin.command:
+        cmd: "zfs set recordsize={{ item.item.zfs_recordsize }} {{ pool_name }}/vm/{{ item.stdout | trim }}"
+      loop: "{{ mount_vols.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.mountpoint }} → {{ pool_name }}/vm/{{ item.stdout | trim }} recordsize={{ item.item.zfs_recordsize }}"
+      when: (item.stdout | default('') | trim) | length > 0
+      changed_when: true
+
+    - name: Wait for it to answer
+      ansible.builtin.command: "pct exec {{ g_vmid }} -- true"
+      register: alive
+      until: alive.rc == 0
+      retries: 12
+      delay: 5
+      changed_when: false
+      when: existing.rc != 0
+
+    - name: What it actually is
+      ansible.builtin.command: >-
+        pct exec {{ g_vmid }} -- bash -lc
+        'echo "host=$(hostname) kernel=$(uname -r)"; df -h {{ (guest.mounts | default([{}]))[0].mountpoint | default("/") }} | tail -1'
+      register: proof
+      changed_when: false
+      when: existing.rc != 0
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: |
+          {{ guest.name }} ({{ g_vmid }}) on {{ inventory_hostname }}
+          {{ proof.stdout | default('(already existed — nothing created)') }}
+          ⚠️ The GUEST exists. The SERVICE inside it does not — that is the L3 role.
+      when: existing.rc != 0

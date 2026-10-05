@@ -1,0 +1,18 @@
+# MANAGED BY ANSIBLE — roles/postgres/templates/pgbackrest.conf.j2
+[global]
+# 🔵 repo1 is LOCAL and fast. ⚠️ It lives on the same pool as the database it protects, so one
+# disk failure takes both — which is why repo2 exists and why it is not optional.
+repo1-type=posix
+repo1-path={{ pg_backup_dir }}/pgbackrest
+repo1-retention-full={{ pg_repo1_retention_full }}
+repo1-retention-diff={{ pg_repo1_retention_diff }}
+
+compress-type=zst
+start-fast=y
+process-max=2
+log-level-console=info
+log-level-file=detail
+
+[{{ pg_stanza }}]
+pg1-path=/var/lib/postgresql/{{ pg_version }}/main
+pg1-port=5432

@@ -1,0 +1,47 @@
+---
+# ── identity ────────────────────────────────────────────────────────────────────────────────
+nas_server_string: "Lab NAS"
+nas_workgroup: WORKGROUP
+# 🔵 SMB2 as the floor. SMB1 is the protocol behind a decade of worms and is off by default in
+# every modern client anyway; naming the minimum means a future package default cannot quietly
+# lower it.
+nas_min_protocol: SMB2
+
+# ── macOS compatibility ─────────────────────────────────────────────────────────────────────
+# 🔵 The `fruit` VFS is what makes Finder behave: resource forks, the right icons, no stray
+# ._ files. Kept because the person using this share is on a Mac. `streams_xattr` must follow
+# `fruit` in the list — the order is load-bearing, not stylistic.
+nas_vfs_objects: "fruit streams_xattr"
+nas_fruit_options:
+  "fruit:nfs_aces": "no"
+  "fruit:model": "MacSamba"
+  "fruit:metadata": "stream"
+
+# ── accounts and shares — SUPPLIED BY THE SITE, NOT BY THIS ROLE ────────────────────────────
+#
+# 🔴 EMPTY ON PURPOSE. `tec`, `agents`, uid 1000 and the three shares are THIS LAB's people and
+# THIS LAB's data. They are not properties of "a samba file server", and a role that ships them
+# is a role that is wrong everywhere except where it was written — the same mistake as putting an
+# IP address in a role default. Terje caught both (2026-10-01).
+#
+# 🔵 The site supplies these in the INVENTORY, under `nas_hosts.vars`. The role asserts they exist
+# rather than inventing something: a file server with no shares is a misconfiguration, and a
+# silent default would produce a server that runs and serves nothing.
+#
+# Shape:
+#   nas_groups: [{ name, gid }]
+#   nas_users:  [{ name, uid, group, comment }]
+#   nas_shares: [{ name, comment, path, valid_users|guest_ok, create_mask, directory_mask,
+#                  force_group?, force_create_mode?, force_directory_mode? }]
+#
+# ⚠️ Two things learned the hard way and worth repeating wherever these get written:
+#   - **GIDs below 1000 are not portable.** 999 is `systemd-journal` on Debian 12 and 13; 995 was
+#     free on 12 and is `sgx` on 13. odin's nas got 995 because it was free that year. Use the
+#     user range; the system range belongs to the distribution.
+#   - **The ids are not cosmetic.** These shares are bind mounts, so the numeric uid/gid on disk
+#     is what grants access. Changing one makes existing files unreadable by their owner.
+nas_users: []
+nas_groups: []
+nas_shares: []
+
+nas_map_to_guest: "Bad User"

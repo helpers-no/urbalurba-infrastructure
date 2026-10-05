@@ -1,22 +1,21 @@
 #!/bin/bash
-# up.sh — Provision both k3s clusters end-to-end.
+# up.sh — Provision the whole lab end-to-end: storage, cluster, k3s, core services.
 #
 # Entry point: uis platform up proxmox
 #
-# Chains the three lifecycle scripts in order. All three are idempotent, so
-# a warm re-run (nothing changed since the last `up`) is a fast no-op that
-# still visibly confirms every step, not silent.
+# Chains all 6 numbered build scripts in order. Each is idempotent, so a warm
+# re-run (nothing changed since the last `up`) is a fast no-op that still
+# visibly confirms every step, not silent.
 #
 # Refuses with a clear pointer if config.sh is missing — does NOT auto-run
 # init. init and up have different mental models (one asks questions, the
 # other builds); a surprise wizard here would be a bigger surprise than
 # refusing.
 #
-# ⚠️ 05-core-services-apply.sh isn't written yet — see STRUCTURE.md. This
-# chain runs storage-ensure (safe mode — no disk is touched without
-# --create-pool, run that yourself once per fresh lab) then cluster-join
-# (idempotent — skips cleanly if already clustered) before the k3s phase.
-# Will grow to cover core services once 05 exists.
+# ⚠️ Storage's pool-creation step (--create-pool) is the one destructive
+# step in this whole chain and is deliberately NOT run automatically here —
+# run it yourself once per fresh lab before the first `up`. Everything else
+# below is safe to re-run blind.
 
 set -euo pipefail
 
@@ -62,12 +61,16 @@ echo "▶ 4/5 Apply (create 6 VMs, form both k3s clusters)..."
 "$SCRIPT_DIR/03-k3s-apply.sh"
 echo
 
-echo "▶ 5/5 Post-apply (kubeconfig + Traefik + switch UIS target)..."
+echo "▶ 5/6 Post-apply (kubeconfig + Traefik + switch UIS target)..."
 "$SCRIPT_DIR/04-k3s-post-apply.sh"
+echo
+
+echo "▶ 6/6 Core services (${CORE_SERVICES:-none configured}: guest → install → replicate → HA)..."
+"$SCRIPT_DIR/05-core-services-apply.sh"
 
 echo
 echo "═══════════════════════════════════════════════════════════"
-echo " ✓ Both k3s clusters are up"
+echo " ✓ Both k3s clusters are up, core services are protected"
 echo "═══════════════════════════════════════════════════════════"
 echo "  Try: kubectl get nodes"
 echo "       ./uis deploy nginx"

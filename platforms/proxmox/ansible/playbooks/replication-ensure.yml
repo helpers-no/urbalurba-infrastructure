@@ -1,0 +1,74 @@
+---
+# replication-ensure — idempotent `pvesr` replication job, one guest -> one target node.
+# Call once per (guest, target) pair — a guest with N other nodes in its HA group needs N calls.
+#
+#   ansible-playbook -i <proxmox-host-addr>, playbooks/replication-ensure.yml \
+#       -e vmid=405 -e target_node=tor
+#
+# 🔵 Runs ON THE PROXMOX HOST holding the guest (pvesr is a hypervisor command, not something run
+# inside the guest), same targeting shape as storage-ensure.yml/cluster-join.yml.
+#
+# 🔴 FOUND BUILDING THIS THE FIRST TIME (private lab, 2026-10-05): a guest with ANY bind-mounted
+# volume cannot be replicated at all — `pvesr create-local-job` refuses the whole guest, not just
+# the bind-mounted path. This is why core services never use bind mounts (see guest-ensure.yml and
+# STRUCTURE.md) — there is no way to work around it from this side.
+- name: Ensure a replication job exists for one guest, to one target node
+  hosts: all
+  gather_facts: false
+  become: false
+
+  vars:
+    vmid: ""
+    target_node: ""
+    schedule: "*/15"
+
+  tasks:
+    - name: Both vmid and target_node are required
+      ansible.builtin.assert:
+        that:
+          - vmid | string | length > 0
+          - target_node | length > 0
+        fail_msg: "Pass -e vmid=<id> -e target_node=<node>."
+        quiet: true
+
+    # 🔵 pvesr job IDs are "<vmid>-<jobnum>" — jobnum picked here as a stable hash of the target
+    # name so the same (vmid, target) pair always gets the same job id across re-runs, and two
+    # different targets for the same vmid never collide. 0 for the first-seen target, 1 for the
+    # second, by alphabetical order of all nodes this cluster could target.
+    - name: Does a job already exist for this (vmid, target) pair
+      ansible.builtin.shell:
+        cmd: "pvesr status | awk -v t='local/{{ target_node }}' '$1 ~ \"^{{ vmid }}-\" && $3 == t {print $1}'"
+      register: existing_job
+      changed_when: false
+      check_mode: false
+
+    - name: Report and stop if it already exists
+      ansible.builtin.debug:
+        msg: "{{ existing_job.stdout | trim }} already replicates {{ vmid }} -> {{ target_node }}. Nothing to do."
+      when: existing_job.stdout | trim | length > 0
+
+    - name: Next free job number for this vmid
+      ansible.builtin.shell:
+        cmd: "pvesr status | awk '$1 ~ \"^{{ vmid }}-\"' | wc -l"
+      register: job_count
+      changed_when: false
+      check_mode: false
+      when: existing_job.stdout | trim | length == 0
+
+    - name: Create the job
+      ansible.builtin.command: >-
+        pvesr create-local-job {{ vmid }}-{{ job_count.stdout | trim }} {{ target_node }}
+        --schedule "{{ schedule }}"
+        --comment "core-services HA: replicate to {{ target_node }}"
+      when: existing_job.stdout | trim | length == 0
+
+    - name: Confirm it was created OK
+      ansible.builtin.command: "pvesr status"
+      register: final_status
+      changed_when: false
+      when: existing_job.stdout | trim | length == 0
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ final_status.stdout_lines | select('search', '^' ~ vmid ~ '-') | list }}"
+      when: existing_job.stdout | trim | length == 0

@@ -1,0 +1,206 @@
+---
+- name: The bootstrap credential must be supplied, never defaulted
+  ansible.builtin.assert:
+    that:
+      - garage_access_key | length > 0
+      - garage_secret_key | length > 0
+      - garage_rpc_secret | length > 0
+    fail_msg: >-
+      garage_access_key, garage_secret_key and garage_rpc_secret are required and this role ships
+      none. ⚠️ A generated default would be a credential nobody recorded; a declared one would be
+      a credential in git. Pass them at run time from the secret store.
+    quiet: true
+  no_log: true
+
+- name: Docker
+  ansible.builtin.apt:
+    name: [docker.io, curl, ca-certificates]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0750"
+  loop:
+    - "{{ garage_data_dir }}/meta"
+    - "{{ garage_data_dir }}/data"
+    - "{{ garage_data_dir }}/_seed"
+
+# ── 🔴 THE BOOTSTRAP RULE: this must start with no internet ─────────────────────────────────
+# Garage runs FROM A CONTAINER IMAGE, so on a node whose docker cache is empty, starting the
+# object store requires pulling it — from the internet, or from the registry. ⚠️ Either makes the
+# object store depend on something else being up first, which is the circular dependency the
+# registry exists to avoid: *a registry inside the cluster cannot serve the images needed to start
+# the cluster.*
+# 🔵 roles/registry solved this with a seed tarball on its own data mount — load-from-seed, THEN
+# pull if neither the image nor a seed exists, THEN refresh the seed. ops wrote THIS role with the
+# save and the load in the WRONG order on 2026-10-05: it tried `docker save` before ever pulling
+# or loading anything, which only ever worked because the image happened to already be cached from
+# an earlier build. On a genuinely fresh guest — no cached image, no seed tarball yet — `docker
+# save` fails outright: "reference does not exist", since there's nothing to save. Fixed to match
+# registry's actual working order.
+- name: Is the garage image already here
+  ansible.builtin.command: "docker image inspect {{ garage_image }}"
+  register: garage_haveimg
+  changed_when: false
+  failed_when: false
+
+- name: Is there a seed tarball to load from
+  ansible.builtin.stat:
+    path: "{{ garage_data_dir }}/_seed/garage-image.tar"
+  register: garage_seedfile
+  when: garage_seed_image | default(true) | bool
+
+- name: Load the image from the seed — no internet needed
+  ansible.builtin.command: "docker load -i {{ garage_data_dir }}/_seed/garage-image.tar"
+  when:
+    - garage_seed_image | default(true) | bool
+    - garage_haveimg.rc != 0
+    - garage_seedfile.stat.exists | default(false)
+
+- name: Otherwise pull it (this is the step that needs the internet)
+  ansible.builtin.command: "docker pull {{ garage_image }}"
+  when:
+    - garage_haveimg.rc != 0
+    - not (garage_seed_image | default(true) | bool and (garage_seedfile.stat.exists | default(false)))
+
+- name: Keep the seed tarball current
+  ansible.builtin.shell:
+    cmd: >-
+      docker save {{ garage_image }} -o {{ garage_data_dir }}/_seed/garage-image.tar.tmp
+      && mv {{ garage_data_dir }}/_seed/garage-image.tar.tmp {{ garage_data_dir }}/_seed/garage-image.tar
+    creates: "{{ garage_data_dir }}/_seed/garage-image.tar"
+  when: garage_seed_image | default(true) | bool
+
+- name: Configuration
+  ansible.builtin.template:
+    src: garage.toml.j2
+    dest: "{{ garage_data_dir }}/garage.toml"
+    mode: "0600"
+  no_log: true            # carries rpc_secret
+  notify: Restart garage
+
+- name: Unit
+  ansible.builtin.template:
+    src: garage.service.j2
+    dest: /etc/systemd/system/garage.service
+    mode: "0644"
+  no_log: true            # the unit embeds the access key
+  notify: Restart garage
+
+- name: Running
+  ansible.builtin.systemd:
+    name: garage
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply pending restarts BEFORE verifying anything
+  ansible.builtin.meta: flush_handlers
+
+# ⚠️ A port check alone passed while the container was CRASH-LOOPING and nothing was listening —
+# systemd reported the unit `active` because `docker run` kept being restarted, and `wait_for`
+# raced against that. Ask whether the CONTAINER is up, then whether the port answers.
+- name: Wait for the container to actually be running
+  ansible.builtin.command:
+    cmd: "docker inspect -f '{{ '{{' }}.State.Running{{ '}}' }}' garage"
+  register: garage_running
+  retries: 18
+  delay: 5
+  until: (garage_running.stdout | default('') | trim) == 'true'
+  changed_when: false
+  check_mode: false
+
+- name: Wait for the S3 API
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ garage_s3_port }}"
+    timeout: 90
+
+# ── 🔴 THE ESCALATION FIX ───────────────────────────────────────────────────────────────────
+# `--single-node --default-bucket` leaves the bootstrap key with account-level
+# can_create_buckets=true. UIS shipped that as "scoped to one bucket"; imac disproved it with one
+# `aws s3api create-bucket` call that SUCCEEDED (urb-agents#1802). It is Garage's own behaviour,
+# so this role carries the same fix or it ships the same hole (tor-agent, #1804).
+- name: Let the node settle before administering it
+  ansible.builtin.command:
+    cmd: "docker exec garage /garage -c /etc/garage.toml status"
+  register: garage_status
+  retries: 12
+  delay: 5
+  until: garage_status.rc == 0
+  changed_when: false
+  check_mode: false
+
+- name: Deny the bootstrap key the ability to create buckets
+  ansible.builtin.command:
+    cmd: "docker exec garage /garage -c /etc/garage.toml key deny --create-bucket {{ garage_access_key }}"
+  register: garage_deny
+  changed_when: "'Key updated' in (garage_deny.stdout | default(''))"
+  failed_when: garage_deny.rc != 0
+  when: garage_deny_create_bucket | bool
+
+# 🔴 READ THE PERMISSION BACK rather than trust the exit code. imac's second check is what caught
+# that the first command alone was not enough — and `key info --show-secret=false` does NOT
+# actually suppress the secret (a Garage CLI bug tor-agent confirmed), so the output is treated as
+# sensitive and only the one flag is extracted inside the container.
+- name: Confirm the denial actually took
+  ansible.builtin.shell:
+    cmd: >-
+      docker exec garage /garage -c /etc/garage.toml key info --show-secret=false {{ garage_access_key }}
+      | grep -i 'can create buckets' | awk '{print $NF}'
+  register: garage_cancreate
+  changed_when: false
+  check_mode: false
+  when: garage_deny_create_bucket | bool
+
+- name: The key must NOT be able to create buckets
+  ansible.builtin.assert:
+    that:
+      - (garage_cancreate.stdout | default('') | trim | lower) == 'false'
+    fail_msg: >-
+      The bootstrap key still reports `Can create buckets:
+      {{ garage_cancreate.stdout | default('?') | trim }}`. 🔴 That is a root-equivalent
+      credential: it can mint itself unlimited buckets, each with full RWO. Proven exploitable on
+      a real deployment with a single aws s3api create-bucket call (urb-agents#1802).
+    quiet: true
+  when: garage_deny_create_bucket | bool
+
+# ── verify ──────────────────────────────────────────────────────────────────────────────────
+- name: An unsigned request must be refused
+  ansible.builtin.command:
+    cmd: "curl -s -o /dev/null -w '%{http_code}' -m 10 http://127.0.0.1:{{ garage_s3_port }}/"
+  register: garage_anon
+  changed_when: false
+  check_mode: false
+
+- name: It must be 403, not merely 'not 200'
+  ansible.builtin.assert:
+    that:
+      - garage_anon.stdout | trim == '403'
+    fail_msg: >-
+      Unsigned request returned {{ garage_anon.stdout | trim }}, expected 403. Measured directly on
+      a real deployment (urb-agents#1802), and the same code MinIO used — so anything that assumed
+      MinIO's convention is unaffected.
+    quiet: true
+
+- name: The default bucket must exist
+  ansible.builtin.shell:
+    cmd: "docker exec garage /garage -c /etc/garage.toml bucket list | grep -c '{{ garage_default_bucket }}'"
+  register: garage_bucket
+  changed_when: false
+  failed_when: (garage_bucket.stdout | trim | int) < 1
+  check_mode: false
+
+- name: Result
+  ansible.builtin.debug:
+    msg: >-
+      Garage {{ garage_version }} · S3 on :{{ garage_s3_port }} · bucket '{{ garage_default_bucket }}' ·
+      replication {{ garage_replication_factor }} · unsigned → 403 ·
+      bootstrap key can create buckets: {{ garage_cancreate.stdout | default('n/a') | trim }}
+      ⚠️ NOT DONE HERE: MinIO's 84 MB of Loki chunks are not migrated, and Loki still points at
+      MinIO. A second bucket for Tempo needs the operator step — which the deny above is exactly
+      what makes necessary.

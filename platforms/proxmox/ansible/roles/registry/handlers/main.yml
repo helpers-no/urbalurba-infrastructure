@@ -1,0 +1,9 @@
+---
+- name: restart mirrors
+  ansible.builtin.systemd:
+    name: "registry-mirror@{{ item.name }}.service"
+    state: restarted
+    daemon_reload: true
+  loop: "{{ registry_mirrors }}"
+  loop_control: { label: "{{ item.name }}" }
+  listen: restart mirrors

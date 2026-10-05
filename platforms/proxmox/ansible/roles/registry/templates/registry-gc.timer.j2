@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Weekly garbage collection of the image caches
+
+[Timer]
+# 🔵 OnCalendar, not a relative trigger. A relative one left ops-bus-enforce.timer with
+# NextElapseUSecMonotonic=infinity on 2026-09-11 — installed, enabled, active, green everywhere,
+# and it would never have fired again.
+OnCalendar={{ registry_gc_oncalendar }}
+Persistent=true
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

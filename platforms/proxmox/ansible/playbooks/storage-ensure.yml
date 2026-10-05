@@ -63,10 +63,27 @@
     # filesystem, shared across every node once clustered). The authorized_key module follows
     # it correctly; the 777 shown on the symlink itself is a symlink's permanent mode, not a
     # permissions fault.
+    - name: Root's .ssh directory
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        mode: "0700"
+        owner: root
+        group: root
+
+    # 🔵 PLAIN ansible.builtin.lineinfile, NOT ansible.posix.authorized_key — the real
+    # uis-provision-host image doesn't ship ansible.posix, and this platform's rule is to assert
+    # what's needed rather than introduce a new runtime dependency (found running this for real
+    # inside that container on 2026-10-05; ansible.posix only worked on ops's own separate
+    # ansible environment, by coincidence).
     - name: This platform's key can reach this host, unattended, from now on
-      ansible.posix.authorized_key:
-        user: root
-        key: "{{ lookup('file', control_pubkey_file) }}"
+      ansible.builtin.lineinfile:
+        path: /root/.ssh/authorized_keys
+        line: "{{ lookup('file', control_pubkey_file) }}"
+        create: true
+        mode: "0600"
+        owner: root
+        group: root
         state: present
 
     # ── 3. a fresh install's apt is broken until this runs ─────────────────────────────────────

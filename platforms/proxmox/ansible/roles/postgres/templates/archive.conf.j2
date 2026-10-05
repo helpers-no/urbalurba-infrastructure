@@ -1,0 +1,10 @@
+# MANAGED BY ANSIBLE — roles/postgres/templates/archive.conf.j2
+# Continuous WAL archiving to pgBackRest. 🔵 This is what makes point-in-time recovery possible;
+# a nightly dump alone can only ever return you to last night.
+archive_mode = on
+archive_command = 'pgbackrest --stanza={{ pg_stanza }} archive-push %p'
+# ⚠️ Forces a WAL segment every {{ pg_archive_timeout }}s even on an idle database. Without it a
+# quiet database archives nothing, and the recovery point silently ages while everything looks fine.
+archive_timeout = {{ pg_archive_timeout }}
+wal_level = replica
+max_wal_senders = 3

@@ -1,0 +1,358 @@
+---
+# ── 0. the address this node will advertise ──────────────────────────────────────────────────
+# 🔵 DISCOVERED. odin's config hardcodes one IP, so the same file on another node would advertise
+# an address that machine does not have — and raft would accept it and then fail to form.
+- name: The address this guest actually has
+  ansible.builtin.set_fact:
+    bao_advertise_addr: "{{ bao_advertise_addr | default(ansible_default_ipv4.address) }}"
+
+- name: Refuse to continue without one
+  ansible.builtin.assert:
+    that:
+      - bao_advertise_addr is defined
+      - bao_advertise_addr | length > 6
+    fail_msg: >-
+      Could not determine this guest's address, and a vault that advertises the wrong one forms a
+      raft cluster that fails later rather than now. Pass -e bao_advertise_addr=<ip>.
+    quiet: true
+
+# ── 0b. prerequisites the base image does not carry ─────────────────────────────────────────
+# ⚠️ A fresh debian-13-standard container has none of these. Found by failing on `curl` — and the
+# run would have failed twice more, on `openssl` for the certificate and `logrotate` for the audit
+# rotation, each several minutes later. Stated as one list so the guest is made ready once.
+- name: Packages this role needs before it can do anything
+  ansible.builtin.apt:
+    name:
+      - curl           # fetch the release asset
+      - ca-certificates
+      - openssl        # the listener's self-signed certificate
+      - logrotate      # 🔴 odin's audit log reached 256 MB because nothing rotated it
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# ── 1. the package, from a source that exists and is verified ───────────────────────────────
+- name: Is the pinned version already installed
+  ansible.builtin.command: "dpkg-query -W -f=${Version} openbao"
+  register: bao_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false          # 🔵 a probe must run even in --check, or "could not look" reads as
+                             #    "nothing to do" — the mistake that produced ok=4 skipped=10.
+
+# ⚠️ `get_url` is NOT used here, and the reason is worth recording: on Debian 13 (Python 3.13)
+# it fails with "HTTPSConnection.__init__() got an unexpected keyword argument 'cert_file'".
+# 🔵 The replacement is better IaC regardless — the checksum comparison is a visible, failing
+# assertion rather than a module argument, so "verified" is something the run proves rather than
+# something the module claims.
+- name: Fetch the release asset
+  ansible.builtin.command:
+    cmd: "curl -fsSL -o /tmp/openbao_{{ bao_version }}_amd64.deb {{ bao_deb_url }}"
+    creates: "/tmp/openbao_{{ bao_version }}_amd64.deb"
+  when: bao_version not in (bao_installed.stdout | default(''))
+
+- name: What did we actually download
+  ansible.builtin.stat:
+    path: "/tmp/openbao_{{ bao_version }}_amd64.deb"
+    checksum_algorithm: sha256
+  register: bao_deb
+  check_mode: false
+  when: bao_version not in (bao_installed.stdout | default(''))
+
+- name: It must be the file we pinned, or stop
+  ansible.builtin.assert:
+    that:
+      - bao_deb.stat.exists
+      - bao_deb.stat.checksum == bao_deb_sha256
+    fail_msg: >-
+      {{ bao_deb_url }} does not match the pinned checksum.
+      got {{ bao_deb.stat.checksum | default('nothing') }}, wanted {{ bao_deb_sha256 }}.
+      🔴 Do NOT install it. Either the release was re-cut, the pin is stale, or the download was
+      tampered with — and an unverified binary is exactly what this role exists to stop being.
+    quiet: true
+  when: bao_version not in (bao_installed.stdout | default(''))
+
+- name: Install it
+  ansible.builtin.apt:
+    deb: "/tmp/openbao_{{ bao_version }}_amd64.deb"
+  when: bao_version not in (bao_installed.stdout | default(''))
+  notify: Restart openbao
+
+# ── 2. directories ──────────────────────────────────────────────────────────────────────────
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item.p }}"
+    state: directory
+    owner: "{{ item.o | default('openbao') }}"
+    group: "{{ item.g | default('openbao') }}"
+    mode: "{{ item.m }}"
+  loop:
+    - { p: /etc/openbao, m: "0755", o: root, g: root }
+    - { p: "{{ bao_seal_key_dir }}", m: "0700" }
+    - { p: "{{ bao_data_dir }}", m: "0700" }
+    - { p: "{{ bao_audit_path | dirname }}", m: "0750" }
+    - { p: "{{ bao_tls_dir }}", m: "0750" }
+  loop_control:
+    label: "{{ item.p }}"
+
+# ── 3. TLS ──────────────────────────────────────────────────────────────────────────────────
+# 🔵 SANs are derived from the address discovered above. odin's cert names one IP and was valid
+# for ten years, so a migration would have produced a cert that silently no longer matched.
+- name: Is there already a certificate
+  ansible.builtin.stat:
+    path: "{{ bao_tls_dir }}/bao.crt"
+  register: bao_cert
+  check_mode: false
+
+# 🔴 DOES THE EXISTING CERT STILL NAME THIS GUEST'S ADDRESS?
+# The first version only asked "does a cert exist", which is the wrong question the moment an
+# address changes — and Terje stated on 2026-10-01 that it will: this guest holds a DHCP lease
+# and a static below .50 is to be assigned later. A cert whose SANs name the OLD address keeps
+# existing, so the role would never replace it, and every client would fail a TLS verification
+# whose message names the certificate rather than the address that moved.
+# 🔵 odin's bao has exactly this latent fault: SANs pinned to one IP, valid until 2036.
+- name: Does the existing certificate still name this address
+  ansible.builtin.command:
+    cmd: "openssl x509 -in {{ bao_tls_dir }}/bao.crt -noout -ext subjectAltName"
+  register: bao_cert_sans
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: bao_cert.stat.exists
+
+- name: Self-signed certificate for the listener
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -x509 -newkey rsa:4096 -sha256 -nodes
+      -days {{ bao_tls_days }}
+      -keyout {{ bao_tls_dir }}/bao.key
+      -out {{ bao_tls_dir }}/bao.crt
+      -subj "/CN={{ inventory_hostname }}"
+      -addext "subjectAltName=IP:{{ bao_advertise_addr }},IP:127.0.0.1,DNS:{{ inventory_hostname }},DNS:bao"
+  when: >-
+    (not bao_cert.stat.exists)
+    or (bao_advertise_addr not in (bao_cert_sans.stdout | default('')))
+  notify: Restart openbao
+
+- name: Only openbao may read the key
+  ansible.builtin.file:
+    path: "{{ item.p }}"
+    owner: openbao
+    group: openbao
+    mode: "{{ item.m }}"
+  loop:
+    - { p: "{{ bao_tls_dir }}/bao.key", m: "0400" }
+    - { p: "{{ bao_tls_dir }}/bao.crt", m: "0444" }
+  loop_control:
+    label: "{{ item.p }}"
+
+# ── 4. the seal key ─────────────────────────────────────────────────────────────────────────
+# ⚠️ GENERATED ONCE AND NEVER REGENERATED. Replacing this key makes every existing secret
+# unreadable, so `creates:` is load-bearing, not an optimisation.
+- name: Is there already a seal key
+  ansible.builtin.stat:
+    path: "{{ bao_seal_key_path }}"
+  register: bao_seal_key
+  check_mode: false
+  when: bao_seal == 'static'
+
+- name: Generate the seal key
+  ansible.builtin.shell:
+    cmd: "head -c 32 /dev/urandom | base64 -w0 > {{ bao_seal_key_path }}"
+    creates: "{{ bao_seal_key_path }}"
+  when:
+    - bao_seal == 'static'
+    - not (bao_seal_key.stat.exists | default(false))
+  notify: Restart openbao
+
+- name: Only openbao may read the seal key
+  ansible.builtin.file:
+    path: "{{ bao_seal_key_path }}"
+    owner: openbao
+    group: openbao
+    mode: "0400"
+  when: bao_seal == 'static'
+
+# ── 5. configuration ────────────────────────────────────────────────────────────────────────
+- name: An empty EnvironmentFile, because the unit requires one
+  ansible.builtin.copy:
+    content: ""
+    dest: /etc/openbao/openbao.env
+    owner: openbao
+    group: openbao
+    mode: "0640"
+    force: false
+
+- name: Configuration
+  ansible.builtin.template:
+    src: openbao.hcl.j2
+    dest: /etc/openbao/openbao.hcl
+    owner: openbao
+    group: openbao
+    mode: "0640"
+  notify: Restart openbao
+
+- name: Rotate the audit log
+  ansible.builtin.template:
+    src: openbao-audit.logrotate.j2
+    dest: /etc/logrotate.d/openbao-audit
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enabled and running
+  ansible.builtin.systemd:
+    name: openbao
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# 🔴 Handlers run at the END of a play, so every check below would otherwise test the PREVIOUS
+# configuration and pass. Found the hard way on the registry role.
+- name: Apply pending restarts BEFORE verifying anything
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ bao_port }}"
+    timeout: 60
+
+# ── 6. initialisation — once, ever ──────────────────────────────────────────────────────────
+# ⚠️ `uri` is NOT used for these, for the same reason `get_url` is not used above: on Debian 13
+# (Python 3.13) both fail against HTTPS with
+#   "HTTPSConnection.__init__() got an unexpected keyword argument 'cert_file'".
+# 🔵 It is HTTPS-specific — the registry role's `uri` checks are plain HTTP and work. Anything
+# here that must speak TLS goes through curl.
+- name: Seal status
+  ansible.builtin.command:
+    cmd: "curl -sk --max-time 10 https://127.0.0.1:{{ bao_port }}/v1/sys/seal-status"
+  register: bao_status_raw
+  changed_when: false
+  retries: 6
+  delay: 5
+  until: bao_status_raw.rc == 0 and (bao_status_raw.stdout | trim | length) > 0
+  check_mode: false
+
+- name: Read it
+  ansible.builtin.set_fact:
+    bao_status: { json: "{{ bao_status_raw.stdout | from_json }}" }
+
+# 🔴 THE FLAGS DEPEND ON THE SEAL, and getting it wrong fails with a message that names neither:
+#   `{"errors":["parameters secret_shares,secret_threshold not applicable to seal type static"]}`
+# With an AUTO-UNSEAL seal (static), OpenBao holds the master key itself, so the Shamir shares it
+# emits are RECOVERY keys — `-recovery-shares`/`-recovery-threshold`. With `shamir` they are the
+# unseal keys — `-key-shares`/`-key-threshold`. The two are not interchangeable and the API
+# rejects the wrong pair outright.
+# ⚠️ This also means the keys printed below do DIFFERENT jobs depending on bao_seal: with static
+# they cannot unseal anything, only authorise recovery operations. Do not describe them as unseal
+# keys in the break-glass notes.
+- name: Initialise, if it never has been
+  ansible.builtin.command:
+    cmd: >-
+      bao operator init -format=json
+      {% if bao_seal == 'static' %}
+      -recovery-shares={{ bao_init_key_shares }}
+      -recovery-threshold={{ bao_init_key_threshold }}
+      {% else %}
+      -key-shares={{ bao_init_key_shares }}
+      -key-threshold={{ bao_init_key_threshold }}
+      {% endif %}
+    creates: "{{ bao_init_output_path }}"
+  environment:
+    BAO_ADDR: "https://127.0.0.1:{{ bao_port }}"
+    BAO_SKIP_VERIFY: "true"
+  register: bao_init
+  # 🔴 no_log: the output contains the recovery keys and the root token. Without this they land
+  # in the Ansible log, in the Semaphore task output, and in this session's transcript.
+  no_log: true
+  when: not (bao_status.json.initialized | default(true))
+
+- name: Write the recovery keys and root token where a human can collect them
+  ansible.builtin.copy:
+    content: "{{ bao_init.stdout }}"
+    dest: "{{ bao_init_output_path }}"
+    owner: root
+    group: root
+    mode: "0400"
+  no_log: true
+  when:
+    - bao_init is defined
+    - bao_init.changed | default(false)
+
+- name: Say that it happened, without saying what it was
+  ansible.builtin.debug:
+    msg: >-
+      🔴 THIS VAULT WAS JUST INITIALISED. {{ bao_init_key_shares }}
+      {{ 'RECOVERY keys (they do NOT unseal — the static seal does that)' if bao_seal == 'static'
+         else 'UNSEAL keys' }}
+      and a root token are at {{ bao_init_output_path }} (mode 0400, root only). They are emitted
+      ONCE and cannot be recovered. Move them off this machine — break-glass — then delete the
+      file. Until that is done the vault's recovery material exists in exactly one place: on the
+      machine it protects.
+  when:
+    - bao_init is defined
+    - bao_init.changed | default(false)
+
+# ── 7. verify — by asking the running service, not by trusting the tasks above ──────────────
+- name: What is actually running
+  ansible.builtin.command:
+    cmd: "curl -sk --max-time 10 https://127.0.0.1:{{ bao_port }}/v1/sys/seal-status"
+  register: bao_final_raw
+  changed_when: false
+  check_mode: false
+
+- name: Read it
+  ansible.builtin.set_fact:
+    bao_final: { json: "{{ bao_final_raw.stdout | from_json }}" }
+
+- name: The service must be initialised, unsealed, and the version we pinned
+  ansible.builtin.assert:
+    that:
+      - bao_final.json.initialized | bool
+      - not (bao_final.json.sealed | bool)
+      - bao_version in bao_final.json.version
+    fail_msg: >-
+      initialized={{ bao_final.json.initialized }} sealed={{ bao_final.json.sealed }}
+      version={{ bao_final.json.version }} (wanted {{ bao_version }}).
+      ⚠️ A SEALED vault answers this port and serves nothing — green ports are not a health check.
+    quiet: true
+
+# 🔵 Asserted, not merely reported: the health check measures the same thing, but a check that
+# only reports a mismatch leaves the service broken until somebody reads it.
+- name: The certificate must name the address this guest answers on
+  ansible.builtin.command:
+    cmd: "openssl x509 -in {{ bao_tls_dir }}/bao.crt -noout -ext subjectAltName"
+  register: bao_cert_final
+  changed_when: false
+  check_mode: false
+
+- name: It must, or TLS breaks for every client while the port stays open
+  ansible.builtin.assert:
+    that:
+      - bao_advertise_addr in bao_cert_final.stdout
+    fail_msg: >-
+      The certificate does not name {{ bao_advertise_addr }}. Its SANs are
+      {{ bao_cert_final.stdout | trim }}. ⚠️ The listener still accepts connections, so this reads
+      as a client-side certificate error rather than as an address that moved.
+    quiet: true
+
+- name: The seal key must not be on the data mount
+  ansible.builtin.assert:
+    that:
+      - not (bao_seal_key_path | regex_search('^/var/lib/openbao'))
+    fail_msg: >-
+      {{ bao_seal_key_path }} is on the data mount. The key and the ciphertext would then share one
+      volume and one backup, so a leak of either yields both. Keep the key on the rootfs.
+    quiet: true
+  when: bao_seal == 'static'
+
+- name: Result
+  ansible.builtin.debug:
+    msg: >-
+      bao {{ bao_final.json.version }} · cluster '{{ bao_final.json.cluster_name }}' ·
+      seal={{ bao_seal }} · storage={{ bao_final.json.storage_type }} ·
+      listening on {{ bao_advertise_addr }}:{{ bao_port }} ·
+      audit rotated at {{ bao_audit_rotate_size }} ({{ bao_audit_rotate_keep }} kept)
+      ⚠️ NOT PROVEN HERE: that a secret written now can be read after a reboot. That is the only
+      test of what a vault is for, and it needs a restart — see vars/guests/bao.yml maintenance.

@@ -159,11 +159,27 @@
     # to the raw file on the joining node — /root/.ssh/authorized_keys on a cluster member is
     # pmxcfs-managed (/etc/pve/priv/authorized_keys), and whatever synced from the other side's
     # copy doesn't always carry the new key forward. Re-apply unconditionally rather than assume.
+    - name: Root's .ssh directory
+      tags: [verify]
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        mode: "0700"
+        owner: root
+        group: root
+
+    # 🔵 PLAIN ansible.builtin.lineinfile, NOT ansible.posix.authorized_key — same portability
+    # fix as storage-ensure.yml: the real uis-provision-host image doesn't ship ansible.posix
+    # (found running this for real inside that container on 2026-10-05).
     - name: Re-apply this platform's key — the join may have dropped it
       tags: [verify]
-      ansible.posix.authorized_key:
-        user: root
-        key: "{{ lookup('file', control_pubkey_file) }}"
+      ansible.builtin.lineinfile:
+        path: /root/.ssh/authorized_keys
+        line: "{{ lookup('file', control_pubkey_file) }}"
+        create: true
+        mode: "0600"
+        owner: root
+        group: root
         state: present
 
     - name: Confirm the control key can still reach this host
