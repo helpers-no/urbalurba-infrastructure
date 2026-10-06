@@ -59,10 +59,15 @@ cat > "$TMP/healthy.log" <<'EOF'
 EOF
 
 # Run the real function from status.sh with _kubectl stubbed to serve a fixture.
+# CF_POD_LABEL is set exactly as status.sh itself sets it before ever calling
+# this helper (computed from an empty/bare --env) — the function runs under
+# status.sh's own `set -u`, so an unset CF_POD_LABEL fails the lift itself,
+# not the thing under test.
 _run_origin_failure() {
     local fixture="$1"
     bash -c '
         set -euo pipefail
+        CF_POD_LABEL="cloudflared"
         _kubectl() { cat "'"$fixture"'"; }
         '"$(sed -n '/^_origin_failure() {/,/^}/p' "$STATUS_SH")"'
         _origin_failure
@@ -190,5 +195,45 @@ if grep -q "cf_tunnel_token\[:8\]" "$VERIFY_PB"; then
 else
     pass_test
 fi
+
+# ---------------------------------------------------------------------------
+# Backward-compat pin: status.sh with no --env must still query the exact
+# literal names ('uis network list' and every existing installation depend
+# on this not changing). A fake kubectl on PATH records what it was called
+# with; the real status.sh runs for real, nothing about it is stubbed.
+# ---------------------------------------------------------------------------
+# Deliberately its OWN fresh temp dir, not the file's shared $TMP (by this
+# point several other tests have written fixtures into $TMP; isolating this
+# one avoids any chance of cross-test interference).
+CF_TEST_DIR="$(mktemp -d)"
+
+cat > "$CF_TEST_DIR/kubectl" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >> "$KUBECTL_CALLS"
+exit 1
+EOF
+chmod +x "$CF_TEST_DIR/kubectl"
+
+# A fake repo root with just enough on disk for status.sh to get past its
+# "is this initialized" check and reach the kubectl lookup under test.
+# provision-host is symlinked to the real one so status.sh can still source
+# the real cloudflare-envs.sh; only .uis.secrets is faked, in isolation.
+REAL_REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+FAKE_REPO="$CF_TEST_DIR/fake-repo"
+mkdir -p "$FAKE_REPO/.uis.secrets/service-keys"
+ln -s "$REAL_REPO_ROOT/provision-host" "$FAKE_REPO/provision-host"
+echo 'CLOUDFLARE_TUNNEL_TOKEN=test-token-value' > "$FAKE_REPO/.uis.secrets/service-keys/cloudflare.env"
+
+start_test "status.sh with no --env queries the literal cloudflare-tunnel/cloudflared names"
+KUBECTL_CALLS="$CF_TEST_DIR/kubectl_calls.log"
+: > "$KUBECTL_CALLS"
+KUBECTL_CALLS="$KUBECTL_CALLS" UIS_REPO_ROOT="$FAKE_REPO" PATH="$CF_TEST_DIR:$PATH" bash "$STATUS_SH" >/dev/null 2>&1
+cf_calls="$(cat "$KUBECTL_CALLS")"
+if grep -qx -- '-n default get deployment cloudflare-tunnel' "$KUBECTL_CALLS"; then
+    pass_test
+else
+    fail_test "expected a lookup for the literal 'cloudflare-tunnel' deployment, got: [$cf_calls]"
+fi
+rm -rf "$CF_TEST_DIR"
 
 print_summary

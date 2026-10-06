@@ -6,9 +6,9 @@ sidebar_position: 2
 
 # Cloudflare tunnel
 
-Expose services on a domain you own through Cloudflare's edge network. The cluster runs a `cloudflared` Deployment that holds an outbound-only connection to Cloudflare — no inbound ports, no public IP, no manual TLS certificates.
+Expose services on a domain you own through Cloudflare's edge network. The cluster runs a `cloudflared` Deployment that holds an outbound-only connection to Cloudflare — no inbound ports, no public IP, no TLS certificate to create or renew.
 
-The novice path — from a fresh provision-host container to a service reachable on the public internet — is **three commands** plus a one-time dashboard click.
+Setup is **three commands** plus a one-time step in the Cloudflare dashboard.
 
 ## Prerequisites
 
@@ -17,26 +17,41 @@ The novice path — from a fresh provision-host container to a service reachable
 | The UIS provision-host container running (`./uis start`) | An account with a domain you own (DNS managed by Cloudflare) |
 | A cluster active (`uis platform list` shows one as `✓ running (active)`) — rancher-desktop works | A tunnel **created** in the Zero Trust dashboard (you need its token) |
 
-This guide assumes rancher-desktop as the target cluster — that's what was verified for this round. The pipeline is cluster-agnostic, so the same commands work against AKS once the platform is up.
+The pipeline is cluster-agnostic — the same commands work against any UIS platform (rancher-desktop, AKS, a Proxmox lab cluster, …) once it's up.
 
-### There is no key or certificate to create
+The only credential UIS needs is the tunnel's own token, copied from the dashboard — it's a self-contained string that embeds the tunnel's id and secret, so there's nothing to generate locally. Cloudflare terminates TLS at its edge, so the cluster serves plain HTTP to the connector and no certificate is ever created or copied.
 
-The tunnel token is the only credential. It's a self-contained string that embeds the tunnel id and its secret, so you copy it from the dashboard rather than generating anything:
+## How many tunnels do you need?
 
-| Not needed | Why |
-|---|---|
-| `cloudflared tunnel login`, `cert.pem`, a per-tunnel credentials file | That's the older certificate-based model. UIS deploys the token-based connector; the old path survives only under `networking/cloudflare/legacy/` |
-| A TLS certificate | Cloudflare terminates TLS at its edge — the cluster serves plain HTTP to the connector |
-| A Cloudflare API token | UIS never calls the Cloudflare API. The DNS record is created by the Public Hostname rule you add in the dashboard |
-| An SSH key | The connector dials out to Cloudflare over HTTPS/QUIC |
+**One cluster, one tunnel: just follow the Quick start below as written.** This is the common case.
 
-`CLOUDFLARE_DNS_TOKEN` in `00-common-values.env.template` is the one thing that looks like a counter-example. It's optional and unrelated to the tunnel: only `ansible/playbooks/utility/u01-add-domains-to-tunnel.yml` reads it, for bulk DNS automation. `uis network verify cloudflare` prints whether it's set and never requires it, so leave the placeholder alone unless you run that playbook.
+**More than one cluster from the same provision-host container** — for example a `test` and a `prod` k3s cluster, switching `CLUSTER_TYPE` between them — needs a separate tunnel (with its own token and its own hostname) per cluster. Routing is configured server-side at Cloudflare, keyed by token: pointing a second cluster at the same token just adds it as another connector on the *same* tunnel, and Cloudflare load-balances across both rather than keeping them separate.
 
-:::caution One tunnel per cluster
-Routing is configured server-side at Cloudflare, so the token decides which hostnames a cluster answers for. Give a second cluster the same token and it becomes another connector on the same tunnel — Cloudflare will then load-balance those hostnames across both clusters. Create a separate tunnel, with its own hostname, for each cluster you deploy to.
-:::
+Add `--env <name>` to every command to keep each cluster's token, Deployment and pods in their own slot instead of overwriting each other:
 
-## Quick start — three commands
+```bash
+./uis network init cloudflare --env test     # paste the test cluster's own tunnel token
+./uis network up cloudflare --env test
+./uis network verify cloudflare --env test
+
+./uis network init cloudflare --env prod     # a separate token for the prod tunnel
+./uis network up cloudflare --env prod
+./uis network verify cloudflare --env prod
+```
+
+Supported names: `dev`, `test`, `prod` (case-insensitive on the command line). Omitting `--env` is the same as always — the two forms don't interfere with each other, so you can run a bare tunnel and one or more named ones side by side if you ever need to.
+
+| | Bare (no `--env`) | `--env test` |
+|---|---|---|
+| Secret key | `CLOUDFLARE_TUNNEL_TOKEN` | `CLOUDFLARE_TUNNEL_TOKEN_TEST` |
+| Local file | `.uis.secrets/service-keys/cloudflare.env` | `.uis.secrets/service-keys/cloudflare-test.env` |
+| Deployment / pods | `cloudflare-tunnel` / `app=cloudflared` | `cloudflare-tunnel-test` / `app=cloudflared-test` |
+
+`uis secrets status` reports every named environment's token state alongside the bare one, so you can check all of them at a glance.
+
+Tunnel **creation** is still a manual, one-time step per environment in the Cloudflare dashboard (see Step 1 below) — `--env` only decides which slot UIS stores and deploys each token from.
+
+## Quick start
 
 ```bash
 ./uis network init cloudflare     # 1. interactive wizard, paste the tunnel token
@@ -44,15 +59,15 @@ Routing is configured server-side at Cloudflare, so the token decides which host
 ./uis network verify cloudflare   # 3. confirm DNS + port 7844 + e2e probe
 ```
 
-The sections below walk through what each command does and what output to expect.
+Add `--env <name>` to all three if you're setting up more than one tunnel (see above). The sections below walk through what each command does and what output to expect.
 
 ### 1. Create the tunnel in the Cloudflare dashboard
 
-Before running any UIS command, create the tunnel in Cloudflare. UIS doesn't talk to the Cloudflare API — it deploys the in-cluster connector that points at a tunnel you created in the dashboard.
+Before running any UIS command, create the tunnel in Cloudflare. UIS doesn't call the Cloudflare API for this step — it deploys the in-cluster connector that points at a tunnel you create by hand.
 
 1. Go to the [Zero Trust dashboard](https://one.dash.cloudflare.com) → **Networks** → **Tunnels**. The page is titled **"Tunnels & Mesh"** in the current console.
 2. **Create a tunnel** → tunnel type **`cloudflared`** → pick a name.
-   - ⚠️ **Not Mesh.** The console now offers `cloudflared` and **Mesh** side by side. Mesh is for bidirectional connectivity and is a different product; UIS deploys the `cloudflared` connector.
+   - ⚠️ **Not Mesh.** The console offers `cloudflared` and **Mesh** side by side. Mesh is a different product for bidirectional connectivity; you want `cloudflared`.
 3. Skip the install instructions for Linux/macOS/Windows — UIS deploys the connector for you. **Copy the tunnel token** (the long string starting with `ey...`) from the install command shown on the page.
    - The wizard's **Continue** button stays disabled with *"No connection detected yet"*. That's expected: the connector is the pod you haven't deployed yet. The tunnel is already saved, so you can leave the install screen and configure routing from the tunnel's own page.
 4. Add a **Public Hostname** routing rule. The field is labelled **Hostname** (hint: `e.g., www, blog, api`) and the page shows you the **Full hostname** it will create — check that line reads what you expect before saving:
@@ -72,7 +87,7 @@ This applies to **editing an existing route**, not just creating one, and it is 
 ### 2. Run the init wizard
 
 ```bash
-./uis network init cloudflare
+./uis network init cloudflare              # or: --env <name>
 ```
 
 The wizard prompts for the **tunnel token** (required) and the **base domain** (optional — needed only for the end-to-end probe in `verify`). It writes two files:
@@ -89,31 +104,31 @@ If the file already exists, the wizard offers three options: skip (keep existing
 ### 3. Deploy the cloudflared pods
 
 ```bash
-./uis network up cloudflare
+./uis network up cloudflare                # or: --env <name>
 ```
 
 Two stages:
 
 1. **`uis secrets generate` + `uis secrets apply`** — pushes the token from the local env file into the `urbalurba-secrets` Secret in the cluster. This is the same pipeline every other UIS secret uses.
-2. **`ansible-playbook 820-deploy-network-cloudflare-tunnel.yml`** — applies the static `820-cloudflare-tunnel-base.yaml` manifest (a Deployment with one `cloudflared` replica) and waits for the pod to reach `Running`. The playbook also runs a final HTTPS probe through your domain if `BASE_DOMAIN_CLOUDFLARE` is set.
+2. **`ansible-playbook 820-deploy-network-cloudflare-tunnel.yml`** — renders the `820-cloudflare-tunnel-base.yaml.j2` manifest (a Deployment with one `cloudflared` replica) and waits for the pod to reach `Running`. The playbook also runs a final HTTPS probe through your domain if `BASE_DOMAIN_CLOUDFLARE` is set.
 
 The pod registers with Cloudflare's edge within ~15 seconds. After that, any service with a Traefik IngressRoute matching `*.your-domain.com` is reachable on the public internet.
 
 ### 4. Verify
 
 ```bash
-./uis network verify cloudflare
+./uis network verify cloudflare            # or: --env <name>
 ```
 
 Runs five checks:
 
 | # | Check | What it confirms |
 |---|---|---|
-| 1 | Secrets | `CLOUDFLARE_TUNNEL_TOKEN` is set in the cluster Secret and not a placeholder |
+| 1 | Secrets | The tunnel token is set in the cluster Secret and not a placeholder |
 | 2 | Network | DNS resolves `region1.v2.argotunnel.com` and TCP/7844 is reachable (corporate firewalls sometimes block it) |
 | 3 | Pods | All `cloudflared` pods are in `Running` phase |
 | 4 | Logs | Recent pod logs contain `Registered tunnel connection` |
-| 5 | End-to-end | HTTPS probe to `https://<BASE_DOMAIN_CLOUDFLARE>` returns 200/301/302/404 (skipped if the domain wasn't set in init) |
+| 5 | End-to-end | HTTPS probe to `https://<your-domain>` returns 200/301/302/404 (skipped if the domain wasn't set in init) |
 
 A `PASS` on every line means traffic is flowing through the tunnel.
 
@@ -146,9 +161,9 @@ To get a real page rather than a 404, deploy a service and use its hostname. Che
 ./uis network down cloudflare     # remove the in-cluster Deployment
 ```
 
-`uis network down cloudflare` only deletes the in-cluster `cloudflared` Deployment. The tunnel itself in the Cloudflare dashboard is preserved, so re-running `uis network up cloudflare` reconnects the same tunnel. To retire the tunnel completely, delete it from Zero Trust → Networks → Tunnels.
+All three take `--env <name>` too. `down` only deletes the in-cluster `cloudflared` Deployment — the tunnel itself in the Cloudflare dashboard is preserved, so re-running `up` reconnects the same tunnel. To retire a tunnel completely, delete it from Zero Trust → Networks → Tunnels.
 
-The `.uis.secrets/service-keys/cloudflare.env` file is preserved across `down` / `up` cycles so you don't have to re-paste the token. Delete it manually if you want a full reset.
+The local `cloudflare.env` file is preserved across `down` / `up` cycles so you don't have to re-paste the token. Delete it manually if you want a full reset.
 
 ## How traffic flows
 
@@ -172,7 +187,7 @@ The IngressRoutes don't need to know they're being reached through Cloudflare �
 
 **`uis network up cloudflare` fails at the playbook step with "placeholder value"**
 
-The token from the dashboard wasn't picked up by the secrets pipeline. Verify both files have the real token (not `your-cloudflare-tunnel-token-here`):
+The token from the dashboard wasn't picked up by the secrets pipeline. Verify both files have the real token:
 
 ```
 ./uis network status cloudflare     # confirms the local env file
@@ -188,6 +203,8 @@ The connector is registered with Cloudflare and receiving traffic, and cannot re
 ```
 kubectl -n default logs -l app=cloudflared --tail=50
 ```
+
+(use `app=cloudflared-test` etc. if you're running a named environment)
 
 Look for `originService=`. That is the URL Cloudflare is sending it to, verbatim:
 
@@ -218,5 +235,5 @@ The cloudflared connector is free. Cloudflare's free plan covers tunnels, WAF ba
 ## Learn more
 
 - [Cloudflare tunnel official docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) — concepts, dashboard reference, advanced routing
-- [Cloudflare setup (deep dive)](./cloudflare-setup.md) — historical UIS-specific setup notes covering DNS automation and multi-environment patterns
+- [Cloudflare advanced topics](./cloudflare-setup.md) — CORS for browser-based API access, reserved hostname prefixes, and reading Cloudflare's 403 challenge pages
 - [Traefik ingress rules](../contributors/rules/ingress-traefik.md) — how `HostRegexp` routes traffic across localhost, Tailscale, and Cloudflare

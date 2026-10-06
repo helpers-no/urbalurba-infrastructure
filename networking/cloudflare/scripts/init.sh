@@ -1,12 +1,19 @@
 #!/bin/bash
 # init.sh — Interactive wizard for Cloudflare tunnel onboarding.
 #
-# Entry point: ./uis network init cloudflare
+# Entry point: ./uis network init cloudflare [--env <name>]
 #
 # Writes .uis.secrets/service-keys/cloudflare.env with the tunnel token the
 # user copies from the Cloudflare Zero Trust dashboard. The token is the ONLY
 # required field — checked against ansible/playbooks/820-deploy + 822-verify;
 # they don't consume any other Cloudflare credential.
+#
+# --env <name> is for an installation that manages more than one Cloudflare
+# Tunnel (e.g. a test and a prod cluster from the same container). It writes
+# a SEPARATE file (cloudflare-<name>.env) and patches CLOUDFLARE_TUNNEL_TOKEN_<NAME>
+# instead of the bare key — see provision-host/uis/lib/cloudflare-envs.sh for
+# the supported names. Omitting --env is byte-identical to this script's
+# original single-tunnel behavior.
 
 set -euo pipefail
 
@@ -14,8 +21,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # networking/cloudflare/scripts/init.sh → repo root is three levels up.
 REPO_ROOT="${UIS_REPO_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
-ENV_FILE="$REPO_ROOT/.uis.secrets/service-keys/cloudflare.env"
-ENV_FILE_REL=".uis.secrets/service-keys/cloudflare.env"
+
+# ----- Parse --env (optional; empty means today's bare/single-tunnel path) -----
+source "$REPO_ROOT/provision-host/uis/lib/cloudflare-envs.sh"
+CF_ENV=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --env)
+            CF_ENV="${2:-}"
+            shift 2 || { echo "✗ --env requires a value" >&2; exit 1; }
+            ;;
+        --env=*)
+            CF_ENV="${1#--env=}"
+            shift
+            ;;
+        *)
+            echo "✗ Unknown argument: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+if [[ -n "$CF_ENV" ]]; then
+    CF_ENV="${CF_ENV^^}"
+    if ! _cf_env_is_valid "$CF_ENV"; then
+        echo "✗ Unknown --env '$CF_ENV'. Supported: ${UIS_CLOUDFLARE_ENVS[*]}" >&2
+        exit 1
+    fi
+fi
+CF_SUFFIX="$(_cf_name_suffix "$CF_ENV")"                       # "" or "-test"
+TOKEN_VAR="$(_cf_var_name CLOUDFLARE_TUNNEL_TOKEN "$CF_ENV")"  # CLOUDFLARE_TUNNEL_TOKEN or _TEST
+DOMAIN_VAR="$(_cf_var_name BASE_DOMAIN_CLOUDFLARE "$CF_ENV")"
+
+ENV_FILE="$REPO_ROOT/.uis.secrets/service-keys/cloudflare${CF_SUFFIX}.env"
+ENV_FILE_REL=".uis.secrets/service-keys/cloudflare${CF_SUFFIX}.env"
 # The master config that envsubst reads when 'uis secrets generate' runs.
 # We patch the CLOUDFLARE_* lines in this file so the token actually lands in
 # the urbalurba-secrets k8s Secret that 820-deploy + 822-verify consume.
@@ -35,8 +73,13 @@ print_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # ----- Banner -----
 echo "═══════════════════════════════════════════════════════════"
-echo " Cloudflare tunnel setup wizard"
-echo " (uis network init cloudflare)"
+if [[ -n "$CF_ENV" ]]; then
+    echo " Cloudflare tunnel setup wizard — environment: $CF_ENV"
+    echo " (uis network init cloudflare --env ${CF_ENV,,})"
+else
+    echo " Cloudflare tunnel setup wizard"
+    echo " (uis network init cloudflare)"
+fi
 echo " Writes the tunnel token. No tunnel is deployed yet."
 echo "═══════════════════════════════════════════════════════════"
 echo
@@ -68,7 +111,7 @@ if [[ -f "$ENV_FILE" ]]; then
     read -rp "Choice [1-3]: " choice
     case "$choice" in
         1|"")
-            print_status "Keeping existing config. To deploy: ./uis network up cloudflare"
+            print_status "Keeping existing config. To deploy: ./uis network up cloudflare${CF_ENV:+ --env ${CF_ENV,,}}"
             exit 0
             ;;
         2)
@@ -91,7 +134,7 @@ fi
 # ----- Prompt for tunnel token -----
 echo
 echo "Paste the Cloudflare tunnel token (long string from the dashboard):"
-read -rsp "  CLOUDFLARE_TUNNEL_TOKEN: " token
+read -rsp "  $TOKEN_VAR: " token
 echo
 echo
 
@@ -114,27 +157,27 @@ fi
 # ----- Optional: base domain (used by verify's e2e HTTP probe) -----
 echo "Base domain (optional — enables 'uis network verify cloudflare' end-to-end check)."
 echo "  Example: skryter.no (the apex you've routed through the tunnel)"
-read -rp "  BASE_DOMAIN_CLOUDFLARE [skip]: " domain
+read -rp "  $DOMAIN_VAR [skip]: " domain
 echo
 
 # ----- Persist (file 1/2): per-provider record under service-keys/ -----
 mkdir -p "$(dirname "$ENV_FILE")"
-tmp_file="$(dirname "$ENV_FILE")/.cloudflare.env.tmp.$$"
+tmp_file="$(dirname "$ENV_FILE")/.cloudflare${CF_SUFFIX}.env.tmp.$$"
 trap 'rm -f "$tmp_file"' EXIT
 
 cat > "$tmp_file" <<EOF
-# Cloudflare tunnel configuration
-# Written by 'uis network init cloudflare' on $(date -u +%Y-%m-%dT%H:%M:%SZ).
+# Cloudflare tunnel configuration${CF_ENV:+ — environment: $CF_ENV}
+# Written by 'uis network init cloudflare${CF_ENV:+ --env ${CF_ENV,,}}' on $(date -u +%Y-%m-%dT%H:%M:%SZ).
 # Used by: networking/cloudflare/scripts/status.sh (configured/running detection).
 #
 # The real load-bearing copy lives in:
 #   $COMMON_VALUES_REL
 # Both files are updated together; 'uis secrets generate' reads the latter.
 #
-# Update / regenerate with: ./uis network init cloudflare
+# Update / regenerate with: ./uis network init cloudflare${CF_ENV:+ --env ${CF_ENV,,}}
 
-CLOUDFLARE_TUNNEL_TOKEN="$token"
-BASE_DOMAIN_CLOUDFLARE="$domain"
+$TOKEN_VAR="$token"
+$DOMAIN_VAR="$domain"
 EOF
 
 chmod 600 "$tmp_file"
@@ -199,20 +242,20 @@ _set_kv() {
 
 trap 'rm -f "$tmp_file" "$COMMON_VALUES".kv.$$' EXIT
 
-_set_kv "$COMMON_VALUES" CLOUDFLARE_TUNNEL_TOKEN "$token"
+_set_kv "$COMMON_VALUES" "$TOKEN_VAR" "$token"
 if [[ -n "$domain" ]]; then
-    _set_kv "$COMMON_VALUES" BASE_DOMAIN_CLOUDFLARE "$domain"
+    _set_kv "$COMMON_VALUES" "$DOMAIN_VAR" "$domain"
 fi
 
 # ----- Summary -----
 echo
 echo "═══════════════════════════════════════════════════════════"
-echo " ✓ Cloudflare config ready"
+echo " ✓ Cloudflare config ready${CF_ENV:+ — environment: $CF_ENV}"
 echo "═══════════════════════════════════════════════════════════"
 echo "  Token:   set (${#token} chars)"
 echo "  Domain:  ${domain:-not set (verify e2e probe will be skipped)}"
 echo "  Files:"
 echo "    $ENV_FILE_REL"
-echo "    $COMMON_VALUES_REL  (CLOUDFLARE_* patched)"
+echo "    $COMMON_VALUES_REL  ($TOKEN_VAR patched)"
 echo
-echo "Next: ./uis network up cloudflare"
+echo "Next: ./uis network up cloudflare${CF_ENV:+ --env ${CF_ENV,,}}"

@@ -124,4 +124,52 @@ else
     fail_test "mode is now $(stat -c '%a' "$TMP/perm.env" 2>/dev/null || stat -f '%Lp' "$TMP/perm.env") — this file holds a tunnel token"
 fi
 
+# --- --env: multiple named tunnels on one installation ---
+# Omitting --env must stay byte-identical to the original single-tunnel
+# behavior (the backward-compatibility hinge of the whole multi-env design);
+# a given --env must validate against the canonical list in cloudflare-envs.sh
+# and ride the SAME _set_kv append mechanism already proven above, not a new
+# ad-hoc writer.
+
+start_test "_set_kv appends a new env-suffixed key exactly like BASE_DOMAIN_CLOUDFLARE"
+printf 'A=1\n' > "$TMP/envsuffix.env"
+_run_set_kv "$TMP/envsuffix.env" CLOUDFLARE_TUNNEL_TOKEN_TEST "abc123"
+if grep -q '^CLOUDFLARE_TUNNEL_TOKEN_TEST=abc123$' "$TMP/envsuffix.env"; then
+    pass_test
+else
+    fail_test "env-suffixed key was not appended: $(cat "$TMP/envsuffix.env" | tr '\n' ' ')"
+fi
+
+start_test "init.sh sources cloudflare-envs.sh"
+if grep -q 'cloudflare-envs.sh' "$INIT_SH"; then
+    pass_test
+else
+    fail_test "init.sh does not source the canonical env list"
+fi
+
+start_test "init.sh rejects an unknown --env before any TTY interaction"
+out="$(bash "$INIT_SH" --env bogus < /dev/null 2>&1)"; rc=$?
+if [[ $rc -ne 0 ]] && grep -q "Unknown --env" <<<"$out"; then
+    pass_test
+else
+    fail_test "expected a clean rejection, got (rc=$rc): $out"
+fi
+
+start_test "init.sh omitting --env writes the bare cloudflare.env path"
+out="$(bash "$INIT_SH" < /dev/null 2>&1)"; rc=$?
+if [[ $rc -ne 0 ]] && grep -q "requires an interactive terminal" <<<"$out" \
+   && ! grep -q "environment:" <<<"$out"; then
+    pass_test
+else
+    fail_test "bare invocation printed an environment banner — --env default changed behavior: $out"
+fi
+
+start_test "init.sh --env test selects the suffixed path before the TTY guard"
+out="$(bash "$INIT_SH" --env test < /dev/null 2>&1)"; rc=$?
+if [[ $rc -ne 0 ]] && grep -q "environment: TEST" <<<"$out"; then
+    pass_test
+else
+    fail_test "expected the TEST environment banner, got (rc=$rc): $out"
+fi
+
 print_summary

@@ -84,7 +84,7 @@ You don't change the ingress to switch providers — you add or remove the netwo
 ## Pages in this section
 
 - **[Cloudflare tunnel](./cloudflare.md)** — three-command novice path for `cloudflared` in-cluster, token-based.
-- **[Cloudflare setup (deep dive)](./cloudflare-setup.md)** — dashboard walk-through, DNS, multi-environment.
+- **[Cloudflare advanced topics](./cloudflare-setup.md)** — CORS at the edge, reserved hostname prefixes, 403/bot diagnosis, caching, availability, DNS edge cases.
 - **[Tailscale Funnel](./tailscale.md)** — three-command novice path for the Tailscale operator + per-service Funnel exposure.
 - **[Tailscale setup (deep dive)](./tailscale-setup.md)** — dashboard walk-through, ACL JSON, OAuth scopes, MagicDNS.
 - **[Tailscale network isolation](./tailscale-network-isolation.md)** — design proposal for host-network-isolation hardening (not implemented; design reference only).

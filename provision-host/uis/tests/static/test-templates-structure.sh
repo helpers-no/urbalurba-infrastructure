@@ -92,6 +92,35 @@ else
     pass_test
 fi
 
+start_test "cloudflare.env.template documents --env for multiple tunnels"
+if grep -q -- "--env" "$TEMPLATES_DIR/uis.secrets/service-keys/cloudflare.env.template"; then
+    pass_test
+else
+    fail_test "Missing --env documentation — see cloudflare-envs.sh"
+fi
+
+# Named-environment Cloudflare tunnels (opt-in; see
+# provision-host/uis/lib/cloudflare-envs.sh and 'uis network init cloudflare
+# --env <name>'). These keys must pass through the master Secret template so
+# 'uis secrets generate' actually lands them in the urbalurba-secrets k8s
+# Secret that 820-deploy/822-verify read — a template that documents --env
+# but never wires the resulting keys into the Secret would silently drop them.
+start_test "00-master-secrets.yml.template passes through CLOUDFLARE_TUNNEL_TOKEN_TEST"
+if grep -q '"\${CLOUDFLARE_TUNNEL_TOKEN_TEST}"' \
+        "$TEMPLATES_DIR/secrets-templates/00-master-secrets.yml.template"; then
+    pass_test
+else
+    fail_test "Missing CLOUDFLARE_TUNNEL_TOKEN_TEST passthrough in the master Secret template"
+fi
+
+start_test "00-master-secrets.yml.template passes through CLOUDFLARE_TUNNEL_TOKEN_PROD"
+if grep -q '"\${CLOUDFLARE_TUNNEL_TOKEN_PROD}"' \
+        "$TEMPLATES_DIR/secrets-templates/00-master-secrets.yml.template"; then
+    pass_test
+else
+    fail_test "Missing CLOUDFLARE_TUNNEL_TOKEN_PROD passthrough in the master Secret template"
+fi
+
 # Note: Cloud-init template selection is handled by CLI code (PLAN-002),
 # not by config files. The mapping is: host-type -> cloud-init-template
 

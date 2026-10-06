@@ -1,6 +1,13 @@
-# 820-cloudflare-tunnel-base.yaml
+# 820-cloudflare-tunnel-base.yaml.j2
 #
-# Token-based Cloudflare tunnel deployment.
+# Token-based Cloudflare tunnel deployment. Templated so one installation can
+# run more than one named tunnel (test/prod/...) without their Deployments,
+# pod labels or Secret keys colliding — see
+# ansible/playbooks/820-deploy-network-cloudflare-tunnel.yml, which renders
+# this with cf_deployment_name/cf_pod_label/cf_token_key computed from an
+# optional cf_env (empty cf_env renders byte-identical to the original static
+# manifest: cloudflare-tunnel / cloudflared / CLOUDFLARE_TUNNEL_TOKEN).
+#
 # SECRET-VERSION: pending — reads urbalurba-secrets, which `uis secrets apply`
 # re-syncs, so the value CAN change without this manifest changing. Needs the
 # pod-template annotation before a re-applied secret reaches a running pod.
@@ -8,27 +15,27 @@
 # The tunnel token is read from urbalurba-secrets via secretKeyRef.
 # All routing is configured in the Cloudflare dashboard, not here.
 #
-# Usage:
-#   kubectl apply -f manifests/820-cloudflare-tunnel-base.yaml
-#   kubectl delete -f manifests/820-cloudflare-tunnel-base.yaml
+# Rendered and applied by: ansible/playbooks/820-deploy-network-cloudflare-tunnel.yml
+# (never `kubectl apply -f` this file directly — {{ cf_deployment_name }} etc.
+# are Jinja placeholders, not valid YAML on their own).
 
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: cloudflare-tunnel
+  name: {{ cf_deployment_name }}
   namespace: default
   labels:
-    app: cloudflared
+    app: {{ cf_pod_label }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: cloudflared
+      app: {{ cf_pod_label }}
   template:
     metadata:
       labels:
-        app: cloudflared
+        app: {{ cf_pod_label }}
     spec:
       containers:
       - name: cloudflared
@@ -44,7 +51,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: urbalurba-secrets
-              key: CLOUDFLARE_TUNNEL_TOKEN
+              key: {{ cf_token_key }}
         ports:
         - containerPort: 2000
           name: metrics
