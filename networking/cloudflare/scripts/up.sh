@@ -1,26 +1,53 @@
 #!/bin/bash
 # up.sh — Deploy the Cloudflare tunnel into the active Kubernetes cluster.
 #
-# Entry point: uis network up cloudflare
+# Entry point: uis network up cloudflare [--env <name>]
 #
 # Pipeline:
-#   1. Refuse if .uis.secrets/service-keys/cloudflare.env is missing (run init).
+#   1. Refuse if .uis.secrets/service-keys/cloudflare<-env>.env is missing (run init).
 #   2. 'uis secrets generate' + 'uis secrets apply' — pushes the token into the
 #      urbalurba-secrets k8s Secret that 820-deploy reads.
-#   3. ansible-playbook 820-deploy-network-cloudflare-tunnel.yml — applies the
-#      static manifest and waits for cloudflared pods to register.
+#   3. ansible-playbook 820-deploy-network-cloudflare-tunnel.yml — renders the
+#      tunnel manifest for this environment and waits for cloudflared pods to
+#      register.
 #
 # Targets whichever cluster the kubeconf-all current-context points at. This
 # round is rancher-desktop-focused (see PLAN-network-cloudflare-port-and-docs-lift-up.md).
-# The playbooks themselves are cluster-agnostic.
+# The playbooks themselves are cluster-agnostic. --env lets one installation
+# manage more than one tunnel (e.g. a test and a prod cluster) — see
+# provision-host/uis/lib/cloudflare-envs.sh. Omitting it is byte-identical to
+# this script's original single-tunnel behavior.
 
 set -euo pipefail
 
 # ----- Resolve paths -----
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${UIS_REPO_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
-ENV_FILE="$REPO_ROOT/.uis.secrets/service-keys/cloudflare.env"
-ENV_FILE_REL=".uis.secrets/service-keys/cloudflare.env"
+
+# ----- Parse --env (optional) -----
+source "$REPO_ROOT/provision-host/uis/lib/cloudflare-envs.sh"
+CF_ENV=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --env) CF_ENV="${2:-}"; shift 2 || { echo "✗ --env requires a value" >&2; exit 1; } ;;
+        --env=*) CF_ENV="${1#--env=}"; shift ;;
+        *) echo "✗ Unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
+if [[ -n "$CF_ENV" ]]; then
+    CF_ENV="${CF_ENV^^}"
+    if ! _cf_env_is_valid "$CF_ENV"; then
+        echo "✗ Unknown --env '$CF_ENV'. Supported: ${UIS_CLOUDFLARE_ENVS[*]}" >&2
+        exit 1
+    fi
+fi
+CF_SUFFIX="$(_cf_name_suffix "$CF_ENV")"
+TOKEN_VAR="$(_cf_var_name CLOUDFLARE_TUNNEL_TOKEN "$CF_ENV")"
+DOMAIN_VAR="$(_cf_var_name BASE_DOMAIN_CLOUDFLARE "$CF_ENV")"
+CF_POD_LABEL="cloudflared${CF_SUFFIX}"
+
+ENV_FILE="$REPO_ROOT/.uis.secrets/service-keys/cloudflare${CF_SUFFIX}.env"
+ENV_FILE_REL=".uis.secrets/service-keys/cloudflare${CF_SUFFIX}.env"
 # Resolve the uis CLI: inside the container the binary lives at /usr/local/bin/uis
 # (on PATH); on a developer host the repo-root './uis' is what works. Try the
 # repo-relative path first to keep developer-host workflows honest, then fall
@@ -35,7 +62,7 @@ PLAYBOOK="$REPO_ROOT/ansible/playbooks/820-deploy-network-cloudflare-tunnel.yml"
 # ----- Refuse with pointer if init has not been run -----
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "✗ No Cloudflare config found at $ENV_FILE_REL" >&2
-    echo "  Run './uis network init cloudflare' first to set the tunnel token." >&2
+    echo "  Run './uis network init cloudflare${CF_ENV:+ --env ${CF_ENV,,}}' first to set the tunnel token." >&2
     exit 1
 fi
 
@@ -44,13 +71,20 @@ set -a
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 set +a
+token_value="${!TOKEN_VAR:-}"
+domain_value="${!DOMAIN_VAR:-}"
 
 # ----- Banner -----
 echo "═══════════════════════════════════════════════════════════"
-echo " Cloudflare tunnel deployment"
-echo " (uis network up cloudflare)"
-echo " Token:   set (${#CLOUDFLARE_TUNNEL_TOKEN} chars)"
-echo " Domain:  ${BASE_DOMAIN_CLOUDFLARE:-not set}"
+if [[ -n "$CF_ENV" ]]; then
+    echo " Cloudflare tunnel deployment — environment: $CF_ENV"
+    echo " (uis network up cloudflare --env ${CF_ENV,,})"
+else
+    echo " Cloudflare tunnel deployment"
+    echo " (uis network up cloudflare)"
+fi
+echo " Token:   set (${#token_value} chars)"
+echo " Domain:  ${domain_value:-not set}"
 echo "═══════════════════════════════════════════════════════════"
 echo
 echo "This deploys cloudflared pods into the active cluster."
@@ -84,7 +118,11 @@ echo "▶ 2/2 Deploying cloudflared (ansible-playbook 820-deploy-network-cloudfl
 # actually using. `set -e` would abort here and swallow the follow-up commands,
 # so capture the status and branch on it.
 set +e
-ansible-playbook "$PLAYBOOK"
+if [[ -n "$CF_ENV" ]]; then
+    ansible-playbook "$PLAYBOOK" -e "cf_env=$CF_ENV"
+else
+    ansible-playbook "$PLAYBOOK"
+fi
 PLAYBOOK_RC=$?
 set -e
 
@@ -97,8 +135,8 @@ if [[ "$PLAYBOOK_RC" -ne 0 ]]; then
     echo "  between the connector and the origin — see the diagnosis above."
     echo
     echo "  Check this cluster's Traefik:  kubectl get svc -A | grep -i traefik"
-    echo "  Connector logs:               kubectl -n default logs -l app=cloudflared --tail=50"
-    echo "  Re-check after fixing:        ./uis network verify cloudflare"
+    echo "  Connector logs:               kubectl -n default logs -l app=$CF_POD_LABEL --tail=50"
+    echo "  Re-check after fixing:        ./uis network verify cloudflare${CF_ENV:+ --env ${CF_ENV,,}}"
     echo
     echo "  If the origin URL on the dashboard route is wrong, fix it there —"
     echo "  the connector picks up the change in seconds. No redeploy needed."
@@ -108,11 +146,11 @@ fi
 # ----- Summary -----
 echo
 echo "═══════════════════════════════════════════════════════════"
-echo " ✓ Cloudflare tunnel is up"
+echo " ✓ Cloudflare tunnel is up${CF_ENV:+ — environment: $CF_ENV}"
 echo "═══════════════════════════════════════════════════════════"
-echo "  Pods:    kubectl -n default get pods -l app=cloudflared"
-echo "  Logs:    kubectl -n default logs -l app=cloudflared --tail=50"
+echo "  Pods:    kubectl -n default get pods -l app=$CF_POD_LABEL"
+echo "  Logs:    kubectl -n default logs -l app=$CF_POD_LABEL --tail=50"
 echo
-echo "  Verify:  ./uis network verify cloudflare"
-echo "  Status:  ./uis network status cloudflare"
-echo "  Remove:  ./uis network down cloudflare"
+echo "  Verify:  ./uis network verify cloudflare${CF_ENV:+ --env ${CF_ENV,,}}"
+echo "  Status:  ./uis network status cloudflare${CF_ENV:+ --env ${CF_ENV,,}}"
+echo "  Remove:  ./uis network down cloudflare${CF_ENV:+ --env ${CF_ENV,,}}"

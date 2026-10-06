@@ -19,8 +19,27 @@
     kubeconfig_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
     tunnel_namespace: "default"
     check_results: []
+    # Optional: see 820-deploy-network-cloudflare-tunnel.yml's matching comment.
+    cf_env: "{{ cf_env | default('') }}"
 
   tasks:
+    - name: "00a Validate cf_env, when given"
+      ansible.builtin.fail:
+        msg: "Unknown cf_env '{{ cf_env }}'. Supported: DEV TEST PROD"
+      when: cf_env != '' and cf_env not in ['DEV', 'TEST', 'PROD']
+
+    - name: "00b Compute the env-suffixed names and keys"
+      ansible.builtin.set_fact:
+        cf_suffix: "{{ '_' + cf_env if cf_env != '' else '' }}"
+        cf_name_suffix: "{{ '-' + (cf_env | lower) if cf_env != '' else '' }}"
+
+    - name: "00c Compute the dependent names and keys"
+      ansible.builtin.set_fact:
+        cf_token_key: "CLOUDFLARE_TUNNEL_TOKEN{{ cf_suffix }}"
+        cf_dns_token_key: "CLOUDFLARE_DNS_TOKEN{{ cf_suffix }}"
+        cf_domain_key: "BASE_DOMAIN_CLOUDFLARE{{ cf_suffix }}"
+        cf_pod_label: "cloudflared{{ cf_name_suffix }}"
+
     # ============================================================
     # Check 1: Secrets present and valid
     # ============================================================
@@ -35,9 +54,9 @@
 
     - name: "02 Extract Cloudflare tunnel token and domain"
       ansible.builtin.set_fact:
-        cf_tunnel_token: "{{ urbalurba_secrets.resources[0].data.CLOUDFLARE_TUNNEL_TOKEN | b64decode }}"
-        cf_dns_token: "{{ urbalurba_secrets.resources[0].data.CLOUDFLARE_DNS_TOKEN | default('') | b64decode | default('not set', true) }}"
-        cf_domain: "{{ urbalurba_secrets.resources[0].data.BASE_DOMAIN_CLOUDFLARE | default('') | b64decode | default('', true) }}"
+        cf_tunnel_token: "{{ urbalurba_secrets.resources[0].data[cf_token_key] | b64decode }}"
+        cf_dns_token: "{{ urbalurba_secrets.resources[0].data[cf_dns_token_key] | default('') | b64decode | default('not set', true) }}"
+        cf_domain: "{{ urbalurba_secrets.resources[0].data[cf_domain_key] | default('') | b64decode | default('', true) }}"
       when: urbalurba_secrets.resources | length > 0
       ignore_errors: true
 
@@ -53,7 +72,7 @@
         token_valid: >-
           {{
             cf_tunnel_token != "" and
-            "your-cloudflare-tunnel-token" not in cf_tunnel_token
+            (cf_env != '' or "your-cloudflare-tunnel-token" not in cf_tunnel_token)
           }}
         domain_valid: >-
           {{
@@ -67,8 +86,8 @@
       vars:
         secrets_result: >-
           {% if urbalurba_secrets.resources | length == 0 %}FAIL: Secrets - urbalurba-secrets not found in cluster
-          {% elif not token_valid %}FAIL: Secrets - CLOUDFLARE_TUNNEL_TOKEN is a placeholder value
-          {% else %}PASS: Secrets - CLOUDFLARE_TUNNEL_TOKEN is configured ({{ cf_tunnel_token | length }} chars){% endif %}
+          {% elif not token_valid %}FAIL: Secrets - {{ cf_token_key }} is a placeholder value
+          {% else %}PASS: Secrets - {{ cf_token_key }} is configured ({{ cf_tunnel_token | length }} chars){% endif %}
 
     # ============================================================
     # Check 2: Network connectivity
@@ -104,7 +123,7 @@
         kind: Pod
         namespace: "{{ tunnel_namespace }}"
         label_selectors:
-          - "app=cloudflared"
+          - "app={{ cf_pod_label }}"
         kubeconfig: "{{ kubeconfig_file }}"
       register: cf_pods
       ignore_errors: true
@@ -115,7 +134,7 @@
       vars:
         running_pods: "{{ cf_pods.resources | default([]) | selectattr('status.phase', 'equalto', 'Running') | list }}"
         pod_result: >-
-          {% if cf_pods.resources | default([]) | length == 0 %}INFO: Pods - not deployed (deploy with: uis network up cloudflare)
+          {% if cf_pods.resources | default([]) | length == 0 %}INFO: Pods - not deployed (deploy with: uis network up cloudflare{{ ' --env ' + (cf_env | lower) if cf_env != '' else '' }})
           {% elif running_pods | length == cf_pods.resources | length %}PASS: Pods - {{ running_pods | length }}/{{ cf_pods.resources | length }} running
           {% else %}WARN: Pods - {{ running_pods | length }}/{{ cf_pods.resources | length }} running ({{ cf_pods.resources | map(attribute='status.phase') | list | join(', ') }}){% endif %}
 
@@ -185,6 +204,8 @@
           - "Cloudflare Tunnel Verification Results"
           - "==================================================="
           - ""
+          - "Environment: {{ cf_env if cf_env != '' else '(bare, no --env)' }}"
+          - ""
           - "Configuration:"
           # Every Cloudflare tunnel token begins eyJhIjoi — that is base64 of
           # {"a":" — so the old 8-char prefix was identical for every token and
@@ -211,9 +232,9 @@
           - "{% for result in check_results %}  {{ result | trim }}\n{% endfor %}"
           - ""
           - "Commands:"
-          - "  Status:   uis network status cloudflare"
-          - "  Verify:   uis network verify cloudflare"
-          - "  Remove:   uis network down cloudflare"
-          - "  Logs:     kubectl logs -n default -l app=cloudflared --tail=50"
+          - "  Status:   uis network status cloudflare{{ ' --env ' + (cf_env | lower) if cf_env != '' else '' }}"
+          - "  Verify:   uis network verify cloudflare{{ ' --env ' + (cf_env | lower) if cf_env != '' else '' }}"
+          - "  Remove:   uis network down cloudflare{{ ' --env ' + (cf_env | lower) if cf_env != '' else '' }}"
+          - "  Logs:     kubectl logs -n default -l app={{ cf_pod_label }} --tail=50"
           - ""
           - "==================================================="

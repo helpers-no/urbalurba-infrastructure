@@ -16,6 +16,7 @@ source "$_SECRETS_SCRIPT_DIR/logging.sh"
 source "$_SECRETS_SCRIPT_DIR/utilities.sh"
 source "$_SECRETS_SCRIPT_DIR/paths.sh"
 source "$_SECRETS_SCRIPT_DIR/first-run.sh"
+source "$_SECRETS_SCRIPT_DIR/cloudflare-envs.sh"
 
 # ============================================================
 # Secrets Directory Functions (wrappers for paths.sh)
@@ -167,6 +168,21 @@ show_secrets_status() {
         else
             echo "  ⚪ $var: not set"
         fi
+    done
+
+    echo ""
+    echo "Per-environment Cloudflare tunnels (opt-in; 'uis network init cloudflare --env <name>'):"
+    local env base var value
+    for env in "${UIS_CLOUDFLARE_ENVS[@]}"; do
+        for base in CLOUDFLARE_TUNNEL_TOKEN CLOUDFLARE_DNS_TOKEN BASE_DOMAIN_CLOUDFLARE; do
+            var="$(_cf_var_name "$base" "$env")"
+            value=$(get_default_secret "$var")
+            if [[ -n "$value" && "$value" != '""' && "$value" != "''" ]]; then
+                echo "  ✅ $var: configured"
+            else
+                echo "  ⚪ $var: not set"
+            fi
+        done
     done
 }
 

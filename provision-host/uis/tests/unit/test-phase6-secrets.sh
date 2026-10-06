@@ -133,6 +133,37 @@ else
 fi
 
 # ============================================================
+# Test: show_secrets_status reports per-environment Cloudflare tunnels
+# ============================================================
+# One hardcoded two-variable list (CLOUDFLARE_DNS_TOKEN/CLOUDFLARE_TUNNEL_TOKEN)
+# was the only status this command ever gave. A 4th named environment should
+# be a one-line change in cloudflare-envs.sh, not a new hardcoded string here
+# — so this pins the loop exists and iterates the canonical list, not that
+# any one environment name is special-cased into the function.
+
+start_test "show_secrets_status reports CLOUDFLARE_TUNNEL_TOKEN_TEST"
+output="$(show_secrets_status 2>&1)"
+if grep -q 'CLOUDFLARE_TUNNEL_TOKEN_TEST' <<<"$output"; then
+    pass_test
+else
+    fail_test "no per-env TEST row in show_secrets_status output"
+fi
+
+start_test "show_secrets_status reports CLOUDFLARE_TUNNEL_TOKEN_PROD"
+if grep -q 'CLOUDFLARE_TUNNEL_TOKEN_PROD' <<<"$output"; then
+    pass_test
+else
+    fail_test "no per-env PROD row in show_secrets_status output"
+fi
+
+start_test "show_secrets_status's per-env rows come from a loop over UIS_CLOUDFLARE_ENVS, not a hardcoded string"
+if grep -q 'UIS_CLOUDFLARE_ENVS\[@\]' "$LIB_DIR/secrets-management.sh"; then
+    pass_test
+else
+    fail_test "a 4th environment would need a new hardcoded line here instead of one in cloudflare-envs.sh"
+fi
+
+# ============================================================
 # Summary
 # ============================================================
 

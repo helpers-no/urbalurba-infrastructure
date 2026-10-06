@@ -18,8 +18,13 @@
   vars:
     manifests_folder: "/mnt/urbalurbadisk/manifests"
     kubeconfig_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
-    manifest_file: "820-cloudflare-tunnel-base.yaml"
+    manifest_template: "820-cloudflare-tunnel-base.yaml.j2"
     tunnel_namespace: "default"
+    # Optional: which named Cloudflare Tunnel environment this run targets
+    # (DEV/TEST/PROD — see provision-host/uis/lib/cloudflare-envs.sh, duplicated
+    # here because Ansible can't source a bash array). Empty = today's original
+    # single-tunnel behavior, unchanged.
+    cf_env: "{{ cf_env | default('') }}"
 
   tasks:
     - name: "01 Verify kubeconfig file exists"
@@ -31,6 +36,23 @@
       ansible.builtin.fail:
         msg: "Kubeconfig file not found at {{ kubeconfig_file }}"
       when: not kubeconfig_stat.stat.exists
+
+    - name: "02b Validate cf_env, when given"
+      ansible.builtin.fail:
+        msg: "Unknown cf_env '{{ cf_env }}'. Supported: DEV TEST PROD"
+      when: cf_env != '' and cf_env not in ['DEV', 'TEST', 'PROD']
+
+    - name: "02c Compute the env-suffixed names and keys"
+      ansible.builtin.set_fact:
+        cf_suffix: "{{ '_' + cf_env if cf_env != '' else '' }}"
+        cf_name_suffix: "{{ '-' + (cf_env | lower) if cf_env != '' else '' }}"
+
+    - name: "02d Compute the dependent names and keys"
+      ansible.builtin.set_fact:
+        cf_token_key: "CLOUDFLARE_TUNNEL_TOKEN{{ cf_suffix }}"
+        cf_domain_key: "BASE_DOMAIN_CLOUDFLARE{{ cf_suffix }}"
+        cf_deployment_name: "cloudflare-tunnel{{ cf_name_suffix }}"
+        cf_pod_label: "cloudflared{{ cf_name_suffix }}"
 
     - name: "03 Retrieve secrets from urbalurba-secrets"
       kubernetes.core.k8s_info:
@@ -47,46 +69,66 @@
 
     - name: "05 Extract Cloudflare tunnel token and domain"
       ansible.builtin.set_fact:
-        cf_tunnel_token: "{{ urbalurba_secrets.resources[0].data.CLOUDFLARE_TUNNEL_TOKEN | b64decode }}"
-        cf_domain: "{{ urbalurba_secrets.resources[0].data.BASE_DOMAIN_CLOUDFLARE | default('') | b64decode | default('', true) }}"
+        cf_tunnel_token: "{{ urbalurba_secrets.resources[0].data[cf_token_key] | b64decode }}"
+        cf_domain: "{{ urbalurba_secrets.resources[0].data[cf_domain_key] | default('') | b64decode | default('', true) }}"
       when: urbalurba_secrets.resources | length > 0
 
     - name: "06 Validate tunnel token is not a placeholder"
       ansible.builtin.fail:
         msg: |
-          CLOUDFLARE_TUNNEL_TOKEN is still set to a placeholder value.
+          {{ cf_token_key }} is not set (or is still a placeholder value).
 
           To fix:
           1. Create a tunnel in the Cloudflare dashboard (Zero Trust > Networks > Tunnels)
-          2. Run: uis network init cloudflare   (paste the tunnel token when prompted)
-          3. Then: uis network up cloudflare
+          2. Run: uis network init cloudflare{{ ' --env ' + (cf_env | lower) if cf_env != '' else '' }}   (paste the tunnel token when prompted)
+          3. Then: uis network up cloudflare{{ ' --env ' + (cf_env | lower) if cf_env != '' else '' }}
       when: >-
         cf_tunnel_token is not defined or
         cf_tunnel_token == "" or
-        "your-cloudflare-tunnel-token" in cf_tunnel_token
+        (cf_env == '' and "your-cloudflare-tunnel-token" in cf_tunnel_token)
 
-    - name: "07 Verify manifest file exists"
+    - name: "07 Verify manifest template exists"
       ansible.builtin.stat:
-        path: "{{ manifests_folder }}/{{ manifest_file }}"
+        path: "{{ manifests_folder }}/{{ manifest_template }}"
       register: manifest_stat
 
-    - name: "08 Fail if manifest not found"
+    - name: "08 Fail if manifest template not found"
       ansible.builtin.fail:
-        msg: "Manifest not found at {{ manifests_folder }}/{{ manifest_file }}"
+        msg: "Manifest template not found at {{ manifests_folder }}/{{ manifest_template }}"
       when: not manifest_stat.stat.exists
 
-    - name: "09 Apply Cloudflare tunnel manifest"
+    - name: "09a Create temp file for the rendered manifest"
+      ansible.builtin.tempfile:
+        state: file
+        suffix: .yaml
+      register: temp_cf_manifest
+
+    - name: "09b Render the tunnel manifest for this environment"
+      ansible.builtin.template:
+        src: "{{ manifests_folder }}/{{ manifest_template }}"
+        dest: "{{ temp_cf_manifest.path }}"
+      vars:
+        cf_deployment_name: "{{ cf_deployment_name }}"
+        cf_pod_label: "{{ cf_pod_label }}"
+        cf_token_key: "{{ cf_token_key }}"
+
+    - name: "09c Apply Cloudflare tunnel manifest"
       kubernetes.core.k8s:
-        src: "{{ manifests_folder }}/{{ manifest_file }}"
+        src: "{{ temp_cf_manifest.path }}"
         kubeconfig: "{{ kubeconfig_file }}"
         state: present
+
+    - name: "09d Remove the rendered manifest temp file"
+      ansible.builtin.file:
+        path: "{{ temp_cf_manifest.path }}"
+        state: absent
 
     - name: "10 Wait for cloudflared pods to appear"
       kubernetes.core.k8s_info:
         kind: Pod
         namespace: "{{ tunnel_namespace }}"
         label_selectors:
-          - "app=cloudflared"
+          - "app={{ cf_pod_label }}"
         kubeconfig: "{{ kubeconfig_file }}"
       register: cf_pods
       until:
@@ -99,7 +141,7 @@
         kind: Pod
         namespace: "{{ tunnel_namespace }}"
         label_selectors:
-          - "app=cloudflared"
+          - "app={{ cf_pod_label }}"
         kubeconfig: "{{ kubeconfig_file }}"
       register: cf_pods_status
       until:
@@ -194,6 +236,8 @@
           - "==================================================="
           - ""
           - "Status: {{ 'DEPLOYED' if probe_skipped | bool or probe_passed | bool else 'DEPLOYED BUT NOT SERVING TRAFFIC' }}"
+          - "Environment: {{ cf_env if cf_env != '' else '(bare, no --env)' }}"
+          - "Deployment: {{ cf_deployment_name }}"
           - "Pods: {{ cf_pods_status.resources | length }} running"
           - "Namespace: {{ tunnel_namespace }}"
           - "Domain: {{ cf_domain if not probe_skipped | bool else 'not configured' }}"
@@ -207,8 +251,8 @@
           - ""
           - "Cloudflare dashboard: Zero Trust > Networks > Tunnels"
           - ""
-          - "To verify: uis network verify cloudflare"
-          - "To remove: uis network down cloudflare"
+          - "To verify: uis network verify cloudflare{{ ' --env ' + (cf_env | lower) if cf_env != '' else '' }}"
+          - "To remove: uis network down cloudflare{{ ' --env ' + (cf_env | lower) if cf_env != '' else '' }}"
           - "==================================================="
 
     - name: "19 Diagnose a failed end-to-end probe"

@@ -89,7 +89,7 @@ http://authentik.localhost
 http://openwebui.localhost
 ```
 
-For external access, see [Tailscale](../../networking/tailscale-setup.md) and [Cloudflare Tunnels](../../networking/cloudflare-setup.md).
+For external access, see [Tailscale](../../networking/tailscale-setup.md) and [Cloudflare Tunnels](../../networking/cloudflare.md).
 
 ## Debugging Deployments
 

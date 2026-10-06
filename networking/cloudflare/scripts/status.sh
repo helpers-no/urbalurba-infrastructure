@@ -1,7 +1,7 @@
 #!/bin/bash
 # status.sh — Show Cloudflare tunnel status (config + pods + connectivity).
 #
-# Entry point: uis network status cloudflare
+# Entry point: uis network status cloudflare [--env <name>]
 #
 # --summary flag: emits one tab-separated line "<state>\t<hint>" for the
 # `uis network list` table (C-1 contract). State machine:
@@ -9,24 +9,46 @@
 #   2. env present, no cloudflared Deployment in cluster → configured-not-running
 #   3. deployment present, at least one pod Running     → running
 #   4. deployment present, no pods Running              → unreachable
+#
+# --env lets one installation manage more than one tunnel — see
+# provision-host/uis/lib/cloudflare-envs.sh. Omitting it is byte-identical to
+# this script's original single-tunnel behavior (both the full-status output
+# and the --summary line format are unchanged; only the underlying file/
+# Deployment/label lookups become env-aware).
 
 set -euo pipefail
 
 # ----- Resolve paths -----
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${UIS_REPO_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
-ENV_FILE="$REPO_ROOT/.uis.secrets/service-keys/cloudflare.env"
-ENV_FILE_REL=".uis.secrets/service-keys/cloudflare.env"
+source "$REPO_ROOT/provision-host/uis/lib/cloudflare-envs.sh"
 KUBECONFIG_PATH="${UIS_KUBECONFIG:-/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all}"
 
 # ----- Flag parsing -----
 SUMMARY=0
+CF_ENV=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --summary) SUMMARY=1; shift ;;
+        --env) CF_ENV="${2:-}"; shift 2 || { echo "✗ --env requires a value" >&2; exit 1; } ;;
+        --env=*) CF_ENV="${1#--env=}"; shift ;;
         *) shift ;;
     esac
 done
+if [[ -n "$CF_ENV" ]]; then
+    CF_ENV="${CF_ENV^^}"
+    if ! _cf_env_is_valid "$CF_ENV"; then
+        echo "✗ Unknown --env '$CF_ENV'. Supported: ${UIS_CLOUDFLARE_ENVS[*]}" >&2
+        exit 1
+    fi
+fi
+CF_SUFFIX="$(_cf_name_suffix "$CF_ENV")"
+TOKEN_VAR="$(_cf_var_name CLOUDFLARE_TUNNEL_TOKEN "$CF_ENV")"
+DOMAIN_VAR="$(_cf_var_name BASE_DOMAIN_CLOUDFLARE "$CF_ENV")"
+CF_POD_LABEL="cloudflared${CF_SUFFIX}"
+CF_DEPLOYMENT_NAME="cloudflare-tunnel${CF_SUFFIX}"
+ENV_FILE="$REPO_ROOT/.uis.secrets/service-keys/cloudflare${CF_SUFFIX}.env"
+ENV_FILE_REL=".uis.secrets/service-keys/cloudflare${CF_SUFFIX}.env"
 
 # ----- Helpers -----
 _kubectl() {
@@ -41,7 +63,7 @@ _kubectl() {
 # no cluster reachable) echoes "0/0" so the caller treats it as not-running.
 _pod_counts() {
     local pods total running
-    pods=$(_kubectl -n default get pods -l app=cloudflared \
+    pods=$(_kubectl -n default get pods -l "app=${CF_POD_LABEL}" \
             -o jsonpath='{range .items[*]}{.status.phase}{"\n"}{end}' 2>/dev/null || echo "")
     if [[ -z "$pods" ]]; then
         echo "0/0"; return
@@ -51,9 +73,9 @@ _pod_counts() {
     echo "${running}/${total}"
 }
 
-# Cluster touch — true iff cloudflared Deployment exists in default namespace.
+# Cluster touch — true iff the cloudflared Deployment exists in default namespace.
 _deployment_present() {
-    _kubectl -n default get deployment cloudflare-tunnel >/dev/null 2>&1
+    _kubectl -n default get deployment "$CF_DEPLOYMENT_NAME" >/dev/null 2>&1
 }
 
 # A RUNNING POD IS NOT A WORKING TUNNEL.
@@ -74,7 +96,7 @@ _deployment_present() {
 # or nothing when it is not.
 _origin_failure() {
     local logs
-    logs=$(_kubectl -n default logs -l app=cloudflared --tail=100 2>/dev/null || echo "")
+    logs=$(_kubectl -n default logs -l "app=${CF_POD_LABEL}" --tail=100 2>/dev/null || echo "")
     [[ -z "$logs" ]] && return 0
     printf '%s\n' "$logs" | grep -q 'Unable to reach the origin service' || return 0
     printf '%s\n' "$logs" \
@@ -85,13 +107,16 @@ _origin_failure() {
 }
 
 # ----- Summary path (C-1 contract for `uis network list`) -----
+# env_hint: "" when bare (keeps the line format byte-identical to before
+# --env existed); " --env <name>" otherwise.
+env_hint="${CF_ENV:+ --env ${CF_ENV,,}}"
 if (( SUMMARY )); then
     if [[ ! -f "$ENV_FILE" ]]; then
-        printf 'not-initialized\trun '\''./uis network init cloudflare'\'' to set up\n'
+        printf 'not-initialized\trun '\''./uis network init cloudflare%s'\'' to set up\n' "$env_hint"
         exit 0
     fi
     if ! _deployment_present; then
-        printf 'configured-not-running\trun '\''./uis network up cloudflare'\'' to deploy\n'
+        printf 'configured-not-running\trun '\''./uis network up cloudflare%s'\'' to deploy\n' "$env_hint"
         exit 0
     fi
     counts=$(_pod_counts)
@@ -100,45 +125,52 @@ if (( SUMMARY )); then
     if [[ "$running" -gt 0 ]]; then
         bad_origin="$(_origin_failure)"
         if [[ -n "$bad_origin" ]]; then
-            printf 'degraded\tpods up but the origin is unreachable (%s); run '\''./uis network verify cloudflare'\''\n' "$bad_origin"
+            printf 'degraded\tpods up but the origin is unreachable (%s); run '\''./uis network verify cloudflare%s'\''\n' "$bad_origin" "$env_hint"
         else
             printf 'running\t%s/%s cloudflared pods up\n' "$running" "$total"
         fi
     else
-        printf 'unreachable\tdeployment exists but no Running pods; check '\''kubectl -n default logs -l app=cloudflared'\''\n'
+        printf 'unreachable\tdeployment exists but no Running pods; check '\''kubectl -n default logs -l app=%s'\''\n' "$CF_POD_LABEL"
     fi
     exit 0
 fi
 
 # ----- Full status -----
 echo "═══════════════════════════════════════════════════════════"
-echo " Cloudflare tunnel status"
-echo " (uis network status cloudflare)"
+if [[ -n "$CF_ENV" ]]; then
+    echo " Cloudflare tunnel status — environment: $CF_ENV"
+    echo " (uis network status cloudflare --env ${CF_ENV,,})"
+else
+    echo " Cloudflare tunnel status"
+    echo " (uis network status cloudflare)"
+fi
 echo "═══════════════════════════════════════════════════════════"
 echo
 
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "  Config:    not initialized"
-    echo "  Setup:     ./uis network init cloudflare"
+    echo "  Setup:     ./uis network init cloudflare${env_hint}"
     exit 0
 fi
 
 # shellcheck source=/dev/null
 source "$ENV_FILE"
+token_value="${!TOKEN_VAR:-}"
+domain_value="${!DOMAIN_VAR:-}"
 echo "  Config:    $ENV_FILE_REL"
 # ${VAR:+...} suppressed the length for an empty token but left the literal
 # word "set", so an empty value rendered as "Token:     set ()".
-if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
-    echo "  Token:     set (${#CLOUDFLARE_TUNNEL_TOKEN} chars)"
+if [[ -n "$token_value" ]]; then
+    echo "  Token:     set (${#token_value} chars)"
 else
-    echo "  Token:     not set — run './uis network init cloudflare'"
+    echo "  Token:     not set — run './uis network init cloudflare${env_hint}'"
 fi
-echo "  Domain:    ${BASE_DOMAIN_CLOUDFLARE:-not set}"
+echo "  Domain:    ${domain_value:-not set}"
 
 if ! _deployment_present; then
     echo "  Pods:      not deployed"
     echo
-    echo "  Deploy:    ./uis network up cloudflare"
+    echo "  Deploy:    ./uis network up cloudflare${env_hint}"
     exit 0
 fi
 
@@ -150,9 +182,9 @@ echo "  Pods:      ${running}/${total} cloudflared running"
 if [[ "$running" -eq 0 ]]; then
     echo
     echo "  Pods exist but none are Running. Recent logs:"
-    _kubectl -n default logs -l app=cloudflared --tail=20 2>&1 | sed 's/^/    /' || true
+    _kubectl -n default logs -l "app=${CF_POD_LABEL}" --tail=20 2>&1 | sed 's/^/    /' || true
     echo
-    echo "  Verify:    ./uis network verify cloudflare"
+    echo "  Verify:    ./uis network verify cloudflare${env_hint}"
     exit 0
 fi
 
@@ -175,5 +207,5 @@ else
     echo "  Origin:    reachable (no origin errors in recent logs)"
 fi
 echo
-echo "  Verify e2e: ./uis network verify cloudflare"
-echo "  Remove:     ./uis network down cloudflare"
+echo "  Verify e2e: ./uis network verify cloudflare${env_hint}"
+echo "  Remove:     ./uis network down cloudflare${env_hint}"

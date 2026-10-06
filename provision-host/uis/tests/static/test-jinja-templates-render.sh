@@ -104,10 +104,30 @@ for d in docs:
                            "match": r.get("match"),
                            "middlewares": [m.get("name") for m in (r.get("middlewares") or [])]})
 
+# Every Deployment's name, pod label and the secretKeyRef.key its containers
+# read, parsed off the real rendered+parsed document — not grepped off the
+# template text, so a value that landed in the wrong place would still fail.
+deployments = []
+for d in docs:
+    if d.get("kind") == "Deployment":
+        containers = d.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        secret_key = None
+        for c in containers:
+            for e in (c.get("env") or []):
+                ref = (e.get("valueFrom") or {}).get("secretKeyRef")
+                if ref:
+                    secret_key = ref.get("key")
+        deployments.append({
+            "name": d.get("metadata", {}).get("name"),
+            "podLabel": (d.get("spec", {}).get("template", {}).get("metadata", {}).get("labels") or {}).get("app"),
+            "secretKey": secret_key,
+        })
+
 print(json.dumps({"documents": len(docs),
                   "kinds": [f"{d.get('kind')}/{d.get('metadata',{}).get('name')}" for d in docs],
                   "podAnnotations": pod_ann,
-                  "routes": routes}))
+                  "routes": routes,
+                  "deployments": deployments}))
 PYEOF
 
 _render() {
@@ -294,6 +314,34 @@ if grep -q 'kind: Middleware' "$_PBR" && grep -q 'postgrest-spec-alias' "$_PBR";
     pass_test
 else
     fail_test "undeploy leaves an orphaned Middleware in the namespace"
+fi
+
+# --- 820-cloudflare-tunnel-base.yaml.j2: the multi-env backward-compat pin ---
+# Empty cf_env must render BYTE-FOR-BYTE what the original static manifest
+# shipped (cloudflare-tunnel / cloudflared / CLOUDFLARE_TUNNEL_TOKEN) — proven
+# here by actually rendering and parsing, not by reading the template source.
+start_test "820-cloudflare-tunnel-base.yaml.j2 renders today's exact names with no cf_env"
+CTX='{"cf_deployment_name":"cloudflare-tunnel","cf_pod_label":"cloudflared","cf_token_key":"CLOUDFLARE_TUNNEL_TOKEN"}'
+OUT="$(_render 820-cloudflare-tunnel-base.yaml.j2 "$CTX")"
+if [[ "$OUT" == \{* ]] \
+   && grep -q '"name": "cloudflare-tunnel"' <<<"$OUT" \
+   && grep -q '"podLabel": "cloudflared"' <<<"$OUT" \
+   && grep -q '"secretKey": "CLOUDFLARE_TUNNEL_TOKEN"' <<<"$OUT"; then
+    pass_test
+else
+    fail_test "$OUT"
+fi
+
+start_test "820-cloudflare-tunnel-base.yaml.j2 renders suffixed names for a named env"
+CTX='{"cf_deployment_name":"cloudflare-tunnel-test","cf_pod_label":"cloudflared-test","cf_token_key":"CLOUDFLARE_TUNNEL_TOKEN_TEST"}'
+OUT="$(_render 820-cloudflare-tunnel-base.yaml.j2 "$CTX")"
+if [[ "$OUT" == \{* ]] \
+   && grep -q '"name": "cloudflare-tunnel-test"' <<<"$OUT" \
+   && grep -q '"podLabel": "cloudflared-test"' <<<"$OUT" \
+   && grep -q '"secretKey": "CLOUDFLARE_TUNNEL_TOKEN_TEST"' <<<"$OUT"; then
+    pass_test
+else
+    fail_test "$OUT"
 fi
 
 print_summary
