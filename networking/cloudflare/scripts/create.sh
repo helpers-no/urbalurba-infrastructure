@@ -1,0 +1,185 @@
+#!/bin/bash
+# create.sh — Create a Cloudflare tunnel + DNS records via the Cloudflare API (OpenTofu).
+#
+# Entry point: uis network create cloudflare --env <name> --domain <domain> [--zone <zone>] [--name <tunnel-name>] [--yes]
+#
+# Alternative to the manual dashboard walkthrough in Step 1 of
+# website/docs/networking/cloudflare.md — the dashboard path always works and
+# needs no `tofu` binary; this one needs both `tofu` installed and a scoped
+# Cloudflare API token (.uis.secrets/service-keys/cloudflare-api.env).
+#
+# --env is REQUIRED here (unlike init/up/down/verify/status, where it's
+# optional) — automation always names its environment; only the fully-manual
+# dashboard path is allowed to stay bare, to keep a tofu-managed tunnel's state
+# from ever colliding with a hand-created one.
+#
+# Pipeline:
+#   1. Resolve the API token and this env's state directory
+#      (.uis.secrets/cloudflare/tofu/<env>/ — NOT next to this script, which is
+#      baked into the provision-host image and not host-persistent).
+#   2. tofu init (env-scoped backend) + tofu plan -out=... ; print the plan and
+#      ask to confirm (skippable with --yes) — this creates real, billable,
+#      DNS-affecting cloud resources.
+#   3. tofu apply, then validate.sh --live (DNS should already be correct;
+#      the tunnel itself will correctly report inactive until `up` deploys
+#      cloudflared — that's expected here, not a failure of this step).
+#   4. init.sh --env <name> --from-key <state-dir>/out/<name>.key --domain <domain>
+#      — wires the generated token into the same secrets pipeline the manual
+#      dashboard path uses. Stops there; does NOT deploy or verify — run
+#      `uis network up` / `verify` yourself next.
+
+set -euo pipefail
+
+# ----- Resolve paths -----
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${UIS_REPO_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
+TOFU_DIR="$REPO_ROOT/networking/cloudflare/tofu"
+INIT_SH="$SCRIPT_DIR/init.sh"
+
+# ----- Parse args -----
+source "$REPO_ROOT/provision-host/uis/lib/cloudflare-envs.sh"
+CF_ENV=""
+DOMAIN=""
+ZONE=""
+TUNNEL_NAME=""
+SKIP_CONFIRM=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --env) CF_ENV="${2:-}"; shift 2 || { echo "✗ --env requires a value" >&2; exit 1; } ;;
+        --env=*) CF_ENV="${1#--env=}"; shift ;;
+        --domain) DOMAIN="${2:-}"; shift 2 || { echo "✗ --domain requires a value" >&2; exit 1; } ;;
+        --domain=*) DOMAIN="${1#--domain=}"; shift ;;
+        --zone) ZONE="${2:-}"; shift 2 || { echo "✗ --zone requires a value" >&2; exit 1; } ;;
+        --zone=*) ZONE="${1#--zone=}"; shift ;;
+        --name) TUNNEL_NAME="${2:-}"; shift 2 || { echo "✗ --name requires a value" >&2; exit 1; } ;;
+        --name=*) TUNNEL_NAME="${1#--name=}"; shift ;;
+        --yes) SKIP_CONFIRM=1; shift ;;
+        *) echo "✗ Unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
+
+if [[ -z "$CF_ENV" ]]; then
+    echo "✗ --env is required for 'uis network create cloudflare' (dev/test/prod). See --help in cloudflare.md." >&2
+    exit 1
+fi
+CF_ENV="${CF_ENV^^}"
+if ! _cf_env_is_valid "$CF_ENV"; then
+    echo "✗ Unknown --env '$CF_ENV'. Supported: ${UIS_CLOUDFLARE_ENVS[*]}" >&2
+    exit 1
+fi
+if [[ -z "$DOMAIN" ]]; then
+    echo "✗ --domain is required, e.g. --domain urbalurba.eu" >&2
+    exit 1
+fi
+[[ -n "$TUNNEL_NAME" ]] || TUNNEL_NAME="${DOMAIN//./-}"
+CF_ENV_LOWER="${CF_ENV,,}"
+
+# ----- Check tofu is installed -----
+if ! command -v tofu >/dev/null 2>&1; then
+    echo "✗ 'tofu' (OpenTofu) is not installed in this container." >&2
+    echo "  This is a packaging gap, not something to install by hand — the image" >&2
+    echo "  is supposed to ship it. Use the manual dashboard path instead for now" >&2
+    echo "  (Step 1 in website/docs/networking/cloudflare.md), or rebuild the image." >&2
+    exit 1
+fi
+
+# ----- Resolve the Cloudflare API token -----
+API_TOKEN_FILE="$REPO_ROOT/.uis.secrets/service-keys/cloudflare-api.env"
+if [[ ! -f "$API_TOKEN_FILE" ]]; then
+    echo "✗ No Cloudflare API token found at .uis.secrets/service-keys/cloudflare-api.env" >&2
+    echo "  This token is separate from the tunnel token and is never written by a wizard —" >&2
+    echo "  see provision-host/uis/templates/uis.secrets/service-keys/cloudflare-api.env.template" >&2
+    echo "  for the one-time dashboard steps to create it, then save it at that path (mode 600)." >&2
+    exit 1
+fi
+set -a
+# shellcheck source=/dev/null
+source "$API_TOKEN_FILE"
+set +a
+if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    echo "✗ CLOUDFLARE_API_TOKEN is empty in $API_TOKEN_FILE" >&2
+    exit 1
+fi
+export CLOUDFLARE_API_TOKEN
+
+# ----- Per-env state directory (host-persistent, never next to this script) -----
+STATE_DIR="$REPO_ROOT/.uis.secrets/cloudflare/tofu/$CF_ENV_LOWER"
+STATE_DIR_REL=".uis.secrets/cloudflare/tofu/$CF_ENV_LOWER"
+mkdir -p "$STATE_DIR/out"
+export TF_DATA_DIR="$STATE_DIR/.terraform"
+
+TFVARS="$STATE_DIR/$CF_ENV_LOWER.tfvars"
+{
+    echo "# Generated by 'uis network create cloudflare --env $CF_ENV_LOWER --domain $DOMAIN' on $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+    echo "tunnels = {"
+    if [[ -n "$ZONE" ]]; then
+        printf '  "%s" = { domain = "%s", env = "%s", zone = "%s" }\n' "$TUNNEL_NAME" "$DOMAIN" "$CF_ENV_LOWER" "$ZONE"
+    else
+        printf '  "%s" = { domain = "%s", env = "%s" }\n' "$TUNNEL_NAME" "$DOMAIN" "$CF_ENV_LOWER"
+    fi
+    echo "}"
+} > "$TFVARS"
+
+# ----- Banner -----
+echo "═══════════════════════════════════════════════════════════"
+echo " Cloudflare tunnel creation — environment: $CF_ENV"
+echo " (uis network create cloudflare --env $CF_ENV_LOWER --domain $DOMAIN)"
+echo "═══════════════════════════════════════════════════════════"
+echo "  Tunnel name: $TUNNEL_NAME"
+echo "  Domain:      $DOMAIN${ZONE:+ (zone: $ZONE)}"
+echo "  State:       $STATE_DIR_REL"
+echo
+echo "This creates a real Cloudflare tunnel and DNS records (billable account resources)."
+echo
+
+# ----- 1/4 tofu init (env-scoped backend — never shares state with another env) -----
+echo "▶ 1/4 tofu init..."
+(cd "$TOFU_DIR" && tofu init -input=false -backend-config="path=$STATE_DIR/terraform.tfstate")
+echo
+
+# ----- 2/4 tofu plan + confirm -----
+echo "▶ 2/4 tofu plan..."
+PLAN_FILE="$STATE_DIR/plan.tfplan"
+(cd "$TOFU_DIR" && tofu plan -input=false -var-file="$TFVARS" -var "out_dir=$STATE_DIR/out" -out="$PLAN_FILE")
+echo
+
+if [[ "$SKIP_CONFIRM" -ne 1 ]]; then
+    if [[ ! -t 0 ]]; then
+        echo "✗ Not an interactive terminal — pass --yes to apply without an interactive confirmation." >&2
+        exit 1
+    fi
+    read -rp "Apply this plan and create these Cloudflare resources? [y/N]: " confirm
+    case "$confirm" in
+        y|Y|yes|Yes) ;;
+        *) echo "Aborted — nothing was created."; exit 1 ;;
+    esac
+fi
+
+# ----- 3/4 tofu apply + live validate -----
+echo "▶ 3/4 tofu apply..."
+(cd "$TOFU_DIR" && tofu apply -input=false "$PLAN_FILE")
+echo
+
+echo "▶ Checking DNS (the tunnel itself will correctly show inactive until you run 'up')..."
+set +e
+(cd "$TOFU_DIR" && ./validate.sh --live)
+set -e
+echo
+
+KEY_FILE="$STATE_DIR/out/$TUNNEL_NAME.key"
+if [[ ! -f "$KEY_FILE" ]]; then
+    echo "✗ Expected key file not found after apply: $KEY_FILE" >&2
+    exit 1
+fi
+
+# ----- 4/4 wire the token into the standard secrets pipeline -----
+echo "▶ 4/4 ./uis network init cloudflare --env $CF_ENV_LOWER --from-key ..."
+"$INIT_SH" --env "$CF_ENV_LOWER" --from-key "$KEY_FILE" --domain "$DOMAIN"
+echo
+
+# ----- Summary -----
+echo "═══════════════════════════════════════════════════════════"
+echo " ✓ Tunnel created and token wired in — environment: $CF_ENV"
+echo "═══════════════════════════════════════════════════════════"
+echo "  Next: ./uis network up cloudflare --env $CF_ENV_LOWER"
+echo "        ./uis network verify cloudflare --env $CF_ENV_LOWER"

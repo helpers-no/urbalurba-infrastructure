@@ -84,6 +84,17 @@ Saving a route whose origin is a `.cluster.local` address triggers a **"Cloudfla
 This applies to **editing an existing route**, not just creating one, and it is the single most expensive mistake on this page: a route that still holds the old origin produces a 502 on every request while the tunnel itself reports Healthy. After saving, re-open the route and read the URL back.
 :::
 
+:::tip Automating this step (optional)
+Scripting setup for several domains? `uis network create cloudflare --env test --domain urbalurba.eu`
+does the above via the Cloudflare API instead, using a vendored OpenTofu module — needs the `tofu`
+binary (ships in the provision-host image) and its own, separately-scoped API token (**not** the
+tunnel token — see `cloudflare-api.env.template`, created once by hand). `--env` is **required**
+here, unlike every other verb below. It shows the plan and asks to confirm before creating
+anything (a real, billable, DNS-affecting action — `--yes` skips the prompt), then wires the
+result into Step 2's secrets pipeline and stops — it doesn't deploy pods or verify for you;
+continue with Steps 3-4 as normal. Details: `networking/cloudflare/tofu/README.md`.
+:::
+
 ### 2. Run the init wizard
 
 ```bash
