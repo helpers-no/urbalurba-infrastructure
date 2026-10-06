@@ -27,7 +27,7 @@ variable "write_key_files" {
 }
 
 variable "out_dir" {
-  description = "Directory the generated <name>.key files are written into. Defaults to ${path.module}/out (null is not a literal here — see main.tf's coalesce) — override when the module source path isn't host-persistent (e.g. baked into a container image)."
+  description = "Directory the generated <name>.key files are written into. Defaults to the module's own out/ directory (null is not a literal here — see main.tf's coalesce, which resolves it against path.module) — override when the module source path isn't host-persistent (e.g. baked into a container image)."
   type        = string
   default     = null
 }
