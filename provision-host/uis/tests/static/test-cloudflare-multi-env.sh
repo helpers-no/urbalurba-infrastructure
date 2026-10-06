@@ -8,8 +8,9 @@
 # second token — handing over a second one just overwrote the first.
 #
 # --env <name> adds named environments (DEV/TEST/PROD) without touching the
-# bare, single-tunnel behavior every existing installation (including imac's
-# urbalurba.com) depends on. These tests pin the two halves of that promise:
+# bare, single-tunnel behavior every existing installation (including the
+# one that predates this change) depends on. These tests pin the two halves
+# of that promise:
 # a given --env is validated against the same canonical list everywhere, and
 # every script/playbook computes its names/keys from cf_env rather than
 # hardcoding them — so omitting --env is provably unchanged, not just assumed
@@ -109,7 +110,7 @@ done
 # -e cf_env=... must be appended ONLY when --env was actually given. Always
 # passing it, even empty, would hand Ansible a DEFINED-BUT-EMPTY cf_env —
 # subtly different from undefined, and not the same code path the bare
-# installations (imac's included) have always run.
+# installations have always run.
 # ---------------------------------------------------------------------------
 start_test "up.sh passes -e cf_env only when --env is given"
 if grep -q 'cf_env=\$CF_ENV' "$UP_SH" && grep -qE '\[\[ -n "\$CF_ENV" \]\]' "$UP_SH"; then

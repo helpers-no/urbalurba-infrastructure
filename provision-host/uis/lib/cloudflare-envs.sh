@@ -13,9 +13,9 @@
 # ansible/playbooks/822-verify-cloudflare.yml each duplicate this same literal
 # list — keep all four in sync if it ever changes.
 #
-# DEV is reserved for imac's already-existing, separate urbalurba.com
-# installation. It is not populated or migrated by this file's introduction —
-# only TEST and PROD are in active use as of this writing.
+# DEV is reserved for an existing separate installation that predates this
+# change. It is not populated or migrated by this file's introduction — only
+# TEST and PROD are in active use as of this writing.
 #
 # Dependency-free on purpose: sourced identically from
 # provision-host/uis/lib/secrets-management.sh (which sources logging.sh/
