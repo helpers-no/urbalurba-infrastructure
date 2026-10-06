@@ -121,6 +121,22 @@ else
     fail_test "Missing CLOUDFLARE_TUNNEL_TOKEN_PROD passthrough in the master Secret template"
 fi
 
+# cloudflare-api.env.template — the OpenTofu-side credential 'uis network
+# create cloudflare' reads (Account: Cloudflare Tunnel Edit + Zone: DNS
+# Edit, Zone Read). Deliberately a SEPARATE file from cloudflare.env.template,
+# whose own "documents no unread credentials" test above still correctly
+# forbids CLOUDFLARE_API_TOKEN there — this is a different credential for a
+# different, optional code path, not a reintroduction of the old unused one.
+start_test "cloudflare-api.env.template exists"
+assert_file_exists "$TEMPLATES_DIR/uis.secrets/service-keys/cloudflare-api.env.template" && pass_test
+
+start_test "cloudflare-api.env.template documents CLOUDFLARE_API_TOKEN"
+if grep -q '^CLOUDFLARE_API_TOKEN=' "$TEMPLATES_DIR/uis.secrets/service-keys/cloudflare-api.env.template"; then
+    pass_test
+else
+    fail_test "Missing CLOUDFLARE_API_TOKEN — the credential 'uis network create cloudflare' reads"
+fi
+
 # Note: Cloud-init template selection is handled by CLI code (PLAN-002),
 # not by config files. The mapping is: host-type -> cloud-init-template
 

@@ -1,0 +1,5 @@
+# Per-domain input. Install command: tofu apply -var-file=<domain>.tfvars
+# Never put the API token here: use CLOUDFLARE_API_TOKEN.
+tunnels = {
+  "urbalurba-eu" = { domain = "urbalurba.eu", env = "test" }
+}

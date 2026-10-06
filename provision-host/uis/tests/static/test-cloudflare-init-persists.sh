@@ -172,4 +172,91 @@ else
     fail_test "expected the TEST environment banner, got (rc=$rc): $out"
 fi
 
+# --- --from-key: the non-interactive path used by `uis network create cloudflare` ---
+# Rebuilds the connector token from a #1876-format KEY=VALUE file instead of a
+# TTY prompt, then falls through to the SAME file-writing code already proven
+# above — these tests pin that it reaches that code with the right token/env/
+# domain, and that it fails closed on a bad fixture rather than silently
+# wiring the wrong tunnel into the wrong environment.
+
+if [[ -d "/mnt/urbalurbadisk/provision-host/uis/lib" ]]; then
+    LIB_DIR="/mnt/urbalurbadisk/provision-host/uis/lib"
+else
+    LIB_DIR="$(cd "$SCRIPT_DIR/../../lib" && pwd)"
+fi
+
+# An isolated fake repo root so this never touches the real .uis.secrets/.
+# A second `trap ... EXIT` would replace the one set near the top of this file
+# (traps don't stack) and stop $TMP from being cleaned up — so this one covers both.
+FK_ROOT="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$FK_ROOT"' EXIT
+mkdir -p "$FK_ROOT/provision-host/uis/lib" "$FK_ROOT/.uis.secrets/secrets-config"
+cp "$LIB_DIR/cloudflare-envs.sh" "$FK_ROOT/provision-host/uis/lib/"
+: > "$FK_ROOT/.uis.secrets/secrets-config/00-common-values.env.template"
+
+FIXTURE="$FK_ROOT/fixture.key"
+cat > "$FIXTURE" <<'EOF'
+ENV=test
+TUNNEL_NAME=example
+TUNNEL_ID=6076aeca-f1dd-43a1-aa5e-0708c1621f2e
+ACCOUNT_ID=97e30a13fdbed4f09e53db9aba18d144
+TUNNEL_SECRET=abcDEF123xyz==
+EOF
+
+start_test "init.sh --from-key rejects a nonexistent file"
+out="$(UIS_REPO_ROOT="$FK_ROOT" bash "$INIT_SH" --from-key "$FK_ROOT/nope.key" < /dev/null 2>&1)"; rc=$?
+if [[ $rc -ne 0 ]] && grep -qi "file not found" <<<"$out"; then
+    pass_test
+else
+    fail_test "expected a clean 'file not found', got (rc=$rc): $out"
+fi
+
+start_test "init.sh --from-key rejects a fixture missing a required field"
+printf 'ENV=test\nTUNNEL_ID=abc\n' > "$FK_ROOT/incomplete.key"
+out="$(UIS_REPO_ROOT="$FK_ROOT" bash "$INIT_SH" --from-key "$FK_ROOT/incomplete.key" < /dev/null 2>&1)"; rc=$?
+if [[ $rc -ne 0 ]] && grep -qi "missing a required field" <<<"$out"; then
+    pass_test
+else
+    fail_test "expected a clean rejection of an incomplete fixture, got (rc=$rc): $out"
+fi
+
+start_test "init.sh --env prod --from-key <ENV=test fixture> refuses the mismatch"
+out="$(UIS_REPO_ROOT="$FK_ROOT" bash "$INIT_SH" --env prod --from-key "$FIXTURE" < /dev/null 2>&1)"; rc=$?
+if [[ $rc -ne 0 ]] && grep -qi "doesn't match ENV=test" <<<"$out"; then
+    pass_test
+else
+    fail_test "expected a mismatch refusal, got (rc=$rc): $out"
+fi
+
+start_test "init.sh --from-key never hits the TTY guard"
+out="$(UIS_REPO_ROOT="$FK_ROOT" bash "$INIT_SH" --from-key "$FIXTURE" --domain example.com < /dev/null 2>&1)"; rc=$?
+if ! grep -qi "requires an interactive terminal" <<<"$out"; then
+    pass_test
+else
+    fail_test "the non-interactive path still hit the TTY guard: $out"
+fi
+
+start_test "init.sh --from-key writes the env-suffixed file for the fixture's ENV"
+if [[ -f "$FK_ROOT/.uis.secrets/service-keys/cloudflare-test.env" ]]; then
+    pass_test
+else
+    fail_test "expected cloudflare-test.env — fixture's ENV=test was not picked up"
+fi
+
+start_test "init.sh --from-key sets BASE_DOMAIN_CLOUDFLARE_TEST from --domain"
+if grep -q '^BASE_DOMAIN_CLOUDFLARE_TEST="example.com"$' "$FK_ROOT/.uis.secrets/service-keys/cloudflare-test.env"; then
+    pass_test
+else
+    fail_test "domain not recorded: $(cat "$FK_ROOT/.uis.secrets/service-keys/cloudflare-test.env")"
+fi
+
+start_test "init.sh --from-key rebuilds a token whose decoded JSON matches the fixture's fields verbatim"
+token="$(grep '^CLOUDFLARE_TUNNEL_TOKEN_TEST=' "$FK_ROOT/.uis.secrets/service-keys/cloudflare-test.env" | cut -d= -f2- | tr -d '"')"
+decoded="$(echo "$token" | base64 -d 2>/dev/null)"
+if [[ "$decoded" == '{"a":"97e30a13fdbed4f09e53db9aba18d144","t":"6076aeca-f1dd-43a1-aa5e-0708c1621f2e","s":"abcDEF123xyz=="}' ]]; then
+    pass_test
+else
+    fail_test "decoded token does not match the fixture's fields verbatim: $decoded"
+fi
+
 print_summary

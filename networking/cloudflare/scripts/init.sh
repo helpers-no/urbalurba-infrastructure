@@ -14,6 +14,17 @@
 # instead of the bare key — see provision-host/uis/lib/cloudflare-envs.sh for
 # the supported names. Omitting --env is byte-identical to this script's
 # original single-tunnel behavior.
+#
+# --from-key <path> is the non-interactive path, for a tunnel created
+# programmatically instead of pasted from the dashboard (used by
+# `uis network create cloudflare`). <path> is a #1876-format KEY=VALUE file
+# (ENV, TUNNEL_NAME, TUNNEL_ID, ACCOUNT_ID, TUNNEL_SECRET — TUNNEL_SECRET is
+# the connector token's "s" field, verbatim). The token is rebuilt from those
+# fields; the TTY guard and every interactive prompt below are skipped. An
+# optional --domain sets BASE_DOMAIN_CLOUDFLARE_<NAME> the same as the
+# interactive prompt would (the key file itself carries no domain field).
+# Everything past "Persist (file 1/2)" below is shared, unchanged, with the
+# interactive path — one writer, two ways to reach it.
 
 set -euo pipefail
 
@@ -25,6 +36,8 @@ REPO_ROOT="${UIS_REPO_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 # ----- Parse --env (optional; empty means today's bare/single-tunnel path) -----
 source "$REPO_ROOT/provision-host/uis/lib/cloudflare-envs.sh"
 CF_ENV=""
+FROM_KEY=""
+CLI_DOMAIN=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --env)
@@ -35,12 +48,51 @@ while [[ $# -gt 0 ]]; do
             CF_ENV="${1#--env=}"
             shift
             ;;
+        --from-key)
+            FROM_KEY="${2:-}"
+            shift 2 || { echo "✗ --from-key requires a path" >&2; exit 1; }
+            ;;
+        --from-key=*)
+            FROM_KEY="${1#--from-key=}"
+            shift
+            ;;
+        --domain)
+            CLI_DOMAIN="${2:-}"
+            shift 2 || { echo "✗ --domain requires a value" >&2; exit 1; }
+            ;;
+        --domain=*)
+            CLI_DOMAIN="${1#--domain=}"
+            shift
+            ;;
         *)
             echo "✗ Unknown argument: $1" >&2
             exit 1
             ;;
     esac
 done
+
+if [[ -n "$FROM_KEY" ]]; then
+    [[ -f "$FROM_KEY" ]] || { echo "✗ --from-key file not found: $FROM_KEY" >&2; exit 1; }
+    # `|| true` matters here: under set -eo pipefail, a missing key makes grep
+    # exit 1, and a failing command substitution used in a plain assignment
+    # (KEY_X="$(_key_field ...)") aborts the whole script right there — before
+    # the explicit "missing a required field" check below ever runs. Letting
+    # this return empty instead keeps that check the thing that actually fires.
+    _key_field() { grep -m1 "^$1=" "$2" 2>/dev/null | cut -d= -f2- || true; }
+    KEY_ENV="$(_key_field ENV "$FROM_KEY")"
+    KEY_TUNNEL_ID="$(_key_field TUNNEL_ID "$FROM_KEY")"
+    KEY_ACCOUNT_ID="$(_key_field ACCOUNT_ID "$FROM_KEY")"
+    KEY_TUNNEL_SECRET="$(_key_field TUNNEL_SECRET "$FROM_KEY")"
+    for f in KEY_ENV KEY_TUNNEL_ID KEY_ACCOUNT_ID KEY_TUNNEL_SECRET; do
+        [[ -n "${!f}" ]] || { echo "✗ $FROM_KEY is missing a required field (checked ENV/TUNNEL_ID/ACCOUNT_ID/TUNNEL_SECRET)" >&2; exit 1; }
+    done
+    if [[ -n "$CF_ENV" && "${CF_ENV^^}" != "${KEY_ENV^^}" ]]; then
+        echo "✗ --env ${CF_ENV,,} doesn't match ENV=$KEY_ENV in $FROM_KEY — refusing to wire a ${KEY_ENV,,} tunnel into ${CF_ENV,,}" >&2
+        exit 1
+    fi
+    CF_ENV="${KEY_ENV^^}"
+fi
+
 if [[ -n "$CF_ENV" ]]; then
     CF_ENV="${CF_ENV^^}"
     if ! _cf_env_is_valid "$CF_ENV"; then
@@ -84,81 +136,98 @@ echo " Writes the tunnel token. No tunnel is deployed yet."
 echo "═══════════════════════════════════════════════════════════"
 echo
 
-# ----- TTY guard -----
-if [[ ! -t 0 ]]; then
-    print_error "uis network init cloudflare requires an interactive terminal."
-    echo "  Run it from your terminal (not piped, not inside a non-tty container exec)."
-    exit 1
-fi
+if [[ -z "$FROM_KEY" ]]; then
+    # ----- TTY guard -----
+    if [[ ! -t 0 ]]; then
+        print_error "uis network init cloudflare requires an interactive terminal."
+        echo "  Run it from your terminal (not piped, not inside a non-tty container exec)."
+        echo "  (Creating the tunnel programmatically instead? See uis network create cloudflare,"
+        echo "   which calls this script's non-interactive --from-key path.)"
+        exit 1
+    fi
 
-# ----- Pre-conditions reminder -----
-echo "Before continuing you need:"
-echo "  - A Cloudflare account with a domain you own (DNS managed by Cloudflare)."
-echo "  - A tunnel created at: Zero Trust → Networks → Tunnels → Create a tunnel."
-echo "  - The tunnel token from the install instructions (long string starting 'ey...')."
-echo
-
-# ----- Overwrite gate -----
-if [[ -f "$ENV_FILE" ]]; then
-    echo "An existing config file was found:"
-    echo "  $ENV_FILE_REL"
+    # ----- Pre-conditions reminder -----
+    echo "Before continuing you need:"
+    echo "  - A Cloudflare account with a domain you own (DNS managed by Cloudflare)."
+    echo "  - A tunnel created at: Zero Trust → Networks → Tunnels → Create a tunnel."
+    echo "  - The tunnel token from the install instructions (long string starting 'ey...')."
     echo
-    echo "What would you like to do?"
-    echo "  [1] Skip — keep the existing values, exit the wizard."
-    echo "  [2] Re-prompt — overwrite with new values."
-    echo "  [3] Show — print the current values + path, then exit."
+
+    # ----- Overwrite gate -----
+    if [[ -f "$ENV_FILE" ]]; then
+        echo "An existing config file was found:"
+        echo "  $ENV_FILE_REL"
+        echo
+        echo "What would you like to do?"
+        echo "  [1] Skip — keep the existing values, exit the wizard."
+        echo "  [2] Re-prompt — overwrite with new values."
+        echo "  [3] Show — print the current values + path, then exit."
+        echo
+        read -rp "Choice [1-3]: " choice
+        case "$choice" in
+            1|"")
+                print_status "Keeping existing config. To deploy: ./uis network up cloudflare${CF_ENV:+ --env ${CF_ENV,,}}"
+                exit 0
+                ;;
+            2)
+                # fall through to prompt
+                ;;
+            3)
+                echo
+                echo "Path: $ENV_FILE_REL"
+                echo
+                grep -E '^[A-Z_]+=' "$ENV_FILE" || true
+                exit 0
+                ;;
+            *)
+                print_error "Unknown choice: $choice"
+                exit 1
+                ;;
+        esac
+    fi
+
+    # ----- Prompt for tunnel token -----
     echo
-    read -rp "Choice [1-3]: " choice
-    case "$choice" in
-        1|"")
-            print_status "Keeping existing config. To deploy: ./uis network up cloudflare${CF_ENV:+ --env ${CF_ENV,,}}"
-            exit 0
-            ;;
-        2)
-            # fall through to prompt
-            ;;
-        3)
-            echo
-            echo "Path: $ENV_FILE_REL"
-            echo
-            grep -E '^[A-Z_]+=' "$ENV_FILE" || true
-            exit 0
-            ;;
-        *)
-            print_error "Unknown choice: $choice"
-            exit 1
-            ;;
-    esac
+    echo "Paste the Cloudflare tunnel token (long string from the dashboard):"
+    read -rsp "  $TOKEN_VAR: " token
+    echo
+    echo
+
+    if [[ -z "$token" ]]; then
+        print_error "Token is required. Aborting."
+        exit 1
+    fi
+
+    # Quick sanity on shape — Cloudflare tunnel tokens are long JWT-shaped strings.
+    # Don't hard-fail (it might change), just warn if it doesn't look right.
+    if [[ ${#token} -lt 100 ]]; then
+        print_warning "Token looks short (${#token} chars). Cloudflare tunnel tokens are usually 200+ chars."
+        read -rp "Continue anyway? [y/N]: " confirm
+        case "$confirm" in
+            y|Y|yes|Yes) ;;
+            *) print_error "Aborted."; exit 1 ;;
+        esac
+    fi
+
+    # ----- Optional: base domain (used by verify's e2e HTTP probe) -----
+    echo "Base domain (optional — enables 'uis network verify cloudflare' end-to-end check)."
+    echo "  Example: skryter.no (the apex you've routed through the tunnel)"
+    read -rp "  $DOMAIN_VAR [skip]: " domain
+    echo
+else
+    # ----- Non-interactive: rebuild the token from the --from-key file -----
+    if [[ -f "$ENV_FILE" ]]; then
+        print_warning "Overwriting existing config: $ENV_FILE_REL"
+    fi
+    token="$(python3 -c '
+import base64, json, sys
+account_id, tunnel_id, tunnel_secret = sys.argv[1:4]
+blob = json.dumps({"a": account_id, "t": tunnel_id, "s": tunnel_secret}, separators=(",", ":")).encode()
+print(base64.b64encode(blob).decode())
+' "$KEY_ACCOUNT_ID" "$KEY_TUNNEL_ID" "$KEY_TUNNEL_SECRET")"
+    domain="$CLI_DOMAIN"
+    print_status "Rebuilt tunnel token from $FROM_KEY (${#token} chars)."
 fi
-
-# ----- Prompt for tunnel token -----
-echo
-echo "Paste the Cloudflare tunnel token (long string from the dashboard):"
-read -rsp "  $TOKEN_VAR: " token
-echo
-echo
-
-if [[ -z "$token" ]]; then
-    print_error "Token is required. Aborting."
-    exit 1
-fi
-
-# Quick sanity on shape — Cloudflare tunnel tokens are long JWT-shaped strings.
-# Don't hard-fail (it might change), just warn if it doesn't look right.
-if [[ ${#token} -lt 100 ]]; then
-    print_warning "Token looks short (${#token} chars). Cloudflare tunnel tokens are usually 200+ chars."
-    read -rp "Continue anyway? [y/N]: " confirm
-    case "$confirm" in
-        y|Y|yes|Yes) ;;
-        *) print_error "Aborted."; exit 1 ;;
-    esac
-fi
-
-# ----- Optional: base domain (used by verify's e2e HTTP probe) -----
-echo "Base domain (optional — enables 'uis network verify cloudflare' end-to-end check)."
-echo "  Example: skryter.no (the apex you've routed through the tunnel)"
-read -rp "  $DOMAIN_VAR [skip]: " domain
-echo
 
 # ----- Persist (file 1/2): per-provider record under service-keys/ -----
 mkdir -p "$(dirname "$ENV_FILE")"

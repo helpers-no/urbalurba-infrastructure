@@ -132,6 +132,7 @@ Platform:
   platform down   <provider>  Tear down the cluster (delegates to 03-destroy.sh)
 
 Network:
+  network create   <provider>             Create the tunnel/route via API (cloudflare: needs OpenTofu + an API token)
   network init     <provider>             Interactive setup wizard for a networking provider (cloudflare, tailscale)
   network list                            Show networking providers and their state
   network up       <provider>             Deploy the provider into the active cluster
@@ -228,6 +229,7 @@ Examples:
   uis secrets status      # Show what's configured
   uis tools list          # Show available tools
   uis tools install azure-cli  # Install Azure CLI
+  uis network create cloudflare --env test --domain example.com  # Create the tunnel via API (optional)
   uis network init cloudflare         # Set the Cloudflare tunnel token
   uis network up cloudflare           # Deploy the Cloudflare tunnel in-cluster
   uis network verify cloudflare       # Check Cloudflare tunnel configuration
@@ -1550,6 +1552,7 @@ cmd_network() {
     shift || true
 
     case "$subcmd" in
+        create)    cmd_network_create "$@" ;;
         init)      cmd_network_init "$@" ;;
         list)      cmd_network_list "$@" ;;
         up)        cmd_network_up "$@" ;;
@@ -1560,12 +1563,12 @@ cmd_network() {
         unexpose)  cmd_network_unexpose "$@" ;;
         "")
             log_error "Usage: uis network <subcmd> [<provider>]"
-            echo "Subcommands: init | list | up | status | down | verify | expose | unexpose" >&2
+            echo "Subcommands: create | init | list | up | status | down | verify | expose | unexpose" >&2
             exit "$EXIT_GENERAL_ERROR"
             ;;
         *)
             log_error "Unknown network subcommand: $subcmd"
-            echo "Usage: uis network [init|list|up|status|down|verify|expose|unexpose] [<provider>]" >&2
+            echo "Usage: uis network [create|init|list|up|status|down|verify|expose|unexpose] [<provider>]" >&2
             exit "$EXIT_GENERAL_ERROR"
             ;;
     esac
@@ -1587,6 +1590,32 @@ _list_available_network_providers_with_script() {
         esac
         echo "  - $p"
     done
+}
+
+# cmd_network_create — create the tunnel/route itself via the provider's API.
+# No cluster banner — this doesn't touch the active cluster, it talks to the
+# provider's own control plane (Cloudflare's API, not Kubernetes).
+cmd_network_create() {
+    local provider="${1:-}"
+    shift || true
+    local repo_root
+    repo_root="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+    if [[ -z "$provider" ]]; then
+        log_error "Usage: uis network create <provider> --env <name> --domain <domain>"
+        { _list_available_network_providers_with_script create.sh "$repo_root"; } >&2
+        exit "$EXIT_GENERAL_ERROR"
+    fi
+
+    local script="$repo_root/networking/$provider/scripts/create.sh"
+    if [[ ! -f "$script" ]]; then
+        log_error "Unknown network provider '$provider' (no create.sh found at $script)"
+        { _list_available_network_providers_with_script create.sh "$repo_root"; } >&2
+        exit "$EXIT_GENERAL_ERROR"
+    fi
+
+    export UIS_REPO_ROOT="$repo_root"
+    exec "$script" "$@"
 }
 
 # cmd_network_init — interactive wizard for a networking provider.

@@ -51,6 +51,29 @@ RUN YQ_VERSION="v4.44.1" && \
     echo "Installed yq version:" && \
     /usr/local/bin/yq --version
 
+# Install OpenTofu for IaC-based Cloudflare tunnel creation (uis network create cloudflare)
+RUN TOFU_VERSION="1.9.1" && \
+    ARCH=$(uname -m) && \
+    case "$ARCH" in \
+      x86_64) \
+        TARCH="amd64" \
+        ;; \
+      aarch64 | arm64) \
+        TARCH="arm64" \
+        ;; \
+      *) \
+        echo "Unsupported architecture: $ARCH" && \
+        exit 1 \
+        ;; \
+    esac && \
+    echo "Downloading OpenTofu version $TOFU_VERSION for architecture $ARCH..." && \
+    wget -qO /tmp/tofu.tar.gz "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_${TARCH}.tar.gz" && \
+    tar -xzf /tmp/tofu.tar.gz -C /usr/local/bin tofu && \
+    chmod a+x /usr/local/bin/tofu && \
+    rm /tmp/tofu.tar.gz && \
+    echo "Installed OpenTofu version:" && \
+    /usr/local/bin/tofu version
+
 # Create necessary directories
 RUN mkdir -p /mnt/urbalurbadisk && \
     chown ansible:ansible /mnt/urbalurbadisk
