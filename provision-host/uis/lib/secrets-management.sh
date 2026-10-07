@@ -221,6 +221,18 @@ apply_secrets() {
     local secrets_dir
     secrets_dir=$(get_user_secrets_dir)
 
+    # Every bare `kubectl` call below previously relied on kubectl's own default
+    # resolution ($KUBECONFIG, then $HOME/.kube/config) rather than pointing at
+    # UIS's own generated kubeconfig — unlike every ansible playbook in this repo,
+    # which always passes kubeconfig explicitly. That default silently works only
+    # as long as nothing else occupies $HOME/.kube/config; found failing for real
+    # when a host-level bind mount put an unrelated, unreadable-to-ansible
+    # directory there, and "uis secrets apply" errored on a permissions problem
+    # that had nothing to do with secrets. Same path every other kubeconf-all
+    # consumer in this codebase already uses (see configure-postgresql.sh,
+    # configure-postgrest.sh, connect.sh).
+    local kubeconf="${KUBECONF:-/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all}"
+
     # Check for secrets file in order of preference
     local secrets_file=""
     local file_locations=(
@@ -264,7 +276,7 @@ apply_secrets() {
     local waited=0
     local terminating
     while [[ $waited -lt 60 ]]; do
-        terminating=$(kubectl get namespaces --no-headers 2>/dev/null \
+        terminating=$(kubectl --kubeconfig "$kubeconf" get namespaces --no-headers 2>/dev/null \
             | awk '$2 == "Terminating" { print $1 }' | tr '\n' ' ')
         [[ -z "${terminating// /}" ]] && break
         [[ $waited -eq 0 ]] && log_info "Waiting for namespace(s) to finish terminating: ${terminating}"
@@ -277,7 +289,7 @@ apply_secrets() {
         log_warn "Namespace(s) still terminating after ${waited}s: ${terminating}"
     fi
 
-    if ! kubectl apply -f "$secrets_file"; then
+    if ! kubectl --kubeconfig "$kubeconf" apply -f "$secrets_file"; then
         log_error "Failed to apply secrets"
         return 1
     fi
