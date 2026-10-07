@@ -27,6 +27,12 @@ Dashboard > My Profile > API Tokens > Create Token > Create Custom Token (https:
   never post it. Lost it? Create a new one; the old one cannot be read back.
 The token cannot be created by this IaC (that needs a broader token), so this step stays manual.
 
+**Known deviation, documented on purpose:** the token actually in use for the real urbalurba.eu/
+urbalurba.no setup is wider than this recipe — it reuses a pre-existing, differently-named token
+with `Zone | Zone | Edit` (not Read) on "All zones" (not scoped to specific zones). It works, but
+it can edit DNS on every zone in the account, not just these two. See
+`cloudflare-api.env.template` for the same note next to where the token actually gets dropped in.
+
 Install command, per domain (via UIS):
 ```bash
 uis network create cloudflare --env test --domain urbalurba.eu
