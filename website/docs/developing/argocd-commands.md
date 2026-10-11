@@ -27,9 +27,9 @@ uis argocd register hello-world https://github.com/helpers-no/urb-dev-typescript
 ### What happens during registration
 
 1. **Validates inputs** — checks that the name is DNS-compatible, not already in use, and the URL is valid HTTPS
-2. **Checks prerequisites** — verifies ArgoCD is running, the repo exists on GitHub, and it has a `manifests/` directory
+2. **Checks prerequisites** — verifies ArgoCD is running, the repo exists on GitHub, and it has a `uis/` directory (the standard layout) or, for repositories that predate that standard, a `manifests/` directory
 3. **Creates namespace** — `hello-world` namespace in the cluster
-4. **Creates ArgoCD Application** — points at the repo's `manifests/` directory, enables auto-sync
+4. **Creates ArgoCD Application** — points at the repo's `uis/` directory (or `manifests/` as a fallback), enables auto-sync
 5. **Waits for sync** — monitors until ArgoCD syncs manifests and pods are running
 6. **Creates IngressRoute** — platform-managed Traefik route for `hello-world.localhost` (and any other domain pointing to the cluster)
 7. **Displays summary** — shows health status, service info, and the URL to access the app
