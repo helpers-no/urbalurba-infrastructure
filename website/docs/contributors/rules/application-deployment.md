@@ -21,7 +21,7 @@ other later.
 | Owner | Owns | Why it cannot be the other one |
 |---|---|---|
 | **`uis`** | databases, roles, secrets, and **platform-service configuration** — a Dagster code location, a PostgREST instance | None of these is a Kubernetes manifest in the application's repository. A code location is a Helm values overlay; a PostgREST instance is a generated password. **ArgoCD has no object to reconcile** |
-| **ArgoCD** | the **workload** — `Deployment`, `Service`, `Ingress`, in the application's own repo under `manifests/` | Reconciling a running workload against git is exactly what it is for, and `uis argocd register` already does it |
+| **ArgoCD** | the **workload** — `Deployment`, `Service`, `Ingress`, in the application's own repo under `uis/` (or `manifests/` for repositories that predate that layout) | Reconciling a running workload against git is exactly what it is for, and `uis argocd register` already does it |
 
 ### The test for any application
 
@@ -61,10 +61,10 @@ services is, by definition, on the `uis` path for those parts.
 
 ## What ArgoCD already gives you, and what it does not
 
-`uis argocd register` creates an `Application` (`argocd-register-app.yml:285-311`):
+`uis argocd register` creates an `Application` (`argocd-register-app.yml:328-354`):
 
 ```yaml
-source:      { repoURL: <repo>.git, targetRevision: HEAD, path: manifests }
+source:      { repoURL: <repo>.git, targetRevision: HEAD, path: <uis-or-manifests> }
 syncPolicy:
   automated: { prune: true, selfHeal: true }
   syncOptions: [ CreateNamespace=true ]

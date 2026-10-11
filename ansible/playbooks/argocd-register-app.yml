@@ -7,7 +7,8 @@
 #   - Parses GitHub owner and repo name from repo_url
 #   - Verifies ArgoCD is deployed and running
 #   - Verifies GitHub repository exists and is accessible
-#   - Verifies manifests/ directory exists in the repository
+#   - Verifies uis/ directory exists in the repository (falls back to manifests/
+#     for repositories that predate the uis/ layout standard)
 #
 # If pre-flight passes:
 #   - Creates a namespace with the app_name
@@ -183,7 +184,36 @@
       ansible.builtin.debug:
         msg: "✅ Repository {{ github_owner }}/{{ repo_name }} exists and is accessible"
 
-    - name: "8. Verify manifests/ directory exists (authenticated)"
+    - name: "8. Verify uis/ directory exists (authenticated)"
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ github_owner }}/{{ repo_name }}/contents/uis"
+        method: GET
+        headers:
+          Authorization: "token {{ github_pat }}"
+          Accept: "application/vnd.github.v3+json"
+        status_code: [200]
+        return_content: false
+      register: github_uis_check
+      failed_when: false
+      when: has_github_token | bool
+
+    - name: "8. Verify uis/ directory exists (unauthenticated)"
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ github_owner }}/{{ repo_name }}/contents/uis"
+        method: GET
+        headers:
+          Accept: "application/vnd.github.v3+json"
+        status_code: [200]
+        return_content: false
+      register: github_uis_check_noauth
+      failed_when: false
+      when: not (has_github_token | bool)
+
+    - name: "8a. Merge uis/ check results"
+      ansible.builtin.set_fact:
+        uis_check_status: "{{ (github_uis_check.status | default(0)) if (has_github_token | bool) else (github_uis_check_noauth.status | default(0)) }}"
+
+    - name: "8b. Verify manifests/ directory exists, fallback (authenticated)"
       ansible.builtin.uri:
         url: "https://api.github.com/repos/{{ github_owner }}/{{ repo_name }}/contents/manifests"
         method: GET
@@ -194,9 +224,9 @@
         return_content: false
       register: github_manifests_check
       failed_when: false
-      when: has_github_token | bool
+      when: has_github_token | bool and uis_check_status | int != 200
 
-    - name: "8. Verify manifests/ directory exists (unauthenticated)"
+    - name: "8b. Verify manifests/ directory exists, fallback (unauthenticated)"
       ansible.builtin.uri:
         url: "https://api.github.com/repos/{{ github_owner }}/{{ repo_name }}/contents/manifests"
         method: GET
@@ -206,29 +236,41 @@
         return_content: false
       register: github_manifests_check_noauth
       failed_when: false
-      when: not (has_github_token | bool)
+      when: not (has_github_token | bool) and uis_check_status | int != 200
 
-    - name: "8a. Merge manifests check results"
+    - name: "8c. Merge manifests/ check results"
       ansible.builtin.set_fact:
         manifests_check_status: "{{ (github_manifests_check.status | default(0)) if (has_github_token | bool) else (github_manifests_check_noauth.status | default(0)) }}"
+      when: uis_check_status | int != 200
 
-    - name: "8b. Fail if manifests/ directory not found"
+    - name: "8d. Determine the application path — uis/ preferred, manifests/ fallback"
+      ansible.builtin.set_fact:
+        app_path: "{{ 'uis' if (uis_check_status | int == 200) else 'manifests' }}"
+
+    - name: "8e. Fail if neither uis/ nor manifests/ directory found"
       ansible.builtin.fail:
         msg: |
-          ❌ No manifests/ directory found in repository '{{ github_owner }}/{{ repo_name }}'.
+          ❌ No uis/ or manifests/ directory found in repository '{{ github_owner }}/{{ repo_name }}'.
 
-          ArgoCD expects Kubernetes manifests in a manifests/ directory.
-          Make sure your repo has this structure:
+          ArgoCD expects the standard uis/ layout (kustomization.yaml, one file per
+          service) or, for repositories that predate that standard, a manifests/
+          directory. Make sure your repo has one of these structures:
+
+            {{ repo_name }}/
+              uis/
+                kustomization.yaml
+                deployment.yaml
+                service.yaml
 
             {{ repo_name }}/
               manifests/
                 deployment.yaml
                 service.yaml
-      when: manifests_check_status | int != 200
+      when: uis_check_status | int != 200 and (manifests_check_status | default(0) | int) != 200
 
-    - name: "8c. Display manifests check passed"
+    - name: "8f. Display path check passed"
       ansible.builtin.debug:
-        msg: "✅ manifests/ directory found in repository"
+        msg: "✅ {{ app_path }}/ directory found in repository — registering with this path"
 
     - name: "9. Display registration plan"
       ansible.builtin.debug:
@@ -237,6 +279,7 @@
             - App name: {{ app_name }}
             - Repository: {{ github_owner }}/{{ repo_name }} (verified)
             - Repo URL: {{ repo_url_clean }}
+            - Path: {{ app_path }}
             - Namespace: {{ app_name }}
             - ArgoCD Namespace: {{ argocd_namespace }}
             - Wait timeout: {{ wait_timeout }} seconds
@@ -299,7 +342,7 @@
                 source:
                   repoURL: "{{ repo_url_clean }}.git"
                   targetRevision: HEAD
-                  path: manifests
+                  path: "{{ app_path }}"
                 destination:
                   server: https://kubernetes.default.svc
                   namespace: "{{ app_name }}"
