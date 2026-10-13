@@ -26,29 +26,38 @@ ArgoCD applies manifests; it cannot create a database. So something in the clust
 
 A `Provision` custom resource at sync-wave `-1`, an ArgoCD health check holding the sync until `status: Ready`, and one **handler** per service — `configure-postgresql.sh` and PostgREST today, others joining later.
 
-## 🔴 The premise the shape rests on is not established
+## 🔴 The premise the shape rests on is false — settled 2026-09-29
 
-The argument for the provisioner over the hook Job is that **only UIS's namespace holds service admin credentials.** That needs checking before it is designed around.
+The argument for the provisioner over the hook Job is that **only UIS's namespace holds service admin credentials.** When this was filed that needed a cluster to check. It does not: the whole chain is in this repository, in the secrets template.
 
-What is measured in this repository:
-
-- `_pg_get_admin_password()` reads **`urbalurba-secrets` → `PGPASSWORD`** in namespace **`default`**. That is the Postgres admin credential.
-- `ANALYSIS-nais-uis` (2026-08-15) measured `urbalurba-secrets` as **one Secret shape replicated across 13 namespaces, 54 keys**, and recorded the blast radius as *"every workload in 13 namespaces"*.
-- `320-unity-catalog-deployment.yaml` reads **`PGPASSWORD` from `urbalurba-secrets` in its own namespace** — the same Secret name and the same key name as the admin credential.
-
-⚠️ **The same key name in two namespaces is not proof the values match**, and the secrets manifest lives outside this repository, so it cannot be settled here. **One command settles it:**
-
-```bash
-kubectl get secret urbalurba-secrets -n default        -o jsonpath='{.data.PGPASSWORD}'
-kubectl get secret urbalurba-secrets -n unity-catalog  -o jsonpath='{.data.PGPASSWORD}'
+```
+DEFAULT_DATABASE_PASSWORD                    00-common-values.env.template
+  └─> PGPASSWORD                             same file, line 140
+      └─> urbalurba-secrets/default:PGPASSWORD    00-master-secrets.yml.template:76
+          └─> --set auth.postgresPassword=…       040-database-postgresql.yml:66
 ```
 
-🔴 **If those match, the hook Job was rejected for a property UIS does not yet have** — every workload in those namespaces can already reach Postgres as admin, and the provisioner protects nothing until [item 4](../../../contributors/rules/application-deployment.md) splits the shared Secret.
+That last line is the **Postgres superuser**. And the same `${PGPASSWORD}` value is written into four other namespaces under different key names:
+
+| namespace | key | value |
+|---|---|---|
+| `unity-catalog` | `UNITY_CATALOG_DATABASE_PASSWORD` | `${PGPASSWORD}` |
+| `unity-catalog` | `UNITY_CATALOG_DATABASE_URL` | `postgresql://postgres:${PGPASSWORD}@…` |
+| `openmetadata` | `OPENMETADATA_DATABASE_PASSWORD` | `${PGPASSWORD}` |
+| `openmetadata` | `OPENMETADATA_DATABASE_URL` | `postgresql://postgres:${PGPASSWORD}@…` |
+| `nextcloud` | `NEXTCLOUD_DATABASE_PASSWORD` | `${PGPASSWORD}` |
+| `authentik` | `AUTHENTIK_POSTGRESQL__PASSWORD` | `${PGPASSWORD}` |
+
+⚠️ The filing guessed at "the same key name in two namespaces". That was wrong in detail and understated in substance: **different key names, the same value** — and two of them ship it as a ready-made superuser connection string.
+
+🔴 **So the hook Job was rejected for a property UIS does not have.** Any workload in those four namespaces can already read the Postgres superuser password from its own namespace. A hook Job in `unity-catalog` needing admin credentials is not a new exposure there; it is the exposure that already exists.
+
+**This does not make the provisioner wrong.** It moves what it is *for*. It is not a security improvement today — it is a **workflow** change (provisioning happens on ArgoCD sync rather than in a command someone runs), and it becomes a security improvement only after [item 4](../../../contributors/rules/application-deployment.md) splits the shared Secret. Those are two different justifications with two different urgencies, and only the second was in the proposal.
 
 ## Sequence, if it is built
 
 1. **Item 3** — retract `SCRIPT_CONFIGURABLE` where no handler exists. **Eight services declare it; two have handlers.** A provisioner that reads that flag to decide what it can fulfil inherits the false advertisement. Prerequisite, not a tidy-up.
-2. **Item 4** — per-workload named secrets. This is what makes the provisioner's security claim **true**; without it the mechanism is clean and the blast radius is unchanged.
+2. **Item 4** — per-workload named secrets. This is what makes the provisioner's security claim **true**; without it the mechanism is clean and the blast radius is unchanged. 🔴 **Now measured, not suspected** — see the section above: four namespaces hold the Postgres superuser password today.
 3. **Then** the provisioner has something real to protect.
 
 ## ⚠️ The cost that was not in the estimate
