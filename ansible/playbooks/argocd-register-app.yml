@@ -298,6 +298,15 @@
             state: present
             kubeconfig: "{{ merged_kubeconf_file }}"
 
+        # 🔴 Without the `argocd.argoproj.io/secret-type: repository` label,
+        # ArgoCD's repo-server never recognizes this as a repository
+        # credential — it scans Secrets in its namespace BY LABEL, not by
+        # name or content. A repo with this Secret missing the label passes
+        # every pre-flight check (both GitHub API checks already authenticate
+        # with github_pat) and then times out ~5 minutes later waiting for
+        # ArgoCD to sync, because the git clone has no credentials ArgoCD will
+        # actually use. Confirmed against ArgoCD's declarative repository
+        # Secret contract (operator-manual/declarative-setup, "Repositories").
         - name: "11. Create GitHub credentials secret (private repos)"
           kubernetes.core.k8s:
             name: "{{ github_secret_name }}"
@@ -312,6 +321,8 @@
               metadata:
                 name: "{{ github_secret_name }}"
                 namespace: "{{ argocd_namespace }}"
+                labels:
+                  argocd.argoproj.io/secret-type: repository
               type: Opaque
               stringData:
                 type: git
