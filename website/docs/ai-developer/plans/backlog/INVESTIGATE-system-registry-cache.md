@@ -236,6 +236,111 @@ enabled services; the outage test passes.
 
 ---
 
+## Part 4 — Forgejo/Epinio needs a *different* shape, not another upstream (2026-10-19)
+
+**From `urb-agents#1912`:** whichever cluster ends up running Epinio
+([INVESTIGATE-service-epinio-deploy-path](./INVESTIGATE-service-epinio-deploy-path.md))
+needs containerd to trust Forgejo's own built-in OCI registry without TLS — the same
+*class* of gap as open question 4 above, but **it is not another entry in
+`registry_upstreams`**, and folding it in that way would actively break things:
+
+- `registry_upstreams` is synced by zot with `tlsVerify: true`
+  (`roles/registry/templates/zot-config.json.j2`). Forgejo serves plain HTTP internally
+  (no `cert-manager` in UIS; TLS ends at the edge) — a `tlsVerify: true` sync against it
+  does not work.
+- Even with that relaxed, zot re-encodes Docker-format images to OCI on ingest — the
+  OCI-REFORMAT CAVEAT already recorded in `roles/registry/defaults/main.yml`. **A
+  digest-pinned pull does not hit the cache.** Forgejo's own images are exactly the case
+  most likely to be pulled by digest (build → push → deploy in one pipeline), so routing
+  them through zot risks silently missing the cache on every pull, not just the first.
+- Conceptually, Forgejo is the **origin** of these images, freshly built locally — not an
+  external upstream being mirrored for resilience. `registry_upstreams`'s own stated
+  purpose is "cache every image this lab ever deploys … from upstreams nobody's picked
+  yet"; Forgejo isn't one.
+
+**Recommendation:** a second, independent variable — e.g. `registry_direct_insecure: []`,
+a list of `{domain, endpoint}` with nothing to do with zot — rendered into the *same*
+`/etc/rancher/k3s/registries.yaml` by a generalized `k3s-registries.yaml.j2` /
+`k3s-registry-ensure.yml`, as containerd's standard shape for a private insecure
+registry: a domain mirrored to itself over plain HTTP
+(`mirrors: { <forgejo-domain>: { endpoint: ["http://<forgejo-host>:<port>"] } } }`),
+not proxied through zot at all.
+
+⚠️ **The risk this surfaces, not yet solved:** `k3s-registry-ensure.yml` runs exactly
+once, gated on `"registry" ∈ CORE_SERVICES`, and **writes the whole file** via
+`ansible.builtin.template` — the full desired state comes from `registry_upstreams`
+alone, today. If Forgejo/Epinio wiring is triggered independently (a second playbook run
+against the same file, from whatever eventually provisions Forgejo), each run clobbers
+whatever the other wrote — there is exactly one `registries.yaml` per node, and only one
+of the two conditions can win a last-write-wins race.
+
+**The fix is composition, not a second file.** Whatever ends up triggering Forgejo's
+registry wiring must assemble the complete desired state in one render — both the
+zot-mirror entries (if `registry` is selected) and the direct-insecure entries (if
+Forgejo/Epinio is selected) — rather than each trigger owning an independent write to the
+same path. This is not yet resolved because it is not yet decided whether Forgejo
+provisioning becomes a `CORE_SERVICES` entry in `05-core-services-apply.sh`'s sense or a
+separate mechanism entirely (`urb-agents#1911`'s territory). **Flagging the clobber risk
+now, before that decision locks in a shape that hits it.**
+
+Not a PLAN yet — gated on the same lab proof-of-concept as the Epinio deploy-path
+decision.
+
+---
+
+## Part 5 — the clobber risk crosses a repo boundary, not just a trigger boundary (2026-10-19)
+
+**From a review on `urb-agents#1913`:** Part 4's clobber risk was analysed *within this
+repository's own scope* — the existing zot-triggered write versus a possible future
+Epinio-triggered write, both living in `urbalurba-infrastructure`. That framing has a gap:
+**this repository's own `k3s-registry-ensure.yml` is itself just one possible writer of
+`/etc/rancher/k3s/registries.yaml`.**
+
+Nothing about that playbook detects or preserves entries it did not put there. It
+templates the whole file from `registry_upstreams` (plus, per Part 4's recommendation,
+whatever direct-insecure list it's given) and overwrites unconditionally. **If a cluster's
+`registries.yaml` is composed or managed by anything outside this repository's own
+`05-core-services-apply.sh` flow — for any reason, including one this document has no
+visibility into — re-running this playbook against that cluster silently discards
+whatever that other process added, with no warning.** The playbook's own verification step
+only checks that *its configured* upstreams have `certs.d/`; it does not check that
+nothing else was removed.
+
+Part 4's fix (one render, one combined list, covering both zot-mirror and direct-insecure
+entries) only closes the gap **for callers inside this repository's own invocation of the
+playbook.** It says nothing about a second, independent writer that isn't this repo's code
+at all — and this document cannot know, let alone decide, what such a writer would be or
+whether one exists for a given deployment. That is a real limit on what an INVESTIGATE
+filed here can resolve, not an oversight to paper over.
+
+**What this repository's own mechanism can still do, regardless of who else might write
+to this path:**
+
+1. **Accept the direct-insecure list as an explicit input**, not only from in-repo
+   defaults — so *any* caller, whether the eventual Epinio/Forgejo trigger lives in this
+   repo or not, can supply its entries through this one playbook invocation instead of
+   writing the file independently. (This generalizes Part 4's recommendation rather than
+   replacing it.)
+2. **Refuse rather than silently overwrite what it doesn't recognize.** Before templating,
+   read the current file if one exists, and compare its mirror domains against the known
+   set (configured upstreams plus any supplied extras). An unrecognized domain means
+   something else is managing this file — **refuse, naming it**, rather than discarding
+   it. This is the same shape as this repository's own precedent elsewhere (`uis argocd
+   register` asking what is actually *in* a namespace before acting, rather than trusting
+   whether it merely exists) — a refusal that names the surprise beats a success that
+   doesn't mention it.
+
+**What this document explicitly does not resolve:** whether anything outside this
+repository's own apply flow is ever expected to manage entries in this file for a given
+deployment, and if so, whether it would route through this playbook (per recommendation 1
+above) rather than writing independently. That is not a decision this repository's own
+backlog can make unilaterally — it depends on whatever mechanism ends up owning Forgejo's
+entry, which per `INVESTIGATE-service-epinio-deploy-path.md` is still unsettled. Recording
+it here so it is a deliberate choice, not a silently-reverted file discovered the next time
+`05-core-services-apply.sh` runs with `registry` selected.
+
+---
+
 ## Appendix: reference implementation as built
 
 Proxmox LXC (2 cores, 1 GB RAM, 60 GB cache volume on ZFS with 1 M recordsize +
