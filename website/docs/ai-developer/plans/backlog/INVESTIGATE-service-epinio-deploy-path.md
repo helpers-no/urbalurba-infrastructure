@@ -67,7 +67,12 @@ These are proof-of-concept gates, not implementation details to paper over:
 - `epinio push --git` against a self-hosted (non-GitHub/GitLab) git forge: should work
   per Epinio's source (it's a plain git clone), but the auto-deploy webhook is
   GitHub/GitLab-only and isn't needed for this platform's CI-triggered flow.
-- Whether Epinio can pull from the forge's own registry with credentials.
+- Whether Epinio can pull from the forge's own registry with credentials. **Containerd
+  trust for that registry (plain HTTP, no TLS) is a separate, now-filed gap** — see
+  [INVESTIGATE-system-registry-cache.md, Part 4](./INVESTIGATE-system-registry-cache.md#part-4--forgejoepinio-needs-a-different-shape-not-another-upstream-2026-10-19)
+  (`urb-agents#1912`): it is not another entry behind the existing pull-through cache,
+  and whatever provisions the forge must not independently clobber the cache's own
+  `registries.yaml` wiring.
 - The object store as Epinio's S3 backend: untested with Epinio specifically.
 - Dockerfile builds, and Docker-in-Docker vs. a rootless pusher (e.g. `skopeo`) for
   pushing images from CI — open.

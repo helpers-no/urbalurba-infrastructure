@@ -236,6 +236,58 @@ enabled services; the outage test passes.
 
 ---
 
+## Part 4 — Forgejo/Epinio needs a *different* shape, not another upstream (2026-10-19)
+
+**From `urb-agents#1912`:** whichever cluster ends up running Epinio
+([INVESTIGATE-service-epinio-deploy-path](./INVESTIGATE-service-epinio-deploy-path.md))
+needs containerd to trust Forgejo's own built-in OCI registry without TLS — the same
+*class* of gap as open question 4 above, but **it is not another entry in
+`registry_upstreams`**, and folding it in that way would actively break things:
+
+- `registry_upstreams` is synced by zot with `tlsVerify: true`
+  (`roles/registry/templates/zot-config.json.j2`). Forgejo serves plain HTTP internally
+  (no `cert-manager` in UIS; TLS ends at the edge) — a `tlsVerify: true` sync against it
+  does not work.
+- Even with that relaxed, zot re-encodes Docker-format images to OCI on ingest — the
+  OCI-REFORMAT CAVEAT already recorded in `roles/registry/defaults/main.yml`. **A
+  digest-pinned pull does not hit the cache.** Forgejo's own images are exactly the case
+  most likely to be pulled by digest (build → push → deploy in one pipeline), so routing
+  them through zot risks silently missing the cache on every pull, not just the first.
+- Conceptually, Forgejo is the **origin** of these images, freshly built locally — not an
+  external upstream being mirrored for resilience. `registry_upstreams`'s own stated
+  purpose is "cache every image this lab ever deploys … from upstreams nobody's picked
+  yet"; Forgejo isn't one.
+
+**Recommendation:** a second, independent variable — e.g. `registry_direct_insecure: []`,
+a list of `{domain, endpoint}` with nothing to do with zot — rendered into the *same*
+`/etc/rancher/k3s/registries.yaml` by a generalized `k3s-registries.yaml.j2` /
+`k3s-registry-ensure.yml`, as containerd's standard shape for a private insecure
+registry: a domain mirrored to itself over plain HTTP
+(`mirrors: { <forgejo-domain>: { endpoint: ["http://<forgejo-host>:<port>"] } } }`),
+not proxied through zot at all.
+
+⚠️ **The risk this surfaces, not yet solved:** `k3s-registry-ensure.yml` runs exactly
+once, gated on `"registry" ∈ CORE_SERVICES`, and **writes the whole file** via
+`ansible.builtin.template` — the full desired state comes from `registry_upstreams`
+alone, today. If Forgejo/Epinio wiring is triggered independently (a second playbook run
+against the same file, from whatever eventually provisions Forgejo), each run clobbers
+whatever the other wrote — there is exactly one `registries.yaml` per node, and only one
+of the two conditions can win a last-write-wins race.
+
+**The fix is composition, not a second file.** Whatever ends up triggering Forgejo's
+registry wiring must assemble the complete desired state in one render — both the
+zot-mirror entries (if `registry` is selected) and the direct-insecure entries (if
+Forgejo/Epinio is selected) — rather than each trigger owning an independent write to the
+same path. This is not yet resolved because it is not yet decided whether Forgejo
+provisioning becomes a `CORE_SERVICES` entry in `05-core-services-apply.sh`'s sense or a
+separate mechanism entirely (`urb-agents#1911`'s territory). **Flagging the clobber risk
+now, before that decision locks in a shape that hits it.**
+
+Not a PLAN yet — gated on the same lab proof-of-concept as the Epinio deploy-path
+decision.
+
+---
+
 ## Appendix: reference implementation as built
 
 Proxmox LXC (2 cores, 1 GB RAM, 60 GB cache volume on ZFS with 1 M recordsize +
