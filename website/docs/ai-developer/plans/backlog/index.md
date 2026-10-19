@@ -15,9 +15,11 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-10-19 |
+| [Investigate: Epinio Deploy Path for UIS](INVESTIGATE-service-epinio-deploy-path.md) | Decide how UIS itself (CLI surface, service layout, docs) should incorporate | 2026-10-19 |
+| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-19 |
 | [Plan: Registry cache — provision the cache itself (zot, not registry:2)](PLAN-system-registry-cache-001-provision.md) | Provision a single zot instance as UIS's pull-through registry cache — the | 2026-10-05 |
 | [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-10-05 |
-| [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-10-05 |
 | [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-10-05 |
 | [Investigate: should a service bring its own availability probe, and can Uptime Kuma accept one?](INVESTIGATE-system-monitor-definitions-with-services.md) | Decide how the external watchdog's monitors get created and stay in | 2026-10-05 |
 | [Investigate: migrate `hosts-to-be-deleted/*` to `platforms/*` (or formally retire)](INVESTIGATE-system-migrate-hosts-to-platforms.md) | — | 2026-10-05 |
@@ -27,7 +29,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Investigate: SemaphoreUI as a UIS service](INVESTIGATE-service-semaphore.md) | Make [SemaphoreUI](https://semaphoreui.com) — a web UI and API for running | 2026-10-05 |
 | [Investigate: OpenBao — deployable on a laptop, and the same interface in production](INVESTIGATE-service-openbao.md) | — | 2026-10-05 |
 | [Investigate: Dagster Orchestration Platform for UIS](INVESTIGATE-service-dagster.md) | UIS today has no data-pipeline orchestrator. Applications that need to ingest, transform, and catalogue data have three options — each with drawbacks: | 2026-10-05 |
-| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-05 |
 | [---](PLAN-secrets-ansible-credentials-in-output.md) | — | 2026-10-01 |
 | [---](PLAN-extensions-in-app-databases.md) | — | 2026-10-01 |
 | [---](INVESTIGATE-system-loki-tempo-minio-dependency.md) | — | 2026-10-01 |
