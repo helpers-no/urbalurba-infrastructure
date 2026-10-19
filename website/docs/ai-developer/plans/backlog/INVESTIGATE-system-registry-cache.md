@@ -288,6 +288,59 @@ decision.
 
 ---
 
+## Part 5 — the clobber risk crosses a repo boundary, not just a trigger boundary (2026-10-19)
+
+**From a review on `urb-agents#1913`:** Part 4's clobber risk was analysed *within this
+repository's own scope* — the existing zot-triggered write versus a possible future
+Epinio-triggered write, both living in `urbalurba-infrastructure`. That framing has a gap:
+**this repository's own `k3s-registry-ensure.yml` is itself just one possible writer of
+`/etc/rancher/k3s/registries.yaml`.**
+
+Nothing about that playbook detects or preserves entries it did not put there. It
+templates the whole file from `registry_upstreams` (plus, per Part 4's recommendation,
+whatever direct-insecure list it's given) and overwrites unconditionally. **If a cluster's
+`registries.yaml` is composed or managed by anything outside this repository's own
+`05-core-services-apply.sh` flow — for any reason, including one this document has no
+visibility into — re-running this playbook against that cluster silently discards
+whatever that other process added, with no warning.** The playbook's own verification step
+only checks that *its configured* upstreams have `certs.d/`; it does not check that
+nothing else was removed.
+
+Part 4's fix (one render, one combined list, covering both zot-mirror and direct-insecure
+entries) only closes the gap **for callers inside this repository's own invocation of the
+playbook.** It says nothing about a second, independent writer that isn't this repo's code
+at all — and this document cannot know, let alone decide, what such a writer would be or
+whether one exists for a given deployment. That is a real limit on what an INVESTIGATE
+filed here can resolve, not an oversight to paper over.
+
+**What this repository's own mechanism can still do, regardless of who else might write
+to this path:**
+
+1. **Accept the direct-insecure list as an explicit input**, not only from in-repo
+   defaults — so *any* caller, whether the eventual Epinio/Forgejo trigger lives in this
+   repo or not, can supply its entries through this one playbook invocation instead of
+   writing the file independently. (This generalizes Part 4's recommendation rather than
+   replacing it.)
+2. **Refuse rather than silently overwrite what it doesn't recognize.** Before templating,
+   read the current file if one exists, and compare its mirror domains against the known
+   set (configured upstreams plus any supplied extras). An unrecognized domain means
+   something else is managing this file — **refuse, naming it**, rather than discarding
+   it. This is the same shape as this repository's own precedent elsewhere (`uis argocd
+   register` asking what is actually *in* a namespace before acting, rather than trusting
+   whether it merely exists) — a refusal that names the surprise beats a success that
+   doesn't mention it.
+
+**What this document explicitly does not resolve:** whether anything outside this
+repository's own apply flow is ever expected to manage entries in this file for a given
+deployment, and if so, whether it would route through this playbook (per recommendation 1
+above) rather than writing independently. That is not a decision this repository's own
+backlog can make unilaterally — it depends on whatever mechanism ends up owning Forgejo's
+entry, which per `INVESTIGATE-service-epinio-deploy-path.md` is still unsettled. Recording
+it here so it is a deliberate choice, not a silently-reverted file discovered the next time
+`05-core-services-apply.sh` runs with `registry` selected.
+
+---
+
 ## Appendix: reference implementation as built
 
 Proxmox LXC (2 cores, 1 GB RAM, 60 GB cache volume on ZFS with 1 M recordsize +
