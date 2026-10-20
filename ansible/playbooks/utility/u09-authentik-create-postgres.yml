@@ -213,6 +213,52 @@
         delay: 2
         timeout: 30
 
+    # 🔴 urb-agents#1917 bug #565: a stale external-services.yaml target and a wrong
+    # PGPASSWORD produced the IDENTICAL "server closed the connection unexpectedly" error from
+    # the tasks below, forcing a manual dig through socat's sidecar logs to tell them apart.
+    # Task 11 above only proves the LOCAL port-forward is accepting connections — not that a
+    # real PostgreSQL server answers at the other end. If this platform proxies "postgresql"
+    # from an external-services.yaml target that is dead or stale, the port-forward's local
+    # port still accepts TCP connections (it tunnels straight to the Service, which still has
+    # endpoints), and the failure only shows up one hop further in, as the ambiguous error this
+    # fixes.
+    #
+    # pg_isready is protocol-aware, not a plain TCP connect — it distinguishes "nothing
+    # answering as PostgreSQL at all" (rc 2, exactly the dead/stale-target case) from "a real
+    # server answered but is rejecting connections" (rc 1, e.g. still starting up) from "a real
+    # server is accepting connections" (rc 0) — all WITHOUT needing valid credentials, so this
+    # check runs before any password is even tried. Already used elsewhere in this repo
+    # (040-database-postgresql.yml, platforms/proxmox/ansible/roles/postgres), so the binary is
+    # a safe assumption in this container.
+    - name: 11.1. Confirm a real PostgreSQL server answers through the tunnel (not just the port accepting)
+      ansible.builtin.command: pg_isready -h localhost -p 5432
+      register: pg_isready_result
+      changed_when: false
+      failed_when: false
+
+    - name: 11.2. Refuse with a distinct message if nothing is answering as PostgreSQL
+      ansible.builtin.fail:
+        msg: |
+          ❌ The PostgreSQL port-forward's local port accepts connections, but nothing
+          answered as a PostgreSQL server (pg_isready exit code {{ pg_isready_result.rc }}).
+
+          This is a NETWORK/TARGET problem, not a credentials problem — the 'postgresql'
+          Service routed the connection somewhere that isn't actually PostgreSQL (or isn't
+          responding at all). If this platform proxies 'postgresql' externally, check
+          external-services.yaml's target address is still correct and reachable.
+
+          This is NOT the "server closed the connection unexpectedly" error from a bad
+          password — that would only happen after this check passes.
+      when: pg_isready_result.rc == 2
+
+    - name: 11.3. Note if PostgreSQL is reachable but actively rejecting connections (e.g. still starting)
+      ansible.builtin.debug:
+        msg: >-
+          ⚠️ pg_isready reports the server is reachable but rejecting connections
+          (exit code 1, typically still starting up). Proceeding anyway — if the tasks
+          below fail, this is a timing issue, not the stale-target class above.
+      when: pg_isready_result.rc == 1
+
     # DELETE OPERATION TASKS
     - block:
         - name: 12-DEL. Terminate active connections to authentik database
