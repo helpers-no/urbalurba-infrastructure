@@ -62,6 +62,11 @@
     authentik_ingressroute_file: "{{ manifests_folder }}/076-authentik-ingressroute.yaml"
     forward_auth_middleware_file: "{{ manifests_folder }}/077-authentik-forward-auth-middleware.yaml"
 
+    # Real TLS for authentik.* (urb-agents#1917 bug #570) — generated, not static, since the
+    # Certificate's dnsNames depend on which domains this install has enabled.
+    authentik_server_tls_certificate_file: "{{ manifests_folder }}/076-authentik-server-tls-certificate.yaml"
+    authentik_ingressroute_tls_file: "{{ manifests_folder }}/076-authentik-ingressroute-tls.yaml"
+
     # Auth10 configuration (loaded from Kubernetes secret)
 
     # Other playbooks
@@ -81,6 +86,21 @@
           🚀 Authentik Authentication System Deployment
           ===============================================
           📝 Target: {{ kube_context | default('default') }}
+
+    - name: "1.1. Verify cert-manager's uis-ca ClusterIssuer is Ready (needed for authentik-server-tls, bug #570)"
+      kubernetes.core.k8s_info:
+        api_version: cert-manager.io/v1
+        kind: ClusterIssuer
+        name: uis-ca
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: authentik_issuer_check
+
+    - name: "1.2. Refuse if cert-manager is not installed"
+      ansible.builtin.fail:
+        msg: >-
+          cert-manager's uis-ca ClusterIssuer was not found. Authentik's real TLS certificate
+          (fixing urb-agents#1917 bug #570) needs it — run 'uis deploy cert-manager' first.
+      when: authentik_issuer_check.resources | default([]) | length == 0
 
     - name: "1.5. Apply secrets file to create namespace and credentials"
       ansible.builtin.command: >
@@ -367,6 +387,22 @@
         domains: "{{ auth10_config.domains }}"
       register: ingressroute_generation
 
+    - name: "24.8. Render Authentik's real TLS certificate (bug #570)"
+      ansible.builtin.template:
+        src: "{{ auth10_templates_folder }}/076-authentik-server-tls-certificate.yaml.j2"
+        dest: "{{ authentik_server_tls_certificate_file }}"
+        mode: '0644'
+      vars:
+        domains: "{{ auth10_config.domains }}"
+
+    - name: "24.9. Render Authentik's HTTPS IngressRoute (bug #570)"
+      ansible.builtin.template:
+        src: "{{ auth10_templates_folder }}/076-authentik-ingressroute-tls.yaml.j2"
+        dest: "{{ authentik_ingressroute_tls_file }}"
+        mode: '0644'
+      vars:
+        domains: "{{ auth10_config.domains }}"
+
     - name: "24.8. Display Auth10 template rendering status"
       ansible.builtin.debug:
         msg: |
@@ -609,6 +645,38 @@
       register: authentik_ingressroute_wait
       failed_when: false
       changed_when: false
+
+    # ── Real TLS for authentik.* (urb-agents#1917 bug #570) ───────────────────────────────────
+    - name: "36.1. Deploy Authentik's real TLS certificate"
+      ansible.builtin.command: >
+        kubectl apply -f {{ authentik_server_tls_certificate_file }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: authentik_tls_cert_result
+      changed_when: true
+
+    - name: "36.2. Wait for the certificate to be issued"
+      kubernetes.core.k8s_info:
+        api_version: cert-manager.io/v1
+        kind: Certificate
+        name: authentik-server-tls
+        namespace: "{{ authentik_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: authentik_tls_cert_status
+      retries: 15
+      delay: 5
+      until: >
+        authentik_tls_cert_status.resources | length > 0 and
+        authentik_tls_cert_status.resources[0].status.conditions | default([]) |
+        selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length > 0
+
+    - name: "36.3. Deploy Authentik's HTTPS IngressRoute"
+      ansible.builtin.command: >
+        kubectl apply -f {{ authentik_ingressroute_tls_file }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: authentik_ingressroute_tls_result
+      changed_when: true
 
     - name: "37. Test Authentik UI accessibility via cluster"
       ansible.builtin.shell: |

@@ -14,7 +14,7 @@ SCRIPT_PLAYBOOK="070-setup-authentik.yml"
 SCRIPT_MANIFEST=""
 SCRIPT_CHECK_COMMAND="kubectl get pods -n authentik -l app.kubernetes.io/name=authentik --no-headers 2>/dev/null | grep -q Running"
 SCRIPT_REMOVE_PLAYBOOK="070-remove-authentik.yml"
-SCRIPT_REQUIRES="postgresql redis"
+SCRIPT_REQUIRES="postgresql redis cert-manager"
 
 # Printed verbatim after `uis undeploy authentik`. `undeploy` deliberately
 # keeps the database — UIS cannot back up what it deploys, so a removal that
