@@ -50,11 +50,24 @@ This PLAN proves one thing: **Epinio installs and comes up healthy.** It does NO
   `<service>.localhost` directly and a developer-chosen Epinio app name could collide with
   an existing service name in that same namespace.
 
-## 🔴 What is NOT verified — read before trusting this
+## Grounded in the proven PoC reference (2026-10-20 correction)
 
-- **No live cluster in this environment.** `ansible-playbook --syntax-check` only.
-- **The Epinio Helm repo URL/chart name/version were not confirmed against a live index**
-  — no internet access where this was written. Before running for real:
+`urb-agents#1917`'s handoff named `terchris/home`'s `service-epinio-poc.yml` directly —
+this repo's chart version (first written as a guess, `1.12.0`) is now `1.14.3`, the exact
+value that playbook's own comment records as "verified live 2026-10-19 (helm search repo
+epinio -l)" for gate 1. The health-check path is now the root `/`, not `/ready` — the PoC's
+own gate-1 acceptance check is exactly that request.
+
+## 🔴 What is still NOT verified — read before trusting this
+
+- **No live cluster in this environment.** `ansible-playbook --syntax-check` only. The PoC
+  reference proves gate 1 passed on `frigg-k3s-test` with these exact chart/version/health-
+  check values — a real, useful data point — but this repo's own playbook is written
+  differently enough (its own cert-manager prerequisite check, UIS's secrets-template
+  domain variable, no Dex secrets at all) that it still needs its own live run, not just
+  inherited trust from the PoC's.
+- **The Epinio Helm repo URL/chart name were not independently re-confirmed** beyond
+  matching the PoC reference — chart repos move; before running for real:
   `helm repo add epinio https://epinio.github.io/helm-charts && helm repo update &&
   helm search repo epinio/epinio --versions` — correct `625-setup-epinio.yml` if wrong.
 - **The default-credential secret name/label in the playbook's final output message is a

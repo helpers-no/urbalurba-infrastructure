@@ -14,13 +14,13 @@
 # backend — see the INVESTIGATE doc's "Next steps". This playbook's only job is: does Epinio
 # install and come up healthy against this platform's existing Traefik.
 #
-# 🔴 UNVERIFIED IN THIS ENVIRONMENT: the chart repo URL/name and version below were not
-# confirmed against a live Helm repo index — no internet access where this was written, and no
-# live cluster to test against either. imac must confirm
-# `helm repo add epinio https://epinio.github.io/helm-charts && helm repo update &&
-#  helm search repo epinio/epinio --versions` actually lists a chart named `epinio/epinio`
-# before trusting this playbook to run unattended, and correct `epinio_chart`/`epinio_chart_version`
-# below if not.
+# 🔵 Chart repo URL/name and version (1.14.3) match what the Epinio PoC actually installed and
+# proved working live, 2026-10-19 (urb-agents#1909 gate 1, "verified live 2026-10-19 (helm search
+# repo epinio -l)" per `terchris/home`'s `service-epinio-poc.yml`) — corrected here from an
+# earlier, unverified guess at 1.12.0, caught re-reading `#1917`'s own reference material directly
+# instead of trusting a first-pass summary of it. Still worth imac re-confirming
+# `helm repo update && helm search repo epinio/epinio --versions` still lists 1.14.3 before a real
+# run, since chart repos move and this was last verified on a different cluster, not this one.
 #
 # Prerequisite: cert-manager (`uis deploy cert-manager`) — Epinio's own chart requires
 # cert-manager's CRDs to exist before its install pass; `certManager.install: false` below tells
@@ -42,7 +42,7 @@
     # 🔴 Not independently verified — see the file header.
     epinio_chart_repo_url: "https://epinio.github.io/helm-charts"
     epinio_chart: "epinio/epinio"
-    epinio_chart_version: "1.12.0"
+    epinio_chart_version: "1.14.3"
     # DEFAULT_EPINIO_DOMAIN, forwarded automatically from
     # provision-host/uis/templates/secrets-templates/00-common-values.env.template.
     default_epinio_domain: "apps.localhost"
@@ -171,9 +171,11 @@
         epinio_pods_ready.resources | length > 0 and
         epinio_pods_ready.resources[0].status.containerStatuses[0].ready == true
 
+    # 🔵 Root path, not /ready — the PoC's own gate-1 acceptance check (service-epinio-poc.yml)
+    # proved `https://epinio.<domain>/` returns 200; corrected from an earlier guess at `/ready`.
     - name: 13. Verify Epinio API responds
       ansible.builtin.uri:
-        url: "https://epinio.{{ default_epinio_domain }}/ready"
+        url: "https://epinio.{{ default_epinio_domain }}/"
         validate_certs: false
         status_code: [200]
       register: epinio_api_check
