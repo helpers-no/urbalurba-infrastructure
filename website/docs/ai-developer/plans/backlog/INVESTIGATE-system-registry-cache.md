@@ -380,6 +380,13 @@ whether `05-core-services-apply.sh` itself gets wired to call this generalized p
 a Forgejo-owning service — that's the orchestration layer, intentionally left to whoever
 integrates this with an actual Forgejo-provisioning service.
 
+**Done, same day**: `05-core-services-apply.sh` now captures `FORGEJO_IP` the same way it
+already captured `REGISTRY_IP`/`BAO_IP`, and the "wire k3s registry trust" step is one
+combined `ansible-playbook` invocation passing `registry_host` (if `registry` was selected)
+and `registry_direct_insecure` (if `forgejo` was selected) together — never two separate
+calls writing the same file. See `PLAN-system-forgejo-core-service.md` Phase 2. Still
+unverified against a live cluster, same caveat as above.
+
 ---
 
 ## Appendix: reference implementation as built

@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — code written, not yet reviewed or run against a live Proxmox cluster
+## Status: Backlog — Phases 1 and 2 code written, not yet run against a live Proxmox cluster
 
 **Goal**: Add Forgejo (self-hosted git host + its own built-in OCI registry) as a new
 `platforms/proxmox` core service — the same host-level-guest shape as the registry cache,
@@ -52,6 +52,10 @@ install/config logic rather than copying the one-off version verbatim.
    `services/management/`, since they aren't `uis deploy <service>` Kubernetes workloads).
 
 ## What this plan does NOT do — integration is a separate, deliberate step
+
+> **Update 2026-10-20**: items 1-3 below are now done — see Phase 2's checklist. Left as
+> written for the historical record of what was deferred and why; item 4 (admin account)
+> remains genuinely out of scope.
 
 Three things remain for whoever integrates this (not done here, because they touch
 multi-service shared files this plan's own code review should see as a clean, reviewable
@@ -115,16 +119,22 @@ toward integration.
 
 ### Tasks
 
-- [ ] 2.1 Add the `forgejo)` case to `generate-ansible-config.sh` (see exact line above)
-- [ ] 2.2 Add `FORGEJO_IP` capture to `05-core-services-apply.sh`'s per-service loop
-- [ ] 2.3 Coordinate with the registry-direct-insecure-trust change
-      (`INVESTIGATE-system-registry-cache.md` Parts 4-5) so Forgejo's registry trust gets wired in
-      the same combined `registries.yaml` render, not a second independent writer
+- [x] 2.1 Add the `forgejo)` case to `generate-ansible-config.sh` — done 2026-10-20, VMID
+      410 as planned, `order=6` (not `order=3` as first sketched — that collided with
+      garage's own `order=3`)
+- [x] 2.2 Add `FORGEJO_IP` capture to `05-core-services-apply.sh`'s per-service loop — done
+- [x] 2.3 Coordinate with the registry-direct-insecure-trust change — done: the "wire k3s
+      registry trust" step is now ONE combined `ansible-playbook` invocation passing
+      `registry_host` (if `registry` selected) and `registry_direct_insecure` (if `forgejo`
+      selected) together, reading Forgejo's registry port from `roles/forgejo/defaults/
+      main.yml`'s `forgejo_http_port` rather than duplicating it
 
 ### Validation
 
 A lab owner who adds `forgejo` to `CORE_SERVICES` and runs `05-core-services-apply.sh` gets a
-running, HA-registered, firewalled Forgejo guest — **tested by imac**, not claimed here.
+running, HA-registered, firewalled Forgejo guest — **tested by imac**, not claimed here. The
+code for Phase 2 is written and `bash -n`/`shellcheck`-clean, but like Phase 1, has not run
+against a live Proxmox cluster.
 
 ---
 
