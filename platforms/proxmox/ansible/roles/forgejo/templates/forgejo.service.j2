@@ -1,0 +1,26 @@
+# MANAGED BY ANSIBLE — roles/forgejo/templates/forgejo.service.j2
+[Unit]
+Description=Forgejo ({{ forgejo_version }}) — git + OCI registry on :{{ forgejo_http_port }}, ssh on :{{ forgejo_ssh_port }}
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+# --rm plus a fixed name, same shape as roles/garage/bao: the unit owns the container's whole
+# lifecycle, so a restart cannot collide with a leftover from a previous run.
+ExecStartPre=-/usr/bin/docker rm -f forgejo
+ExecStart=/usr/bin/docker run --rm --name forgejo \
+  -p {{ forgejo_http_port }}:3000 \
+  -p {{ forgejo_ssh_port }}:22 \
+  -v {{ forgejo_data_dir }}:/data \
+  -v {{ forgejo_data_dir }}/app.ini:/data/gitea/conf/app.ini:ro \
+  --memory={{ forgejo_mem_limit | default('768m') }} \
+  --log-opt max-size={{ forgejo_log_max_size | default('10m') }} \
+  --log-opt max-file={{ forgejo_log_max_file | default('3') }} \
+  {{ forgejo_image }}
+ExecStop=/usr/bin/docker stop forgejo
+
+[Install]
+WantedBy=multi-user.target
