@@ -24,6 +24,8 @@ line, which carries one for the plans whose authors recorded it.
 
 | Plan | Goal | Last updated |
 |------|------|-----------|
+| [Plan: cert-manager as a UIS service](PLAN-system-cert-manager-001-install.md) | Give UIS an in-cluster certificate-issuing capability (`uis deploy cert-manager`) — | 2026-10-20 |
+| [Plan: Epinio install (no identity, no custom storage/registry wiring)](PLAN-service-epinio-001-install.md) | `uis deploy epinio` installs Epinio against this platform's existing Traefik, | 2026-10-20 |
 | [Plan: SemaphoreUI user-facing documentation](PLAN-service-semaphore-002-docs.md) | A lab owner who has just run `uis deploy semaphore` can find, on the | 2026-10-05 |
 | [Plan: Bump Dagster from 1.13.19 to 1.13.25](PLAN-service-dagster-version-upgrade.md) | Move the pinned Dagster chart/core version from `1.13.19` to the current latest | 2026-10-05 |
 | [Plan: advertise only the `configure` handlers that exist](PLAN-cli-configure-retract-unimplemented.md) | `SCRIPT_CONFIGURABLE="true"` appears only on services that actually have a | 2026-09-29 |
