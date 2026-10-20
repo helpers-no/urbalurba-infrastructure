@@ -510,6 +510,11 @@
 
           Debug: Run manually inside the container:
             ansible-playbook /mnt/urbalurbadisk/ansible/playbooks/utility/u09-authentik-create-postgres.yml -e operation=create -v
+
+          ⚠️ -v/-vvv on a playbook that touches urbalurba-secrets can print full Secret
+          contents (any task that fetches one via a k8s_info-style lookup prints its
+          data/stringData in verbose mode) — avoid pasting that output anywhere it could
+          be seen or logged.
       when: postgres_setup_result.rc != 0
 
     # Phase 6: Authentik Deployment via Helm with Enhanced Monitoring
