@@ -598,6 +598,7 @@ INVESTIGATEs that still live in `backlog/` because their work isn't fully shippe
 | 15 | [cli-top-level-doc](INVESTIGATE-cli-top-level-doc.md) | S | **Newly triaged.** One coherent top-level CLI reference. Small, and the 2026-08-11 help-text gaps (three services dispatching correctly but undocumented) show the current help is maintained by hand and drifts. |
 | 16 | [docs-markdown-update-logic](INVESTIGATE-docs-markdown-update-logic.md) | M | Improves the docs-generation pipeline so metadata-driven sections update without overwriting manual prose. Quality-of-life for contributors maintaining service pages. |
 | 17 | [cli-network-export-import](INVESTIGATE-cli-network-export-import.md) | M | **Newly triaged.** Moving network config between installs. Ready but not blocking anything; sits at the bottom of Tier 2 until a concrete consumer pulls on it. |
+| 30 | [epinio-deploy-path](INVESTIGATE-service-epinio-deploy-path.md) | M | **Moved from Tier 3, 2026-10-20.** The lab PoC's identity gates passed (`urb-agents#1917`) and the rule exception is approved (`#1915`, PR #564 merged) — the prerequisite that kept this in Tier 3 is gone. `PLAN-service-epinio-001-install.md` and `-002-namespace-and-push.md` are ready to write; `-003-identity.md` waits on one remaining question to Terje (reuse vs. fresh identity-provider registrations per cluster — see the doc). Object-store wiring, cert issuer, and network isolation stay open, to be resolved in whichever PLAN touches them, not assumed. |
 
 ## Tier 3 — defer until prereqs ship
 
@@ -613,7 +614,6 @@ These have known prerequisites that are still open. Don't open them yet — the 
 | 23 | [dct-argocd-deploy](INVESTIGATE-service-argocd-dct-deploy.md) | argocd as a stable UIS service | The "deploy from inside DCT with one command" flow needs argocd to be the deployment substrate. ArgoCD has a manifest in UIS but isn't an everyday service yet; investigate this once argocd is operationally normal. |
 | 24 | [enonic-deployment](INVESTIGATE-service-enonic-deployment.md) | enonic-as-stable-service | Covers both apps (JAR pipeline — chosen-approach decided) and content (still open). Pull-based deployment design assumes Enonic XP is operationally stable in UIS. Merged from the two earlier app + content investigations on 2026-05-15. |
 | 25 | [email-smtp-service](INVESTIGATE-service-email-smtp.md) | product clarity (which services need email first?) | Cross-cutting platform service. Worth opening only when the first concrete consumer (Authentik password resets? a notification path?) is actually pulling on it. |
-| 30 | [epinio-deploy-path](INVESTIGATE-service-epinio-deploy-path.md) | a lab proof-of-concept (18 gated tests, `urb-agents#1910`), run outside this repo | Self-service "push code, get a URL" deploy path alongside ArgoCD. The biggest open risk — OIDC claim→namespace-role mapping — and several other items (registry pull, object-store backend, TLS, network isolation) are untested. Don't firm up the CLI surface or amend the deployment rule until the gates report back; fall back to scoped ArgoCD access if they don't clear. |
 
 ## Tier 4 — ideas, not investigations
 

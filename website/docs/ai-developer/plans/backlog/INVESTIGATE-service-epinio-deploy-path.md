@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — gated on an external lab proof-of-concept, not ready for a PLAN
+## Status: Backlog — identity gates passed 2026-10-20, ready to split into PLANs
 
 **Goal**: Decide how UIS itself (CLI surface, service layout, docs) should incorporate
 an Epinio-based self-service deploy path — "push code, get a URL and status back, read
@@ -14,18 +14,19 @@ below has cleared its gates.
 **Priority**: Low until the gates below report back. This file exists so the decision
 isn't re-derived from scratch when they do.
 
-**Last Updated**: 2026-10-19
+**Last Updated**: 2026-10-20
 
 **Related**:
 - [Rules for Deploying Applications](../../../contributors/rules/application-deployment.md) —
   the 2026-09-07 `uis provisions / ArgoCD deploys` rule this proposal takes an explicit
-  exception to
+  exception to, **approved by Terje** (`urb-agents#1915`)
 - [INVESTIGATE-service-argocd-dct-deploy.md](./INVESTIGATE-service-argocd-dct-deploy.md) —
   prior art for a "push and get a URL back" developer experience, built on the ArgoCD path
 - `urb-agents#1909` — the platform evaluation (Kubero/KubeVela/Devtron/Epinio) and the
   product requirement behind this
 - `urb-agents#1910` — the handoff that scoped this document to "how UIS builds it,"
   separating it from the production-rollout decision, which is tracked elsewhere
+- `urb-agents#1917` — full handoff once the lab PoC's identity gates passed (below)
 
 ---
 
@@ -60,10 +61,10 @@ It does **not** re-litigate:
 
 These are proof-of-concept gates, not implementation details to paper over:
 
-- **Biggest risk**: how Epinio maps OIDC claims/groups to namespace roles. Untested.
-  Upstream Epinio has no issue open for this yet.
-- Epinio's bundled Dex against either of this platform's identity providers: untested
-  in both directions.
+- ~~**Biggest risk**: how Epinio maps OIDC claims/groups to namespace roles. Untested.~~
+  **Resolved 2026-10-20 — see "Identity gates passed" below.**
+- ~~Epinio's bundled Dex against either of this platform's identity providers: untested
+  in both directions.~~ **Resolved — both proven, plus a third provider.**
 - `epinio push --git` against a self-hosted (non-GitHub/GitLab) git forge: should work
   per Epinio's source (it's a plain git clone), but the auto-deploy webhook is
   GitHub/GitLab-only and isn't needed for this platform's CI-triggered flow.
@@ -84,6 +85,82 @@ These are proof-of-concept gates, not implementation details to paper over:
 
 **Until these report back from the proof-of-concept, nothing below should be read as
 "ready to build."** It's the shape the work takes if the gates pass.
+
+---
+
+## Identity gates passed (2026-10-20) — the biggest risk is resolved
+
+`urb-agents#1917`: the lab proof-of-concept's two identity gates (the bolded,
+go/no-go-deciding ones) both passed. All three OIDC identity providers Epinio's bundled
+Dex needs to authenticate against are proven working, each mapping its own groups to the
+same shape — **one admin namespace per team**:
+
+- GitHub org/teams
+- Authentik (this platform's own identity provider)
+- Okta (a third provider, proving the pattern isn't specific to either of the first two)
+
+Each was proven with two separate, self-controlled test identities logged in
+simultaneously — real cross-team namespace isolation, confirmed from Epinio's own
+authorization-middleware logs, not inferred from config alone.
+
+**This does not make the earlier open items below resolved — only the OIDC claim-mapping
+question specifically.** Object store wiring, cert issuer, and network isolation (next
+section) are still open.
+
+### A secrets-mechanism requirement from Terje, binding on this document's eventual PLANs
+
+> *"\[Epinio's] secrets … must go through UIS's own secrets mechanism —
+> `provision-host/uis/templates/secrets-templates/` (`00-master-secrets.yml.template`
+> under `urbalurba-secrets`, `stringData`, with LocalDev-safe defaults in
+> `00-common-values.env.template`) — the same pattern every other UIS service uses."*
+
+The lab PoC proved the identity gate with direct Helm-values injection — the right scope
+*for proving it*, explicitly **not** the shape the real integration should copy. Whatever
+`PLAN-service-epinio-003-identity.md` (see Next Steps) ends up being, its GitHub
+OAuth/Dex/Authentik/Okta connector secrets are UIS-secrets-template entries, not
+hand-wired Helm values.
+
+### Five Dex/chart gotchas for whoever writes that PLAN (none are UIS bugs — upstream behavior)
+
+1. `dex.connectors[].config.scopes` **replaces** Dex's default scope set rather than
+   adding to it — list `profile`/`email` explicitly alongside any custom scope (`groups`),
+   or Dex's callback fails on a missing `name` claim.
+2. A generic `oidc` connector needs `insecureEnableGroups: true` before it parses ANY
+   `groups` claim, even with the scope granted and the claim present upstream.
+3. Dex only reads its config Secret at startup — any change needs an explicit
+   `kubectl rollout restart deployment/dex` afterward. A plain `helm upgrade` will not
+   restart the pod on its own, since nothing in the pod template changes.
+4. Okta specifically: its default authorization server sends no `email_verified` claim,
+   and Dex requires one by default — `insecureSkipEmailVerified: true` is the fix.
+5. Okta specifically: its default authorization server ships with no access policy —
+   every login fails at `/authorize` until one exists. Only surfaces by running a real
+   login, not by inspecting the applied config.
+
+### Six real `urbalurba-infrastructure` bugs found during the lab PoC — now filed
+
+Filed as GitHub issues rather than re-described here:
+[#565](https://github.com/helpers-no/urbalurba-infrastructure/issues/565) (ambiguous
+authentik postgres-bootstrap error),
+[#566](https://github.com/helpers-no/urbalurba-infrastructure/issues/566) (hardcoded
+kubeconfig context name assumption),
+[#567](https://github.com/helpers-no/urbalurba-infrastructure/issues/567) (`uis status`
+doesn't detect a stale `external-services.yaml` target),
+[#568](https://github.com/helpers-no/urbalurba-infrastructure/issues/568)
+(`NEKO_CDP_TOKEN` ignores its template value),
+[#569](https://github.com/helpers-no/urbalurba-infrastructure/issues/569) (`-v`/`-vvv`
+debug guidance risks dumping secrets — partial fix merged, broader sweep still open),
+[#570](https://github.com/helpers-no/urbalurba-infrastructure/issues/570) (Authentik's
+shipped IngressRoute has no real certificate, breaks strict-TLS OIDC clients — this one
+in particular blocks a clean Dex↔Authentik wiring until this platform has a cert-issuing
+story, which it doesn't today).
+
+### One open question for Terje — not decided here
+
+Should the real UIS integration reuse the PoC's exact identity-provider registrations (the
+GitHub OAuth app, the Authentik blueprint, the Okta org), or does whoever builds the real
+integration provision fresh ones per real cluster? Raised on `urb-agents#1917`; affects how
+`PLAN-service-epinio-003-identity.md`'s secrets-template entries get populated, so worth an
+answer before that PLAN is written, not during it.
 
 ---
 
@@ -157,8 +234,8 @@ fits there alongside ArgoCD rather than in a new range.
 The items in "What is explicitly NOT decided or verified yet" above are not re-summarized
 here — they are the gate. Specifically, this document takes no position on:
 
-- The concrete OIDC claim→namespace-role mapping (depends on gate results against both
-  identity providers).
+- ~~The concrete OIDC claim→namespace-role mapping (depends on gate results against both
+  identity providers).~~ **Resolved — see "Identity gates passed" above.**
 - Whether the object store needs any Epinio-specific bucket/policy shape.
 - Whether a cert issuer needs adding for Epinio's own endpoints, or whether its ingress
   rides the same edge-terminated-TLS pattern every other UIS service already uses.
@@ -178,13 +255,16 @@ original ask.
 
 ## Next steps
 
-- [ ] Lab proof-of-concept runs its gates (owned outside this document)
-- [ ] On a pass: amend
-      [application-deployment.md](../../../contributors/rules/application-deployment.md)
-      with the third-path exception above, as a dated decision record the same way the
-      2026-09-07 rule is recorded
-- [ ] Split this INVESTIGATE into ordered PLANs once the gated items have answers —
-      expected shape: `PLAN-service-epinio-001-install.md` (the service itself, no
-      developer-facing surface yet), then `-002-namespace-and-push.md`, then
-      `-003-identity.md` once OIDC claim mapping is proven
-- [ ] On a fail: write up the fallback as its own PLAN against the existing ArgoCD path
+- [x] Lab proof-of-concept runs its identity gates — **passed 2026-10-20** (`#1917`)
+- [x] Rule exception approved by Terje (`#1915`), PR #564 merged
+- [ ] Get Terje's answer on identity-provider reuse-vs-fresh (above) before writing
+      `PLAN-service-epinio-003-identity.md`
+- [ ] Split this INVESTIGATE into ordered PLANs — `PLAN-service-epinio-001-install.md`
+      (the service itself, no developer-facing surface yet) and `-002-namespace-and-push.md`
+      no longer have an open prerequisite and can be written next; `-003-identity.md`
+      waits on the question above
+- [ ] Object store wiring, cert issuer, and network isolation remain open and should be
+      resolved in the relevant PLAN(s) above, not assumed
+- [ ] On a production-rollout no-go from ops's side: fall back to scoped Argo CD access as
+      its own PLAN against the existing ArgoCD path (does not block the UIS-side PLANs
+      above, which target any cluster, not specifically production)
