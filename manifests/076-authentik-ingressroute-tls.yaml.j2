@@ -1,0 +1,46 @@
+# File: manifests/076-authentik-ingressroute-tls.yaml.j2
+#
+# Description:
+# HTTPS route for Authentik, carrying the real certificate from
+# 076-authentik-server-tls-certificate.yaml.j2 — fixes urb-agents#1917 bug #570. A separate
+# IngressRoute from 076-authentik-ingressroute.yaml.j2's existing HTTP (`web` entrypoint)
+# routes, which keep working unchanged; this one only adds the `websecure` entrypoint so a
+# strict-TLS client (an OIDC connector, concretely) gets a certificate that is actually valid
+# for `authentik.*`, instead of falling through to Traefik's ad-hoc per-connection default.
+#
+# Template Variables (from kubernetes-secrets.yml, same as the HTTP IngressRoute template):
+# - domains: Dictionary of domain configurations (unused directly here — the HostRegexp below
+#   already matches any authentik.<anything>, same pattern the HTTP route uses; kept as an
+#   argument for parity/future use, not because this file branches on it today).
+#
+# Dependencies:
+# - 076-authentik-server-tls-certificate.yaml (must be applied first — this references its
+#   Secret by name)
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: authentik-server-tls
+  namespace: authentik
+  labels:
+    app: authentik
+    component: server
+    type: public
+    routing: tls
+    app.kubernetes.io/name: authentik
+    app.kubernetes.io/component: server
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: HostRegexp(`authentik\..+`)
+      kind: Rule
+      services:
+        - name: authentik-server
+          port: 80
+      middlewares:
+        - name: authentik-csp-upgrade
+          namespace: authentik
+  tls:
+    secretName: authentik-server-tls

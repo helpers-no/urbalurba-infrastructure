@@ -1,0 +1,38 @@
+# File: manifests/076-authentik-server-tls-certificate.yaml.j2
+#
+# Description:
+# A real, cert-manager-issued certificate for Authentik's own hostname(s) — fixes
+# urb-agents#1917 bug #570: with no explicit TLS configured for `authentik.*`, Traefik's
+# `websecure` entrypoint falls back to its own ad-hoc default certificate, which breaks any
+# client doing strict TLS verification (an OIDC connector, concretely — found live when
+# Epinio's Dex refused to open its oidc connector against this Authentik install).
+#
+# Covers every domain this install has actually enabled, not just localhost — built from the
+# SAME `domains` dict 073-authentik-service-protection-blueprint.yaml.j2 already consumes, so
+# this cannot drift out of step with which domains are actually live.
+#
+# Template Variables (from kubernetes-secrets.yml, same as the IngressRoute template):
+# - domains: Dictionary of domain configurations ({domain_type: {enabled, protocol, base_domain}})
+#
+# Dependencies:
+# - cert-manager must be deployed first (`uis deploy cert-manager`) — this Certificate
+#   references the uis-ca ClusterIssuer, which does not exist otherwise.
+
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: authentik-server-tls
+  namespace: authentik
+spec:
+  secretName: authentik-server-tls
+  issuerRef:
+    name: uis-ca
+    kind: ClusterIssuer
+  dnsNames:
+    - authentik.localhost
+{%- for domain_type in domains %}
+{%- if domains[domain_type].enabled and domain_type != 'localhost' %}
+    - authentik.{{ domains[domain_type].base_domain }}
+{%- endif %}
+{%- endfor %}

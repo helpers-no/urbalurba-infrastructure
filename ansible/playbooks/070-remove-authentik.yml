@@ -31,6 +31,8 @@
     service_protection_ingressroute_file: "{{ manifests_folder }}/078-service-protection-ingressroute.yaml"
     authentik_csp_middleware_file: "{{ manifests_folder }}/076-authentik-csp-middleware.yaml"
     authentik_ingressroute_file: "{{ manifests_folder }}/076-authentik-ingressroute.yaml"
+    authentik_ingressroute_tls_file: "{{ manifests_folder }}/076-authentik-ingressroute-tls.yaml"
+    authentik_server_tls_certificate_file: "{{ manifests_folder }}/076-authentik-server-tls-certificate.yaml"
     forward_auth_middleware_file: "{{ manifests_folder }}/077-authentik-forward-auth-middleware.yaml"
 
   tasks:
@@ -76,6 +78,20 @@
       kubernetes.core.k8s:
         state: absent
         src: "{{ authentik_ingressroute_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: 6.1. Remove Authentik's HTTPS IngressRoute (bug #570)
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ authentik_ingressroute_tls_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: 6.2. Remove Authentik's real TLS certificate (bug #570)
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ authentik_server_tls_certificate_file }}"
         kubeconfig: "{{ merged_kubeconf_file }}"
       failed_when: false
 
