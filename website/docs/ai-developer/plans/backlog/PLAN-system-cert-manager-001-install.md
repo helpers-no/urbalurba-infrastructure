@@ -48,19 +48,29 @@ certificates for in-cluster or service-to-service TLS. Two concrete consumers ne
 - Three manifests: `manifests/025-cert-manager-bootstrap-issuer.yaml`,
   `-ca-certificate.yaml`, `-clusterissuer.yaml`.
 
-## 🔴 What is NOT verified — read before trusting this
+## Grounded in the proven PoC reference (2026-10-20 correction)
+
+`urb-agents#1917`'s handoff named `terchris/home`'s `service-epinio-poc.yml` directly as the
+playbook that proved gate 1 live on 2026-10-19 — this repo's own version was first written
+from a guess rather than that file. Read it properly and corrected: the install flag is
+`--set installCRDs=true`, **not** `crds.enabled=true` (this chart's older, since-deprecated
+flag name — but it's what gate 1 actually ran and passed, so it's what this repo trusts).
+
+## 🔴 What is still NOT verified — read before trusting this
 
 - **No live cluster in this environment.** Every playbook here passed
   `ansible-playbook --syntax-check` and nothing more. The Helm install, the CRD wait, the
-  two-step CA bootstrap, and the final `ClusterIssuer` Ready check have never actually run.
-- **The chart version (`1.16.2`) was not confirmed against a live Helm repo index** — no
-  internet access in the environment this was written in. Before running this for real:
-  `helm repo add jetstack https://charts.jetstack.io && helm repo update &&
-  helm search repo jetstack/cert-manager --versions` — correct the pinned version in
-  `025-setup-cert-manager.yml` if it does not exist.
-- The `crds.enabled=true` flag matches cert-manager's current (post-deprecation-of
-  `installCRDs`) Helm convention as of this writer's training — also not independently
-  reconfirmed live.
+  two-step CA bootstrap, and the final `ClusterIssuer` Ready check have never actually run
+  *in this repo's form* — the PoC's own install proved cert-manager itself installs and
+  works, not this repo's specific two-step CA bootstrap on top of it.
+- **The chart version (`1.16.2`) was not confirmed against a live Helm repo index** — the
+  PoC reference didn't pin one either (plain `chart_ref: cert-manager`, whatever
+  `helm repo update` resolved to on 2026-10-19). UIS's own convention is to pin for
+  reproducibility regardless, so a version is pinned here, but it's a best-effort guess, not
+  a verified one. Before running this for real: `helm repo add jetstack
+  https://charts.jetstack.io && helm repo update && helm search repo jetstack/cert-manager
+  --versions` — correct the pinned version in `025-setup-cert-manager.yml` if it does not
+  exist.
 
 **This is imac's job to run and report back on, same as every other new service.**
 

@@ -9,8 +9,18 @@
 # Authentik's `authentik-server-tls` (urb-agents#1912/#1917 bug report #570 — no real cert today,
 # breaks any strict-TLS client such as an OIDC connector).
 #
-# 🔴 UNVERIFIED IN THIS ENVIRONMENT: the chart version pinned below was not confirmed against a
-# live Helm repo index — no internet access where this was written. imac must confirm
+# 🔵 `--set installCRDs=true` (not `crds.enabled=true`) is the value the Epinio PoC actually
+# installed with and proved working live, 2026-10-19 (urb-agents#1909 gate 1,
+# `terchris/home`'s `service-epinio-poc.yml`) — corrected here from an earlier, wrong guess at
+# this chart's "current" convention. `installCRDs` is this chart's older,
+# since-deprecated flag name, but it's what gate 1 ran and passed, so it's what this repo trusts
+# until something says otherwise.
+#
+# 🔴 STILL UNVERIFIED IN THIS ENVIRONMENT: the exact chart VERSION pinned below. The PoC reference
+# did not pin one either (plain `chart_ref: cert-manager`, whatever `helm repo update` resolved to
+# on 2026-10-19) — UIS's own convention is to pin for reproducibility regardless, so a version is
+# pinned here, but it was not independently confirmed against a live Helm repo index (no internet
+# access where this was written). imac must confirm
 # `helm repo update && helm search repo jetstack/cert-manager --versions` actually lists it (or
 # the nearest available version) before trusting this playbook to run unattended.
 #
@@ -73,7 +83,7 @@
         helm upgrade --install cert-manager {{ cert_manager_chart }}
         --namespace {{ cert_manager_namespace }}
         --version {{ cert_manager_chart_version }}
-        --set crds.enabled=true
+        --set installCRDs=true
         --timeout {{ installation_timeout }}s
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
