@@ -193,6 +193,11 @@ for svc in $CORE_SERVICES; do
     # 🔵 A SEPARATE guest, not a database inside "pg" — the test cluster must never be able to
     # read or corrupt production data. Smaller than pg on purpose: test data, test stakes.
     pg-test)  write_core_service pg-test  406 2 2048 512  "order=5" ""                  8  /var/lib/postgresql 20  16K postgres ;;
+    # Self-hosted git host + its own built-in OCI registry — see roles/forgejo and
+    # PLAN-system-forgejo-core-service.md. 410 is the next free VMID after 405-409 above, not the
+    # Epinio PoC's own ad-hoc VMID 411 on its real host. order=6: every other order value above is
+    # already taken; Forgejo has no startup dependency on any of them.
+    forgejo)  write_core_service forgejo 410 2 2048 512  "order=6" "nesting=1,keyctl=1" 8  /var/lib/forgejo    50  ""  forgejo ;;
     *) echo "⚠️  Unknown core service '$svc' in CORE_SERVICES — skipped" >&2 ;;
   esac
 done

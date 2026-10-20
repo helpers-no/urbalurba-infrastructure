@@ -341,6 +341,54 @@ it here so it is a deliberate choice, not a silently-reverted file discovered th
 
 ---
 
+## Part 4/5 are now IMPLEMENTED, not just designed (2026-10-20)
+
+Both recommendations above are built, in `platforms/proxmox/ansible/playbooks/`:
+
+- `templates/k3s-registries.yaml.j2` now renders two independent loops — the existing
+  zot/`registry_upstreams` one (only when `registry_host` is non-empty) and a new one over
+  `registry_direct_insecure` (a plain `{domain, endpoint}` list, mirrored to itself over
+  plain HTTP, no zot involvement at all).
+- `k3s-registry-ensure.yml` accepts `registry_direct_insecure` as an explicit `-e` input
+  (default `[]`, declared in the playbook's own `vars:` — deliberately **not** added to
+  `roles/registry/defaults/main.yml`, since it has nothing to do with zot). The old
+  mandatory `registry_host` assert is relaxed to "at least one of the two mechanisms must
+  be requested," so a caller with only a direct-insecure entry and no zot cache doesn't
+  need to pass a meaningless `registry_host`.
+- **The refuse-on-unrecognized-domain safety net is in**: before templating, the playbook
+  reads the node's existing `registries.yaml` (if any), and refuses — naming the domain —
+  if it already mirrors something neither `registry_upstreams` nor the supplied
+  `registry_direct_insecure` accounts for. This is this repository's own answer to the
+  Part 5 cross-repo risk: it cannot stop another repo's tooling from writing this file
+  independently, but it can refuse to silently clobber whatever that tooling left behind,
+  rather than discovering the overwrite later.
+- The certs.d verification loop now covers both kinds of domain, not just zot's.
+
+⚠️ **What this is not**: proof that it works against a real cluster. Verified so far —
+`ansible-playbook --syntax-check` on the playbook, and the Jinja template itself rendered
+standalone (via `jinja2`, outside Ansible) against three cases (zot-only, direct-insecure-
+only, both) and parsed back as valid YAML with the expected `mirrors:` keys in each. The
+`set_fact` expressions inside the playbook (the `ternary`/`difference`/`from_yaml` chain)
+were reviewed but not executed under real Ansible, and none of this has run against an
+actual k3s node — no live cluster exists in the environment this was built in. The
+2026-10-05 zot-only path this replaces was verified live; this generalization has not been,
+and that gap stays open until someone runs it for real.
+
+Still not resolved here, same as Part 5 left it: whether anything outside this
+repository's own apply flow is expected to manage this file for a real deployment, and
+whether `05-core-services-apply.sh` itself gets wired to call this generalized playbook for
+a Forgejo-owning service — that's the orchestration layer, intentionally left to whoever
+integrates this with an actual Forgejo-provisioning service.
+
+**Done, same day**: `05-core-services-apply.sh` now captures `FORGEJO_IP` the same way it
+already captured `REGISTRY_IP`/`BAO_IP`, and the "wire k3s registry trust" step is one
+combined `ansible-playbook` invocation passing `registry_host` (if `registry` was selected)
+and `registry_direct_insecure` (if `forgejo` was selected) together — never two separate
+calls writing the same file. See `PLAN-system-forgejo-core-service.md` Phase 2. Still
+unverified against a live cluster, same caveat as above.
+
+---
+
 ## Appendix: reference implementation as built
 
 Proxmox LXC (2 cores, 1 GB RAM, 60 GB cache volume on ZFS with 1 M recordsize +

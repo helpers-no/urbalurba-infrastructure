@@ -1,0 +1,21 @@
+---
+# service-forgejo — L3: git host + OCI registry for what UIS/Epinio builds
+# (`INVESTIGATE-service-epinio-deploy-path.md`). Install/configure forgejo on an already-created
+# guest; it does not create the guest (see guest-ensure.yml / generate-ansible-config.sh's
+# `write_core_service forgejo` entry).
+#
+#   ansible-playbook -i <addr>, playbooks/service-forgejo.yml -e @vars.yml \
+#     -e forgejo_secret_key=... -e forgejo_internal_token=... -e forgejo_jwt_secret=...
+#
+# See roles/forgejo/tasks/main.yml for how to generate the three secrets.
+- name: Git host and registry
+  hosts: all
+  gather_facts: true
+  vars:
+    # 🔵 Derived from the connection address this run is actually using — never passed as a
+    # separate -e flag and never hardcoded. 05-core-services-apply.sh invokes this playbook as
+    # `-i "${guest_ip},"`, so ansible_host already IS the guest's resolved address by the time this
+    # play runs.
+    forgejo_domain: "{{ ansible_host | default(inventory_hostname) }}"
+  roles:
+    - forgejo

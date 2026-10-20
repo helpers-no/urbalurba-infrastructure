@@ -84,6 +84,7 @@ POOL_NAME="${PROXMOX_STORAGE%-vm}"
 VMID_LIST=()
 REGISTRY_IP=""
 BAO_IP=""
+FORGEJO_IP=""
 
 for svc in $CORE_SERVICES; do
     decl="generated/vars/core-services/${svc}.yml"
@@ -119,6 +120,9 @@ for svc in $CORE_SERVICES; do
     if [[ "$svc" == "bao" ]]; then
         BAO_IP="$guest_ip"
     fi
+    if [[ "$svc" == "forgejo" ]]; then
+        FORGEJO_IP="$guest_ip"
+    fi
 
     print_status "service-${svc} (${guest_ip})..."
     extra_vars_file="generated/vars/core-services/_extra-vars.yml"
@@ -144,18 +148,43 @@ for svc in $CORE_SERVICES; do
     print_success "$svc fully protected: replicated + HA-registered"
 done
 
-# ─── wire k3s to the registry cache, ONLY if the lab owner selected it ─────────────────────────
+# ─── wire k3s registry trust, ONLY if the lab owner selected a service that needs it ────────────
 # 🔵 A CLEAR, CONDITIONAL STEP — not something every lab owner's cluster silently gets. A lab
-# owner who never puts "registry" in CORE_SERVICES never has k3s-registry-ensure.yml run against
-# them at all; their k3s nodes behave exactly as before. See that playbook for why a restart is
-# required and why registry_port/registry_upstreams are read from the registry role's own
-# defaults rather than duplicated here.
-if [[ -n "$REGISTRY_IP" ]]; then
-    print_section "Wire k3s to the registry cache"
-    print_status "Rendering registries.yaml on every k3s node (both clusters) via ${REGISTRY_IP}..."
-    ansible-playbook -i generated/inventory.yml --limit guests \
-        playbooks/k3s-registry-ensure.yml -e "registry_host=${REGISTRY_IP}"
-    print_success "Every k3s node now mirrors every registry upstream through ${REGISTRY_IP}"
+# owner who selects neither "registry" nor "forgejo" never has k3s-registry-ensure.yml run against
+# them at all; their k3s nodes behave exactly as before.
+#
+# 🔴 ONE COMBINED INVOCATION, NOT TWO — this is the composition INVESTIGATE-system-registry-cache
+# Part 5 calls for. k3s-registry-ensure.yml writes the WHOLE registries.yaml file every run; if
+# "registry" and "forgejo" each triggered their own separate ansible-playbook call against that
+# same file, the second call would — thanks to the refuse-on-unrecognized-domain guard the
+# playbook now has — actually REFUSE outright rather than silently clobbering the first (that
+# guard exists precisely to turn a silent data-loss bug into a loud, early one) but the fix is
+# still to never put the playbook in that position: both mechanisms' desired state is assembled
+# here, in bash, and handed to ONE playbook run.
+#
+# See that playbook for why a restart is required and why registry_port/registry_upstreams are
+# read from the registry role's own defaults rather than duplicated here.
+if [[ -n "$REGISTRY_IP" || -n "$FORGEJO_IP" ]]; then
+    print_section "Wire k3s registry trust"
+
+    k3s_registry_ensure_args=(-i generated/inventory.yml --limit guests playbooks/k3s-registry-ensure.yml)
+
+    if [[ -n "$REGISTRY_IP" ]]; then
+        print_status "Zot pull-through cache: every k3s node (both clusters) via ${REGISTRY_IP}..."
+        k3s_registry_ensure_args+=(-e "registry_host=${REGISTRY_IP}")
+    fi
+
+    if [[ -n "$FORGEJO_IP" ]]; then
+        # 🔵 SINGLE SOURCE OF TRUTH: the port comes from roles/forgejo/defaults/main.yml's
+        # forgejo_http_port — Forgejo serves its registry on the same port as everything else, so
+        # this must never drift from what service-forgejo.yml actually configured.
+        forgejo_port="$(grep -m1 '^forgejo_http_port:' roles/forgejo/defaults/main.yml | awk '{print $2}')"
+        print_status "Forgejo's own registry: direct insecure trust via ${FORGEJO_IP}:${forgejo_port}..."
+        k3s_registry_ensure_args+=(-e "registry_direct_insecure=[{\"domain\": \"${FORGEJO_IP}:${forgejo_port}\", \"endpoint\": \"${FORGEJO_IP}:${forgejo_port}\"}]")
+    fi
+
+    ansible-playbook "${k3s_registry_ensure_args[@]}"
+    print_success "Every k3s node now trusts every registry this run configured"
 fi
 
 # ─── wire ESO + a ClusterSecretStore to bao, ONLY if the lab owner selected it ─────────────────

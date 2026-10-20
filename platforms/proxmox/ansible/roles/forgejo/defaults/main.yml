@@ -1,0 +1,59 @@
+---
+# forgejo — self-hosted git host + its own built-in OCI registry. Same platform-services class as
+# registry/bao/garage: an LXC guest, not a Kubernetes service — see
+# INVESTIGATE-system-registry-cache.md's own F1 for why a thing other services bootstrap from
+# cannot live inside the cluster it serves. Serves the Epinio build pipeline
+# (`INVESTIGATE-service-epinio-deploy-path.md`); Zot (roles/registry) stays the separate
+# pull-through cache for upstream images — this guest stores what gets BUILT here, not mirrors.
+
+# ── the image, pinned by digest ──────────────────────────────────────────────────────────────
+# 🔵 PINNED BY DIGEST, verified live against codeberg.org's own v2 registry API on 2026-10-20 (not
+# copied from a changelog or a second-hand report):
+#   TOKEN=$(curl -fsSL "https://codeberg.org/v2/token?service=container_registry&scope=repository:forgejo/forgejo:pull" | jq -r .token)
+#   curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.oci.image.index.v1+json" \
+#     -D - -o /dev/null "https://codeberg.org/v2/forgejo/forgejo/manifests/16.0.4"
+# returned `docker-content-digest: sha256:a3e33d03e771d3e58b27de5573c3a25dc4f670583a6724c1878a6d0bbecf3556`
+# for the 16.0.4 tag. Re-run the same query to re-pin on a version bump; Forgejo publishes no
+# separate checksum file, so this is the only independent verification available.
+forgejo_version: "16.0.4"
+forgejo_image: "codeberg.org/forgejo/forgejo@sha256:a3e33d03e771d3e58b27de5573c3a25dc4f670583a6724c1878a6d0bbecf3556"
+
+# ── ports ───────────────────────────────────────────────────────────────────────────────────
+# 🔴 2222, NOT 22, FOR GIT-SSH ON THE HOST — this guest's own management sshd already owns 22.
+# forgejo_ssh_port is what Forgejo is TOLD its public port is (app.ini SERVER.SSH_PORT), so
+# `git clone ssh://...` URLs it generates are correct; see app.ini.j2's own header for the
+# START_SSH_SERVER=false reasoning (the image's built-in Go SSH server would collide with the
+# system sshd handling git-ssh via a forced command otherwise).
+forgejo_http_port: 3000
+forgejo_ssh_port: 2222
+
+forgejo_data_dir: /var/lib/forgejo
+
+# ── identity ────────────────────────────────────────────────────────────────────────────────
+# 🔴 NO DEFAULT — resolved at apply time from this guest's actual address, the same rule every
+# other core-services role in this repository follows (see roles/registry's own `registry_host`).
+# A hardcoded address here would be exactly the kind of internal-topology value this repository's
+# own plan-authoring rule (PLANS.md, "Before you write a real address into a plan") exists to keep
+# out of a public repository.
+forgejo_domain: ""
+forgejo_root_url: "http://{{ forgejo_domain }}:{{ forgejo_http_port }}/"
+
+# ── admin bootstrap ─────────────────────────────────────────────────────────────────────────
+# 🔵 NOT BAKED IN, deliberately — same reasoning as roles/garage's bootstrap credential: a
+# generated default is a credential nobody recorded, a declared one is a credential in git.
+# First-run admin creation (`docker exec forgejo forgejo admin user create ...`) is an explicit
+# operator step, not something this role or its service playbook does automatically.
+
+# ── firewall ────────────────────────────────────────────────────────────────────────────────
+# Same two-knob shape as roles/garage/bao — declare the actual allow-list per site elsewhere, not
+# here. This guest's real consumers (a CI runner, k3s nodes building/pulling images) sit OUTSIDE
+# any admin-only band, so forgejo_firewall_allow_hosts is where they go — resolved to live
+# addresses at apply time, never hand-copied IPs.
+#   forgejo_firewall_allow_hosts  — inventory hostnames, resolved to ansible_host.
+#   forgejo_firewall_allow_ranges — raw "start-end" ranges, for an admin band if one exists.
+# 🔴 BOTH `input` AND `forward` — same reason as roles/garage: Docker runs a DNAT rule and a
+# docker-proxy process for the same published port at once, so gating only one hook is only
+# sometimes effective. Management SSH (port 22, this guest's own, not Forgejo's) is deliberately
+# UNSCOPED in the template.
+forgejo_firewall_allow_hosts: []
+forgejo_firewall_allow_ranges: []

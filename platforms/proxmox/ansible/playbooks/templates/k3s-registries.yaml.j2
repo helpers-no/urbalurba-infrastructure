@@ -1,8 +1,19 @@
 # {{ ansible_managed }}
-# One entry per upstream the registry cache fronts — read from roles/registry/defaults/main.yml's
-# registry_upstreams, not duplicated here. See k3s-registry-ensure.yml.
+# Two independent kinds of entry share this one file — see k3s-registry-ensure.yml:
+#   1. registry_upstreams (roles/registry/defaults/main.yml) — public upstreams proxied/cached
+#      through the one zot instance at registry_host:registry_port, each rewritten to that
+#      upstream's own destination path.
+#   2. registry_direct_insecure (k3s-registry-ensure.yml's own default, normally []) — a registry
+#      that IS the origin (e.g. a self-hosted git forge's built-in OCI registry), mirrored to
+#      itself over plain HTTP. No zot proxy, no path rewrite, no OCI reformatting.
 mirrors:
+{% if registry_host %}
 {% for u in registry_upstreams %}
   {{ u.domain }}:
     endpoint: ["http://{{ registry_host }}:{{ registry_port }}{{ u.destination }}"]
+{% endfor %}
+{% endif %}
+{% for d in registry_direct_insecure %}
+  {{ d.domain }}:
+    endpoint: ["http://{{ d.endpoint }}"]
 {% endfor %}

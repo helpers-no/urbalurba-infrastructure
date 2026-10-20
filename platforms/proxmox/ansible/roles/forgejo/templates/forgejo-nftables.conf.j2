@@ -1,0 +1,59 @@
+#!/usr/sbin/nft -f
+# MANAGED BY ANSIBLE — roles/forgejo/templates/forgejo-nftables.conf.j2. Local edits are lost on
+# the next run.
+#
+# Restricts the HTTP (git-http, web UI, the built-in OCI registry) and git-ssh ports to the
+# declared allow-list (forgejo_firewall_allow_hosts, resolved to live addresses, plus
+# forgejo_firewall_allow_ranges). Management SSH (port 22, this guest's own, separate from
+# Forgejo's git-ssh on {{ forgejo_ssh_port }}) and outbound traffic are UNAFFECTED — unscoped,
+# deliberately, matching every other core-services guest's firewall role.
+#
+# 🔴 BOTH `input` AND `forward` ARE GATED, SAME REASON AS roles/garage — Docker runs a DNAT rule
+# and a docker-proxy process for the same published port at once; gating only one hook is only
+# sometimes effective.
+#
+# 🔴 `destroy table`, NOT `flush ruleset` — Docker keeps its own `ip nat`/`ip filter` tables; a
+# global flush would take those down too. Safe to re-apply on every run and every boot.
+destroy table inet forgejo_filter
+table inet forgejo_filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+
+		iif lo accept
+		ct state established,related accept
+		ip protocol icmp accept
+		ip6 nexthdr ipv6-icmp accept
+		tcp dport 22 accept
+
+{% for addr in forgejo_firewall_allow_addrs %}
+		ip saddr {{ addr }} tcp dport {{ forgejo_http_port }} accept
+		ip saddr {{ addr }} tcp dport {{ forgejo_ssh_port }} accept
+{% endfor %}
+{% for range in forgejo_firewall_allow_ranges %}
+		ip saddr {{ range }} tcp dport {{ forgejo_http_port }} accept
+		ip saddr {{ range }} tcp dport {{ forgejo_ssh_port }} accept
+{% endfor %}
+	}
+
+	# 🔴 MATCHES THE CONTAINER'S OWN PORT (22), NOT THE HOST'S PUBLISHED ONE ({{ forgejo_ssh_port }}).
+	# Docker's PREROUTING DNAT rewrites the destination PORT, not just the address, whenever the
+	# host and container ports differ (`-p {{ forgejo_ssh_port }}:22`). By the time a
+	# published-port connection reaches `forward`, its destination port is already 22 — a rule
+	# matching {{ forgejo_ssh_port }} here would never fire, and the connection would silently
+	# fall through to this chain's `policy accept`. HTTP hides this exact bug whenever the host and
+	# container port happen to match, since no remapping means no rewrite to miss.
+	chain forward {
+		type filter hook forward priority -5; policy accept;
+
+{% for addr in forgejo_firewall_allow_addrs %}
+		ip saddr {{ addr }} tcp dport {{ forgejo_http_port }} accept
+		ip saddr {{ addr }} tcp dport 22 accept
+{% endfor %}
+{% for range in forgejo_firewall_allow_ranges %}
+		ip saddr {{ range }} tcp dport {{ forgejo_http_port }} accept
+		ip saddr {{ range }} tcp dport 22 accept
+{% endfor %}
+		tcp dport {{ forgejo_http_port }} counter drop
+		tcp dport 22 ip daddr 172.17.0.0/16 counter drop
+	}
+}

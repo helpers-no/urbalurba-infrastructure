@@ -1,0 +1,129 @@
+---
+- name: The three secrets must be supplied, never defaulted
+  ansible.builtin.assert:
+    that:
+      - forgejo_secret_key | length > 0
+      - forgejo_internal_token | length > 0
+      - forgejo_jwt_secret | length > 0
+    fail_msg: >-
+      forgejo_secret_key, forgejo_internal_token and forgejo_jwt_secret are required and this role
+      ships none of them. Generate them once (they must stay stable across every future run — see
+      app.ini.j2's own header for why): a missing JWT_SECRET makes Forgejo try to self-write one
+      into the deliberately read-only app.ini and crash-loop.
+        docker run --rm {{ forgejo_image }} forgejo generate secret SECRET_KEY
+        docker run --rm {{ forgejo_image }} forgejo generate secret INTERNAL_TOKEN
+        docker run --rm {{ forgejo_image }} forgejo generate secret JWT_SECRET
+      Pass all three at run time from the secret store, same pattern as roles/garage's bootstrap
+      credential.
+    quiet: true
+  no_log: true
+
+- name: forgejo_domain must be resolved at apply time, never hardcoded
+  ansible.builtin.assert:
+    that:
+      - forgejo_domain | length > 0
+    fail_msg: >-
+      forgejo_domain is empty. Pass -e forgejo_domain=<this guest's resolved address> from the
+      caller — the same "never guess, never hardcode" rule roles/registry's registry_host follows.
+    quiet: true
+
+- name: Docker
+  ansible.builtin.apt:
+    name: [docker.io, curl, ca-certificates]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Data directory
+  ansible.builtin.file:
+    path: "{{ forgejo_data_dir }}"
+    state: directory
+    # 🔴 0777, FLAGGED, NOT ASSUMED CORRECT. The official image runs as its own internal `git`
+    # user (uid 1000) inside the container; this guest is an unprivileged LXC running Docker, so
+    # the uid that uid-1000-inside-the-container actually lands as on this host's filesystem is a
+    # subuid mapping two layers deep. Getting that exact number right without live-testing it is a
+    # guess; wide permissions on a guest holding no secrets yet (no repos, no users at install
+    # time) is the pragmatic starting choice, not a verified-correct one — narrow it once a real
+    # uid has been measured against a live container, before this guest holds anything real.
+    mode: "0777"
+
+- name: Pull the pinned image if it is not already cached
+  ansible.builtin.command:
+    cmd: "docker pull {{ forgejo_image }}"
+  register: forgejo_pull
+  changed_when: "'Downloaded newer image' in (forgejo_pull.stdout | default(''))"
+  # Digest-pinned, so a mismatch here is a pull failure worth seeing, not something to swallow —
+  # unlike roles/garage's tag-and-report shape, there is no "pulled something, just not what the
+  # version label expects" case possible once the reference is a digest.
+
+- name: Configuration
+  ansible.builtin.template:
+    src: app.ini.j2
+    dest: "{{ forgejo_data_dir }}/app.ini"
+    mode: "0644"
+  no_log: true   # carries SECRET_KEY and INTERNAL_TOKEN
+  notify: Restart forgejo
+
+- name: Unit
+  ansible.builtin.template:
+    src: forgejo.service.j2
+    dest: /etc/systemd/system/forgejo.service
+    mode: "0644"
+  notify: Restart forgejo
+
+- name: Running
+  ansible.builtin.systemd:
+    name: forgejo
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply any pending restart before verifying anything
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for Forgejo to actually answer, not just for the container to start
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ forgejo_http_port }}/api/healthz"
+    status_code: 200
+  register: forgejo_health
+  retries: 20
+  delay: 5
+  until: forgejo_health.status | default(0) == 200
+
+# ── firewall ────────────────────────────────────────────────────────────────────────────────
+- name: Resolve the allow-list to live addresses
+  ansible.builtin.set_fact:
+    forgejo_firewall_allow_addrs: "{{ forgejo_firewall_allow_hosts | map('extract', hostvars, 'ansible_host') | select('defined') | list }}"
+
+- name: Firewall — allow-list for HTTP and git-ssh, management ssh unscoped
+  ansible.builtin.template:
+    src: forgejo-nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Reload forgejo firewall
+
+- name: nftables enabled and running
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: Apply any pending firewall reload before verifying it
+  ansible.builtin.meta: flush_handlers
+
+- name: Prove the allow-list is actually in the live ruleset, not just templated
+  ansible.builtin.command: "nft list ruleset"
+  register: forgejo_live_ruleset
+  changed_when: false
+
+- name: Fail loudly if any allow-listed address is missing from the live chain
+  ansible.builtin.assert:
+    that:
+      - "addr in forgejo_live_ruleset.stdout"
+    fail_msg: "{{ addr }} is in the allow-list but not in the live nftables ruleset — the reload did not take."
+    quiet: true
+  loop: "{{ forgejo_firewall_allow_addrs }}"
+  loop_control:
+    loop_var: addr
