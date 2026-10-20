@@ -1,0 +1,17 @@
+# 025-cert-manager-clusterissuer.yaml
+#
+# Description:
+# The real, cluster-wide Issuer every UIS service should ask for a certificate: a self-signed CA
+# ("uis-ca"), not a publicly trusted one — there is no external CA in this platform, and TLS to
+# the outside world ends at the network edge (Cloudflare/Tailscale) upstream of the cluster, per
+# this repo's existing architecture. This issues certificates good for IN-CLUSTER and
+# service-to-service TLS where the consumer can be told to trust uis-ca's ca.crt explicitly (e.g.
+# Dex verifying Authentik, urb-agents#1917 bug #570) — it does NOT make a browser stop warning
+# about an untrusted certificate for human-facing traffic.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: uis-ca
+spec:
+  ca:
+    secretName: uis-ca-secret

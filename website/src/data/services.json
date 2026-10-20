@@ -504,6 +504,47 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "cert-manager",
+    "name": "cert-manager",
+    "description": "X.509 certificate issuance and renewal for Kubernetes",
+    "category": "MANAGEMENT",
+    "tags": ["tls", "certificates", "pki", "kubernetes"],
+    "abstract": "In-cluster X.509 certificate issuance via a self-signed CA",
+    "logo": "",
+    "website": "https://cert-manager.io"
+    ,"summary": "cert-manager automates the issuance and renewal of X.509 certificates inside the cluster. UIS installs it with one self-signed ClusterIssuer (uis-ca) that other services ask for a real certificate, instead of relying on Traefiks ad-hoc per-connection default."
+    ,"docs": "/docs/services/management/cert-manager"
+    ,"playbook": "025-setup-cert-manager.yml"
+    ,"priority": 20
+    ,"checkCommand": "kubectl get pods -n cert-manager -l app.kubernetes.io/component=webhook --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "025-remove-cert-manager.yml"
+    ,"helmChart": "jetstack/cert-manager"
+    ,"namespace": "cert-manager"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
+    "id": "epinio",
+    "name": "Epinio",
+    "description": "Self-service source-to-URL deploy path (push code, get a URL, no kubeconfig)",
+    "category": "MANAGEMENT",
+    "tags": ["paas", "deploy", "buildpacks", "self-service", "kubernetes"],
+    "abstract": "Push code, get a URL — Heroku/Vercel-style self-service deploy",
+    "logo": "",
+    "website": "https://epinio.io"
+    ,"summary": "Epinio builds and deploys an application directly from source — no Kubernetes manifest, no kubeconfig for the developer. Alongside ArgoCD (which deploys a manifest the application brings) and uis (which provisions platform services), Epinio is UISs third deploy mechanism: for code that brings neither."
+    ,"docs": "/docs/services/management/epinio"
+    ,"playbook": "625-setup-epinio.yml"
+    ,"priority": 85
+    ,"checkCommand": "kubectl get pods -n epinio -l app.kubernetes.io/name=epinio-server --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "625-remove-epinio.yml"
+    ,"requires": ["cert-manager"]
+    ,"helmChart": "epinio/epinio"
+    ,"namespace": "epinio"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "nextcloud",
     "name": "Nextcloud",
     "description": "Self-hosted collaboration platform with file sync and document editing",

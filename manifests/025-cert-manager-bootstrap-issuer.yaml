@@ -1,0 +1,15 @@
+# 025-cert-manager-bootstrap-issuer.yaml
+#
+# Description:
+# A throwaway self-signing Issuer, used ONLY to sign the uis-ca CA Certificate
+# (025-cert-manager-ca-certificate.yaml). Nothing else should ever reference this Issuer directly —
+# every other consumer asks the uis-ca ClusterIssuer (025-cert-manager-clusterissuer.yaml) instead,
+# which signs off the CA this bootstraps. Standard cert-manager two-step self-signed-CA pattern,
+# not an invention here: a bare selfSigned Issuer cannot act as a CA for other Issuers on its own.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: uis-ca-bootstrap
+  namespace: cert-manager
+spec:
+  selfSigned: {}

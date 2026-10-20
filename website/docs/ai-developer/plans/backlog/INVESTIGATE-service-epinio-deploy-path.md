@@ -237,8 +237,10 @@ here — they are the gate. Specifically, this document takes no position on:
 - ~~The concrete OIDC claim→namespace-role mapping (depends on gate results against both
   identity providers).~~ **Resolved — see "Identity gates passed" above.**
 - Whether the object store needs any Epinio-specific bucket/policy shape.
-- Whether a cert issuer needs adding for Epinio's own endpoints, or whether its ingress
-  rides the same edge-terminated-TLS pattern every other UIS service already uses.
+- ~~Whether a cert issuer needs adding for Epinio's own endpoints~~ **Resolved — added
+  cert-manager as a new UIS service with a self-signed `uis-ca` ClusterIssuer, see
+  [PLAN-system-cert-manager-001-install](./PLAN-system-cert-manager-001-install.md). Not
+  yet verified live.**
 - Network isolation between build workloads and platform workloads — flagged as a real
   gap, not assumed solved by namespace-per-team alone.
 
@@ -257,14 +259,19 @@ original ask.
 
 - [x] Lab proof-of-concept runs its identity gates — **passed 2026-10-20** (`#1917`)
 - [x] Rule exception approved by Terje (`#1915`), PR #564 merged
-- [ ] Get Terje's answer on identity-provider reuse-vs-fresh (above) before writing
-      `PLAN-service-epinio-003-identity.md`
-- [ ] Split this INVESTIGATE into ordered PLANs — `PLAN-service-epinio-001-install.md`
-      (the service itself, no developer-facing surface yet) and `-002-namespace-and-push.md`
-      no longer have an open prerequisite and can be written next; `-003-identity.md`
-      waits on the question above
-- [ ] Object store wiring, cert issuer, and network isolation remain open and should be
-      resolved in the relevant PLAN(s) above, not assumed
+- [x] Terje's answer on identity-provider reuse-vs-fresh received (`#1919`): fresh
+      Authentik, reuse GitHub+Okta. Secrets delivery destination given back; not yet
+      confirmed received.
+- [x] [PLAN-system-cert-manager-001-install](./PLAN-system-cert-manager-001-install.md) and
+      [PLAN-service-epinio-001-install](./PLAN-service-epinio-001-install.md) written AND
+      coded — 2026-10-20. **Not yet run against a live cluster** (no cluster in this
+      environment); both PLANs say so explicitly. imac to verify.
+- [ ] `PLAN-service-epinio-002-namespace-and-push.md` — not started
+- [ ] `PLAN-service-epinio-003-identity.md` — not started; waits on the two secret files
+      ops is delivering (`#1919`)
+- [ ] Object store wiring (Garage) and network isolation remain open and should be
+      resolved in a later PLAN, not assumed. Cert issuer is now resolved — see
+      PLAN-system-cert-manager-001.
 - [ ] On a production-rollout no-go from ops's side: fall back to scoped Argo CD access as
       its own PLAN against the existing ArgoCD path (does not block the UIS-side PLANs
       above, which target any cluster, not specifically production)

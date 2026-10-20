@@ -1,0 +1,24 @@
+# 025-cert-manager-ca-certificate.yaml
+#
+# Description:
+# The CA Certificate the uis-ca ClusterIssuer signs everything else from. Signed by the throwaway
+# bootstrap Issuer (025-cert-manager-bootstrap-issuer.yaml), not self-signed directly, so this CA's
+# private key — not the bootstrap Issuer — is what every real certificate traces back to.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: uis-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: uis-ca
+  secretName: uis-ca-secret
+  duration: 8760h   # 365d
+  renewBefore: 720h # 30d
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: uis-ca-bootstrap
+    kind: Issuer
+    group: cert-manager.io

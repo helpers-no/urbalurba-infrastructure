@@ -1,0 +1,41 @@
+---
+# file: ansible/playbooks/625-remove-epinio.yml
+# Description: Remove Epinio from Kubernetes (PLAN-service-epinio-001's install only)
+# Usage:
+# ansible-playbook playbooks/625-remove-epinio.yml -e target_host="rancher-desktop"
+
+- name: Remove Epinio from Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    epinio_namespace: "epinio"
+    epinio_helm_release: "epinio"
+    deletion_timeout: 180
+
+  tasks:
+    - name: 1. Check for Epinio Helm release
+      ansible.builtin.shell: helm list -n {{ epinio_namespace }} | grep {{ epinio_helm_release }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: helm_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: 2. Uninstall Epinio Helm release
+      ansible.builtin.shell: |
+        helm uninstall {{ epinio_helm_release }} -n {{ epinio_namespace }} --timeout {{ deletion_timeout }}s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: helm_check.rc == 0
+
+    - name: 3. Display final removal status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🗑️  Epinio Removal Status"
+          - "==============================================="
+          - "{{ '✅ SUCCESS - Epinio removed' if helm_check.rc == 0 else '⚪ Not found (already removed)' }}"
+          - "⚠️  Any apps developers pushed to Epinio are gone with it — this removes the whole"
+          - "  platform, not individual apps."
+          - "==============================================="
