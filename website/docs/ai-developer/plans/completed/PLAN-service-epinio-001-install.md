@@ -4,12 +4,12 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — code written, not yet run against a live cluster
+## Status: Completed — verified live by imac on a real Rancher Desktop cluster, 2026-10-20
 
 **Goal**: `uis deploy epinio` installs Epinio against this platform's existing Traefik,
 with Epinio's own bundled defaults for everything this PLAN deliberately does not touch.
 First of three ordered PLANs splitting
-[INVESTIGATE-service-epinio-deploy-path](./INVESTIGATE-service-epinio-deploy-path.md) —
+[INVESTIGATE-service-epinio-deploy-path](../backlog/INVESTIGATE-service-epinio-deploy-path.md) —
 see that doc for the full decision record (`urb-agents#1909/#1910/#1915/#1917`).
 
 **Prerequisites**: [PLAN-system-cert-manager-001-install](./PLAN-system-cert-manager-001-install.md)
@@ -58,44 +58,46 @@ value that playbook's own comment records as "verified live 2026-10-19 (helm sea
 epinio -l)" for gate 1. The health-check path is now the root `/`, not `/ready` — the PoC's
 own gate-1 acceptance check is exactly that request.
 
-## 🔴 What is still NOT verified — read before trusting this
+## Two real bugs found live, both fixed (`urb-agents#1921`)
 
-- **No live cluster in this environment.** `ansible-playbook --syntax-check` only. The PoC
-  reference proves gate 1 passed on `frigg-k3s-test` with these exact chart/version/health-
-  check values — a real, useful data point — but this repo's own playbook is written
-  differently enough (its own cert-manager prerequisite check, UIS's secrets-template
-  domain variable, no Dex secrets at all) that it still needs its own live run, not just
-  inherited trust from the PoC's.
-- **The Epinio Helm repo URL/chart name were not independently re-confirmed** beyond
-  matching the PoC reference — chart repos move; before running for real:
-  `helm repo add epinio https://epinio.github.io/helm-charts && helm repo update &&
-  helm search repo epinio/epinio --versions` — correct `625-setup-epinio.yml` if wrong.
-- **The default-credential secret name/label in the playbook's final output message is a
-  guess**, flagged as such inline — confirm against a real install and fix the message,
-  don't trust it as written.
-- **`apps.localhost` as a wildcard domain**: relies on Traefik's Kubernetes-native
-  `Ingress` support (not just its own `IngressRoute` CRD) picking up whatever Ingress
-  objects Epinio's server creates per pushed app, and on `*.localhost` resolving to
-  loopback the same way the rest of this platform's `<service>.localhost` convention
-  already depends on. Not independently re-verified for Epinio's dynamic, per-app-name
-  case specifically.
+1. **`uis deploy epinio` could never pass its own `urbalurba-secrets` existence check on
+   a fresh cluster.** `00-master-secrets.yml.template` had no `epinio` namespace/Secret
+   block, so the generic secrets pipeline never created one, and the namespace didn't
+   exist yet at that point in the deploy either. Confirmed nothing reads a *value* from
+   it — a pure existence gate nothing satisfied. Fixed by adding the block (reserved for
+   `PLAN-service-epinio-003-identity`'s Dex/OAuth secrets), same pipeline every other UIS
+   service goes through.
+2. **`epinio_chart_version: "1.12.0"` bundled MinIO, not SeaweedFS** — those pinned MinIO
+   images are no longer pullable anonymously from `quay.io` (`401 Unauthorized`), so the
+   Helm release's own post-install hook timed out waiting on them. Already corrected to
+   `1.14.3` for an unrelated reason (grounding values in the PoC's proven install) before
+   this was found; imac's independent check of the live Helm index confirms `1.14.3` is
+   the right fix (drops `minio:` entirely, ships `seaweedfs.enabled: true`).
 
-**This is imac's job to run and report back on.**
+## ✅ Verified live, imac, 2026-10-20 (re-test with both fixes on `main`)
+
+`uis deploy epinio`: **SUCCESS.** All 9 pods (dex, epinio-server, epinio-ui, reflector,
+registry, seaweedfs-filer/master/s3/volume) came up Ready. `https://epinio.apps.localhost/`
+→ HTTP 200. `uis undeploy epinio`: **SUCCESS**, removed cleanly (the empty namespace itself
+is left behind, same as every other UIS undeploy on this cluster — not a defect).
+
+**The default-credential secret name/label in the playbook's final output message is
+still an unconfirmed guess** — not blocking, but worth fixing the message text once
+someone actually checks it against a real install.
 
 ## Acceptance Criteria
 
-- [ ] `uis deploy cert-manager && uis deploy epinio` succeeds on a fresh Rancher Desktop
+- [x] `uis deploy cert-manager && uis deploy epinio` succeeds on a fresh Rancher Desktop
       cluster
-- [ ] `kubectl get pods -n epinio` shows the server pod Running and Ready
-- [ ] `https://epinio.apps.localhost/ready` responds (or the equivalent for whatever real
-      `DEFAULT_EPINIO_DOMAIN` is configured)
-- [ ] `uis undeploy epinio` removes it cleanly
-- [ ] Docs page (`website/docs/services/management/epinio.md`, auto-generated — already
-      generated and committed with this PLAN) renders correctly
+- [x] `kubectl get pods -n epinio` shows the server pod Running and Ready
+- [x] `https://epinio.apps.localhost/` responds (corrected from `/ready` — see above)
+- [x] `uis undeploy epinio` removes it cleanly
+- [x] Docs page (`website/docs/services/management/epinio.md`, auto-generated) renders
+      correctly
 
 ## Next steps
 
-- [ ] imac runs this against a real cluster, reports what broke
-- [ ] On success: `PLAN-service-epinio-002-namespace-and-push`
+- [x] imac ran this against a real cluster, found and both bugs above are fixed
+- [ ] `PLAN-service-epinio-002-namespace-and-push` — not started
 - [ ] `PLAN-service-epinio-003-identity` waits on the secrets ops is delivering per
       `urb-agents#1919` (destination given, not yet confirmed received)

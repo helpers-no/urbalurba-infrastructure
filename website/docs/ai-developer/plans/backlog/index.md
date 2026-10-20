@@ -16,8 +16,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | Document | Goal | Updated |
 |----------|------|---------|
 | [Plan: Forgejo as a platforms/proxmox core service](PLAN-system-forgejo-core-service.md) | Add Forgejo (self-hosted git host + its own built-in OCI registry) as a new | 2026-10-20 |
-| [Plan: cert-manager as a UIS service](PLAN-system-cert-manager-001-install.md) | Give UIS an in-cluster certificate-issuing capability (`uis deploy cert-manager`) — | 2026-10-20 |
-| [Plan: Epinio install (no identity, no custom storage/registry wiring)](PLAN-service-epinio-001-install.md) | `uis deploy epinio` installs Epinio against this platform's existing Traefik, | 2026-10-20 |
 | [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-10-20 |
 | [Investigate: Epinio Deploy Path for UIS](INVESTIGATE-service-epinio-deploy-path.md) | Decide how UIS itself (CLI surface, service layout, docs) should incorporate | 2026-10-20 |
 | [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-20 |

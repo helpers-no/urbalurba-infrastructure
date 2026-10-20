@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — identity gates passed 2026-10-20, ready to split into PLANs
+## Status: Backlog — PLAN-001 (install) shipped and verified; PLAN-002/003 not started
 
 **Goal**: Decide how UIS itself (CLI surface, service layout, docs) should incorporate
 an Epinio-based self-service deploy path — "push code, get a URL and status back, read
@@ -239,8 +239,8 @@ here — they are the gate. Specifically, this document takes no position on:
 - Whether the object store needs any Epinio-specific bucket/policy shape.
 - ~~Whether a cert issuer needs adding for Epinio's own endpoints~~ **Resolved — added
   cert-manager as a new UIS service with a self-signed `uis-ca` ClusterIssuer, see
-  [PLAN-system-cert-manager-001-install](./PLAN-system-cert-manager-001-install.md). Not
-  yet verified live.**
+  [PLAN-system-cert-manager-001-install](../completed/PLAN-system-cert-manager-001-install.md).
+  Verified live by imac, 2026-10-20.**
 - Network isolation between build workloads and platform workloads — flagged as a real
   gap, not assumed solved by namespace-per-team alone.
 
@@ -262,16 +262,18 @@ original ask.
 - [x] Terje's answer on identity-provider reuse-vs-fresh received (`#1919`): fresh
       Authentik, reuse GitHub+Okta. Secrets delivery destination given back; not yet
       confirmed received.
-- [x] [PLAN-system-cert-manager-001-install](./PLAN-system-cert-manager-001-install.md) and
-      [PLAN-service-epinio-001-install](./PLAN-service-epinio-001-install.md) written AND
-      coded — 2026-10-20. **Not yet run against a live cluster** (no cluster in this
-      environment); both PLANs say so explicitly. imac to verify.
+- [x] [PLAN-system-cert-manager-001-install](../completed/PLAN-system-cert-manager-001-install.md)
+      and [PLAN-service-epinio-001-install](../completed/PLAN-service-epinio-001-install.md) —
+      written, coded, and **verified live by imac on a real Rancher Desktop cluster,
+      2026-10-20** (`#1921`). Both moved to `completed/`. Two real bugs found and fixed
+      along the way (missing `epinio` secrets-template entry; a chart version bundling
+      broken MinIO images) — see the PLANs themselves for detail.
 - [ ] `PLAN-service-epinio-002-namespace-and-push.md` — not started
 - [ ] `PLAN-service-epinio-003-identity.md` — not started; waits on the two secret files
       ops is delivering (`#1919`)
 - [ ] Object store wiring (Garage) and network isolation remain open and should be
-      resolved in a later PLAN, not assumed. Cert issuer is now resolved — see
-      PLAN-system-cert-manager-001.
+      resolved in a later PLAN, not assumed. Cert issuer is resolved — see
+      [PLAN-system-cert-manager-001-install](../completed/PLAN-system-cert-manager-001-install.md).
 - [ ] On a production-rollout no-go from ops's side: fall back to scoped Argo CD access as
       its own PLAN against the existing ArgoCD path (does not block the UIS-side PLANs
       above, which target any cluster, not specifically production)
