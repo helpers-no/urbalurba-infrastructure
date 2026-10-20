@@ -420,11 +420,29 @@ cmd_status() {
         if [[ -n "$SCRIPT_CHECK_COMMAND" ]]; then
             if check_service_deployed "$service_id" 2>/dev/null; then
                 has_deployed=true
+                # 🔴 urb-agents#1917 bug #567: SCRIPT_CHECK_COMMAND only proves the
+                # pod/proxy process is Running — for an externally-proxied service that
+                # is true even when the actual target is dead or stale, and "Healthy"
+                # said so anyway. Mirror the external-awareness `uis list` already has
+                # (see its own "External → host:port" row above), plus an actual TCP
+                # reachability test — `is_external_service`/`external_service_get` only
+                # read the declared topology, they never test it.
+                local _status_line="✅ Healthy"
+                if is_external_service "$service_id" 2>/dev/null; then
+                    local _st_host _st_port _st_why
+                    if read -r _st_host _st_port _st_why < <(external_service_get "$service_id" "${SCRIPT_EXPOSE_PORT:-}" 2>/dev/null); then
+                        if [[ "$_st_port" != "-" ]] && timeout 2 bash -c ">/dev/tcp/${_st_host}/${_st_port}" 2>/dev/null; then
+                            _status_line="🔗 External → ${_st_host}:${_st_port} (reachable)"
+                        else
+                            _status_line="⚠️  External → ${_st_host}:${_st_port} (UNREACHABLE)"
+                        fi
+                    fi
+                fi
                 printf "%-18s %-20s %-12s %s\n" \
                     "$SCRIPT_ID" \
                     "${SCRIPT_NAME:0:20}" \
                     "${SCRIPT_CATEGORY:0:12}" \
-                    "✅ Healthy"
+                    "$_status_line"
             fi
         fi
     done
