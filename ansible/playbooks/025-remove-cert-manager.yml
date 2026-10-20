@@ -1,0 +1,67 @@
+---
+# file: ansible/playbooks/025-remove-cert-manager.yml
+# Description: Remove cert-manager from Kubernetes
+# Usage:
+# ansible-playbook playbooks/025-remove-cert-manager.yml -e target_host="rancher-desktop"
+
+- name: Remove cert-manager from Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    manifests_folder: "/mnt/urbalurbadisk/manifests"
+    cert_manager_namespace: "cert-manager"
+    cert_manager_helm_release: "cert-manager"
+    deletion_timeout: 180
+
+  tasks:
+    - name: 1. Check for other Certificates using the uis-ca ClusterIssuer
+      kubernetes.core.k8s_info:
+        api_version: cert-manager.io/v1
+        kind: Certificate
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: all_certs
+      ignore_errors: true
+
+    # ⚠️ Refuse rather than silently break every service that asked uis-ca for a certificate —
+    # same shape as this repo's `argocd remove`/`argocd register` precedent (ask what is actually
+    # there before acting). A fresh install where nothing else has requested a cert yet is the
+    # only case this allows through unprompted.
+    - name: 2. Refuse if another namespace's Certificate depends on uis-ca
+      ansible.builtin.fail:
+        msg: >-
+          Refusing to remove cert-manager: {{ dependents | map(attribute='metadata.name') | join(', ') }}
+          (namespace(s): {{ dependents | map(attribute='metadata.namespace') | unique | join(', ') }})
+          still reference the uis-ca ClusterIssuer. Removing cert-manager would leave those
+          Certificates unable to renew. Remove those services first, or pass -e force=true to
+          remove cert-manager anyway.
+      vars:
+        dependents: "{{ all_certs.resources | default([]) | selectattr('spec.issuerRef.name', 'defined') | selectattr('spec.issuerRef.name', 'equalto', 'uis-ca') | selectattr('metadata.namespace', 'ne', cert_manager_namespace) | list }}"
+      when:
+        - (all_certs.resources | default([]) | selectattr('spec.issuerRef.name', 'defined') | selectattr('spec.issuerRef.name', 'equalto', 'uis-ca') | selectattr('metadata.namespace', 'ne', cert_manager_namespace) | list | length) > 0
+        - force is not defined or not (force | bool)
+
+    - name: 3. Check for cert-manager Helm release
+      ansible.builtin.shell: helm list -n {{ cert_manager_namespace }} | grep {{ cert_manager_helm_release }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: helm_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: 4. Uninstall cert-manager Helm release
+      ansible.builtin.shell: |
+        helm uninstall {{ cert_manager_helm_release }} -n {{ cert_manager_namespace }} --timeout {{ deletion_timeout }}s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: helm_check.rc == 0
+
+    - name: 5. Display final removal status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🗑️  cert-manager Removal Status"
+          - "==============================================="
+          - "{{ '✅ SUCCESS - cert-manager removed' if helm_check.rc == 0 else '⚪ Not found (already removed)' }}"
+          - "⚠️  Any Certificate that referenced uis-ca will stop renewing."
+          - "==============================================="

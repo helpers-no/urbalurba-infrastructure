@@ -1,0 +1,172 @@
+---
+# file: ansible/playbooks/025-setup-cert-manager.yml
+# Description:
+# Install cert-manager and a self-signed ClusterIssuer ("uis-ca"), so any in-cluster service
+# that needs a real TLS certificate (not Traefik's ad-hoc per-connection default) has one to ask
+# for. First concrete consumers: Epinio (its own chart requires cert-manager as a prerequisite —
+# installed separately, not bundled, because Helm cannot apply a release's own CustomResources
+# against CRDs a bundled subchart in the SAME install pass would otherwise provide) and
+# Authentik's `authentik-server-tls` (urb-agents#1912/#1917 bug report #570 — no real cert today,
+# breaks any strict-TLS client such as an OIDC connector).
+#
+# 🔴 UNVERIFIED IN THIS ENVIRONMENT: the chart version pinned below was not confirmed against a
+# live Helm repo index — no internet access where this was written. imac must confirm
+# `helm repo update && helm search repo jetstack/cert-manager --versions` actually lists it (or
+# the nearest available version) before trusting this playbook to run unattended.
+#
+# Usage:
+# ansible-playbook playbooks/025-setup-cert-manager.yml -e target_host="rancher-desktop"
+
+- name: Install cert-manager and a self-signed ClusterIssuer
+  hosts: localhost
+  gather_facts: true
+  vars:
+    manifests_folder: "/mnt/urbalurbadisk/manifests"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    cert_manager_namespace: "cert-manager"
+    installation_timeout: 300
+    cert_manager_chart: "jetstack/cert-manager"
+    # 🔴 Not independently verified — see the file header.
+    cert_manager_chart_version: "1.16.2"
+    bootstrap_issuer_file: "{{ manifests_folder }}/025-cert-manager-bootstrap-issuer.yaml"
+    ca_certificate_file: "{{ manifests_folder }}/025-cert-manager-ca-certificate.yaml"
+    cluster_issuer_file: "{{ manifests_folder }}/025-cert-manager-clusterissuer.yaml"
+
+  tasks:
+    - name: 1. Check if required variables are provided
+      ansible.builtin.fail:
+        msg: "The variable 'target_host' is mandatory. Use -e target_host=your_host_name to specify it."
+      when: target_host is not defined
+
+    - name: 2. Print playbook description
+      ansible.builtin.debug:
+        msg: "Installing cert-manager on Kubernetes context: {{ target_host }}"
+
+    - name: 3. Check existing Helm repositories
+      ansible.builtin.command: helm repo list
+      register: helm_repo_list
+      changed_when: false
+
+    - name: 4. Add the jetstack Helm repository if needed
+      kubernetes.core.helm_repository:
+        name: "jetstack"
+        repo_url: "https://charts.jetstack.io"
+      when: "'jetstack' not in helm_repo_list.stdout"
+
+    - name: 5. Update Helm repositories
+      ansible.builtin.command: helm repo update
+      changed_when: false
+
+    - name: 6. Create cert-manager namespace if it doesn't exist
+      ansible.builtin.shell: kubectl create namespace {{ cert_manager_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: namespace_result
+      changed_when: namespace_result.rc == 0
+      failed_when: namespace_result.rc != 0
+
+    # 🔵 CRDs bundled in the SAME release this chart installs — unlike Epinio below (which needs
+    # cert-manager's CRDs to already exist before its own install pass), there is nothing else
+    # relying on cert-manager's own CRDs existing before this one Helm release completes.
+    - name: 7. Deploy cert-manager via Helm (installs its own CRDs)
+      ansible.builtin.command: >
+        helm upgrade --install cert-manager {{ cert_manager_chart }}
+        --namespace {{ cert_manager_namespace }}
+        --version {{ cert_manager_chart_version }}
+        --set crds.enabled=true
+        --timeout {{ installation_timeout }}s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: cert_manager_result
+      changed_when: true
+
+    - name: 8. Wait for cert-manager webhook to be ready
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ cert_manager_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/component=webhook"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: webhook_pods
+      retries: 30
+      delay: 10
+      until: >
+        webhook_pods.resources | length > 0 and
+        webhook_pods.resources[0].status.phase == "Running" and
+        webhook_pods.resources[0].status.containerStatuses[0].ready == true
+
+    # ── Self-signed CA, the standard cert-manager two-step bootstrap ──────────────────────────
+    # A bare `ClusterIssuer: { selfSigned: {} }` can only sign a Certificate directly, and cannot
+    # be reused as a CA for other Issuers. This repo wants ONE CA ("uis-ca") that every in-cluster
+    # service with a TLS need asks the same ClusterIssuer for — so: a throwaway self-signing
+    # Issuer signs one CA Certificate, and the REAL ClusterIssuer (uis-ca) signs everything else
+    # off that CA's key. This is cert-manager's own documented pattern for a self-signed CA, not
+    # an invention here.
+    - name: 9. Apply the bootstrap self-signing Issuer
+      kubernetes.core.k8s:
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        state: present
+        src: "{{ bootstrap_issuer_file }}"
+
+    - name: 10. Apply the uis-ca CA Certificate (signed by the bootstrap Issuer)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        state: present
+        src: "{{ ca_certificate_file }}"
+
+    - name: 11. Wait for the uis-ca Certificate to be Ready
+      kubernetes.core.k8s_info:
+        api_version: cert-manager.io/v1
+        kind: Certificate
+        name: uis-ca
+        namespace: "{{ cert_manager_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: ca_cert_status
+      retries: 20
+      delay: 5
+      until: >
+        ca_cert_status.resources | length > 0 and
+        ca_cert_status.resources[0].status.conditions | default([]) |
+        selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length > 0
+
+    - name: 12. Apply the uis-ca ClusterIssuer (signs off the CA above)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        state: present
+        src: "{{ cluster_issuer_file }}"
+
+    - name: 13. Verify the uis-ca ClusterIssuer is Ready
+      kubernetes.core.k8s_info:
+        api_version: cert-manager.io/v1
+        kind: ClusterIssuer
+        name: uis-ca
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: issuer_status
+      retries: 15
+      delay: 5
+      until: >
+        issuer_status.resources | length > 0 and
+        issuer_status.resources[0].status.conditions | default([]) |
+        selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length > 0
+
+    - name: 14. Display final deployment status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🔐 cert-manager Deployment Status"
+          - "==============================================="
+          - ""
+          - "✅ SUCCESS - cert-manager installed, uis-ca ClusterIssuer Ready"
+          - ""
+          - "Any service wanting a real certificate (not Traefik's ad-hoc default) requests one by"
+          - "adding a cert-manager.io/v1 Certificate resource that names:"
+          - "  issuerRef: { name: uis-ca, kind: ClusterIssuer }"
+          - ""
+          - "This CA is self-signed, not publicly trusted — fine for in-cluster service-to-service"
+          - "TLS (e.g. Dex verifying Authentik) where the consumer can be told to trust this CA's"
+          - "ca.crt explicitly. It does NOT make a browser stop warning about an untrusted cert for"
+          - "human-facing traffic; that is a different, larger problem this does not solve."
+          - "🔧 Troubleshooting:"
+          - "• Check pods: kubectl get pods -n {{ cert_manager_namespace }}"
+          - "• Check the issuer: kubectl describe clusterissuer uis-ca"
+          - "==============================================="

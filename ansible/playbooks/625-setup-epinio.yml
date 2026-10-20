@@ -1,0 +1,210 @@
+---
+# file: ansible/playbooks/625-setup-epinio.yml
+# Description:
+# Install Epinio (self-service "push code, get a URL and status back, read logs with no
+# kubeconfig" deploy path), as a third UIS deploy mechanism alongside `uis` provisioning and
+# ArgoCD — see website/docs/ai-developer/plans/backlog/INVESTIGATE-service-epinio-deploy-path.md
+# for the decision record (urb-agents#1909/#1910/#1915).
+#
+# SCOPE OF THIS PLAYBOOK — PLAN-service-epinio-001 ONLY:
+# installs Epinio with its OWN bundled defaults for identity (basic auth, no Dex/OIDC yet),
+# object storage (bundled SeaweedFS) and container registry (bundled) — none of that is wired to
+# this platform's own identity providers or Garage object store here. That is deliberately
+# deferred to PLAN-service-epinio-003-identity (Dex/OIDC) and a later PLAN for Garage as the S3
+# backend — see the INVESTIGATE doc's "Next steps". This playbook's only job is: does Epinio
+# install and come up healthy against this platform's existing Traefik.
+#
+# 🔴 UNVERIFIED IN THIS ENVIRONMENT: the chart repo URL/name and version below were not
+# confirmed against a live Helm repo index — no internet access where this was written, and no
+# live cluster to test against either. imac must confirm
+# `helm repo add epinio https://epinio.github.io/helm-charts && helm repo update &&
+#  helm search repo epinio/epinio --versions` actually lists a chart named `epinio/epinio`
+# before trusting this playbook to run unattended, and correct `epinio_chart`/`epinio_chart_version`
+# below if not.
+#
+# Prerequisite: cert-manager (`uis deploy cert-manager`) — Epinio's own chart requires
+# cert-manager's CRDs to exist before its install pass; `certManager.install: false` below tells
+# the chart not to bundle its own copy. Enforced by this service's SCRIPT_REQUIRES, not by this
+# playbook.
+#
+# Usage:
+# ansible-playbook playbooks/625-setup-epinio.yml -e target_host="rancher-desktop" -e default_epinio_domain="apps.localhost"
+
+- name: Install Epinio (self-service deploy path)
+  hosts: localhost
+  gather_facts: true
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    epinio_namespace: "epinio"
+    installation_timeout: 600
+    pod_readiness_timeout: 300
+    epinio_chart_repo_name: "epinio"
+    # 🔴 Not independently verified — see the file header.
+    epinio_chart_repo_url: "https://epinio.github.io/helm-charts"
+    epinio_chart: "epinio/epinio"
+    epinio_chart_version: "1.12.0"
+    # DEFAULT_EPINIO_DOMAIN, forwarded automatically from
+    # provision-host/uis/templates/secrets-templates/00-common-values.env.template.
+    default_epinio_domain: "apps.localhost"
+
+  tasks:
+    - name: 1. Check if required variables are provided
+      ansible.builtin.fail:
+        msg: "The variable 'target_host' is mandatory. Use -e target_host=your_host_name to specify it."
+      when: target_host is not defined
+
+    - name: 2. Print playbook description
+      ansible.builtin.debug:
+        msg: "Installing Epinio on Kubernetes context: {{ target_host }}, domain: {{ default_epinio_domain }}"
+
+    - name: 3. Verify cert-manager's uis-ca ClusterIssuer is Ready (hard prerequisite)
+      kubernetes.core.k8s_info:
+        api_version: cert-manager.io/v1
+        kind: ClusterIssuer
+        name: uis-ca
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: issuer_check
+
+    - name: 3b. Refuse if cert-manager is not installed — Epinio's chart cannot apply its own Certificates without it
+      ansible.builtin.fail:
+        msg: >-
+          cert-manager's uis-ca ClusterIssuer was not found. Epinio's chart requires
+          cert-manager's CRDs to exist before it installs — run 'uis deploy cert-manager' first.
+      when: issuer_check.resources | default([]) | length == 0
+
+    - name: 4. Create epinio namespace if it doesn't exist
+      ansible.builtin.shell: kubectl create namespace {{ epinio_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: namespace_result
+      changed_when: namespace_result.rc == 0
+      failed_when: namespace_result.rc != 0
+
+    - name: 5. Check existing Helm repositories
+      ansible.builtin.command: helm repo list
+      register: helm_repo_list
+      changed_when: false
+
+    - name: 6. Add the Epinio Helm repository if needed
+      kubernetes.core.helm_repository:
+        name: "{{ epinio_chart_repo_name }}"
+        repo_url: "{{ epinio_chart_repo_url }}"
+      when: "epinio_chart_repo_name not in helm_repo_list.stdout"
+
+    - name: 7. Update Helm repositories
+      ansible.builtin.command: helm repo update
+      changed_when: false
+
+    - name: 8. Check for urbalurba-secrets in epinio namespace
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: urbalurba-secrets
+        namespace: "{{ epinio_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: epinio_secrets
+
+    - name: 8b. Verify urbalurba-secrets exists
+      ansible.builtin.assert:
+        that:
+          - epinio_secrets.resources | length > 0
+        fail_msg: "FATAL: urbalurba-secrets not found in {{ epinio_namespace }} namespace. Secrets must be applied before deploying Epinio."
+        success_msg: "urbalurba-secrets found in {{ epinio_namespace }} namespace"
+
+    - name: 9. Write temporary Helm values
+      ansible.builtin.copy:
+        dest: /tmp/epinio-values.yaml
+        content: |
+          global:
+            domain: {{ default_epinio_domain }}
+          certManager:
+            install: false
+            enabled: true
+          server:
+            ingressClassName: traefik
+          ingress:
+            ingressClassName: traefik
+        mode: '0600'
+
+    - name: 10. Deploy Epinio using Helm
+      ansible.builtin.command: >
+        helm upgrade --install epinio {{ epinio_chart }}
+        --namespace {{ epinio_namespace }}
+        --version {{ epinio_chart_version }}
+        -f /tmp/epinio-values.yaml
+        --timeout {{ installation_timeout }}s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: epinio_result
+      changed_when: true
+
+    - name: 10b. Clean up temporary values file
+      ansible.builtin.file:
+        path: /tmp/epinio-values.yaml
+        state: absent
+      changed_when: false
+
+    - name: 11. Wait for Epinio server pod to be ready (Stage 1 - Running)
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ epinio_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name=epinio-server"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: epinio_pods
+      retries: 30
+      delay: 15
+      until: >
+        epinio_pods.resources | length > 0 and
+        epinio_pods.resources[0].status.phase == "Running"
+
+    - name: 12. Wait for Epinio server pod to be fully ready (Stage 2 - Ready)
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ epinio_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name=epinio-server"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: epinio_pods_ready
+      retries: 30
+      delay: 10
+      until: >
+        epinio_pods_ready.resources | length > 0 and
+        epinio_pods_ready.resources[0].status.containerStatuses[0].ready == true
+
+    - name: 13. Verify Epinio API responds
+      ansible.builtin.uri:
+        url: "https://epinio.{{ default_epinio_domain }}/ready"
+        validate_certs: false
+        status_code: [200]
+      register: epinio_api_check
+      retries: 15
+      delay: 15
+      until: epinio_api_check.status is defined and epinio_api_check.status == 200
+      ignore_errors: true
+
+    - name: 14. Display final deployment status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🚀 Epinio Deployment Status"
+          - "==============================================="
+          - ""
+          - "{{ '✅ SUCCESS - Epinio API responded' if (epinio_api_check.status is defined and epinio_api_check.status == 200) else '⚠️ Epinio pod is Ready, but the external API check did not confirm — check Traefik routing by hand' }}"
+          - ""
+          - "🌐 Access:"
+          - "• API/UI: https://epinio.{{ default_epinio_domain }}"
+          - "• Epinio CLI: epinio target epinio.{{ default_epinio_domain }}"
+          - ""
+          - "🔐 Identity: this install uses Epinio's OWN bundled auth (no Dex/OIDC wiring yet —"
+          - "  that is PLAN-service-epinio-003-identity, not this playbook)."
+          - "  kubectl get secret -n {{ epinio_namespace }} -l epinio.io/api-user-credentials -o yaml"
+          - "  (Epinio's own chart convention for its default admin credential — confirm the exact"
+          - "  secret name/label against a real install; not verified live here.)"
+          - ""
+          - "📦 Storage/registry: Epinio's own bundled defaults (SeaweedFS, bundled registry) —"
+          - "  NOT wired to this platform's Garage object store or Forgejo registry yet."
+          - ""
+          - "🔧 Troubleshooting:"
+          - "• Check pods: kubectl get pods -n {{ epinio_namespace }}"
+          - "• View logs: kubectl logs -n {{ epinio_namespace }} -l app.kubernetes.io/name=epinio-server"
+          - "==============================================="
