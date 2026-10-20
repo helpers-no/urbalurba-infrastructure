@@ -1,15 +1,36 @@
 ---
-# k3s-registry-ensure — point every k3s node (both clusters) at the registry cache, IF one was
-# built. Run once, right after the registry guest exists and is verified — see
-# 05-core-services-apply.sh, which only calls this when "registry" is in CORE_SERVICES.
+# k3s-registry-ensure — point every k3s node (both clusters) at whichever of TWO independent
+# registry-trust mechanisms this run is asked to wire, IF either was built. Run once, right after
+# the relevant guest(s) exist and are verified — see 05-core-services-apply.sh, which calls this
+# when "registry" and/or a direct-insecure-registry-owning service (e.g. a self-hosted git forge)
+# is in CORE_SERVICES.
 #
+#   # zot cache only (unchanged from before this playbook also learned the second kind):
 #   ansible-playbook -i generated/inventory.yml --limit guests playbooks/k3s-registry-ensure.yml \
 #       -e registry_host=<the registry guest's real IP, resolved at apply time — NEVER hardcode>
 #
-# 🔵 SINGLE SOURCE OF TRUTH: registry_port and registry_upstreams (including each upstream's
-# domain → mirror path) come from the SAME file roles/registry/defaults/main.yml already uses to
-# build zot's own config.json — the mapping cannot drift between the cache and the clients
-# pointed at it.
+#   # a direct-insecure origin registry only (e.g. a git forge's own registry), no zot involved:
+#   ansible-playbook -i generated/inventory.yml --limit guests playbooks/k3s-registry-ensure.yml \
+#       -e registry_direct_insecure='[{"domain": "<forge-host>", "endpoint": "<forge-host>:<port>"}]'
+#
+#   # both in one render — the composition this file exists to make possible, see Part 4/5 of
+#   # INVESTIGATE-system-registry-cache.md for why a second, independently-triggered WRITE to this
+#   # same path (rather than one call carrying both) would silently clobber whichever ran last:
+#   ansible-playbook ... -e registry_host=<ip> -e registry_direct_insecure='[...]'
+#
+# 🔵 THE TWO KINDS, AND WHY THEY ARE NOT THE SAME LIST:
+#   - registry_upstreams (roles/registry/defaults/main.yml) — public upstreams proxied/CACHED
+#     through zot. zot syncs with tlsVerify true and re-encodes Docker images to OCI on ingest
+#     (digest-pinned pulls miss the cache) — fine for public upstreams, wrong for a registry that
+#     IS the origin of freshly-built, often digest-referenced images.
+#   - registry_direct_insecure (this playbook's own default, normally []) — a registry trusted
+#     DIRECTLY, no proxy, no reformatting: a domain mirrored to itself over plain HTTP. Belongs to
+#     whatever caller owns that registry (e.g. a forge-provisioning playbook), not to the zot role
+#     — it has nothing to do with zot and must not be added to registry_upstreams.
+#
+# registry_port and registry_upstreams (including each upstream's domain → mirror path) come from
+# the SAME file roles/registry/defaults/main.yml already uses to build zot's own config.json — the
+# mapping cannot drift between the cache and the clients pointed at it.
 #
 # 🔴 A RESTART IS REQUIRED — verified for real on 2026-10-05 against a live k3s v1.36.5+k3s1 node:
 # writing registries.yaml and waiting does NOT regenerate containerd's certs.d/ on its own. Only
@@ -17,10 +38,15 @@
 # file check) routed through the mirror and the image landed in the cache's own /v2/_catalog.
 # Re-prove this if the pinned k3s version ever changes — do not assume hot-reload.
 #
-# ⚠️ DEGRADES GRACEFULLY: a lab owner who never selects "registry" in CORE_SERVICES never has this
-# playbook run against them at all (05-core-services-apply.sh's own condition), so a k3s node with
-# no registries.yaml behaves exactly as it always did — current behaviour, unchanged.
-- name: Wire k3s nodes to the registry cache
+# ⚠️ DEGRADES GRACEFULLY: a lab owner who never selects "registry" (and never owns a service that
+# populates registry_direct_insecure) never has this playbook run against them at all — a k3s node
+# with no registries.yaml behaves exactly as it always did — current behaviour, unchanged.
+#
+# ⚠️ NOT YET PROVEN AGAINST A LIVE CLUSTER: the registry_direct_insecure path (template rendering,
+# the relaxed assert, and the refuse-on-unrecognized-domain guard below) is new and has only been
+# syntax-checked (`ansible-playbook --syntax-check`), not run against a real k3s node. The
+# zot/registry_upstreams path is unchanged from what 2026-10-05 already verified live.
+- name: Wire k3s nodes to whichever registry-trust mechanisms this run supplies
   hosts: guests
   gather_facts: false
 
@@ -29,22 +55,70 @@
 
   vars:
     registry_host: ""
+    registry_direct_insecure: []
+    _registries_yaml_path: /etc/rancher/k3s/registries.yaml
 
   tasks:
-    - name: A registry host is required
+    - name: At least one registry-trust mechanism must actually be requested
       ansible.builtin.assert:
         that:
-          - registry_host | length > 0
+          - (registry_host | length > 0) or (registry_direct_insecure | length > 0)
         fail_msg: >-
-          Pass -e registry_host=<ip> — the registry guest's IP, resolved at apply time by
-          05-core-services-apply.sh. This playbook never guesses or hardcodes one.
+          Pass -e registry_host=<ip> (zot cache wiring), -e registry_direct_insecure=<list>
+          (direct-insecure origin registries), or both. This playbook never guesses or hardcodes
+          either, and running it with neither is a caller error, not a no-op.
         quiet: true
       run_once: true
 
-    - name: registries.yaml — every upstream behind the one cache
+    # 🔴 REFUSE, DON'T CLOBBER — this repo's own precedent (uis argocd register asking what is
+    # actually IN a namespace before acting, rather than overwriting blind). This playbook writes
+    # the ENTIRE file every run; without this check, anything that manages an entry in
+    # registries.yaml through a mechanism OTHER than this playbook — a different repo's tooling,
+    # a hand edit, a future caller nobody updated this list for — gets silently discarded the next
+    # time this runs. See INVESTIGATE-system-registry-cache.md Part 5 for the cross-repo version
+    # of this exact risk; this guard is what this repo's own side of that fix looks like.
+    - name: Does a registries.yaml already exist on this node?
+      ansible.builtin.stat:
+        path: "{{ _registries_yaml_path }}"
+      become: true
+      register: _existing_registries_file
+
+    - name: Read the existing registries.yaml, if any
+      ansible.builtin.slurp:
+        src: "{{ _registries_yaml_path }}"
+      become: true
+      register: _existing_registries_slurp
+      when: _existing_registries_file.stat.exists
+
+    - name: Known domains this run is about to write
+      ansible.builtin.set_fact:
+        _known_domains: >-
+          {{
+            (registry_host | length > 0) | ternary(registry_upstreams | map(attribute='domain') | list, [])
+            + (registry_direct_insecure | map(attribute='domain') | list)
+          }}
+
+    - name: Refuse if the existing file names a domain this run does not recognize
+      vars:
+        _existing_parsed: "{{ (_existing_registries_slurp.content | b64decode | from_yaml) | default({}) }}"
+        _existing_domains: "{{ (_existing_parsed.mirrors | default({})) | list }}"
+        _unrecognized: "{{ _existing_domains | difference(_known_domains) }}"
+      ansible.builtin.assert:
+        that:
+          - _unrecognized | length == 0
+        fail_msg: >-
+          {{ _registries_yaml_path }} on {{ inventory_hostname }} already mirrors
+          {{ _unrecognized | join(', ') }}, which this run was not told about (known domains this
+          run: {{ _known_domains | join(', ') or '(none)' }}). Something else manages that entry —
+          overwriting it would silently discard it. Pass it via registry_direct_insecure (or
+          registry_upstreams) instead of running this playbook with an incomplete list.
+        quiet: true
+      when: _existing_registries_file.stat.exists
+
+    - name: registries.yaml — every mechanism this run was asked to wire
       ansible.builtin.template:
         src: templates/k3s-registries.yaml.j2
-        dest: /etc/rancher/k3s/registries.yaml
+        dest: "{{ _registries_yaml_path }}"
         mode: "0644"
       become: true
       notify: restart k3s
@@ -56,35 +130,38 @@
     # the right registries.yaml reports changed=false and never restarts — correct, since nothing
     # needs to change — but that must not be mistaken for "therefore it's wired"; check the actual
     # evidence a restart leaves behind, every run, regardless of whether this run changed anything.
-    - name: containerd must have generated certs.d for every configured upstream
+    - name: containerd must have generated certs.d for every configured domain (both mechanisms)
       ansible.builtin.stat:
-        path: "/var/lib/rancher/k3s/agent/etc/containerd/certs.d/{{ item.domain }}"
-      loop: "{{ registry_upstreams }}"
-      loop_control: { label: "{{ item.domain }}" }
+        path: "/var/lib/rancher/k3s/agent/etc/containerd/certs.d/{{ item }}"
+      loop: "{{ _known_domains }}"
+      loop_control: { label: "{{ item }}" }
       register: certsd
       become: true
 
-    - name: Each upstream's certs.d must actually exist
+    - name: Each configured domain's certs.d must actually exist
       ansible.builtin.assert:
         that:
           - item.stat.exists
         fail_msg: >-
-          /var/lib/rancher/k3s/agent/etc/containerd/certs.d/{{ item.item.domain }} is missing —
-          k3s has not regenerated its containerd config from registries.yaml. A restart is
-          required (see the note above); confirm the restart handler actually ran.
+          /var/lib/rancher/k3s/agent/etc/containerd/certs.d/{{ item.item }} is missing — k3s has
+          not regenerated its containerd config from registries.yaml. A restart is required (see
+          the note above); confirm the restart handler actually ran.
         quiet: true
       loop: "{{ certsd.results }}"
-      loop_control: { label: "{{ item.item.domain }}" }
+      loop_control: { label: "{{ item.item }}" }
 
     - name: Result
       ansible.builtin.debug:
         msg: >-
-          {{ inventory_hostname }} mirrors {{ registry_upstreams | map(attribute='domain') | join(', ') }}
-          through {{ registry_host }}:{{ registry_port }}.
-          ⚠️ NOT PROVEN HERE: that a pull actually succeeds with upstream unreachable — that is the
-          documented acceptance test (PLAN-system-registry-cache-003-warm-verify, not yet run
-          against this platform). This confirms the wiring exists and containerd picked it up,
-          not that an outage survives it.
+          {{ inventory_hostname }} now trusts: {{ _known_domains | join(', ') }}.
+          {% if registry_host %}Zot-cached: {{ registry_upstreams | map(attribute='domain') | join(', ') }}
+          via {{ registry_host }}:{{ registry_port }}.{% endif %}
+          {% if registry_direct_insecure | length > 0 %}Direct-insecure: {{ registry_direct_insecure | map(attribute='domain') | join(', ') }}.{% endif %}
+          ⚠️ NOT PROVEN HERE: that a pull actually succeeds with upstream unreachable (the zot
+          side's documented acceptance test, PLAN-system-registry-cache-003-warm-verify, not yet
+          run against this platform) — nor, for the direct-insecure side, that a real image pull
+          from that registry works at all. This confirms the wiring exists and containerd picked
+          it up, not that either side's actual pull path has been exercised.
 
   handlers:
     - name: restart k3s
