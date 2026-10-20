@@ -15,9 +15,9 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Investigate: Epinio Deploy Path for UIS](INVESTIGATE-service-epinio-deploy-path.md) | Decide how UIS itself (CLI surface, service layout, docs) should incorporate | 2026-10-20 |
+| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-20 |
 | [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-10-19 |
-| [Investigate: Epinio Deploy Path for UIS](INVESTIGATE-service-epinio-deploy-path.md) | Decide how UIS itself (CLI surface, service layout, docs) should incorporate | 2026-10-19 |
-| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-19 |
 | [Plan: Registry cache — provision the cache itself (zot, not registry:2)](PLAN-system-registry-cache-001-provision.md) | Provision a single zot instance as UIS's pull-through registry cache — the | 2026-10-05 |
 | [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-10-05 |
 | [INVESTIGATE: Platform Provisioning Layer](INVESTIGATE-system-platform-provisioning-layer.md) | — | 2026-10-05 |
