@@ -1,0 +1,47 @@
+---
+# file: ansible/playbooks/640-remove-forgejo-runner.yml
+# Description: Remove the Forgejo Actions runner from Kubernetes.
+#
+# Does NOT remove the runner's own registration from Forgejo itself — Forgejo still
+# lists it (as offline) until an admin removes it by hand via the web UI or API. Same
+# "this playbook owns the Kubernetes side only" boundary as every other uis deploy
+# removal playbook in this repository.
+#
+# Usage:
+# ansible-playbook playbooks/640-remove-forgejo-runner.yml -e target_host="rancher-desktop"
+
+- name: Remove the Forgejo Actions runner from Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    forgejo_runner_namespace: "forgejo-runner"
+
+  tasks:
+    - name: 1. Check if the forgejo-runner namespace exists
+      kubernetes.core.k8s_info:
+        kind: Namespace
+        name: "{{ forgejo_runner_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: forgejo_runner_ns_check
+
+    - name: 2. Delete the forgejo-runner namespace
+      kubernetes.core.k8s:
+        state: absent
+        kind: Namespace
+        name: "{{ forgejo_runner_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        wait: true
+        wait_timeout: 120
+      when: forgejo_runner_ns_check.resources | default([]) | length > 0
+
+    - name: 3. Display final removal status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🗑️  Forgejo Runner Removal Status"
+          - "==============================================="
+          - "{{ '✅ SUCCESS - runner removed' if (forgejo_runner_ns_check.resources | default([]) | length > 0) else '⚪ Not found (already removed)' }}"
+          - "⚠️  Forgejo itself still lists this runner as offline until an admin removes"
+          - "  it by hand (Site Administration → Actions → Runners)."
+          - "==============================================="

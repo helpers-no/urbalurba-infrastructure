@@ -1,0 +1,191 @@
+---
+# file: ansible/playbooks/640-setup-forgejo-runner.yml
+# Description:
+# Install the Forgejo Actions runner as an in-cluster `uis deploy forgejo-runner` service
+# — the Rancher Desktop (dev/test) counterpart to the dedicated Proxmox VM runner
+# (platforms/proxmox/ansible/roles/forgejo-runner/ — proven, live-tested; the production
+# install, ops's own IaC). Same settings reused here (pinned runner image/version,
+# register --no-interactive flow, operator-supplied token, generate-config then patch
+# one field) — not independently invented. Execution mechanism differs out of real
+# necessity: the Proxmox runner mounts a REAL host Docker socket on a VM nothing else
+# runs on; there is no spare dedicated host here, so this uses a `docker:dind` sidecar
+# private to this one Pod as the closest in-cluster equivalent of "a dedicated Docker
+# daemon nothing else touches." See
+# website/docs/ai-developer/plans/backlog/PLAN-system-forgejo-rancher-desktop.md for the
+# full translation record.
+#
+# Prerequisite: `uis deploy forgejo` (SCRIPT_REQUIRES enforces this) and a registration
+# token, which — same as the Proxmox role — this playbook does NOT mint automatically.
+# Mint it once a Forgejo admin account exists (see 635-setup-forgejo.yml's own summary
+# message):
+#   kubectl exec -n forgejo deploy/forgejo -- forgejo actions generate-runner-token
+#
+# Usage:
+# ansible-playbook playbooks/640-setup-forgejo-runner.yml -e target_host="rancher-desktop" \
+#   -e forgejo_runner_token="..."
+
+- name: Install the Forgejo Actions runner
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    manifests_dir: "/mnt/urbalurbadisk/manifests"
+    forgejo_namespace: "forgejo"
+    # Separate namespace from the git host — modest, real isolation (no cross-namespace
+    # RBAC grants) for the one piece of this that runs arbitrary workflow-authored code.
+    # Not a NetworkPolicy (UIS has none anywhere yet) and not claimed as a complete
+    # answer — see the PLAN doc's "What this plan does NOT resolve."
+    forgejo_runner_namespace: "forgejo-runner"
+    forgejo_runner_http_port: 3000
+    # 🔵 SAME VERSION AS platforms/proxmox/ansible/roles/forgejo-runner/defaults/main.yml
+    # — verified live 2026-10-19 by the proven reference (pulling it, not trusting search
+    # results). One version, both targets.
+    forgejo_runner_version: "13.2.0"
+    forgejo_runner_image: "code.forgejo.org/forgejo/runner:{{ forgejo_runner_version }}"
+    # 🔴 NOT independently verified this session — a reasonably recent, well-known stable
+    # tag, not pinned by digest. Worth tightening the same way the Proxmox role tightened
+    # Forgejo's own image (tag → verified digest) once this has run live.
+    forgejo_runner_dind_image: "docker:27-dind"
+    # In-cluster Service DNS — the Rancher Desktop equivalent of the Proxmox role's own
+    # forgejo_runner_instance_url (a LAN IP there; a cluster-local name here, same
+    # "resolved at apply time, never hand-copied" rule either way).
+    forgejo_runner_instance_url: "http://forgejo.{{ forgejo_namespace }}.svc.cluster.local:{{ forgejo_runner_http_port }}/"
+    forgejo_runner_insecure_registry: "forgejo.{{ forgejo_namespace }}.svc.cluster.local:{{ forgejo_runner_http_port }}"
+    forgejo_runner_name: "rancher-desktop-runner"
+    # 🔴 PLACEHOLDER LABELS, FLAGGED — same caveat the Proxmox role's own defaults/main.yml
+    # carries: no real workflow file exists yet to test against. Revisit once one does.
+    forgejo_runner_labels: "docker,ubuntu-latest:docker://node:22-bookworm"
+
+  tasks:
+    - name: 1. Check if required variables are provided
+      ansible.builtin.fail:
+        msg: "The variable 'target_host' is mandatory. Use -e target_host=your_host_name to specify it."
+      when: target_host is not defined
+
+    - name: 1b. The registration token must be supplied, never defaulted
+      ansible.builtin.assert:
+        that:
+          - forgejo_runner_token is defined
+          - forgejo_runner_token | length > 0
+        fail_msg: >-
+          forgejo_runner_token is required and this playbook mints none, same rule as the
+          Proxmox runner role. Create a Forgejo admin account first if you have not
+          (kubectl exec -n forgejo deploy/forgejo -- forgejo admin user create --admin
+          --username <name> --password <pw> --email <email>), then mint a token:
+            kubectl exec -n forgejo deploy/forgejo -- forgejo actions generate-runner-token
+          and pass it: -e forgejo_runner_token=...
+        quiet: true
+      no_log: true
+
+    - name: 2. Print playbook description
+      ansible.builtin.debug:
+        msg: "Installing the Forgejo Actions runner on Kubernetes context: {{ target_host }}, instance: {{ forgejo_runner_instance_url }}"
+
+    - name: 3. Verify Forgejo itself is reachable (hard prerequisite)
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: forgejo
+        namespace: "{{ forgejo_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: forgejo_check
+
+    - name: 3b. Refuse if Forgejo is not installed
+      ansible.builtin.fail:
+        msg: >-
+          Forgejo was not found in the '{{ forgejo_namespace }}' namespace — run
+          'uis deploy forgejo' first.
+      when: forgejo_check.resources | default([]) | length == 0
+
+    - name: 4. Create forgejo-runner namespace if it doesn't exist
+      ansible.builtin.shell: kubectl create namespace {{ forgejo_runner_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: namespace_result
+      changed_when: namespace_result.rc == 0
+      failed_when: namespace_result.rc != 0
+
+    - name: 5. Apply the registration token Secret
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: forgejo-runner-token
+            namespace: "{{ forgejo_runner_namespace }}"
+          type: Opaque
+          stringData:
+            TOKEN: "{{ forgejo_runner_token }}"
+      no_log: true
+
+    - name: 6. Render the Deployment manifest
+      ansible.builtin.template:
+        src: "{{ manifests_dir }}/640-forgejo-runner.yaml.j2"
+        dest: /tmp/640-forgejo-runner.yaml
+        mode: "0600"
+
+    - name: 7. Apply the Deployment
+      kubernetes.core.k8s:
+        state: present
+        src: /tmp/640-forgejo-runner.yaml
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: 7b. Clean up the rendered manifest
+      ansible.builtin.file:
+        path: /tmp/640-forgejo-runner.yaml
+        state: absent
+      changed_when: false
+
+    - name: 8. Wait for the runner pod to be ready
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ forgejo_runner_namespace }}"
+        label_selectors:
+          - "app=forgejo-runner"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: forgejo_runner_pods
+      retries: 30
+      delay: 10
+      until: >
+        forgejo_runner_pods.resources | length > 0 and
+        forgejo_runner_pods.resources[0].status.phase == "Running" and
+        (forgejo_runner_pods.resources[0].status.containerStatuses | default([]) | selectattr('ready') | list | length) == (forgejo_runner_pods.resources[0].status.containerStatuses | default([]) | length) and
+        (forgejo_runner_pods.resources[0].status.containerStatuses | default([]) | length) > 0
+
+    # 🔴 CHECKS stderr TOO — same finding the Proxmox role's own tasks/main.yml made live:
+    # the daemon's own log lines land on stderr, not stdout. A check reading only stdout
+    # reports failure on a genuinely healthy, already-running daemon.
+    - name: 9. Wait for the daemon to report it is polling, not just that the pod started
+      ansible.builtin.command: >-
+        kubectl logs -n {{ forgejo_runner_namespace }} deploy/forgejo-runner -c runner --tail=50
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: forgejo_runner_logs
+      until: "'declared successfully' in (forgejo_runner_logs.stdout + forgejo_runner_logs.stderr) or '[poller] launched' in (forgejo_runner_logs.stdout + forgejo_runner_logs.stderr)"
+      retries: 15
+      delay: 5
+      changed_when: false
+      ignore_errors: true
+
+    - name: 10. Display final deployment status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🚀 Forgejo Runner Deployment Status"
+          - "==============================================="
+          - ""
+          - "{{ '✅ SUCCESS - runner is polling' if (forgejo_runner_logs is defined and forgejo_runner_logs.rc is defined and forgejo_runner_logs.rc == 0 and (\"declared successfully\" in (forgejo_runner_logs.stdout + forgejo_runner_logs.stderr) or \"[poller] launched\" in (forgejo_runner_logs.stdout + forgejo_runner_logs.stderr))) else '⚠️ Pod is Ready, but the daemon log did not confirm polling — check logs by hand' }}"
+          - ""
+          - "🏷️  Labels this runner answers to: {{ forgejo_runner_labels }}"
+          - "  (placeholder — revisit once real .forgejo/workflows/*.yml files exist,"
+          - "  same caveat as the Proxmox role's own defaults)"
+          - ""
+          - "🐳 Execution: a private docker:dind sidecar, not a real host Docker Engine"
+          - "  (the Proxmox runner's own choice) — see the PLAN doc for why."
+          - ""
+          - "🔧 Troubleshooting:"
+          - "• Check pods: kubectl get pods -n {{ forgejo_runner_namespace }}"
+          - "• Runner logs: kubectl logs -n {{ forgejo_runner_namespace }} deploy/forgejo-runner -c runner"
+          - "• dind logs: kubectl logs -n {{ forgejo_runner_namespace }} deploy/forgejo-runner -c dind"
+          - "==============================================="

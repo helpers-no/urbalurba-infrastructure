@@ -1,0 +1,276 @@
+---
+# file: ansible/playbooks/635-setup-forgejo.yml
+# Description:
+# Install Forgejo (self-hosted git host + its own built-in OCI registry) as an in-cluster
+# `uis deploy forgejo` service — the Rancher Desktop (dev/test) counterpart to the
+# Proxmox LXC guest in platforms/proxmox/ansible/roles/forgejo/. Translated from that
+# proven, live-verified role — same pinned image, same app.ini settings (SQLite, no admin
+# bootstrap), same "three secrets generated once, never regenerated" rule — not
+# independently re-designed. See
+# website/docs/ai-developer/plans/backlog/PLAN-system-forgejo-rancher-desktop.md for the
+# full translation record, sourced from urb-agents#1910/#1926's proven PoC reference
+# (`terchris/home` @ 539c030).
+#
+# SCOPE: git host + registry only. No admin account (same deliberate "not baked in" rule
+# as the Proxmox role — an explicit operator step, `forgejo admin user create` via
+# `kubectl exec`). No git-ssh (HTTP clone + the registry are this phase's job; see the
+# PLAN doc's "What this plan does NOT do" for why SSH ingress is out of scope here, not
+# silently dropped). The Actions runner is `uis deploy forgejo-runner`, a separate service
+# (640-setup-forgejo-runner.yml) — SCRIPT_REQUIRES="forgejo" on that service, not built
+# into this playbook.
+#
+# 🔴 SECRET_KEY/INTERNAL_TOKEN/JWT_SECRET do NOT go through the
+# 00-master-secrets.yml.template/envsubst pipeline, deliberately. That pipeline's own
+# apply step (ensure_secrets_applied / `uis secrets apply`) re-renders and re-applies its
+# WHOLE file on every deploy — fine for operator-set values sourced from
+# 00-common-values.env.template, wrong for a value that must stay stable forever once
+# generated (an unset env var would envsubst to an empty string and wipe these back out
+# on the very next `uis deploy` of anything). This playbook owns forgejo-app-secrets
+# directly: read what exists, generate only what's missing, apply the union — the same
+# "never defaulted, never overwritten" rule the Proxmox role's own tasks/main.yml assert
+# enforces, implemented with Kubernetes idioms instead of a shell guard.
+#
+# Usage:
+# ansible-playbook playbooks/635-setup-forgejo.yml -e target_host="rancher-desktop"
+
+- name: Install Forgejo (git host + built-in OCI registry)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    manifests_dir: "/mnt/urbalurbadisk/manifests"
+    forgejo_namespace: "forgejo"
+    forgejo_http_port: 3000
+    forgejo_domain: "forgejo.localhost"
+    # 🔵 SAME DIGEST AS platforms/proxmox/ansible/roles/forgejo/defaults/main.yml — one
+    # image, independently verified once (2026-10-20, against codeberg.org's own v2 API),
+    # running identically on both UIS deployment targets. Re-verify the same way before
+    # bumping either copy.
+    forgejo_image: "codeberg.org/forgejo/forgejo@sha256:a3e33d03e771d3e58b27de5573c3a25dc4f670583a6724c1878a6d0bbecf3556"
+
+  tasks:
+    - name: 1. Check if required variables are provided
+      ansible.builtin.fail:
+        msg: "The variable 'target_host' is mandatory. Use -e target_host=your_host_name to specify it."
+      when: target_host is not defined
+
+    - name: 2. Print playbook description
+      ansible.builtin.debug:
+        msg: "Installing Forgejo on Kubernetes context: {{ target_host }}, domain: {{ forgejo_domain }}"
+
+    - name: 3. Create forgejo namespace if it doesn't exist
+      ansible.builtin.shell: kubectl create namespace {{ forgejo_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: namespace_result
+      changed_when: namespace_result.rc == 0
+      failed_when: namespace_result.rc != 0
+
+    - name: 4. Check for an existing forgejo-app-secrets Secret
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: forgejo-app-secrets
+        namespace: "{{ forgejo_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: forgejo_secret_check
+
+    - name: 5. Preserve any values already set — these must never regenerate once present
+      ansible.builtin.set_fact:
+        _forgejo_secret_key: "{{ (forgejo_secret_check.resources[0].data.SECRET_KEY | b64decode) if (forgejo_secret_check.resources | length > 0 and 'SECRET_KEY' in forgejo_secret_check.resources[0].data) else '' }}"
+        _forgejo_internal_token: "{{ (forgejo_secret_check.resources[0].data.INTERNAL_TOKEN | b64decode) if (forgejo_secret_check.resources | length > 0 and 'INTERNAL_TOKEN' in forgejo_secret_check.resources[0].data) else '' }}"
+        _forgejo_jwt_secret: "{{ (forgejo_secret_check.resources[0].data.JWT_SECRET | b64decode) if (forgejo_secret_check.resources | length > 0 and 'JWT_SECRET' in forgejo_secret_check.resources[0].data) else '' }}"
+      no_log: true
+
+    # 🔴 THE REAL GENERATOR, NOT A HAND-ROLLED EQUIVALENT — same tool the Proxmox role's
+    # own tasks/main.yml requires an operator run by hand (`forgejo generate secret X`).
+    # JWT_SECRET specifically has a documented format requirement (a unique base64-encoded
+    # 32-byte value, per Forgejo's own config cheat sheet) that a plain `openssl rand -hex`
+    # would not satisfy — using the image's own generator avoids guessing any of the
+    # three secrets' exact expected shape.
+    #
+    # ⚠️ `kubectl run --rm -i` is a documented gotcha in this repository
+    # (INVESTIGATE-system-verification-playbooks-usage.md): it can return rc=0 with empty
+    # stdout if the container outlives the attach. The non-empty-output assert
+    # immediately after each generation task is not optional decoration — it is what
+    # makes a silent-empty-capture fail loudly here instead of shipping a blank secret.
+    - name: 6. Generate SECRET_KEY if not already set
+      ansible.builtin.command:
+        cmd: >-
+          kubectl run forgejo-secretgen --rm -i --restart=Never
+          --image={{ forgejo_image }} --command --
+          forgejo generate secret SECRET_KEY
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: _forgejo_gen_secret_key
+      when: _forgejo_secret_key | length == 0
+      changed_when: true
+      no_log: true
+
+    - name: 6b. Refuse to proceed on an empty capture (the kubectl-run-rm gotcha)
+      ansible.builtin.assert:
+        that: (_forgejo_gen_secret_key.stdout | default('') | trim | length) > 0
+        fail_msg: "SECRET_KEY generation produced no output — re-run; do not proceed with an empty secret."
+        quiet: true
+      when: _forgejo_secret_key | length == 0
+
+    - name: 6c. Use the freshly generated SECRET_KEY
+      ansible.builtin.set_fact:
+        _forgejo_secret_key: "{{ _forgejo_gen_secret_key.stdout | trim }}"
+      when: _forgejo_secret_key | length == 0
+      no_log: true
+
+    - name: 7. Generate INTERNAL_TOKEN if not already set
+      ansible.builtin.command:
+        cmd: >-
+          kubectl run forgejo-secretgen --rm -i --restart=Never
+          --image={{ forgejo_image }} --command --
+          forgejo generate secret INTERNAL_TOKEN
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: _forgejo_gen_internal_token
+      when: _forgejo_internal_token | length == 0
+      changed_when: true
+      no_log: true
+
+    - name: 7b. Refuse to proceed on an empty capture
+      ansible.builtin.assert:
+        that: (_forgejo_gen_internal_token.stdout | default('') | trim | length) > 0
+        fail_msg: "INTERNAL_TOKEN generation produced no output — re-run; do not proceed with an empty secret."
+        quiet: true
+      when: _forgejo_internal_token | length == 0
+
+    - name: 7c. Use the freshly generated INTERNAL_TOKEN
+      ansible.builtin.set_fact:
+        _forgejo_internal_token: "{{ _forgejo_gen_internal_token.stdout | trim }}"
+      when: _forgejo_internal_token | length == 0
+      no_log: true
+
+    - name: 8. Generate JWT_SECRET if not already set
+      ansible.builtin.command:
+        cmd: >-
+          kubectl run forgejo-secretgen --rm -i --restart=Never
+          --image={{ forgejo_image }} --command --
+          forgejo generate secret JWT_SECRET
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: _forgejo_gen_jwt_secret
+      when: _forgejo_jwt_secret | length == 0
+      changed_when: true
+      no_log: true
+
+    - name: 8b. Refuse to proceed on an empty capture
+      ansible.builtin.assert:
+        that: (_forgejo_gen_jwt_secret.stdout | default('') | trim | length) > 0
+        fail_msg: "JWT_SECRET generation produced no output — re-run; do not proceed with an empty secret."
+        quiet: true
+      when: _forgejo_jwt_secret | length == 0
+
+    - name: 8c. Use the freshly generated JWT_SECRET
+      ansible.builtin.set_fact:
+        _forgejo_jwt_secret: "{{ _forgejo_gen_jwt_secret.stdout | trim }}"
+      when: _forgejo_jwt_secret | length == 0
+      no_log: true
+
+    - name: 9. Apply forgejo-app-secrets (the union of preserved + freshly generated)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: forgejo-app-secrets
+            namespace: "{{ forgejo_namespace }}"
+          type: Opaque
+          stringData:
+            SECRET_KEY: "{{ _forgejo_secret_key }}"
+            INTERNAL_TOKEN: "{{ _forgejo_internal_token }}"
+            JWT_SECRET: "{{ _forgejo_jwt_secret }}"
+      no_log: true
+
+    - name: 10. Render the PVC / ConfigMap / Service / Deployment manifest
+      ansible.builtin.template:
+        src: "{{ manifests_dir }}/635-forgejo.yaml.j2"
+        dest: /tmp/635-forgejo.yaml
+        mode: "0600"
+
+    - name: 11. Apply the PVC / ConfigMap / Service / Deployment
+      kubernetes.core.k8s:
+        state: present
+        src: /tmp/635-forgejo.yaml
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: 11b. Clean up the rendered manifest
+      ansible.builtin.file:
+        path: /tmp/635-forgejo.yaml
+        state: absent
+      changed_when: false
+
+    - name: 12. Wait for the Forgejo pod to be ready
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ forgejo_namespace }}"
+        label_selectors:
+          - "app=forgejo"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: forgejo_pods
+      retries: 30
+      delay: 10
+      until: >
+        forgejo_pods.resources | length > 0 and
+        forgejo_pods.resources[0].status.phase == "Running" and
+        (forgejo_pods.resources[0].status.containerStatuses | default([]) | length > 0) and
+        forgejo_pods.resources[0].status.containerStatuses[0].ready == true
+
+    - name: 13. Render and apply the IngressRoute
+      ansible.builtin.template:
+        src: "{{ manifests_dir }}/635-forgejo-ingressroute.yaml.j2"
+        dest: /tmp/635-forgejo-ingressroute.yaml
+        mode: "0600"
+
+    - name: 13b. Apply the IngressRoute
+      kubernetes.core.k8s:
+        state: present
+        src: /tmp/635-forgejo-ingressroute.yaml
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: 13c. Clean up the rendered manifest
+      ansible.builtin.file:
+        path: /tmp/635-forgejo-ingressroute.yaml
+        state: absent
+      changed_when: false
+
+    # 🔵 /api/healthz, SAME ENDPOINT the Proxmox role's own tasks/main.yml verifies against
+    # — not independently chosen.
+    - name: 14. Verify Forgejo answers through the ingress
+      ansible.builtin.uri:
+        url: "http://{{ forgejo_domain }}/api/healthz"
+        status_code: [200]
+      register: forgejo_health_check
+      retries: 15
+      delay: 10
+      until: forgejo_health_check.status is defined and forgejo_health_check.status == 200
+      ignore_errors: true
+
+    - name: 15. Display final deployment status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🚀 Forgejo Deployment Status"
+          - "==============================================="
+          - ""
+          - "{{ '✅ SUCCESS - Forgejo answered /api/healthz' if (forgejo_health_check.status is defined and forgejo_health_check.status == 200) else '⚠️ Pod is Ready, but the ingress health check did not confirm — check Traefik routing by hand' }}"
+          - ""
+          - "🌐 Access: http://{{ forgejo_domain }}/"
+          - ""
+          - "🔐 No admin account yet — same deliberate 'not baked in' rule as the Proxmox"
+          - "  guest. Create the first one by hand:"
+          - "  kubectl exec -n {{ forgejo_namespace }} deploy/forgejo -- forgejo admin user create --admin --username <name> --password <pw> --email <email>"
+          - ""
+          - "📦 Registry: Forgejo's own built-in OCI registry ([packages] ENABLED = true)."
+          - "  'uis deploy forgejo-runner' pushes built images here."
+          - ""
+          - "🔧 Troubleshooting:"
+          - "• Check pods: kubectl get pods -n {{ forgejo_namespace }}"
+          - "• View logs: kubectl logs -n {{ forgejo_namespace }} -l app=forgejo"
+          - "==============================================="
