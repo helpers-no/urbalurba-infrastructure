@@ -327,7 +327,7 @@
     ,"priority": 40
     ,"checkCommand": "kubectl get pods -n authentik -l app.kubernetes.io/name=authentik --no-headers 2>/dev/null | grep -q Running"
     ,"removePlaybook": "070-remove-authentik.yml"
-    ,"requires": ["postgresql", "redis"]
+    ,"requires": ["postgresql", "redis", "cert-manager"]
     ,"helmChart": "bitnami/authentik"
     ,"namespace": "authentik"
     ,"exposePort": 39000
