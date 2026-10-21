@@ -9,10 +9,19 @@
 # website/docs/ai-developer/plans/backlog/PLAN-system-forgejo-rancher-desktop.md.
 #
 # Needs a registration token minted by hand after a Forgejo admin account exists — same
-# "never defaulted" rule the Proxmox runner role enforces. Pass it:
-#   uis deploy forgejo-runner -- -e forgejo_runner_token=...
-# (or however this platform's deploy wrapper forwards extra -e args — see
-# 640-setup-forgejo-runner.yml's own usage comment for the direct ansible-playbook form.)
+# "never defaulted" rule the Proxmox runner role enforces.
+#
+# 🔴 FOUND LIVE BY imac (urb-agents#1928): `uis deploy <service> -- -e key=value` does
+# NOT exist — `cmd_deploy()` in uis-cli.sh only parses `--app`/`--url-prefix` and
+# rejects anything else as "Unknown option". There is no extra-vars passthrough on
+# `uis deploy` at all (filed separately as a real CLI gap, not fixed here — worth
+# either adding real passthrough or making an unrecognized flag refuse loudly instead
+# of silently falling through to "no args", which deploys every enabled service).
+# Until that lands, run the playbook directly:
+#   ansible-playbook playbooks/640-setup-forgejo-runner.yml \
+#     -e target_host="rancher-desktop" -e forgejo_runner_token="..."
+# (same form 640-setup-forgejo-runner.yml's own usage comment already documents —
+# that one was always correct; this file's own comment was the one that was wrong.)
 
 # === Service Metadata (Required) ===
 SCRIPT_ID="forgejo-runner"

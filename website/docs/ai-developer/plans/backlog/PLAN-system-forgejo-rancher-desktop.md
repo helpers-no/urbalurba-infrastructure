@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — three real bugs found live by imac across two rounds, all fixed; re-test pending
+## Status: Backlog — five real issues found live by imac across three rounds, all fixed; the git host (steps 1-3) is confirmed working; the runner (steps 4-5) awaits round 4
 
 ## Bugs found live (imac, urb-agents#1928) — all fixed
 
@@ -52,9 +52,42 @@ was itself wrong, and round 2 found why:**
 See F1 above for the corrected mechanism (initContainer, not a ConfigMap mount, at the
 live path) and F2 for the secret-capture fix.
 
-Re-verification (a fresh install actually reaching a migrated, usable instance; admin
-account; runner token; `uis deploy forgejo-runner`; a real Actions build+push) is
-pending a re-test by imac now that all three are fixed.
+**Round 2 re-test confirmed the git host (steps 1-3) fully working**: fresh install
+migrates correctly (`INSTALL_LOCK=true` honored, real schema, no "no such table"
+errors), all three secrets come out clean, admin account creation and runner token
+minting both succeed. Round 3 moved on to the runner and found two more real issues:
+
+4. **Documentation bug, not a code bug**: `uis deploy forgejo-runner -- -e
+   forgejo_runner_token=...` (this service's own header comment) doesn't exist —
+   `uis deploy` has no extra-vars passthrough mechanism at all; an unrecognized flag
+   after the service name is silently dropped rather than refused, and a bare `uis
+   deploy` (what's left after that) deploys **every** enabled service — a real footgun
+   imac hit by hand while testing the (nonexistent) syntax. Fixed the documentation to
+   show the actual working form (`ansible-playbook ... -e forgejo_runner_token=...`
+   directly); the missing passthrough itself is a genuine `uis deploy` CLI gap across
+   every service, not specific to this one, and is better tracked as its own issue than
+   folded into this plan.
+5. **HARD BLOCKER: the runner container can't reach the dind sidecar's socket — GID
+   mismatch.** `fsGroup: 1000` only governs ownership of volume *contents* at mount
+   time; it does nothing for a socket `dockerd` creates itself afterward with an
+   explicit `chown root:docker`. The dind sidecar's socket is group `docker`
+   (gid **2375** in `docker:27-dind`'s own `/etc/group`, measured live); the `runner`
+   container's image runs as uid/gid 1000:1000 with no supplementary groups — 1000 and
+   2375 never meet. The Kubernetes equivalent of the proven Proxmox role's own `docker
+   run --group-add <the socket's real gid, read via stat>` is `supplementalGroups` at
+   the Pod level — added here, same property (join the socket's actual group),
+   expressed where Kubernetes expects it. ⚠️ 2375 is hardcoded, not discovered at
+   template-render time the way the proven role's own `stat` task can (no live cluster
+   exists in this environment to stat against) — flagged for re-verification if the
+   pinned `docker:27-dind` tag changes.
+
+Also fixed from round-3 evidence: the git host's own deploy summary now shows `su-exec
+git forgejo admin user create ...` (confirmed required live — `kubectl exec` alone
+runs as this container's own default user, not `git`), not the bare command.
+
+Git host steps (1-3) are confirmed working and do not need re-testing again. Runner
+re-verification (`uis deploy forgejo-runner` actually coming up and registering; a real
+Actions build+push) is pending round 4 now that the GID fix is in.
 
 **Goal**: Give Rancher Desktop (the laptop/dev UIS target) a working Forgejo git host +
 Actions runner, installed the same way as every other UIS service (`uis deploy forgejo`,
