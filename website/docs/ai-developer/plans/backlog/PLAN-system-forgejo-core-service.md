@@ -143,6 +143,13 @@ running, HA-registered, firewalled Forgejo guest — **tested by imac**, not cla
 code for Phase 2 is written and `bash -n`/`shellcheck`-clean, but like Phase 1, has not run
 against a live Proxmox cluster.
 
+**2026-10-21 update**: the recommended way to do this is now `uis platform core-service add
+proxmox forgejo` — see `provision-host/uis/manage/uis-cli.sh`'s `cmd_platform_core-service`
+and `platforms/proxmox/scripts/07-core-service-add.sh`. It does exactly the manual steps this
+validation describes (add to `CORE_SERVICES`, run the apply step), scoped to just this one
+service rather than re-touching every other already-built guest. The hand-edit-config.sh path
+above still works unchanged; the new command is additive, not a replacement for it.
+
 ---
 
 ## Phase 3: First real use
