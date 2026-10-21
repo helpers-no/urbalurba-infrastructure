@@ -104,7 +104,32 @@
       changed_when: namespace_result.rc == 0
       failed_when: namespace_result.rc != 0
 
-    - name: 5. Apply the registration token Secret
+    # 🔴 FOUND LIVE BY imac (urb-agents#1928, round 4): a job container pushing to
+    # Forgejo's own registry fails token-auth with "dial tcp <loopback>:80: connect:
+    # connection refused". Root cause: the registry's docker-registry token-auth
+    # challenge redirects to ROOT_URL (http://forgejo.localhost/) regardless of which
+    # hostname reached /v2/ — and `.localhost` is an RFC 6761 special-use TLD that every
+    # standard resolver maps straight to loopback with no DNS lookup at all, so nothing
+    # inside the runner/dind Pod can reach it. Not fixable via CoreDNS config — it's
+    # baked into libc's resolver behavior for that TLD. Same established pattern this
+    # repository already uses for the identical class of problem elsewhere (e.g.
+    # 045-test-minio.yml, 070-setup-authentik.yml): look up Traefik's own ClusterIP live
+    # and route the `*.localhost` hostname at it via hostAliases — Traefik does
+    # Host-header routing to Forgejo:3000 from port 80, exactly how host-side traffic
+    # already reaches it. imac proved this exact fix direction by hand before this
+    # playbook had it.
+    - name: 5. Get Traefik ClusterIP for in-cluster *.localhost hostname routing
+      ansible.builtin.command: kubectl get svc traefik -n kube-system -o jsonpath={.spec.clusterIP}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: forgejo_runner_traefik_ip_result
+      changed_when: false
+
+    - name: 5b. Store Traefik ClusterIP
+      ansible.builtin.set_fact:
+        forgejo_runner_traefik_ip: "{{ forgejo_runner_traefik_ip_result.stdout }}"
+
+    - name: 6. Apply the registration token Secret
       kubernetes.core.k8s:
         state: present
         kubeconfig: "{{ merged_kubeconf_file }}"
@@ -119,25 +144,25 @@
             TOKEN: "{{ forgejo_runner_token }}"
       no_log: true
 
-    - name: 6. Render the Deployment manifest
+    - name: 7. Render the Deployment manifest
       ansible.builtin.template:
         src: "{{ manifests_dir }}/640-forgejo-runner.yaml.j2"
         dest: /tmp/640-forgejo-runner.yaml
         mode: "0600"
 
-    - name: 7. Apply the Deployment
+    - name: 8. Apply the Deployment
       kubernetes.core.k8s:
         state: present
         src: /tmp/640-forgejo-runner.yaml
         kubeconfig: "{{ merged_kubeconf_file }}"
 
-    - name: 7b. Clean up the rendered manifest
+    - name: 8b. Clean up the rendered manifest
       ansible.builtin.file:
         path: /tmp/640-forgejo-runner.yaml
         state: absent
       changed_when: false
 
-    - name: 8. Wait for the runner pod to be ready
+    - name: 9. Wait for the runner pod to be ready
       kubernetes.core.k8s_info:
         kind: Pod
         namespace: "{{ forgejo_runner_namespace }}"
@@ -156,7 +181,7 @@
     # 🔴 CHECKS stderr TOO — same finding the Proxmox role's own tasks/main.yml made live:
     # the daemon's own log lines land on stderr, not stdout. A check reading only stdout
     # reports failure on a genuinely healthy, already-running daemon.
-    - name: 9. Wait for the daemon to report it is polling, not just that the pod started
+    - name: 10. Wait for the daemon to report it is polling, not just that the pod started
       ansible.builtin.command: >-
         kubectl logs -n {{ forgejo_runner_namespace }} deploy/forgejo-runner -c runner --tail=50
       environment:
@@ -168,7 +193,7 @@
       changed_when: false
       ignore_errors: true
 
-    - name: 10. Display final deployment status
+    - name: 11. Display final deployment status
       ansible.builtin.debug:
         msg:
           - "==============================================="
@@ -183,6 +208,10 @@
           - ""
           - "🐳 Execution: a private docker:dind sidecar, not a real host Docker Engine"
           - "  (the Proxmox runner's own choice) — see the PLAN doc for why."
+          - ""
+          - "📦 Registry push routing: forgejo.localhost is aliased to Traefik's ClusterIP"
+          - "  ({{ forgejo_runner_traefik_ip }}) inside this Pod via hostAliases — needed"
+          - "  because .localhost is a special-use TLD no in-cluster resolver can look up."
           - ""
           - "🔧 Troubleshooting:"
           - "• Check pods: kubectl get pods -n {{ forgejo_runner_namespace }}"

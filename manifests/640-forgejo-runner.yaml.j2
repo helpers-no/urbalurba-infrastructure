@@ -22,6 +22,8 @@
 # - forgejo_runner_dind_image
 # - forgejo_runner_insecure_registry (the Forgejo registry's host:port, for the dind
 #   sidecar's own daemon — job containers push through THIS daemon, not the k3s node's)
+# - forgejo_runner_traefik_ip (Traefik's ClusterIP, looked up live — routes the
+#   .localhost registry-auth redirect, which no in-cluster resolver can otherwise reach)
 #
 # The registration token (forgejo-runner-token Secret, key TOKEN) is operator-supplied,
 # NOT auto-minted by this playbook — same rule the Proxmox role's own
@@ -84,6 +86,21 @@ spec:
         # ⚠️ 2375 is docker:27-dind's own default `docker` GID, measured live against
         # that exact tag by imac — re-verify if the pinned dind tag/version changes.
         supplementalGroups: [2375]
+      # 🔴 FOUND LIVE BY imac (urb-agents#1928, round 4): a push to Forgejo's own
+      # registry fails token-auth — the registry's auth challenge redirects to
+      # ROOT_URL (http://forgejo.localhost/) regardless of which hostname reached
+      # /v2/, and .localhost is an RFC 6761 special-use TLD that every standard
+      # resolver maps straight to loopback with no real DNS lookup — nothing inside
+      # this Pod can otherwise reach it. Routed at Traefik's own ClusterIP (looked up
+      # live by the setup playbook, same established pattern this repository already
+      # uses elsewhere for the identical problem, e.g. 045-test-minio.yml) — Traefik
+      # does Host-header routing to Forgejo:3000 from port 80, exactly how host-side
+      # traffic already reaches it. Applies to every container in the Pod, including
+      # the dind sidecar where the actual docker login/push happens.
+      hostAliases:
+        - ip: "{{ forgejo_runner_traefik_ip }}"
+          hostnames:
+            - forgejo.localhost
       initContainers:
         # One-shot setup: generate config.yaml (the tool's own generator, not a
         # hand-written file — same discipline as the Proxmox role's own comment on why:

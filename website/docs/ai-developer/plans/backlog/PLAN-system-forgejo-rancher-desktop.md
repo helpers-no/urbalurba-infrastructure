@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — five real issues found live by imac across three rounds, all fixed; the git host (steps 1-3) is confirmed working; the runner (steps 4-5) awaits round 4
+## Status: Backlog — six real issues found live by imac across four rounds, all fixed; the full sequence (steps 1-5, including a real Actions build+push) completed successfully in round 4; the one remaining fix (round 4's own finding) awaits re-verification
 
 ## Bugs found live (imac, urb-agents#1928) — all fixed
 
@@ -85,9 +85,42 @@ Also fixed from round-3 evidence: the git host's own deploy summary now shows `s
 git forgejo admin user create ...` (confirmed required live — `kubectl exec` alone
 runs as this container's own default user, not `git`), not the bare command.
 
-Git host steps (1-3) are confirmed working and do not need re-testing again. Runner
-re-verification (`uis deploy forgejo-runner` actually coming up and registering; a real
-Actions build+push) is pending round 4 now that the GID fix is in.
+Git host steps (1-3) are confirmed working and do not need re-testing again.
+
+**Round 4: the runner came up, registered, and ran a real build+push successfully** —
+the GID fix held (`groups=0(root),1000,2375` confirmed directly), the daemon logged
+"declared successfully" and "[poller] launched" as expected, and a genuine
+`.forgejo/workflows/build.yml` on a real push built and pushed an image through the
+runner's dind sidecar, with all three documented F7 gotchas (static docker CLI binary,
+`insecure-registries`, `write:package` token scope) confirmed real and correctly
+handled. One more bug surfaced along the way, fixed below (F8). Three restarts before
+the runner settled were also observed and are NOT a bug — `docker ps`/`--previous` logs
+showed "Docker Engine socket not found," a benign startup race (dind not ready yet on
+the Pod's first couple of attempts) that self-heals via the normal restart policy; worth
+a readiness-ordering improvement between the two containers eventually, not blocking.
+
+### F8 — Registry push needs `forgejo.localhost` routed at Traefik, not DNS
+
+6. **Registry push failed token-auth**: `Get "http://forgejo.localhost/v2/token?...":
+   dial tcp <loopback>:80: connect: connection refused`. Root cause, confirmed precisely
+   by imac: Forgejo's docker-registry token-auth challenge redirects to `ROOT_URL`
+   (`http://forgejo.localhost/`) regardless of which hostname the client used to reach
+   `/v2/` — and `.localhost` is an RFC 6761 special-use TLD that every standard resolver
+   maps straight to loopback with **no DNS lookup at all**, confirmed via `getent hosts
+   forgejo.localhost` inside the dind container. Not fixable via CoreDNS config; it's
+   baked into libc's own resolver behavior for that TLD.
+
+   imac proved the fix direction by hand (pointing `forgejo.localhost` at Forgejo's own
+   Service ClusterIP got further but still failed — that Service only exposes port
+   3000, and the implied port in `ROOT_URL` is 80; repointing it at **Traefik's**
+   Service ClusterIP instead — which listens on 80 and does Host-header routing to
+   Forgejo:3000, exactly how host-side traffic already reaches it — made the whole flow
+   work end to end, confirmed via a real `docker login`/push and the packages API
+   listing the pushed image). Fixed as a `hostAliases` entry on the runner Pod, with
+   Traefik's ClusterIP **looked up live** by the setup playbook — the exact same
+   established pattern this repository already uses for the identical class of problem
+   elsewhere (`045-test-minio.yml`, `070-setup-authentik.yml`, several others), not a
+   newly invented mechanism.
 
 **Goal**: Give Rancher Desktop (the laptop/dev UIS target) a working Forgejo git host +
 Actions runner, installed the same way as every other UIS service (`uis deploy forgejo`,
