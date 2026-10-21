@@ -1404,24 +1404,54 @@ cmd_platform_use() {
         return
     fi
 
-    # Validate that the platform exists (special-case rancher-desktop).
+    # Validate that the platform exists (special-case rancher-desktop and
+    # "<platform>-test" secondary contexts — e.g. proxmox manages TWO kubectl
+    # contexts, prod "proxmox" and test "proxmox-test", from ONE platform
+    # directory. status.sh / pf_list_platforms only know the directory name,
+    # so "proxmox-test" used to fail the init.sh check below and get a flat
+    # "Unknown platform" refusal even though it's a real, already-provisioned
+    # context with no repair path of its own. See
+    # urb-agents/urbalurba-infrastructure#566 — a kubeconfig rebuilt by hand
+    # has no way to learn this convention exists, and nothing told it one did.
+    local test_base="" is_test_context=0
     if [[ "$target" != "rancher-desktop" ]] && \
        [[ ! -f "/mnt/urbalurbadisk/platforms/$target/scripts/init.sh" ]]; then
-        log_error "Unknown platform '$target' (no init.sh found at /mnt/urbalurbadisk/platforms/$target/scripts/init.sh)"
-        { _list_available_platforms_with_script init.sh "/mnt/urbalurbadisk"; } >&2
-        echo "  - rancher-desktop" >&2  # not in the init.sh enumeration; mention explicitly
-        exit "$EXIT_GENERAL_ERROR"
+        test_base="${target%-test}"
+        if [[ "$test_base" != "$target" ]] && \
+           [[ -f "/mnt/urbalurbadisk/platforms/$test_base/scripts/init.sh" ]]; then
+            is_test_context=1
+        else
+            log_error "Unknown platform '$target' (no init.sh found at /mnt/urbalurbadisk/platforms/$target/scripts/init.sh)"
+            { _list_available_platforms_with_script init.sh "/mnt/urbalurbadisk"; } >&2
+            echo "  - rancher-desktop" >&2  # not in the init.sh enumeration; mention explicitly
+            exit "$EXIT_GENERAL_ERROR"
+        fi
     fi
 
-    # Ask status.sh --summary what state the target is in.
+    # Ask what state the target is in. A "-test" secondary context has no
+    # status.sh of its own — test_base's status.sh --summary contract only
+    # ever reports on the base (prod) context — so determine its state
+    # directly from the kubeconfig instead of routing through pf_platform_summary.
     local summary state hint
-    if ! summary="$(pf_platform_summary "$target")"; then
+    if (( is_test_context )); then
+        if ! pf_context_exists "$target"; then
+            state="not-initialized"
+            hint="no kubectl context named '$target' yet — (re)provision it with: ./uis platform up $test_base  (idempotent, safe to re-run)"
+        elif pf_probe_reachable "$target"; then
+            state="running"
+            hint=""
+        else
+            state="unreachable"
+            hint="API server not answering for '$target'"
+        fi
+    elif ! summary="$(pf_platform_summary "$target")"; then
         log_error "Could not query status for '$target' (status.sh --summary errored or emitted invalid output)"
         echo "  Try: ./uis platform status $target" >&2
         exit "$EXIT_GENERAL_ERROR"
+    else
+        state="${summary%%	*}"
+        hint="${summary#*	}"
     fi
-    state="${summary%%	*}"
-    hint="${summary#*	}"
 
     # Capture current active for the success-line "from → to" wording.
     local previous
