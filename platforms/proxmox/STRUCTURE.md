@@ -39,6 +39,13 @@ platforms/proxmox/
 │   ├── 06-destroy.sh            ✅  tear down the 6 k3s VMs (core services are not torn down by
 │   │                                 this — a lab owner's databases/secrets are not something
 │   │                                 `down`/`destroy` should ever delete silently)
+│   ├── 07-core-service-add.sh   ✅  entry point: `uis platform core-service add proxmox <name>`.
+│   │                                 Adds ONE service to config.sh's CORE_SERVICES (idempotent —
+│   │                                 appends if missing, repairs in place if already listed) then
+│   │                                 calls 05-core-services-apply.sh scoped to just that name, so
+│   │                                 adding one guest doesn't re-touch every other already-built
+│   │                                 one. No remove counterpart yet — these guests hold real data,
+│   │                                 a teardown command needs its own careful design.
 │   ├── upgrade-test-cluster-to-bao.sh ✅  never runs automatically — promotes proxmox-test from
 │   │                                 the simple plain-Secret store to the real bao-backed one,
 │   │                                 for when you want to exercise real vault semantics on test

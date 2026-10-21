@@ -13,7 +13,12 @@
 # created/updated once at the end, after every guest this run touches is already a member.
 #
 # Usage:
-#   ./scripts/05-core-services-apply.sh
+#   ./scripts/05-core-services-apply.sh              # every service in CORE_SERVICES
+#   ./scripts/05-core-services-apply.sh forgejo       # just this one (e.g. called by
+#                                                      # scripts/07-core-service-add.sh after
+#                                                      # appending it to config.sh, so adding one
+#                                                      # service doesn't re-touch every other
+#                                                      # already-built guest)
 
 set -euo pipefail
 
@@ -42,6 +47,26 @@ source "$CONFIG_FILE"
 if [[ -z "${CORE_SERVICES// }" ]]; then
     print_warning "CORE_SERVICES is empty in config.sh — nothing to build. Exiting."
     exit 0
+fi
+
+# An explicit arg scopes the per-service loop below to just that one service — used by
+# scripts/07-core-service-add.sh, which appends the new service to config.sh's CORE_SERVICES
+# (so generate-ansible-config.sh below still regenerates every current declaration, cheap and
+# harmless) but only wants THIS run to touch the one service being added, not re-run
+# service-<name>.yml/replication-ensure.yml/ha-ensure.yml against every already-built guest too.
+# Validated against the real CORE_SERVICES list, not trusted blind — a typo here should fail
+# loudly, the same "unknown service, skipped" the per-service loop already does for config.sh's
+# own list, not silently build nothing.
+TARGET_SERVICES="${1:-$CORE_SERVICES}"
+if [[ -n "${1:-}" ]]; then
+    _found=0
+    for _svc in $CORE_SERVICES; do
+        [[ "$_svc" == "$1" ]] && _found=1 && break
+    done
+    if [[ "$_found" -eq 0 ]]; then
+        print_error "'$1' is not in config.sh's CORE_SERVICES ($CORE_SERVICES) — add it there first."
+        exit 1
+    fi
 fi
 
 print_status "Generating ansible config from config.sh..."
@@ -86,7 +111,7 @@ REGISTRY_IP=""
 BAO_IP=""
 FORGEJO_IP=""
 
-for svc in $CORE_SERVICES; do
+for svc in $TARGET_SERVICES; do
     decl="generated/vars/core-services/${svc}.yml"
     if [[ ! -f "$decl" ]]; then
         print_warning "No declaration for '$svc' (unknown service?) — skipped"
@@ -147,6 +172,32 @@ for svc in $CORE_SERVICES; do
 
     print_success "$svc fully protected: replicated + HA-registered"
 done
+
+# ─── fill in IPs for registry/forgejo if THIS run didn't touch them but config.sh still has ────
+# ─── them (a scoped single-service run — see TARGET_SERVICES above) ────────────────────────────
+# 🔴 WITHOUT THIS, A SCOPED "add forgejo" RUN WOULD WRONGLY REFUSE registries.yaml's EXISTING
+# registry ENTRY. k3s-registry-ensure.yml writes the WHOLE file every run and refuses on any
+# domain it doesn't recognize from THIS run's own inputs — if "registry" is already configured
+# from an earlier run but wasn't in TARGET_SERVICES this time, REGISTRY_IP would stay empty here,
+# the playbook would be told nothing about it, and it would refuse citing registry's own
+# already-legitimate entry as unrecognized. Looking it up directly (not re-running guest-ensure/
+# service-install/replicate/ha for it — already done, that's the whole point of scoping) keeps
+# every run's picture of "what k3s should trust" complete, regardless of what this particular run
+# was scoped to touch.
+_core_services_has() {
+    local want="$1" _s
+    for _s in $CORE_SERVICES; do [[ "$_s" == "$want" ]] && return 0; done
+    return 1
+}
+
+if [[ -z "$REGISTRY_IP" ]] && _core_services_has registry && [[ -f "generated/vars/core-services/registry.yml" ]]; then
+    _vmid="$(grep -m1 '^  vmid:' "generated/vars/core-services/registry.yml" | awk '{print $2}')"
+    REGISTRY_IP="$(ssh_h1 "pct exec ${_vmid} -- hostname -I" 2>/dev/null | awk '{print $1}')"
+fi
+if [[ -z "$FORGEJO_IP" ]] && _core_services_has forgejo && [[ -f "generated/vars/core-services/forgejo.yml" ]]; then
+    _vmid="$(grep -m1 '^  vmid:' "generated/vars/core-services/forgejo.yml" | awk '{print $2}')"
+    FORGEJO_IP="$(ssh_h1 "pct exec ${_vmid} -- hostname -I" 2>/dev/null | awk '{print $1}')"
+fi
 
 # ─── wire k3s registry trust, ONLY if the lab owner selected a service that needs it ────────────
 # 🔵 A CLEAR, CONDITIONAL STEP — not something every lab owner's cluster silently gets. A lab
@@ -223,7 +274,7 @@ if [[ "${#VMID_LIST[@]}" -gt 0 ]]; then
 fi
 
 print_section "CORE SERVICES APPLY COMPLETE"
-echo "Built: ${CORE_SERVICES}"
+echo "Built: ${TARGET_SERVICES}"
 echo "Each is replicated to both other nodes and HA-registered under one flat rule."
 echo
 echo "Prove it: power off a node and watch 'ha-manager status' move its guests elsewhere —"

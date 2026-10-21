@@ -130,6 +130,7 @@ Platform:
   platform status <provider>  Show cluster state, external IP, and cost estimate
   platform use    [<provider>]   Switch the active platform (interactive picker if no arg)
   platform down   <provider>  Tear down the cluster (delegates to 03-destroy.sh)
+  platform core-service add <provider> <name>   Add one host-level guest service (e.g. proxmox forgejo)
 
 Network:
   network create   <provider>             Create the tunnel/route via API (cloudflare: needs OpenTofu + an API token)
@@ -1039,14 +1040,17 @@ cmd_platform() {
         down)
             cmd_platform_down "$@"
             ;;
+        core-service)
+            cmd_platform_core-service "$@"
+            ;;
         "")
             log_error "Usage: uis platform <subcmd> [<provider>]"
-            echo "Subcommands: init | list | up | status | use | down" >&2
+            echo "Subcommands: init | list | up | status | use | down | core-service" >&2
             exit "$EXIT_GENERAL_ERROR"
             ;;
         *)
             log_error "Unknown platform subcommand: $subcmd"
-            echo "Usage: uis platform [init|list|up|status|use|down] [<provider>]" >&2
+            echo "Usage: uis platform [init|list|up|status|use|down|core-service] [<provider>]" >&2
             exit "$EXIT_GENERAL_ERROR"
             ;;
     esac
@@ -1233,6 +1237,53 @@ cmd_platform_down() {
 
     export UIS_REPO_ROOT="$repo_root"
     exec "$script"
+}
+
+# cmd_platform_core-service — the per-service counterpart to up/down, for platforms that
+# manage host-level guests outside any k3s cluster (today, only platforms/proxmox's
+# CORE_SERVICES — registry/bao/garage/pg/forgejo). Same explicit-<provider> shape as every
+# other cmd_platform_* dispatcher: this does not infer a target from the active platform.
+#
+#   uis platform core-service add <provider> <name>
+#
+# "remove" is deliberately not wired here yet — these guests hold real data (git repos,
+# database contents), and a teardown command needs its own careful design, not a quick
+# extension of "add". See INVESTIGATE/PLAN docs for that follow-up.
+cmd_platform_core-service() {
+    local action="${1:-}"
+    shift || true
+    local provider="${1:-}"
+    local name="${2:-}"
+    local repo_root
+    repo_root="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+    case "$action" in
+        add)
+            if [[ -z "$provider" || -z "$name" ]]; then
+                log_error "Usage: uis platform core-service add <provider> <name>"
+                exit "$EXIT_GENERAL_ERROR"
+            fi
+
+            local script="$repo_root/platforms/$provider/scripts/07-core-service-add.sh"
+            if [[ ! -f "$script" ]]; then
+                log_error "Platform '$provider' has no core-service add capability (looked at $script)"
+                exit "$EXIT_GENERAL_ERROR"
+            fi
+
+            export UIS_REPO_ROOT="$repo_root"
+            exec "$script" "$name"
+            ;;
+        "")
+            log_error "Usage: uis platform core-service <add> <provider> <name>"
+            echo "Subcommands: add" >&2
+            exit "$EXIT_GENERAL_ERROR"
+            ;;
+        *)
+            log_error "Unknown core-service subcommand: $action"
+            echo "Usage: uis platform core-service add <provider> <name>" >&2
+            exit "$EXIT_GENERAL_ERROR"
+            ;;
+    esac
 }
 
 # cmd_platform_status — same shape as cmd_platform_up/down. The per-platform
