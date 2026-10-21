@@ -69,6 +69,21 @@ spec:
     spec:
       securityContext:
         fsGroup: 1000
+        # 🔴 FOUND LIVE BY imac (urb-agents#1928, round 3): fsGroup governs ownership of
+        # VOLUME CONTENTS at mount time — it does nothing for a socket dockerd creates
+        # itself, after the fact, with an explicit `chown root:docker`. The `runner`
+        # container's own image runs as uid/gid 1000:1000 with no supplementary groups
+        # at all; the dind sidecar's socket is `root:docker` (gid 2375 in
+        # docker:27-dind's own /etc/group, confirmed live). 1000 and 2375 never meet
+        # without this. The Kubernetes equivalent of the proven Proxmox role's own
+        # `docker run --group-add <the socket's REAL gid, read via stat>` — same
+        # property (join the socket's actual group), expressed where Kubernetes expects
+        # it (Pod-level, evaluated before the container's entrypoint runs) rather than
+        # discovered at template-render time, since no live cluster exists in this
+        # environment to stat against the way the proven role's own task does.
+        # ⚠️ 2375 is docker:27-dind's own default `docker` GID, measured live against
+        # that exact tag by imac — re-verify if the pinned dind tag/version changes.
+        supplementalGroups: [2375]
       initContainers:
         # One-shot setup: generate config.yaml (the tool's own generator, not a
         # hand-written file — same discipline as the Proxmox role's own comment on why:
