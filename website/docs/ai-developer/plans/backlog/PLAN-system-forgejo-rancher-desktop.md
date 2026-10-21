@@ -4,7 +4,31 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — code written, not yet run against a live cluster
+## Status: Backlog — two real bugs found live by imac and fixed; step 1 of 5 confirmed, steps 2-5 blocked on the fix, re-test pending
+
+## Bugs found live (imac, urb-agents#1928) — both fixed
+
+1. **Secret generation corrupted every fresh install** — `kubectl run --rm -i` appends
+   its own pod-deletion notice onto the SAME stdout being captured, with no delimiter.
+   Every one of the three app secrets (`SECRET_KEY`/`INTERNAL_TOKEN`/`JWT_SECRET`) came
+   out corrupted on every run; the non-empty-output assert didn't catch it because the
+   string wasn't empty, just contaminated. Since these are "generated once, never
+   regenerated," this would have been permanent from the first deploy forward. See F2
+   above for the fix.
+2. **HARD BLOCKER: the ConfigMap-mounted app.ini was never actually read.** `GITEA_APP_INI`
+   is a real Gitea Docker convention in general, but this specific rootless image's
+   s6-overlay boot path execs `gitea web` directly with no flags and no entrypoint
+   script that reads it — confirmed from the real startup log
+   (`ConfigFile: /data/gitea/conf/app.ini`, not the ConfigMap's path). The server fell
+   back to auto-generating its own config at that default path with `INSTALL_LOCK =
+   false`, so the install wizard ran instead of the normal first-boot migration, leaving
+   the sqlite DB with no tables (`no such table: user`) — the actual thing blocking
+   every downstream step (admin account, runner token), not the secrets. See F1 above
+   for the fix (a `subPath` mount at the real path, same mechanism the Proxmox role
+   already uses).
+
+Re-verification (steps 2-5: admin account, runner token, `uis deploy forgejo-runner`, a
+real Actions build+push) is pending a re-test by imac now that both are fixed.
 
 **Goal**: Give Rancher Desktop (the laptop/dev UIS target) a working Forgejo git host +
 Actions runner, installed the same way as every other UIS service (`uis deploy forgejo`,
@@ -78,6 +102,17 @@ clone + the registry only; Traefik's own ingress model in this repository is HTT
 by convention, and adding TCP routing for git-ssh is a separate, larger piece of work not
 needed for the runner to function. Flagged as a deliberate scope line, not a silent gap.
 
+**How the ConfigMap actually reaches the server — corrected after a live bug (see "Bugs
+found live" below).** The first version of this plan set `GITEA_APP_INI` as an env var,
+assuming the general Gitea Docker convention. imac found live that this specific
+rootless image's s6-overlay boot path execs `gitea web` directly with no flags and no
+entrypoint script reading that env var — it was never consulted. Fixed by doing exactly
+what the proven Proxmox role already does: bind the ConfigMap over the server's
+hardcoded default config path, `/data/gitea/conf/app.ini` (a `subPath` mount nested
+inside the PVC's own `/data` mount, the Kubernetes equivalent of the role's own
+`-v {{ data_dir }}/app.ini:/data/gitea/conf/app.ini:ro`). Should have translated that
+mechanism directly the first time instead of reaching for a general env var.
+
 ### F2 — The three app secrets: same generator, same "never regenerate" rule
 
 `roles/forgejo/tasks/main.yml` asserts `forgejo_secret_key`/`forgejo_internal_token`/
@@ -85,15 +120,21 @@ needed for the runner to function. Flagged as a deliberate scope line, not a sil
 secret <NAME>` (the image's own tool — `JWT_SECRET` specifically has a documented format
 requirement, a base64-encoded 32-byte value, that a hand-rolled `openssl rand -hex` would
 not satisfy). This plan's setup playbook (`635-setup-forgejo.yml`) runs that exact
-generator via a throwaway `kubectl run --rm -i` pod, reads any already-set values from the
-live `forgejo-app-secrets` Secret first, and only generates what's missing — the same
-"supplied once, stable forever" contract, implemented with Kubernetes idioms (a Secret +
-an idempotency check) instead of a shell `assert` the operator satisfies by hand. The
-image reads these three via standard Gitea/Forgejo environment-variable overrides
-(`GITEA__security__SECRET_KEY` etc., confirmed via `forgejo.org`'s own docs — Forgejo
-accepts both the legacy `GITEA__` and newer `FORGEJO__` prefixes) rather than baking them
-into the ConfigMap, which Kubernetes makes possible and the Proxmox role's own file-based
-app.ini cannot do as cleanly.
+generator, reads any already-set values from the live `forgejo-app-secrets` Secret first,
+and only generates what's missing — the same "supplied once, stable forever" contract,
+implemented with Kubernetes idioms (a Secret + an idempotency check) instead of a shell
+`assert` the operator satisfies by hand. The image reads these three via standard
+Gitea/Forgejo environment-variable overrides (`GITEA__security__SECRET_KEY` etc.,
+confirmed via `forgejo.org`'s own docs AND confirmed live by imac — this mechanism does
+work, unlike F1's `GITEA_APP_INI`) rather than baking them into the ConfigMap.
+
+**How the generator's output gets captured — corrected after a live bug (see "Bugs found
+live" below).** The first version ran `kubectl run --rm -i ... -- forgejo generate secret
+X` and captured its stdout directly. `--rm -i` appends its own pod-deletion notice onto
+that SAME stream with no delimiter, corrupting every one of the three secrets on every
+fresh install. Fixed by never combining run + attach + cleanup in one captured command:
+launch (no `--rm`, no `-i`), wait for the pod to actually finish, read its logs as an
+independent step, delete it as another independent, best-effort step.
 
 ⚠️ `kubectl run --rm -i` is a documented gotcha in this repository
 (`INVESTIGATE-system-verification-playbooks-usage.md`): it can return rc=0 with empty
