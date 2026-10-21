@@ -15,6 +15,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Investigate: Forgejo Actions runner — the other half of the CI decision never got built](INVESTIGATE-system-forgejo-runner.md) | Give UIS's Forgejo install (`PLAN-system-forgejo-core-service.md`) a real, | 2026-10-21 |
 | [Plan: Forgejo as a platforms/proxmox core service](PLAN-system-forgejo-core-service.md) | Add Forgejo (self-hosted git host + its own built-in OCI registry) as a new | 2026-10-20 |
 | [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-10-20 |
 | [Investigate: Epinio Deploy Path for UIS](INVESTIGATE-service-epinio-deploy-path.md) | Decide how UIS itself (CLI surface, service layout, docs) should incorporate | 2026-10-20 |

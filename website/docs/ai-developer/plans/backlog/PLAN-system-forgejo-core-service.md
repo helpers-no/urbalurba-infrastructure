@@ -82,6 +82,13 @@ diff rather than entangled with new-role additions):
 4. **Admin account / first repository** — deliberately not automated (see the role's own
    comment) — an explicit operator step after install, same as every other core-services guest
    with a bootstrap credential.
+5. **The CI runner `urb-agents#1910` actually asked for** — "official Forgejo Runner on a
+   dedicated Proxmox VM (not LXC)" was part of the same decision this plan implements, and
+   was missed entirely here (caught 2026-10-21, not flagged as deferred at the time this plan
+   was written). Tracked separately now:
+   [INVESTIGATE-system-forgejo-runner.md](./INVESTIGATE-system-forgejo-runner.md). Not a
+   blocker for this plan's own Phase 3 (a real `git push`/registry pull doesn't need the
+   runner), but a real gap against what was actually decided.
 
 ## Honest limits of what's been verified
 
