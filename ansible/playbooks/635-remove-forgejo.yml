@@ -1,0 +1,48 @@
+---
+# file: ansible/playbooks/635-remove-forgejo.yml
+# Description: Remove Forgejo (git host + built-in registry) from Kubernetes.
+#
+# ⚠️ Deletes the forgejo-data PVC too — every repository, the sqlite database, and
+# anything pushed to the built-in registry is gone with it. Same irreversibility this
+# repository's other removal playbooks warn about (e.g. Epinio's own "any apps developers
+# pushed... are gone with it").
+#
+# Usage:
+# ansible-playbook playbooks/635-remove-forgejo.yml -e target_host="rancher-desktop"
+
+- name: Remove Forgejo from Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    forgejo_namespace: "forgejo"
+
+  tasks:
+    - name: 1. Check if the forgejo namespace exists
+      kubernetes.core.k8s_info:
+        kind: Namespace
+        name: "{{ forgejo_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: forgejo_ns_check
+
+    - name: 2. Delete the forgejo namespace (removes everything in it, including the PVC)
+      kubernetes.core.k8s:
+        state: absent
+        kind: Namespace
+        name: "{{ forgejo_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        wait: true
+        wait_timeout: 120
+      when: forgejo_ns_check.resources | default([]) | length > 0
+
+    - name: 3. Display final removal status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🗑️  Forgejo Removal Status"
+          - "==============================================="
+          - "{{ '✅ SUCCESS - Forgejo removed' if (forgejo_ns_check.resources | default([]) | length > 0) else '⚪ Not found (already removed)' }}"
+          - "⚠️  Every repository, the sqlite database, and anything pushed to the"
+          - "  built-in registry is gone with it — this removes the whole git host,"
+          - "  not individual repositories."
+          - "==============================================="

@@ -1,0 +1,185 @@
+# File: manifests/635-forgejo.yaml.j2
+#
+# Description:
+# Forgejo git host + its own built-in OCI registry, as an in-cluster `uis deploy forgejo`
+# service — the Rancher Desktop (dev/test) counterpart to the Proxmox LXC guest in
+# platforms/proxmox/ansible/roles/forgejo/. Same proven settings (pinned image, app.ini
+# content, SQLite, no admin bootstrap), translated from a Docker+systemd guest into
+# Kubernetes resources, not independently re-designed — see
+# website/docs/ai-developer/plans/backlog/PLAN-system-forgejo-rancher-desktop.md for the
+# full translation record and why.
+#
+# Template Variables (from the setup playbook):
+# - forgejo_namespace
+# - forgejo_image (pinned by digest, same value as the Proxmox role)
+# - forgejo_http_port
+# - forgejo_domain (forgejo.localhost)
+#
+# Secrets (SECRET_KEY/INTERNAL_TOKEN/JWT_SECRET) are a SEPARATE Secret
+# (forgejo-app-secrets), generated once by the setup playbook itself and never
+# regenerated — see that playbook's own header for why this does NOT go through the
+# urbalurba-secrets/00-master-secrets.yml.template pipeline (that pipeline reapplies its
+# whole file on every deploy, which would reset these back to empty).
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: forgejo-data
+  namespace: {{ forgejo_namespace }}
+  labels:
+    app: forgejo
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forgejo-app-ini
+  namespace: {{ forgejo_namespace }}
+  labels:
+    app: forgejo
+data:
+  # Same content as roles/forgejo/templates/app.ini.j2 (the proven Proxmox role), minus
+  # the [server] SSH lines — this phase serves HTTP clone/registry only (see the PLAN
+  # doc's "What this plan does NOT do" for why SSH is out of scope here, not silently
+  # dropped). SECRET_KEY/INTERNAL_TOKEN/JWT_SECRET come from the forgejo-app-secrets
+  # Secret via env vars the official image reads directly (GITEA__security__SECRET_KEY
+  # etc.) rather than baked into this file — this ConfigMap can be identical across
+  # every install, unlike the Proxmox role's app.ini which carries the secrets inline
+  # (that role has no equivalent "env var from a Secret" mechanism; a Kubernetes
+  # Deployment does, so this uses it instead of duplicating the secret into a ConfigMap).
+  app.ini: |
+    APP_NAME = Forgejo
+    RUN_MODE = prod
+    RUN_USER = git
+
+    [server]
+    DOMAIN    = {{ forgejo_domain }}
+    ROOT_URL  = http://{{ forgejo_domain }}/
+    HTTP_PORT = {{ forgejo_http_port }}
+    DISABLE_SSH = true
+
+    [database]
+    ; sqlite — matches the Proxmox role's own choice (roles/forgejo/templates/app.ini.j2),
+    ; not independently decided here. /data is this Deployment's own PVC mount, same
+    ; layout the official image expects.
+    DB_TYPE = sqlite3
+    PATH    = /data/gitea/forgejo.db
+
+    [security]
+    ; Disables the interactive web installer — this file IS the install, same as the
+    ; Proxmox role. Does not disable Forgejo's own automatic DB migration on startup.
+    INSTALL_LOCK = true
+
+    [repository]
+    ROOT = /data/git/repositories
+
+    [log]
+    MODE  = console
+    LEVEL = Info
+
+    [packages]
+    ; Forgejo's own built-in OCI registry — what gets pushed to from `uis deploy
+    ; forgejo-runner`'s Actions jobs.
+    ENABLED = true
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: forgejo
+  namespace: {{ forgejo_namespace }}
+  labels:
+    app: forgejo
+spec:
+  selector:
+    app: forgejo
+  ports:
+    - name: http
+      port: {{ forgejo_http_port }}
+      targetPort: http
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forgejo
+  namespace: {{ forgejo_namespace }}
+  labels:
+    app: forgejo
+spec:
+  replicas: 1
+  # SQLite has no concurrent-writer story — same single-instance constraint the Proxmox
+  # role carries (one Docker container, one systemd unit). Recreate, not RollingUpdate:
+  # two forgejo processes must never point at the same sqlite file at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: forgejo
+  template:
+    metadata:
+      labels:
+        app: forgejo
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: forgejo
+          image: {{ forgejo_image }}
+          ports:
+            - name: http
+              containerPort: {{ forgejo_http_port }}
+          # SECRET-VERSION: none — these three are generated once by the setup
+          # playbook and asserted to never regenerate afterward (see
+          # 635-setup-forgejo.yml's own header and tasks 4-9). There is no rotation
+          # path this annotation would need to propagate.
+          env:
+            - name: GITEA_APP_INI
+              value: /etc/forgejo-config/app.ini
+            - name: GITEA__security__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: forgejo-app-secrets
+                  key: SECRET_KEY
+            - name: GITEA__security__INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: forgejo-app-secrets
+                  key: INTERNAL_TOKEN
+            - name: GITEA__oauth2__JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: forgejo-app-secrets
+                  key: JWT_SECRET
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: app-ini
+              mountPath: /etc/forgejo-config
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: forgejo-data
+        - name: app-ini
+          configMap:
+            name: forgejo-app-ini

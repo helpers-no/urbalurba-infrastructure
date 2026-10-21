@@ -1,0 +1,172 @@
+# File: manifests/640-forgejo-runner.yaml.j2
+#
+# Description:
+# Forgejo Actions runner, as an in-cluster `uis deploy forgejo-runner` service — the
+# Rancher Desktop (dev/test) counterpart to the dedicated Proxmox VM runner in
+# platforms/proxmox/ansible/roles/forgejo-runner/. That proven, live-tested reference
+# uses a HOST Docker socket mount (explicitly NOT Docker-in-Docker, NOT a Kubernetes-
+# native execution plugin — see the PLAN doc's Part 1 findings for why both were
+# considered and set aside). There is no spare dedicated host here to mount a REAL
+# Docker socket from, so this translates "a dedicated Docker daemon nothing else
+# touches" into its closest Kubernetes-native equivalent: a `docker:dind` sidecar,
+# private to this one Pod, reached the same way the proven config already expects
+# (`docker_host: "automount"` finding /var/run/docker.sock — a shared emptyDir makes
+# that path exist here exactly as it does on the VM).
+#
+# Template Variables (from the setup playbook):
+# - forgejo_runner_namespace
+# - forgejo_runner_image (pinned version, same as the Proxmox role)
+# - forgejo_runner_instance_url (in-cluster Forgejo Service DNS)
+# - forgejo_runner_name
+# - forgejo_runner_labels (comma-joined)
+# - forgejo_runner_dind_image
+# - forgejo_runner_insecure_registry (the Forgejo registry's host:port, for the dind
+#   sidecar's own daemon — job containers push through THIS daemon, not the k3s node's)
+#
+# The registration token (forgejo-runner-token Secret, key TOKEN) is operator-supplied,
+# NOT auto-minted by this playbook — same rule the Proxmox role's own
+# roles/forgejo-runner/tasks/main.yml enforces ("the registration token must be supplied,
+# never defaulted"). Mint it (after creating a Forgejo admin account — same one-time
+# operator step the git host service's own summary message documents):
+#   kubectl exec -n forgejo deploy/forgejo -- forgejo actions generate-runner-token
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: forgejo-runner-data
+  namespace: {{ forgejo_runner_namespace }}
+  labels:
+    app: forgejo-runner
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forgejo-runner
+  namespace: {{ forgejo_runner_namespace }}
+  labels:
+    app: forgejo-runner
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: two runner processes must never register under the
+  # same identity/.runner file at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: forgejo-runner
+  template:
+    metadata:
+      labels:
+        app: forgejo-runner
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        # One-shot setup: generate config.yaml (the tool's own generator, not a
+        # hand-written file — same discipline as the Proxmox role's own comment on why:
+        # "the schema is large and version-specific enough that a hand-written file
+        # risks silent drift"), point job containers at the dind sidecar's socket, then
+        # register (the deprecated-but-proven `register` command, not the newer
+        # declarative form — the proven reference tried that first and it failed live
+        # with no further diagnostic signal). Every step is `creates:`-equivalent
+        # (checks before acting) so a pod restart does not re-register or regenerate.
+        - name: setup
+          image: {{ forgejo_runner_image }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              DATA=/data
+              if [ ! -f "$DATA/config.yaml" ]; then
+                forgejo-runner generate-config > "$DATA/config.yaml"
+              fi
+              sed -i 's|^\s*docker_host:\s*"-"\s*$|  docker_host: "automount"|' "$DATA/config.yaml"
+              if [ ! -f "$DATA/.runner" ]; then
+                forgejo-runner register --no-interactive \
+                  --instance "$FORGEJO_RUNNER_INSTANCE_URL" \
+                  --token "$FORGEJO_RUNNER_TOKEN" \
+                  --name "$FORGEJO_RUNNER_NAME" \
+                  --labels "$FORGEJO_RUNNER_LABELS"
+              fi
+              test -f "$DATA/.runner"
+          # SECRET-VERSION: none — read once, at first registration, gated on
+          # .runner's absence (see the setup script above). Changing this Secret
+          # afterward does not reach a pod restart; it requires deleting .runner
+          # and re-registering by hand, the same as the proven VM reference's own
+          # "ONE TIME, never re-run once it exists" rule.
+          env:
+            - name: FORGEJO_RUNNER_INSTANCE_URL
+              value: "{{ forgejo_runner_instance_url }}"
+            - name: FORGEJO_RUNNER_NAME
+              value: "{{ forgejo_runner_name }}"
+            - name: FORGEJO_RUNNER_LABELS
+              value: "{{ forgejo_runner_labels }}"
+            - name: FORGEJO_RUNNER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: forgejo-runner-token
+                  key: TOKEN
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        # The long-running daemon. Reaches the dind sidecar at the default
+        # /var/run/docker.sock path (shared emptyDir) — no explicit DOCKER_HOST needed,
+        # same as the Proxmox role's own systemd unit, which mounts the real host socket
+        # at that same conventional path for the same reason.
+        - name: runner
+          image: {{ forgejo_runner_image }}
+          command: ["forgejo-runner", "daemon", "--config", "/data/config.yaml"]
+          resources:
+            limits:
+              memory: "768Mi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: docker-sock
+              mountPath: /var/run
+        # The dedicated Docker daemon — private to this Pod, nothing else reaches it.
+        # Functionally the in-cluster equivalent of the Proxmox VM's own standalone
+        # Docker Engine: a daemon this runner's job containers are the only consumer of.
+        - name: dind
+          image: {{ forgejo_runner_dind_image }}
+          # 🔴 PRIVILEGED, FLAGGED, NOT HIDDEN — the open question this whole design
+          # choice is about (see the PLAN doc's "What this plan does NOT resolve").
+          # Scoped to this Pod alone; no other workload in the cluster can reach this
+          # daemon (no Service, no socket shared outside this Pod's own volumes).
+          securityContext:
+            privileged: true
+          env:
+            # No TLS: this daemon is reachable only via the shared, in-Pod socket —
+            # never exposed on the network, so certificate management here would add
+            # complexity without a corresponding security benefit.
+            - name: DOCKER_TLS_CERTDIR
+              value: ""
+          args:
+            # Forgejo's own built-in registry serves plain HTTP (no cert-manager
+            # dependency in this phase, same as the git host's own IngressRoute) — the
+            # same `insecure-registries` requirement the Proxmox role's own
+            # tasks/main.yml found live (gate 12): "server gave HTTP response to HTTPS
+            # client" without it. This is THIS sidecar's own daemon config, distinct
+            # from k3s's containerd registries.yaml trust (a different daemon
+            # altogether, already handled by the generalized
+            # k3s-registry-ensure.yml for the Proxmox platform — Rancher Desktop's own
+            # equivalent is out of scope for this phase, see the PLAN doc).
+            - "--insecure-registry={{ forgejo_runner_insecure_registry }}"
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: forgejo-runner-data
+        - name: docker-sock
+          emptyDir: {}

@@ -1,0 +1,28 @@
+# File: manifests/635-forgejo-ingressroute.yaml.j2
+#
+# Description:
+# HTTP route for Forgejo at forgejo.localhost — plain HTTP, matching this service's own
+# app.ini (no TLS termination needed in-cluster; same convention as whoami/redisinsight's
+# dev-default routes, not the strict-TLS case Authentik's OIDC provider needed).
+#
+# Template Variables:
+# - forgejo_namespace
+# - forgejo_http_port
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: forgejo
+  namespace: {{ forgejo_namespace }}
+  labels:
+    app: forgejo
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`forgejo.localhost`)
+      kind: Rule
+      services:
+        - name: forgejo
+          port: {{ forgejo_http_port }}

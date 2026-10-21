@@ -545,6 +545,45 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "forgejo-runner",
+    "name": "Forgejo Runner",
+    "description": "In-cluster Forgejo Actions runner (CI for Forgejo-hosted repos)",
+    "category": "MANAGEMENT",
+    "tags": ["ci", "actions", "runner", "forgejo"],
+    "abstract": "CI runner for Forgejo Actions workflows, in-cluster",
+    "logo": "",
+    "website": "https://forgejo.org/docs/latest/admin/actions/"
+    ,"summary": "Registers a Forgejo Actions runner against this installs own Forgejo (uis deploy forgejo), executing workflow jobs via a private docker:dind sidecar. The in-cluster counterpart of the dedicated Proxmox VM runner built for production — same runner version and registration flow, different job-isolation mechanism because this target has no spare dedicated host."
+    ,"docs": "/docs/services/management/forgejo-runner"
+    ,"playbook": "640-setup-forgejo-runner.yml"
+    ,"priority": 81
+    ,"checkCommand": "kubectl get pods -n forgejo-runner -l app=forgejo-runner --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "640-remove-forgejo-runner.yml"
+    ,"requires": ["forgejo"]
+    ,"namespace": "forgejo-runner"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
+    "id": "forgejo",
+    "name": "Forgejo",
+    "description": "Self-hosted git host + its own built-in OCI registry",
+    "category": "MANAGEMENT",
+    "tags": ["git", "ci", "registry", "self-hosted"],
+    "abstract": "Self-hosted git host and OCI registry for UISs own CI",
+    "logo": "",
+    "website": "https://forgejo.org"
+    ,"summary": "Forgejo is a self-hosted git host with its own built-in OCI registry — the git host and image store Forgejo Actions (uis deploy forgejo-runner) pushes to and pulls from. The in-cluster counterpart of the dedicated Proxmox guest built for production."
+    ,"docs": "/docs/services/management/forgejo"
+    ,"playbook": "635-setup-forgejo.yml"
+    ,"priority": 80
+    ,"checkCommand": "kubectl get pods -n forgejo -l app=forgejo --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "635-remove-forgejo.yml"
+    ,"namespace": "forgejo"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "nextcloud",
     "name": "Nextcloud",
     "description": "Self-hosted collaboration platform with file sync and document editing",
