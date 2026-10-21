@@ -68,7 +68,7 @@ take it from there.
 
 ```bash
 ./uis platform init proxmox     # wizard: your 3 machines' names/addresses
-# review platforms/proxmox/config.sh — especially the six VMs' addresses/sizing/VMIDs,
+# review .uis.secrets/platforms/proxmox/config.sh — especially the six VMs' addresses/sizing/VMIDs,
 # which default to template values that may collide with your own network or numbering
 
 ./uis platform up proxmox       # preflight → create 6 VMs → form both k3s clusters →
