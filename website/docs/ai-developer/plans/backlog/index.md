@@ -15,7 +15,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
-| [Plan: Forgejo + its Actions runner, in-cluster (Rancher Desktop)](PLAN-system-forgejo-rancher-desktop.md) | Give Rancher Desktop (the laptop/dev UIS target) a working Forgejo git host + | 2026-10-21 |
+| [Plan: Forgejo + its Actions runner, in-cluster (Rancher Desktop)](PLAN-system-forgejo-rancher-desktop.md) | — | 2026-10-21 |
 | [Plan: Forgejo as a platforms/proxmox core service](PLAN-system-forgejo-core-service.md) | Add Forgejo (self-hosted git host + its own built-in OCI registry) as a new | 2026-10-21 |
 | [Investigate: Forgejo Actions runner — the other half of the CI decision never got built](INVESTIGATE-system-forgejo-runner.md) | Give UIS's Forgejo install (`PLAN-system-forgejo-core-service.md`) a real, | 2026-10-21 |
 | [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-21 |
