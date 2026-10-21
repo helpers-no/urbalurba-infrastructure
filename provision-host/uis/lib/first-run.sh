@@ -434,6 +434,14 @@ generate_kubernetes_secrets() {
     fi
 
     log_info "Generating Kubernetes secrets..."
+    # Name the exact file being read, every run — not just on error. The
+    # shipped template under provision-host/uis/templates/secrets-templates/
+    # has the same filename as this live copy and is copied here only ONCE,
+    # on first run; an edit to the shipped copy on an already-installed
+    # system is silently a no-op (urb-agents/urbalurba-infrastructure#568).
+    # Printing the real path every time is the cheapest way to make that
+    # mismatch visible instead of rediscovered by surprise.
+    log_info "Reading values from: $common_values"
 
     # Load common values as environment variables
     set -a
