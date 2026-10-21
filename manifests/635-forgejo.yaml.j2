@@ -21,17 +21,30 @@
 # urbalurba-secrets/00-master-secrets.yml.template pipeline (that pipeline reapplies its
 # whole file on every deploy, which would reset these back to empty).
 #
-# 🔴 FOUND LIVE BY imac (urb-agents#1928): this image's actual boot path is s6-overlay
-# running `su-exec $USER gitea web` with NO flags and NO setup/entrypoint script that
-# reads GITEA_APP_INI — that env var is simply never consulted here (true for Gitea's
-# Docker image in general; NOT true for this specific rootless Forgejo image's s6 run
-# script). The server always reads its config from the hardcoded default path,
-# $GITEA_CUSTOM/conf/app.ini = /data/gitea/conf/app.ini — confirmed from the real
-# startup log ("ConfigFile: /data/gitea/conf/app.ini"), not guessed. Fixed the same way
-# the proven Proxmox role already does it (bind-mount app.ini straight onto that exact
-# path, read-only) via a ConfigMap subPath mount nested inside the PVC's own /data mount
-# — should have translated that mechanism directly instead of reaching for a
-# Gitea-in-general env var that doesn't apply to this image.
+# 🔴 FOUND LIVE BY imac (urb-agents#1928), ROUND 1: this image's actual boot path is
+# s6-overlay running `su-exec $USER gitea web` with NO flags and NO setup/entrypoint
+# script that reads GITEA_APP_INI — that env var is simply never consulted here (true
+# for Gitea's Docker image in general; NOT true for this specific rootless Forgejo
+# image's s6 run script). The server always reads its config from the hardcoded default
+# path, $GITEA_CUSTOM/conf/app.ini = /data/gitea/conf/app.ini — confirmed from the real
+# startup log ("ConfigFile: /data/gitea/conf/app.ini").
+#
+# 🔴 FOUND LIVE BY imac, ROUND 2: a direct ConfigMap subPath mount at that path (this
+# file's first fix attempt) crash-loops instead. `gitea web`'s boot sequence
+# unconditionally runs an internal `environment-to-ini` step whenever GITEA__-prefixed
+# env vars are present (always true here — the three secrets below), and that step
+# WRITES the merged config back to the resolved app.ini path before serving:
+#   environment-to-ini.go [I] Settings saved to: "/data/gitea/conf/app.ini"
+#   environment-to-ini.go [F] ...: open /data/gitea/conf/app.ini: read-only file system
+# A ConfigMap-backed mount is read-only at the kernel level regardless of the
+# volumeMount's own `readOnly` field — there is no manifest tweak that makes this
+# writable. The Proxmox role's own bind-mount never hits this: that's a bare systemd
+# unit invoking the forgejo binary directly, no s6, no environment-to-ini step at all.
+#
+# Fixed by not mounting the ConfigMap at the live path at all — an initContainer `cp`s
+# it onto the PVC-backed /data/gitea/conf/app.ini once per pod start, producing a
+# normal writable file there (the actual effect the first fix attempt was going for,
+# achieved the way Kubernetes requires rather than via a mount flag).
 
 ---
 apiVersion: v1
@@ -142,6 +155,32 @@ spec:
     spec:
       securityContext:
         fsGroup: 1000
+      initContainers:
+        # One-shot per pod start: copy the ConfigMap's app.ini onto the PVC as a real,
+        # writable file at the exact path the server's boot sequence reads AND writes
+        # back to (environment-to-ini — see the header note above). Re-copies every
+        # start, matching the Proxmox role's own "re-applied on every run, not a
+        # preserved-forever file" convention for this same file.
+        - name: init-config
+          image: {{ forgejo_image }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              mkdir -p /data/gitea/conf
+              cp /config-source/app.ini /data/gitea/conf/app.ini
+              # 0664, not 0644: environment-to-ini (see the header note) writes BACK to
+              # this file as the main container's own user, which reaches it only via
+              # the Pod's shared fsGroup (1000) supplementary-group membership, not
+              # ownership — group-write has to be set explicitly, `cp` alone won't
+              # produce it.
+              chmod 0664 /data/gitea/conf/app.ini
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: app-ini
+              mountPath: /config-source
+              readOnly: true
       containers:
         - name: forgejo
           image: {{ forgejo_image }}
@@ -169,19 +208,13 @@ spec:
                   name: forgejo-app-secrets
                   key: JWT_SECRET
           volumeMounts:
+            # app.ini is NOT mounted here — the init-config initContainer above
+            # already wrote a real, writable copy onto this same PVC at
+            # /data/gitea/conf/app.ini before this container starts. Mounting the
+            # ConfigMap directly here is exactly what crash-looped (see the header
+            # note): it would be read-only at the kernel level no matter what.
             - name: data
               mountPath: /data
-            # Nested INSIDE the /data mount above, at the exact path the server's own
-            # boot path hardcodes — a more specific mount wins over a broader one it
-            # sits inside, same effect as the Proxmox role's own read-only bind-mount
-            # over that path. subPath means this does NOT live-update if the ConfigMap
-            # changes (snapshotted at pod creation) — desired here, matching the
-            # Proxmox role's own "MANAGED BY ANSIBLE, re-applied on every run, not a
-            # live-reloaded file" convention.
-            - name: app-ini
-              mountPath: /data/gitea/conf/app.ini
-              subPath: app.ini
-              readOnly: true
           readinessProbe:
             httpGet:
               path: /api/healthz
