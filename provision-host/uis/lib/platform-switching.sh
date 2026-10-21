@@ -202,6 +202,20 @@ pf_probe_reachable() {
 }
 
 
+# ----- pf_context_exists -------------------------------------------------------
+# Return 0 if a kubectl context by this exact name exists in kubeconf-all, 1
+# otherwise. Pure existence check — says nothing about reachability (that's
+# pf_probe_reachable). Exists so callers can recognize a secondary context
+# that isn't itself a platform directory — e.g. proxmox's "proxmox-test" — and
+# give it a real repair path instead of a flat "unknown platform" refusal
+# (urb-agents/urbalurba-infrastructure#566).
+pf_context_exists() {
+    local ctx="${1:-}"
+    [[ -z "$ctx" ]] && return 1
+    KUBECONFIG="$PF_KUBECONFIG" kubectl config get-contexts "$ctx" >/dev/null 2>&1
+}
+
+
 # ----- pf_lockstep_flip -------------------------------------------------------
 # Atomic write of all three halves of "the active platform":
 #   1. kubectl current-context in PF_KUBECONFIG (in-container, truth for reads, Q1)
@@ -451,5 +465,6 @@ pf_banner() {
 # Make the functions available to child shells if needed (sub-shell invocations
 # from ansible's `shell` module, etc.). Most callers source this file directly.
 export -f pf_ensure_kubeconf_seeded pf_ensure_legacy_kubeconf pf_active_platform pf_probe_reachable
+export -f pf_context_exists
 export -f pf_lockstep_flip pf_remove_context pf_list_platforms
 export -f pf_platform_summary pf_banner
