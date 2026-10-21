@@ -4,9 +4,11 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — two real bugs found live by imac and fixed; step 1 of 5 confirmed, steps 2-5 blocked on the fix, re-test pending
+## Status: Backlog — three real bugs found live by imac across two rounds, all fixed; re-test pending
 
-## Bugs found live (imac, urb-agents#1928) — both fixed
+## Bugs found live (imac, urb-agents#1928) — all fixed
+
+**Round 1:**
 
 1. **Secret generation corrupted every fresh install** — `kubectl run --rm -i` appends
    its own pod-deletion notice onto the SAME stdout being captured, with no delimiter.
@@ -23,12 +25,36 @@
    back to auto-generating its own config at that default path with `INSTALL_LOCK =
    false`, so the install wizard ran instead of the normal first-boot migration, leaving
    the sqlite DB with no tables (`no such table: user`) — the actual thing blocking
-   every downstream step (admin account, runner token), not the secrets. See F1 above
-   for the fix (a `subPath` mount at the real path, same mechanism the Proxmox role
-   already uses).
+   every downstream step (admin account, runner token), not the secrets.
 
-Re-verification (steps 2-5: admin account, runner token, `uis deploy forgejo-runner`, a
-real Actions build+push) is pending a re-test by imac now that both are fixed.
+**Round 1's own fix for Bug 2 (a ConfigMap `subPath` mount directly at the live path)
+was itself wrong, and round 2 found why:**
+
+3. **HARD BLOCKER, round 2: a ConfigMap mounted at the live path crash-loops regardless
+   of `readOnly`.** `gitea web`'s boot sequence unconditionally runs an internal
+   `environment-to-ini` step whenever `GITEA__`-prefixed env vars are present (always
+   true here — the three secrets), and that step WRITES the merged config back to the
+   resolved app.ini path before serving:
+   ```
+   environment-to-ini.go [I] Settings saved to: "/data/gitea/conf/app.ini"
+   environment-to-ini.go [F] ...: open /data/gitea/conf/app.ini: read-only file system
+   ```
+   A ConfigMap-backed volume is read-only at the **kernel** level no matter what the
+   volumeMount's own `readOnly` field says — there is no manifest tweak that makes it
+   writable while still being a direct ConfigMap mount. The Proxmox role's own
+   bind-mount never hits this because that's a bare systemd unit invoking the forgejo
+   binary directly — no s6, no `environment-to-ini` step at all. Fixed (per imac's own
+   suggested direction) by not mounting the ConfigMap at the live path at all: an
+   initContainer `cp`s it onto the PVC-backed path as a normal, writable file instead —
+   the actual effect the round-1 fix was going for, achieved the way Kubernetes
+   requires.
+
+See F1 above for the corrected mechanism (initContainer, not a ConfigMap mount, at the
+live path) and F2 for the secret-capture fix.
+
+Re-verification (a fresh install actually reaching a migrated, usable instance; admin
+account; runner token; `uis deploy forgejo-runner`; a real Actions build+push) is
+pending a re-test by imac now that all three are fixed.
 
 **Goal**: Give Rancher Desktop (the laptop/dev UIS target) a working Forgejo git host +
 Actions runner, installed the same way as every other UIS service (`uis deploy forgejo`,
@@ -102,16 +128,17 @@ clone + the registry only; Traefik's own ingress model in this repository is HTT
 by convention, and adding TCP routing for git-ssh is a separate, larger piece of work not
 needed for the runner to function. Flagged as a deliberate scope line, not a silent gap.
 
-**How the ConfigMap actually reaches the server — corrected after a live bug (see "Bugs
-found live" below).** The first version of this plan set `GITEA_APP_INI` as an env var,
-assuming the general Gitea Docker convention. imac found live that this specific
-rootless image's s6-overlay boot path execs `gitea web` directly with no flags and no
-entrypoint script reading that env var — it was never consulted. Fixed by doing exactly
-what the proven Proxmox role already does: bind the ConfigMap over the server's
-hardcoded default config path, `/data/gitea/conf/app.ini` (a `subPath` mount nested
-inside the PVC's own `/data` mount, the Kubernetes equivalent of the role's own
-`-v {{ data_dir }}/app.ini:/data/gitea/conf/app.ini:ro`). Should have translated that
-mechanism directly the first time instead of reaching for a general env var.
+**How the ConfigMap actually reaches the server — corrected twice, after two live bugs
+(see "Bugs found live" below).** Attempt 1 set `GITEA_APP_INI` as an env var, assuming
+the general Gitea Docker convention — never consulted by this image's actual s6-overlay
+boot path. Attempt 2 bind-mounted the ConfigMap directly at the server's hardcoded
+config path (`/data/gitea/conf/app.ini`, via `subPath`), intending to mirror the Proxmox
+role's own bind-mount — but a ConfigMap-backed mount is read-only at the kernel level no
+matter what, and `gitea web`'s boot sequence writes BACK to that exact path whenever
+`GITEA__`-prefixed env vars are present (always true here), so it crash-looped instead.
+**What actually works**: an initContainer `cp`s the ConfigMap onto the PVC as a normal,
+writable file at that path before the main container starts — the real effect intended
+all along, achieved the way Kubernetes requires rather than via a mount flag.
 
 ### F2 — The three app secrets: same generator, same "never regenerate" rule
 
