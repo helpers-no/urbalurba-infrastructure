@@ -20,6 +20,18 @@
 # regenerated — see that playbook's own header for why this does NOT go through the
 # urbalurba-secrets/00-master-secrets.yml.template pipeline (that pipeline reapplies its
 # whole file on every deploy, which would reset these back to empty).
+#
+# 🔴 FOUND LIVE BY imac (urb-agents#1928): this image's actual boot path is s6-overlay
+# running `su-exec $USER gitea web` with NO flags and NO setup/entrypoint script that
+# reads GITEA_APP_INI — that env var is simply never consulted here (true for Gitea's
+# Docker image in general; NOT true for this specific rootless Forgejo image's s6 run
+# script). The server always reads its config from the hardcoded default path,
+# $GITEA_CUSTOM/conf/app.ini = /data/gitea/conf/app.ini — confirmed from the real
+# startup log ("ConfigFile: /data/gitea/conf/app.ini"), not guessed. Fixed the same way
+# the proven Proxmox role already does it (bind-mount app.ini straight onto that exact
+# path, read-only) via a ConfigMap subPath mount nested inside the PVC's own /data mount
+# — should have translated that mechanism directly instead of reaching for a
+# Gitea-in-general env var that doesn't apply to this image.
 
 ---
 apiVersion: v1
@@ -141,8 +153,6 @@ spec:
           # 635-setup-forgejo.yml's own header and tasks 4-9). There is no rotation
           # path this annotation would need to propagate.
           env:
-            - name: GITEA_APP_INI
-              value: /etc/forgejo-config/app.ini
             - name: GITEA__security__SECRET_KEY
               valueFrom:
                 secretKeyRef:
@@ -161,8 +171,16 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            # Nested INSIDE the /data mount above, at the exact path the server's own
+            # boot path hardcodes — a more specific mount wins over a broader one it
+            # sits inside, same effect as the Proxmox role's own read-only bind-mount
+            # over that path. subPath means this does NOT live-update if the ConfigMap
+            # changes (snapshotted at pod creation) — desired here, matching the
+            # Proxmox role's own "MANAGED BY ANSIBLE, re-applied on every run, not a
+            # live-reloaded file" convention.
             - name: app-ini
-              mountPath: /etc/forgejo-config
+              mountPath: /data/gitea/conf/app.ini
+              subPath: app.ini
               readOnly: true
           readinessProbe:
             httpGet:

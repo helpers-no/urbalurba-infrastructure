@@ -88,84 +88,193 @@
     # would not satisfy — using the image's own generator avoids guessing any of the
     # three secrets' exact expected shape.
     #
-    # ⚠️ `kubectl run --rm -i` is a documented gotcha in this repository
-    # (INVESTIGATE-system-verification-playbooks-usage.md): it can return rc=0 with empty
-    # stdout if the container outlives the attach. The non-empty-output assert
-    # immediately after each generation task is not optional decoration — it is what
-    # makes a silent-empty-capture fail loudly here instead of shipping a blank secret.
-    - name: 6. Generate SECRET_KEY if not already set
+    # 🔴 FOUND LIVE BY imac (urb-agents#1928), 100% REPRODUCIBLE: an EARLIER version of
+    # this playbook used `kubectl run --rm -i ... -- forgejo generate secret X` and
+    # captured its stdout directly. `--rm -i` appends its OWN pod-deletion notice onto
+    # the SAME stdout stream with no delimiter — e.g.
+    # `<realvalue>pod "forgejo-secretgen" deleted from default namespace` — and an
+    # empty-string check does not catch a non-empty but CORRUPTED capture. It also hit
+    # an intermittent attach-race that double-printed the value. Since these three
+    # secrets are "generated once, never regenerated," that corruption would have been
+    # permanent on every fresh install from the very first deploy forward.
+    #
+    # Fixed by never combining run + attach + cleanup in one captured command: launch
+    # (no --rm, no -i), wait for the pod to actually finish, read ITS OWN LOGS
+    # separately (not the launch command's stdout), then delete it as an independent,
+    # best-effort step. `kubectl logs` on a Succeeded pod is a clean, reliable read —
+    # no attach, no race, no trailing notice to strip.
+    - name: 6. Launch a pod to generate SECRET_KEY, if not already set
       ansible.builtin.command:
         cmd: >-
-          kubectl run forgejo-secretgen --rm -i --restart=Never
-          --image={{ forgejo_image }} --command --
+          kubectl run forgejo-secretgen -n {{ forgejo_namespace }}
+          --image={{ forgejo_image }} --restart=Never --command --
           forgejo generate secret SECRET_KEY
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: _forgejo_secret_key | length == 0
+      changed_when: true
+
+    - name: 6b. Wait for the generator pod to finish
+      kubernetes.core.k8s_info:
+        kind: Pod
+        name: forgejo-secretgen
+        namespace: "{{ forgejo_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: _forgejo_secretgen_pod
+      retries: 20
+      delay: 2
+      until: >
+        _forgejo_secretgen_pod.resources | length > 0 and
+        _forgejo_secretgen_pod.resources[0].status.phase in ['Succeeded', 'Failed']
+      when: _forgejo_secret_key | length == 0
+
+    - name: 6c. Read the generated value from the pod's own logs
+      ansible.builtin.command:
+        cmd: "kubectl logs forgejo-secretgen -n {{ forgejo_namespace }}"
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: _forgejo_gen_secret_key
       when: _forgejo_secret_key | length == 0
-      changed_when: true
+      changed_when: false
       no_log: true
 
-    - name: 6b. Refuse to proceed on an empty capture (the kubectl-run-rm gotcha)
+    - name: 6d. Delete the generator pod (independent, best-effort — never inline with the run or the log read)
+      ansible.builtin.command:
+        cmd: "kubectl delete pod forgejo-secretgen -n {{ forgejo_namespace }} --wait=false --ignore-not-found"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: _forgejo_secret_key | length == 0
+      changed_when: true
+      failed_when: false
+
+    - name: 6e. Refuse to proceed on an empty or corrupted capture
       ansible.builtin.assert:
-        that: (_forgejo_gen_secret_key.stdout | default('') | trim | length) > 0
-        fail_msg: "SECRET_KEY generation produced no output — re-run; do not proceed with an empty secret."
+        that:
+          - (_forgejo_gen_secret_key.stdout | default('') | trim | length) > 0
+          - not (_forgejo_gen_secret_key.stdout | default('') is search('pod ".*" deleted'))
+        fail_msg: "SECRET_KEY generation produced no output, or a corrupted capture — re-run; do not proceed with a broken secret."
         quiet: true
       when: _forgejo_secret_key | length == 0
 
-    - name: 6c. Use the freshly generated SECRET_KEY
+    - name: 6f. Use the freshly generated SECRET_KEY
       ansible.builtin.set_fact:
         _forgejo_secret_key: "{{ _forgejo_gen_secret_key.stdout | trim }}"
       when: _forgejo_secret_key | length == 0
       no_log: true
 
-    - name: 7. Generate INTERNAL_TOKEN if not already set
+    - name: 7. Launch a pod to generate INTERNAL_TOKEN, if not already set
       ansible.builtin.command:
         cmd: >-
-          kubectl run forgejo-secretgen --rm -i --restart=Never
-          --image={{ forgejo_image }} --command --
+          kubectl run forgejo-secretgen -n {{ forgejo_namespace }}
+          --image={{ forgejo_image }} --restart=Never --command --
           forgejo generate secret INTERNAL_TOKEN
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: _forgejo_internal_token | length == 0
+      changed_when: true
+
+    - name: 7b. Wait for the generator pod to finish
+      kubernetes.core.k8s_info:
+        kind: Pod
+        name: forgejo-secretgen
+        namespace: "{{ forgejo_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: _forgejo_secretgen_pod
+      retries: 20
+      delay: 2
+      until: >
+        _forgejo_secretgen_pod.resources | length > 0 and
+        _forgejo_secretgen_pod.resources[0].status.phase in ['Succeeded', 'Failed']
+      when: _forgejo_internal_token | length == 0
+
+    - name: 7c. Read the generated value from the pod's own logs
+      ansible.builtin.command:
+        cmd: "kubectl logs forgejo-secretgen -n {{ forgejo_namespace }}"
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: _forgejo_gen_internal_token
       when: _forgejo_internal_token | length == 0
-      changed_when: true
+      changed_when: false
       no_log: true
 
-    - name: 7b. Refuse to proceed on an empty capture
+    - name: 7d. Delete the generator pod (independent, best-effort)
+      ansible.builtin.command:
+        cmd: "kubectl delete pod forgejo-secretgen -n {{ forgejo_namespace }} --wait=false --ignore-not-found"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: _forgejo_internal_token | length == 0
+      changed_when: true
+      failed_when: false
+
+    - name: 7e. Refuse to proceed on an empty or corrupted capture
       ansible.builtin.assert:
-        that: (_forgejo_gen_internal_token.stdout | default('') | trim | length) > 0
-        fail_msg: "INTERNAL_TOKEN generation produced no output — re-run; do not proceed with an empty secret."
+        that:
+          - (_forgejo_gen_internal_token.stdout | default('') | trim | length) > 0
+          - not (_forgejo_gen_internal_token.stdout | default('') is search('pod ".*" deleted'))
+        fail_msg: "INTERNAL_TOKEN generation produced no output, or a corrupted capture — re-run; do not proceed with a broken secret."
         quiet: true
       when: _forgejo_internal_token | length == 0
 
-    - name: 7c. Use the freshly generated INTERNAL_TOKEN
+    - name: 7f. Use the freshly generated INTERNAL_TOKEN
       ansible.builtin.set_fact:
         _forgejo_internal_token: "{{ _forgejo_gen_internal_token.stdout | trim }}"
       when: _forgejo_internal_token | length == 0
       no_log: true
 
-    - name: 8. Generate JWT_SECRET if not already set
+    - name: 8. Launch a pod to generate JWT_SECRET, if not already set
       ansible.builtin.command:
         cmd: >-
-          kubectl run forgejo-secretgen --rm -i --restart=Never
-          --image={{ forgejo_image }} --command --
+          kubectl run forgejo-secretgen -n {{ forgejo_namespace }}
+          --image={{ forgejo_image }} --restart=Never --command --
           forgejo generate secret JWT_SECRET
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: _forgejo_jwt_secret | length == 0
+      changed_when: true
+
+    - name: 8b. Wait for the generator pod to finish
+      kubernetes.core.k8s_info:
+        kind: Pod
+        name: forgejo-secretgen
+        namespace: "{{ forgejo_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: _forgejo_secretgen_pod
+      retries: 20
+      delay: 2
+      until: >
+        _forgejo_secretgen_pod.resources | length > 0 and
+        _forgejo_secretgen_pod.resources[0].status.phase in ['Succeeded', 'Failed']
+      when: _forgejo_jwt_secret | length == 0
+
+    - name: 8c. Read the generated value from the pod's own logs
+      ansible.builtin.command:
+        cmd: "kubectl logs forgejo-secretgen -n {{ forgejo_namespace }}"
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: _forgejo_gen_jwt_secret
       when: _forgejo_jwt_secret | length == 0
-      changed_when: true
+      changed_when: false
       no_log: true
 
-    - name: 8b. Refuse to proceed on an empty capture
+    - name: 8d. Delete the generator pod (independent, best-effort)
+      ansible.builtin.command:
+        cmd: "kubectl delete pod forgejo-secretgen -n {{ forgejo_namespace }} --wait=false --ignore-not-found"
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: _forgejo_jwt_secret | length == 0
+      changed_when: true
+      failed_when: false
+
+    - name: 8e. Refuse to proceed on an empty or corrupted capture
       ansible.builtin.assert:
-        that: (_forgejo_gen_jwt_secret.stdout | default('') | trim | length) > 0
-        fail_msg: "JWT_SECRET generation produced no output — re-run; do not proceed with an empty secret."
+        that:
+          - (_forgejo_gen_jwt_secret.stdout | default('') | trim | length) > 0
+          - not (_forgejo_gen_jwt_secret.stdout | default('') is search('pod ".*" deleted'))
+        fail_msg: "JWT_SECRET generation produced no output, or a corrupted capture — re-run; do not proceed with a broken secret."
         quiet: true
       when: _forgejo_jwt_secret | length == 0
 
-    - name: 8c. Use the freshly generated JWT_SECRET
+    - name: 8f. Use the freshly generated JWT_SECRET
       ansible.builtin.set_fact:
         _forgejo_jwt_secret: "{{ _forgejo_gen_jwt_secret.stdout | trim }}"
       when: _forgejo_jwt_secret | length == 0
