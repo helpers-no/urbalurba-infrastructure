@@ -20,7 +20,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-CONFIG_FILE="$PLATFORM_DIR/config.sh"
+# config.sh is per-install REAL STATE (host addresses, VMIDs, which services are
+# selected) -- it must survive a container restart/uis-pull the same way every
+# other platform's own persistent config already does (platform-switching.sh's
+# PF_CLUSTER_CONFIG, azure-aks's own .uis.secrets/cloud-accounts/azure-default.env).
+# platforms/proxmox/ itself is part of the container's image layer, not a
+# persistent mount -- a config.sh written there silently vanishes on the next
+# pull (urb-agents#1935, found running `uis platform init proxmox` for real,
+# against a live lab, for the first time).
+REPO_ROOT="${UIS_REPO_ROOT:-$(cd "$PLATFORM_DIR/../.." && pwd)}"
+CONFIG_FILE="$REPO_ROOT/.uis.secrets/platforms/proxmox/config.sh"
 TEMPLATE_FILE="$PLATFORM_DIR/config.sh-template"
 
 echo "═══════════════════════════════════════════════════════════"
@@ -42,6 +51,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
     [[ "$confirm" == "y" || "$confirm" == "Y" ]] || { echo "Keeping existing config.sh."; exit 0; }
 fi
 
+mkdir -p "$(dirname "$CONFIG_FILE")"
 cp "$TEMPLATE_FILE" "$CONFIG_FILE"
 
 echo

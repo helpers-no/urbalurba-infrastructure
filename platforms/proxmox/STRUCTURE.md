@@ -10,7 +10,12 @@ debug individually.
 ```
 platforms/proxmox/
 ├── config.sh-template          ✅  one config for the whole platform: host1/2/3 names+addresses,
-│                                    k3s sizing, CORE_SERVICES list — everything in one file
+│                                    k3s sizing, CORE_SERVICES list — everything in one file.
+│                                    `init.sh` copies this to the ACTUAL config.sh at
+│                                    `.uis.secrets/platforms/proxmox/config.sh` — NOT anywhere
+│                                    under this directory, which is part of the container's own
+│                                    image layer and does not survive a `uis pull` (urb-agents#1935,
+│                                    found running init for real against a live lab)
 ├── README.md                    ✅  "Before you start" + all phases + troubleshooting (colocated
 │                                    with the code deliberately, not split into a separate docs tree)
 ├── STRUCTURE.md                 ✅  this file
@@ -68,8 +73,10 @@ platforms/proxmox/
 │   ├── down.sh                  ✅
 │   └── status.sh                ✅
 
-(no platform-local `.gitignore` — `config.sh` and `ansible/generated/` are covered by entries in
- the repo root's own `.gitignore`, fixed 2026-10-05 to match the rename)
+(no platform-local `.gitignore` — `ansible/generated/` is covered by an entry in the repo root's
+ own `.gitignore`, fixed 2026-10-05 to match the rename. `config.sh` itself no longer lives under
+ `platforms/proxmox/` at all — see the entry below; it's covered by the root `.gitignore`'s
+ blanket `.uis.secrets/` entry instead, same as every other platform's own persistent config)
 │
 └── ansible/
     ├── ansible.cfg               ✅  (`roles_path = roles` — needed because roles/ sits beside

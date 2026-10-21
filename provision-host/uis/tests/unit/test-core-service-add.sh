@@ -59,25 +59,31 @@ print_test_section "07-core-service-add.sh: config.sh mutation"
 TMP="$(create_test_dir)"
 trap 'cleanup_test_dir "$TMP"' EXIT
 
+CONFIG_UNDER_TEST="$TMP/.uis.secrets/platforms/proxmox/config.sh"
+
 _stub_platform_dir() {
-    # A real $PLATFORM_DIR/config.sh the script can edit, with 05-core-services-apply.sh
-    # replaced by a stub that just records how it was invoked — this test is about the
-    # config.sh edit and the hand-off, not Proxmox provisioning itself.
-    mkdir -p "$TMP/scripts"
+    # A real config.sh the script can edit, at the SAME persistent-state path the real script
+    # computes (REPO_ROOT/.uis.secrets/platforms/proxmox/config.sh, urb-agents#1935 — config.sh
+    # must survive a container restart/uis-pull, not live inside platforms/proxmox/ itself) —
+    # UIS_REPO_ROOT is set to $TMP so the script's own REPO_ROOT computation lands here instead
+    # of walking up from a real checkout. 05-core-services-apply.sh is replaced by a stub that
+    # just records how it was invoked — this test is about the config.sh edit and the hand-off,
+    # not Proxmox provisioning itself.
+    mkdir -p "$TMP/scripts" "$(dirname "$CONFIG_UNDER_TEST")"
     cp "$ADD_SCRIPT" "$TMP/scripts/"
     cat > "$TMP/scripts/05-core-services-apply.sh" <<'EOF'
 #!/bin/bash
 echo "STUB-APPLY-CALLED-WITH: $*" > "$(dirname "${BASH_SOURCE[0]}")/../apply-call.log"
 EOF
     chmod +x "$TMP/scripts/05-core-services-apply.sh"
-    echo 'CORE_SERVICES="pg bao garage registry"' > "$TMP/config.sh"
+    echo 'CORE_SERVICES="pg bao garage registry"' > "$CONFIG_UNDER_TEST"
 }
 
 start_test "a new service is appended, not substituted for the existing list"
 _stub_platform_dir
-"$TMP/scripts/07-core-service-add.sh" forgejo >/dev/null 2>&1
-grep -qx 'CORE_SERVICES="pg bao garage registry forgejo"' "$TMP/config.sh" \
-    && pass_test || fail_test "config.sh after add: $(cat "$TMP/config.sh")"
+UIS_REPO_ROOT="$TMP" "$TMP/scripts/07-core-service-add.sh" forgejo >/dev/null 2>&1
+grep -qx 'CORE_SERVICES="pg bao garage registry forgejo"' "$CONFIG_UNDER_TEST" \
+    && pass_test || fail_test "config.sh after add: $(cat "$CONFIG_UNDER_TEST")"
 
 start_test "the scoped apply script is called with exactly the new service name"
 [[ -f "$TMP/apply-call.log" ]] && grep -qx "STUB-APPLY-CALLED-WITH: forgejo" "$TMP/apply-call.log" \
@@ -85,9 +91,9 @@ start_test "the scoped apply script is called with exactly the new service name"
 
 start_test "re-adding an already-present service does not duplicate it"
 _stub_platform_dir
-echo 'CORE_SERVICES="pg bao garage registry forgejo"' > "$TMP/config.sh"
-"$TMP/scripts/07-core-service-add.sh" forgejo >/dev/null 2>&1
-_count=$(grep -o 'forgejo' "$TMP/config.sh" | wc -l)
+echo 'CORE_SERVICES="pg bao garage registry forgejo"' > "$CONFIG_UNDER_TEST"
+UIS_REPO_ROOT="$TMP" "$TMP/scripts/07-core-service-add.sh" forgejo >/dev/null 2>&1
+_count=$(grep -o 'forgejo' "$CONFIG_UNDER_TEST" | wc -l)
 [[ "$_count" -eq 1 ]] && pass_test || fail_test "'forgejo' appears $_count times after re-adding it"
 
 start_test "re-adding an already-present service still calls the scoped apply (repair path)"
