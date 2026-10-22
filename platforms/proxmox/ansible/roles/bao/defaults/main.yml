@@ -23,6 +23,16 @@ bao_node_id: "bao"
 bao_port: 8200
 bao_cluster_port: 8201
 
+# ── firewall ────────────────────────────────────────────────────────────────────────────────
+# Two ways to allow a source, usable together — declare the actual allow-list per site elsewhere,
+# not here; a reusable role carries no site's machine names or address plan.
+#   bao_firewall_allow_hosts  — inventory hostnames, resolved to their live ansible_host address
+#                              at apply time. For sources outside the ranges below.
+#   bao_firewall_allow_ranges — raw "start-end" address ranges (nftables range syntax), for a
+#                              whole declared band at once rather than naming every guest in it.
+bao_firewall_allow_hosts: []
+bao_firewall_allow_ranges: []
+
 # ── seal ────────────────────────────────────────────────────────────────────────────────────
 # 🔴 A DELIBERATE DEVIATION FROM THE UPSTREAM RECOMMENDATION. OpenBao's own documentation says of
 # the static seal: *"only recommended when an existing source of trust, such as another
@@ -46,7 +56,15 @@ bao_cluster_port: 8201
 #      DISK, not against a compromised HOST. Do not claim otherwise.
 # Set bao_seal: shamir to take the safer path and accept the manual unseal.
 bao_seal: static
-bao_seal_key_id: "{{ ansible_date_time.year }}-{{ '%02d' | format(ansible_date_time.month | int) }}"
+# 🔴 FIXED, NOT DATE-DERIVED (found incorporating the reference installation's own role,
+# urb-agents#1936) — this role has no key-rotation mechanism (no previous_key_id/previous_key in
+# the seal stanza, no rotation playbook), so the id must stay constant across every re-run.
+# `creates: {{ bao_seal_key_path }}` is what makes the key permanent; it only works because the
+# path it guards never changes. An earlier version of this file derived the id from the current
+# year+month, which would have silently generated a NEW seal key every month — making every
+# secret sealed under the previous month's key permanently unreadable, since static seal supports
+# no rotation path back to it.
+bao_seal_key_id: "primary"
 bao_seal_key_dir: /etc/openbao/seal          # rootfs, NOT the data mount — see note 1 above
 bao_seal_key_path: "{{ bao_seal_key_dir }}/unseal-{{ bao_seal_key_id }}.key"
 
@@ -73,3 +91,9 @@ bao_audit_rotate_keep: 7
 bao_init_key_shares: 3
 bao_init_key_threshold: 2
 bao_init_output_path: /etc/openbao/init-output.json
+
+# ── KV engines ──────────────────────────────────────────────────────────────────────────────
+# KV v2 mounts this guest should have. `platform` is where every `bao kv put platform/<name>
+# key=value` in this repo's own convention actually lands.
+bao_kv_mounts:
+  - platform

@@ -8,3 +8,10 @@
   ansible.builtin.systemd:
     name: "postgresql@{{ pg_version }}-main"
     state: reloaded
+
+# 🔴 `reloaded`, NEVER `restarted` — same reason as roles/garage/handlers/main.yml: nftables.service's
+# own ExecStop runs `nft flush ruleset` unscoped, which would wipe Docker's own NAT tables too.
+- name: Reload nftables
+  ansible.builtin.systemd:
+    name: nftables
+    state: reloaded

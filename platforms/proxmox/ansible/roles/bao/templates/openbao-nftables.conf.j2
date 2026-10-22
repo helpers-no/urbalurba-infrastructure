@@ -1,0 +1,41 @@
+#!/usr/sbin/nft -f
+# MANAGED BY ANSIBLE — roles/bao/templates/openbao-nftables.conf.j2. Local edits are lost on the
+# next run.
+#
+# Restricts the vault port to the declared allow-list (roles/bao/defaults/main.yml's
+# bao_firewall_allow_hosts, resolved to live addresses, plus bao_firewall_allow_ranges' raw
+# address ranges). Everything else on this guest — management ssh, outbound traffic — is
+# unaffected. bao_cluster_port (raft) is loopback-only: this is a single-node raft with no peers
+# to reach it from.
+#
+# 🔵 `flush ruleset`, NOT `destroy table` — unlike roles/garage/forgejo (Docker-based, which keeps
+# its own NAT tables a blanket flush would also wipe), this guest runs openbao as a native
+# systemd service from a .deb package. No competing Docker tables exist here to protect.
+flush ruleset
+
+table inet filter {
+	chain input {
+		type filter hook input priority 0; policy drop;
+
+		iif lo accept
+		ct state established,related accept
+		ip protocol icmp accept
+		ip6 nexthdr icmpv6 accept
+		tcp dport 22 accept
+
+{% for addr in bao_firewall_allow_addrs %}
+		ip saddr {{ addr }} tcp dport {{ bao_port }} accept
+{% endfor %}
+{% for range in bao_firewall_allow_ranges %}
+		ip saddr {{ range }} tcp dport {{ bao_port }} accept
+{% endfor %}
+	}
+
+	chain forward {
+		type filter hook forward priority 0; policy drop;
+	}
+
+	chain output {
+		type filter hook output priority 0; policy accept;
+	}
+}

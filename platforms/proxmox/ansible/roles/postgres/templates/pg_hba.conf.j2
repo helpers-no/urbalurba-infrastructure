@@ -1,8 +1,7 @@
 # MANAGED BY ANSIBLE — roles/postgres/templates/pg_hba.conf.j2
-# 🔵 Networks are DECLARED in the inventory, not written here. The reference installation's
-# hand-written pg_hba carries a VPN overlay range (dead since that VPN was removed from that
-# guest on 2026-10-01) and a host-local backplane range that exists on exactly one node. Neither
-# is wrong exactly; both are invisible until someone reads the file.
+# 🔵 Networks are DECLARED in defaults/main.yml (pg_allowed_networks), not written here. A
+# hand-written pg_hba accumulates stale ranges invisibly — see that file's own header for the
+# real example this convention was adopted to avoid repeating.
 local   all             postgres                                peer
 local   all             all                                     peer
 local   replication     all                                     peer

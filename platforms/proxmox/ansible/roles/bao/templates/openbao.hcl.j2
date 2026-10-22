@@ -22,9 +22,10 @@ listener "tcp" {
   tls_key_file  = "{{ bao_tls_dir }}/bao.key"
 }
 
-# 🔵 DISCOVERED, not hardcoded. The reference installation's config pins one IP; this reads the
-# address the guest actually has, so the same role produces a correct config on any node it is
-# built on.
+# From the guest's declared address (an inventory's own ansible_host), falling back to
+# live-discovery only where no such declaration exists. The reference installation's own config
+# pins one IP directly; this reads the address the guest actually has, so the same role produces
+# a correct config on any node it is built on.
 api_addr     = "https://{{ bao_advertise_addr }}:{{ bao_port }}"
 cluster_addr = "https://{{ bao_advertise_addr }}:{{ bao_cluster_port }}"
 

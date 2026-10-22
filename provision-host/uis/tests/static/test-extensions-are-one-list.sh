@@ -23,6 +23,7 @@ CONF="$ROOT/provision-host/uis/lib/postgres-extensions.conf"
 PG_LIB="$ROOT/provision-host/uis/lib/configure-postgresql.sh"
 DEPLOY_PB="$ROOT/ansible/playbooks/040-database-postgresql.yml"
 CHART="$ROOT/manifests/042-database-postgresql-config.yaml"
+PROXMOX_PG_ROLE="$ROOT/platforms/proxmox/ansible/roles/postgres/defaults/main.yml"
 
 print_test_section "Postgres extensions: one list, reaching every database"
 
@@ -77,6 +78,16 @@ if echo "$blk" | grep -qF "postgres-extensions.conf"; then
 else
     fail_test "The playbook hardcodes extensions instead of reading the list"
 fi
+
+start_test "🔴 The Proxmox core-service postgres role reads the live list too, not a snapshot"
+# urb-agents#1936: incorporating ops's real postgres role (platforms/proxmox) first landed with
+# pg_required_extensions as a hardcoded copy of this file's values — a FIFTH consumer this test
+# had no way to know about, and the exact class of silent drift this whole file exists to catch.
+# Fixed to lookup('file', ...) the same way DEPLOY_PB does; this guards it from regressing back.
+assert_file_exists "$PROXMOX_PG_ROLE" && \
+    grep -qF "lookup('file'" "$PROXMOX_PG_ROLE" && \
+    grep -qF "postgres-extensions.conf" "$PROXMOX_PG_ROLE" \
+    && pass_test || fail_test "pg_required_extensions no longer reads the live list in $PROXMOX_PG_ROLE"
 
 start_test "It stops on error — a half-activated template1 must not look fine"
 if echo "$blk" | grep -qF "ON_ERROR_STOP=on"; then

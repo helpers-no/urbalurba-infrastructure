@@ -1,6 +1,7 @@
 # MANAGED BY ANSIBLE — roles/postgres/templates/archive.conf.j2
+{% if pg_pitr_enabled | bool %}
 # Continuous WAL archiving to pgBackRest. 🔵 This is what makes point-in-time recovery possible;
-# a nightly dump alone can only ever return you to last night.
+# a nightly dump/snapshot alone can only ever return you to its own last run.
 archive_mode = on
 archive_command = 'pgbackrest --stanza={{ pg_stanza }} archive-push %p'
 # ⚠️ Forces a WAL segment every {{ pg_archive_timeout }}s even on an idle database. Without it a
@@ -8,3 +9,11 @@ archive_command = 'pgbackrest --stanza={{ pg_stanza }} archive-push %p'
 archive_timeout = {{ pg_archive_timeout }}
 wal_level = replica
 max_wal_senders = 3
+{% else %}
+# 🔴 pg_pitr_enabled is false — EXPLICIT, not the absence of a decision. A nightly host-level
+# snapshot is the accepted backup mechanism by default; point-in-time recovery (seconds of loss
+# instead of up to 24h) is opt-in per guest. archive_mode MUST be off when pgBackRest isn't
+# configured — on with no archive command working is the exact failure this role's own header
+# warns about: WAL silently accumulating in pg_wal until the disk fills.
+archive_mode = off
+{% endif %}

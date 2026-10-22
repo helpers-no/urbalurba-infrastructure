@@ -1,7 +1,9 @@
 # MANAGED BY ANSIBLE — roles/postgres/templates/pgbackrest.conf.j2
 [global]
 # 🔵 repo1 is LOCAL and fast. ⚠️ It lives on the same pool as the database it protects, so one
-# disk failure takes both — which is why repo2 exists and why it is not optional.
+# disk failure takes both — a second, off-guest repo is what would actually protect against that,
+# not shipped by this role (pg_pitr_enabled's own default-false reasoning in defaults/main.yml
+# already judges the host-level nightly snapshot sufficient unless this is explicitly turned on).
 repo1-type=posix
 repo1-path={{ pg_backup_dir }}/pgbackrest
 repo1-retention-full={{ pg_repo1_retention_full }}

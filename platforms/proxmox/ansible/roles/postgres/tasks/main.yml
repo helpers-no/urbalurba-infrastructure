@@ -5,9 +5,8 @@
       - pg_allowed_networks | length > 0
     fail_msg: >-
       pg_allowed_networks is empty. The role ships only loopback by default and will not guess a
-      LAN — a database reachable from a network nobody declared is how a stale backplane range
-      and a dead VPN overlay range ended up in the reference installation's pg_hba without anyone
-      deciding.
+      LAN — a database reachable from a network nobody declared is exactly how stale ranges end
+      up in a hand-written pg_hba with nobody deciding to put them there.
     quiet: true
 
 # ── packages, from the official repository ──────────────────────────────────────────────────
@@ -24,12 +23,11 @@
     update_cache: true
     cache_valid_time: 3600
 
-# 🔴 `get_url` IS NOT USED, FOR THE THIRD TIME IN THIS REPO. On Debian 13 (Python 3.13) both
-# `get_url` and `uri` fail against HTTPS with
-#   "HTTPSConnection.__init__() got an unexpected keyword argument 'cert_file'".
-# It has now bitten roles/bao, roles/node-backup and this role. It is HTTPS-specific — the
-# registry role's plain-HTTP `uri` checks work fine. Anything that must speak TLS goes through
-# curl, and the checksum/verification becomes an explicit step rather than a module argument.
+# 🔴 `get_url` IS NOT USED. On Debian 13 (Python 3.13) both `get_url` and `uri` fail against
+# HTTPS with "HTTPSConnection.__init__() got an unexpected keyword argument 'cert_file'" — found
+# live, proven PoC reference. It is HTTPS-specific — a plain-HTTP `uri` check works fine
+# elsewhere. Anything that must speak TLS goes through curl, and the checksum/verification
+# becomes an explicit step rather than a module argument.
 - name: PGDG signing key
   ansible.builtin.command:
     cmd: "curl -fsSL -o /usr/share/keyrings/pgdg.asc {{ pg_apt_key_url }}"
@@ -67,15 +65,19 @@
     name: "{{ pg_locale }}"
     state: present
 
-# 🔴 FOUND RUNNING THIS FOR REAL (2026-10-05): locale_gen GENERATES a locale — it does not make
-# it the SYSTEM DEFAULT. A fresh debian-13-standard container's /etc/default/locale is LANG="C",
-# and postgresql-common's pg_createcluster (triggered by the package's own postinst hook, a
-# non-interactive dpkg process — not an interactive shell, which can show a different LANG from
-# SSH/profile sourcing and make this look fine when it isn't) reads THAT file, not locale -a's
-# output. `locale -a` showing en_US.utf8 generated proved nothing about what initdb actually used.
-- name: Make it the system default too — pg_createcluster reads /etc/default/locale, not locale -a
-  ansible.builtin.command: "update-locale LANG={{ pg_locale }}"
-  changed_when: true
+# 🔴 GENERATING THE LOCALE IS NOT ENOUGH. `locale_gen` only adds it to the archive; the postinst
+# script that auto-runs `pg_createcluster` when the package below installs reads the SYSTEM
+# DEFAULT locale from /etc/default/locale, not an interactive shell's inherited LANG (which can
+# show en_US.UTF-8 while the file underneath still says C). Measured live against the proven
+# reference this role is translated from: two fresh guests in the same session both had
+# `LANG="C"` in /etc/default/locale despite the locale already being generated, and initdb
+# silently produced SQL_ASCII both times until this was also set.
+- name: The system default locale, not just the generated one
+  ansible.builtin.lineinfile:
+    path: /etc/default/locale
+    regexp: "^LANG="
+    line: "LANG={{ pg_locale }}"
+    create: true
 
 - name: PostgreSQL and its extensions
   ansible.builtin.apt:
@@ -121,9 +123,9 @@
     pg_data_fstype: "{{ pg_fs.stdout_lines[-1] | trim }}"
     pg_zfs_optimisations: "{{ (pg_fs.stdout_lines[-1] | trim) == 'zfs' }}"
 
-# 🔴 The guard that makes this role safe to hand over. `full_page_writes = off` is correct on ZFS
-# and risks silent, unrecoverable corruption on anything else — so it must never be settable by
-# declaration, only derivable from measurement.
+# 🔴 The guard that makes this role safe to hand to anyone. `full_page_writes = off` is correct on
+# ZFS and risks silent, unrecoverable corruption on anything else — so it must never be settable
+# by declaration, only derivable from measurement.
 - name: Refuse a hand-set ZFS optimisation that the filesystem does not support
   ansible.builtin.assert:
     that:
@@ -167,12 +169,39 @@
     mode: "0640"
   notify: Reload postgresql
 
-# ── pgBackRest ──────────────────────────────────────────────────────────────────────────────
+# ── firewall ─────────────────────────────────────────────────────────────────────────────────
+- name: Resolve the allow-list to live addresses
+  ansible.builtin.set_fact:
+    pg_firewall_allow_addrs: "{{ pg_firewall_allow_hosts | map('extract', hostvars, 'ansible_host') | select('defined') | list }}"
+
+- name: Allow-list for the postgres port
+  ansible.builtin.template:
+    src: postgres-nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Reload nftables
+
+- name: nftables enabled and running
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true
+    state: started
+
+# ── pgBackRest, only when pg_pitr_enabled ───────────────────────────────────────────────────
 # 🔴 WITHOUT THIS THE ARCHIVE COMMAND FAILS SILENTLY. `archive_mode = on` with no pgBackRest
 # config leaves the database running, every query working, and `pg_stat_archiver.failed_count`
-# climbing — WAL accumulating in pg_wal until the disk fills. Measured on the first run of this
-# role: archive_mode on, 9 failures, last successful archive "never". The health check caught it;
-# nothing else would have.
+# climbing — WAL accumulating in pg_wal until the disk fills. Found live against the proven
+# reference this role is translated from, on its own first run: archive_mode on, 9 failures, last
+# successful archive "never". A health check caught it; nothing else would have. This is exactly
+# why `archive.conf.j2` sets `archive_mode = off` when `pg_pitr_enabled` is false, rather than
+# leaving pgBackRest's absence to be discovered the same way again on a guest that doesn't want it.
+- name: pgBackRest package, only if PITR is wanted
+  ansible.builtin.apt:
+    name: pgbackrest
+    state: "{{ 'present' if pg_pitr_enabled | bool else 'absent' }}"
+
 - name: pgBackRest directories
   ansible.builtin.file:
     path: "{{ item }}"
@@ -185,9 +214,9 @@
     - "{{ pg_backup_dir }}/pgbackrest"
     - /var/log/pgbackrest
     # ⚠️ The Debian pgbackrest package does not create /etc/pgbackrest — it ships an example
-    # elsewhere and leaves the config directory to you, so the template lands nowhere.
-    # The same omission as the sanoid package in roles/node-backup.
+    # elsewhere and leaves the config directory to you, so the template lands nowhere otherwise.
     - /etc/pgbackrest
+  when: pg_pitr_enabled | bool
 
 - name: pgBackRest configuration
   ansible.builtin.template:
@@ -196,6 +225,7 @@
     owner: postgres
     group: postgres
     mode: "0640"
+  when: pg_pitr_enabled | bool
 
 - name: Running
   ansible.builtin.systemd:
@@ -205,6 +235,23 @@
 
 - name: Apply pending restarts BEFORE verifying anything
   ansible.builtin.meta: flush_handlers
+
+- name: nftables is actually enforcing, not just running
+  ansible.builtin.command: nft list ruleset
+  register: pg_nft_ruleset
+  changed_when: false
+  check_mode: false
+
+- name: The postgres port must not be open to anything off the allow-list
+  ansible.builtin.assert:
+    that:
+      - "'policy drop' in pg_nft_ruleset.stdout"
+      - pg_firewall_allow_addrs | length == 0 or pg_firewall_allow_addrs[0] in pg_nft_ruleset.stdout
+      - pg_firewall_allow_ranges | length == 0 or pg_firewall_allow_ranges[0].split('-')[0] in pg_nft_ruleset.stdout
+    fail_msg: >-
+      nftables is active but the loaded ruleset does not match what was rendered — a running
+      service with a config nobody applied is the same as no firewall.
+    quiet: true
 
 - name: Wait for it to accept connections
   ansible.builtin.command: "pg_isready -q"
@@ -221,6 +268,7 @@
     creates: "{{ pg_backup_dir }}/pgbackrest/backup/{{ pg_stanza }}"
   become: true
   become_user: postgres
+  when: pg_pitr_enabled | bool
 
 # 🔵 ASKS pgBackRest WHETHER ARCHIVING WORKS, rather than trusting that the config is present.
 # `check` pushes a WAL segment and reads it back — the only thing that distinguishes "configured"
@@ -231,65 +279,39 @@
   become: true
   become_user: postgres
   changed_when: false
+  when: pg_pitr_enabled | bool
 
-# ── roles and databases — site data ─────────────────────────────────────────────────────────
-# ⚠️ NO PASSWORDS. The role creates the role; the password is set out of band. A password in a
-# declaration is a password in git, and these are the credentials to every application's data.
-- name: Login roles
+# ── the postgres superuser's own password ───────────────────────────────────────────────────
+# Out of band, like everything else credential-shaped this role touches — only runs when the
+# operator actually supplies PG_ADMIN_PASSWORD; a normal re-run leaves today's password alone.
+- name: The postgres superuser's password, when the operator supplies one
   community.postgresql.postgresql_user:
-    name: "{{ item.name }}"
-    role_attr_flags: "{{ item.flags | default('LOGIN') }}"
+    name: postgres
+    password: "{{ pg_admin_password }}"
     state: present
   become: true
   become_user: postgres
-  loop: "{{ pg_roles }}"
-  loop_control:
-    label: "{{ item.name }}"
+  when: pg_admin_password | length > 0
+  no_log: true
 
 # 🔴 UIS'S CONTRACT IS APPLIED TO template1, NOT PER DATABASE — and that is the right shape.
-# From UIS's own 040-database-postgresql.yml: *"Activate the extensions in template1, so every
-# database created from here on has them"*, with the note that until 1.6.178 the CREATE EXTENSION
-# statements lived only in the chart's initdb script, *"which runs once against the `postgres`
-# database"* — so every other database silently lacked them.
-# ⚠️ ops made a smaller version of the same mistake: six of the eight, declared per database. A
-# database created later by a UIS service would have inherited nothing.
-# 🔵 template1 is the template every CREATE DATABASE copies, so doing it here means the contract
-# holds for databases that do not exist yet — which is the only way a contract can hold.
+# From UIS's own 040-database-postgresql.yml: the extensions must be active in template1, so
+# every database created from here on has them — because until a past UIS fix, the CREATE
+# EXTENSION statements lived only in a chart's own initdb script, which runs once against the
+# `postgres` database, so every OTHER database silently lacked them. Declaring them per database
+# here would repeat the same class of mistake at smaller scale: a database created later would
+# still inherit nothing. template1 is the template every CREATE DATABASE copies, so doing it here
+# means the contract holds for databases that do not exist yet — the only way a contract can hold.
 - name: Activate the UIS extension contract in template1
   community.postgresql.postgresql_ext:
     name: "{{ item }}"
-    login_db: template1
+    db: template1
     state: present
   become: true
   become_user: postgres
   loop: "{{ pg_required_extensions }}"
   loop_control:
     label: "template1 → {{ item }}"
-
-- name: Databases
-  community.postgresql.postgresql_db:
-    name: "{{ item.name }}"
-    owner: "{{ item.owner | default(omit) }}"
-    encoding: UTF8
-    state: present
-  become: true
-  become_user: postgres
-  loop: "{{ pg_databases }}"
-  loop_control:
-    label: "{{ item.name }}"
-
-# 🔵 ANYTHING EXTRA a specific database needs, beyond the template1 contract above. Databases
-# created BEFORE template1 was seeded do not inherit retroactively, so this also repairs those.
-- name: Extensions a particular database needs on top
-  community.postgresql.postgresql_ext:
-    name: "{{ item.1 }}"
-    login_db: "{{ item.0.name }}"
-    state: present
-  become: true
-  become_user: postgres
-  loop: "{{ pg_databases | subelements('extensions', skip_missing=True) }}"
-  loop_control:
-    label: "{{ item.0.name }} → {{ item.1 }}"
 
 # ── verify by asking the running server ─────────────────────────────────────────────────────
 - name: What is actually running
@@ -306,13 +328,25 @@
     that:
       - (pg_final.stdout.split('|')[0] | int) >= (pg_version | int) * 10000
       - pg_final.stdout.split('|')[1] == ('off' if pg_zfs_optimisations | bool else 'on')
-      - pg_final.stdout.split('|')[3] == 'on'
+      - pg_final.stdout.split('|')[3] == ('on' if pg_pitr_enabled | bool else 'off')
     fail_msg: >-
       version={{ pg_final.stdout.split('|')[0] }} full_page_writes={{ pg_final.stdout.split('|')[1] }}
       archive_mode={{ pg_final.stdout.split('|')[3] }} (wanted full_page_writes
-      {{ 'off' if pg_zfs_optimisations | bool else 'on' }}, archive_mode on).
-      ⚠️ archive_mode off means no point-in-time recovery, and nothing else reports it.
+      {{ 'off' if pg_zfs_optimisations | bool else 'on' }}, archive_mode
+      {{ 'on' if pg_pitr_enabled | bool else 'off' }} — pg_pitr_enabled={{ pg_pitr_enabled }}).
+      ⚠️ archive_mode must track pg_pitr_enabled exactly: 'on' with no pgBackRest configured
+      accumulates WAL silently until the disk fills; 'off' while pgBackRest IS configured means
+      archiving looks set up but isn't actually running.
     quiet: true
+
+- name: How many databases actually exist right now
+  ansible.builtin.command:
+    cmd: psql -At -c "select count(*) from pg_database where not datistemplate"
+  become: true
+  become_user: postgres
+  register: pg_db_count
+  changed_when: false
+  check_mode: false
 
 - name: Result
   ansible.builtin.debug:
@@ -320,7 +354,8 @@
       PostgreSQL {{ pg_final.stdout.split('|')[0] }} · {{ pg_data_fstype }} ·
       shared_buffers {{ pg_final.stdout.split('|')[2] }} ·
       full_page_writes {{ pg_final.stdout.split('|')[1] }} ·
-      archiving to stanza '{{ pg_stanza }}' ·
-      {{ pg_databases | length }} databases, {{ pg_roles | length }} roles
-      ⚠️ NOT PROVEN HERE: that a restore produces a working database. pgBackRest `check` proves
-      archiving works; only a rehearsed restore proves recovery does.
+      {{ "archiving to stanza '" ~ pg_stanza ~ "' (PITR on)" if pg_pitr_enabled | bool
+         else 'no WAL archiving — a nightly host-level snapshot is the backup mechanism (PITR off)' }} ·
+      {{ pg_db_count.stdout | trim }} databases live on the server
+      {{ "⚠️ NOT PROVEN HERE: that a restore produces a working database. pgBackRest `check` proves archiving works; only a rehearsed restore proves recovery does." if pg_pitr_enabled | bool
+         else "⚠️ NOT PROVEN HERE: that the nightly host-level backup actually restores a working database — only that the mount point is now included in it." }}

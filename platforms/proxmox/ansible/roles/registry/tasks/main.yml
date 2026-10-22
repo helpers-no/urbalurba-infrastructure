@@ -205,6 +205,23 @@
   loop: "{{ registry_upstreams }}"
   loop_control: { label: "{{ item.name }}" }
 
+# 🔴 RE-CHECKED EVERY RUN, NOT TRUSTED FROM A PAST AUDIT (ops's own real-lab role found this
+# live, urb-agents#1936: zot ships with NO access control by default — a bare POST to start a
+# blob upload returned 202 Accepted with a real upload session, on a registry reachable by
+# anything on the LAN with no firewall in front of it. `http.accessControl.repositories["**"]
+# .anonymousPolicy` in zot-config.json.j2 is what actually narrows this to read-only; this task
+# proves it holds, the same way roles/garage/roles/postgres/roles/bao all re-prove their own
+# lockdown on every run rather than trusting a comment that it was checked once). THIS PUBLIC
+# REPO'S OWN COPY OF THIS ROLE HAD NO ACCESS CONTROL AT ALL UNTIL THIS WAS ADDED — a real gap
+# ops's live-tested role found and this one didn't, not a cosmetic naming difference.
+- name: A push attempt must be refused, not merely undocumented
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ registry_port }}/v2{{ registry_upstreams[0].destination }}/{{ registry_upstreams[0].warm_path }}/blobs/uploads/"
+    method: POST
+    status_code: [401, 403]
+    timeout: 10
+  register: push_attempt
+
 - name: Result
   ansible.builtin.debug:
     msg: >-
@@ -212,10 +229,11 @@
       upstreams: {{ registry_upstreams | map(attribute='name') | join(', ') }} ·
       gc {{ 'on (delay ' ~ registry_gc_delay ~ ', interval ' ~ registry_gc_interval ~ ')' if registry_gc | bool else 'off' }} ·
       metrics {{ 'on ' ~ registry_metrics_path if registry_metrics_enabled | bool else 'off' }} ·
-      seed binary {{ 'kept at ' ~ registry_seed_path if registry_seed_binary | bool else 'disabled' }}
-      ⚠️ NOT DONE HERE: no cluster is wired to use this cache yet — nothing in this platform's k3s
-      role generates registries.yaml / containerd hosts.toml pointing at it. The cache works;
-      nothing asks it for anything yet. ⚠️ ALSO NOT DONE HERE: the documented acceptance test —
-      block internet egress on both this guest and a cluster node, delete a cached image there,
-      and confirm it still pulls. Warming proves zot can fetch and serve; it does not prove a
-      cluster survives an outage, only that this cache is ready to be wired to one.
+      seed binary {{ 'kept at ' ~ registry_seed_path if registry_seed_binary | bool else 'disabled' }} ·
+      push attempt refused with {{ push_attempt.status }}
+      ⚠️ ALSO NOT DONE HERE: the documented acceptance test — block internet egress on both this
+      guest and a cluster node, delete a cached image there, and confirm it still pulls. Warming
+      proves zot can fetch and serve; it does not prove a cluster survives an outage. (k3s IS
+      already wired to this cache, unlike an earlier version of this comment claimed — see
+      platforms/proxmox/ansible/playbooks/k3s-registry-ensure.yml, which reads registry_upstreams
+      directly and generates registries.yaml/containerd hosts.toml from it.)

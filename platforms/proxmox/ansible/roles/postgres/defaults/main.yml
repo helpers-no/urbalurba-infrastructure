@@ -1,18 +1,19 @@
 ---
 # ── the packages, from the official repository ──────────────────────────────────────────────
-# 🔵 PGDG, with its signing key. This is the one service on the reference installation that was
-# installed from a real source, and the role keeps it that way rather than inventing something.
+# 🔵 PGDG, with its signing key — the one package in this core-services set installed from a real
+# upstream source rather than a container image, and this role keeps it that way.
 pg_version: 18
+pg_port: 5432
 
 # 🔴 THE LOCALE MUST EXIST BEFORE THE PACKAGE INITIALISES THE CLUSTER.
 # A cluster's encoding and collation are fixed at initdb and CANNOT be changed afterwards without
 # dropping and recreating it. A fresh debian-13-standard container has LANG=en_US.UTF-8 set but
 # the locale NOT GENERATED, so initdb silently falls back to C and produces a SQL_ASCII cluster.
-# ⚠️ Measured 2026-10-01: the reference installation's cluster is UTF8 and this platform's first
-# attempt was SQL_ASCII — the SAME ROLE producing a different database because of an environment
-# detail nobody declared. The only symptom was `new encoding (UTF8) is incompatible with the
-# encoding of the template database` when creating the first database, long after install
-# reported success.
+# ⚠️ Measured live, proven PoC reference, 2026-10-01: one guest's cluster came up UTF8 and a
+# second guest's first attempt came up SQL_ASCII — the SAME ROLE producing a different database
+# because of an environment detail nobody declared. The only symptom was `new encoding (UTF8) is
+# incompatible with the encoding of the template database` when creating the first database, long
+# after install reported success.
 pg_locale: en_US.UTF-8
 pg_apt_key_url: "https://www.postgresql.org/media/keys/ACCC4CF8.asc"
 pg_apt_repo: "https://apt.postgresql.org/pub/repos/apt"
@@ -25,12 +26,14 @@ pg_packages:
   - "postgresql-client-{{ pg_version }}"
   - "postgresql-{{ pg_version }}-pgvector"
   - "postgresql-{{ pg_version }}-postgis-3"
-  - "pgbackrest"
+  # 🔴 pgbackrest is NOT listed here — it is conditional on pg_pitr_enabled, installed by its own
+  # task below, not unconditionally for every guest this role builds.
 
 # ── 🔴 THE SETTING THAT CAN CORRUPT DATA ON THE WRONG FILESYSTEM ────────────────────────────
 #
-# The reference installation runs `full_page_writes = off`, `wal_init_zero = off` and
-# `wal_recycle = off`. Those are CORRECT on ZFS and DANGEROUS anywhere else.
+# A ZFS-backed guest in the proven reference this role is translated from runs
+# `full_page_writes = off`, `wal_init_zero = off` and `wal_recycle = off`. Those are CORRECT on
+# ZFS and DANGEROUS anywhere else.
 #
 # PostgreSQL writes 8K pages; most filesystems do not guarantee an 8K write is atomic, so a crash
 # mid-write can leave a TORN PAGE — half old, half new. `full_page_writes` defends against that by
@@ -38,13 +41,13 @@ pg_packages:
 # partially overwritten, so the torn page cannot occur and the protection is pure cost.
 #
 # 🔴 **On ext4, XFS or LVM this setting risks silent, unrecoverable corruption after a crash.**
-# A role handed to UIS would carry it to filesystems that are not ZFS.
-# So it is DERIVED FROM THE MEASURED FILESYSTEM, never declared, and asserted below.
+# A role shipped in a public repo will run on filesystems that are not ZFS. So it is DERIVED FROM
+# THE MEASURED FILESYSTEM, never declared, and asserted below.
 pg_zfs_optimisations: null     # computed in tasks; do not set by hand
 
 # ── tuning ──────────────────────────────────────────────────────────────────────────────────
-# 🔵 Sized from the guest's own RAM rather than fixed. The reference installation's values
-# (shared_buffers 2GB, effective_cache_size 5GB) were right for an 8 GB container and would be
+# 🔵 Sized from the guest's own RAM rather than fixed. The proven reference's own values
+# (shared_buffers 2GB, effective_cache_size 5GB) were right for its 8 GB container and would be
 # wrong on any other.
 pg_shared_buffers_fraction: 0.25
 pg_effective_cache_fraction: 0.625
@@ -57,17 +60,37 @@ pg_checkpoint_completion_target: 0.9
 pg_max_wal_size: "4GB"
 
 # ── who may connect ─────────────────────────────────────────────────────────────────────────
-# 🔵 DECLARED, not hardcoded in a template. The reference installation's pg_hba carries two
-# networks nobody decided to keep: a VPN overlay range, dead weight since that VPN was removed
-# from that guest on 2026-10-01, and a host-local backplane range that only exists on one node.
+# 🔵 DECLARED, not hardcoded in a template — the lesson below is from the real lab this role was
+# translated from, kept as a reminder, not a default. That lab's hand-written pg_hba once carried
+# a VPN overlay range that had been dead weight since the VPN was removed from that guest, and a
+# host-local backplane range that only existed on one node — both invisible until someone
+# actually read the file.
 pg_allowed_networks:
   - { cidr: "127.0.0.1/32", why: "loopback" }
   - { cidr: "::1/128", why: "loopback" }
 
+# ── the firewall ────────────────────────────────────────────────────────────────────────────
+# Two ways to allow a source, usable together:
+#   pg_firewall_allow_hosts  — named inventory hostnames, resolved to live ansible_host addresses.
+#                              For sources outside the address ranges below.
+#   pg_firewall_allow_ranges — raw "start-end" address ranges (nftables range syntax), for a whole
+#                              declared band at once rather than naming every guest in it
+#                              individually — the right shape when any current or future guest in
+#                              that band may need this instance, not just today's known callers.
+# Both are narrower than pg_allowed_networks above, which governs database-level auth, not network
+# reachability.
+pg_firewall_allow_hosts: []
+pg_firewall_allow_ranges: []
+
 # ── archiving ───────────────────────────────────────────────────────────────────────────────
-# 🔵 The stanza is NOT the node name. The reference installation's stanza IS its own hostname,
-# which bakes the machine into an archive meant to outlive it — and a restore on another node then
-# needs a stanza rename nobody documented.
+# 🔴 Default false: pgBackRest's one value over a host-level nightly snapshot (vzdump/PBS or
+# equivalent) is continuous WAL archiving for point-in-time recovery — seconds of data loss
+# instead of up to a full day. The proven reference this role is translated from judged that not
+# worth the extra moving part for its own lab, with a nightly host-level snapshot as the accepted
+# backup mechanism instead. Set true per-guest only with a real reason to want sub-daily recovery.
+pg_pitr_enabled: false
+# 🔵 The stanza is NOT the node name. Baking a hostname into an archive meant to outlive that
+# machine means a restore on another node needs a stanza rename nobody documented.
 pg_stanza: lab
 pg_archive_timeout: 300              # force a WAL segment at least every 5 minutes
 pg_backup_dir: /var/backups/postgres
@@ -75,20 +98,25 @@ pg_repo1_retention_full: 2
 pg_repo1_retention_diff: 4
 
 # ── what UIS expects to exist ───────────────────────────────────────────────────────────────
-# 🔴 READ LIVE FROM UIS'S OWN SINGLE SOURCE — not copied. ansible/playbooks/040-database-
-# postgresql.yml (the rancher-desktop install) reads this exact file with this exact filter
-# chain; this role now reads the identical file the identical way, so a developer who adds or
-# removes an extension on rancher-desktop gets the same contract the moment they move to test
-# or production on this platform — the two installs cannot silently drift apart.
-# ⚠️ Requires provision-host/uis/lib/postgres-extensions.conf to exist in whatever
-# /mnt/urbalurbadisk checkout this platform runs from (shipped from UIS 1.6.178 on — absent in
-# any image older than that, found running this for real against a 1.6.116 image on 2026-10-05).
+# 🔴 READ LIVE, NOT A SNAPSHOT — this file's own header calls itself "THE ONE LIST" specifically
+# because three other consumers (a Helm values file, the in-cluster deploy playbook, the
+# per-app-database configure script) already have to agree with it, enforced by
+# provision-host/uis/tests/static/test-extensions-are-one-list.sh. A hardcoded copy here would be
+# a FOURTH, unchecked consumer that test has no way to know about — the exact class of silent
+# drift that file exists to prevent. Read the same way 040-database-postgresql.yml already does
+# (lookup('file', ...) evaluates on the control node — this container — regardless of which
+# remote guest the play targets, so the path below is correct even though this role configures a
+# Proxmox LXC, not the provision-host itself).
 pg_required_extensions: "{{ lookup('file', '/mnt/urbalurbadisk/provision-host/uis/lib/postgres-extensions.conf').splitlines()
                            | reject('match', '^\\s*#')
                            | reject('match', '^\\s*$')
                            | map('trim') | list }}"
 
-# ⚠️ DATABASES AND ROLES ARE SITE DATA — supplied by the inventory, not by this role. And the role
-# creates roles WITHOUT passwords: a password in a declaration is a password in git.
-pg_databases: []
-pg_roles: []
+# ── the postgres superuser's own password ──────────────────────────────────────────────────
+# App databases/roles are provisioned by UIS's own provision-host playbooks (connecting as this
+# superuser), not by this role. Read from the environment, never committed: set
+# `PG_ADMIN_PASSWORD` before running this role to change it (e.g. to match urbalurba-secrets'
+# current PGPASSWORD for the cluster this guest serves — see scripts/point-postgresql-at.sh's own
+# password-sync step). Left empty, the task that sets it is skipped and today's password is left
+# alone.
+pg_admin_password: "{{ lookup('env', 'PG_ADMIN_PASSWORD') | default('', true) }}"
