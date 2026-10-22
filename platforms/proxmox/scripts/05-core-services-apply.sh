@@ -84,6 +84,40 @@ bash "$SCRIPT_DIR/generate-ansible-config.sh"
 cd "$ANSIBLE_DIR"
 PUBKEY="${PROXMOX_SSH_KEY}.pub"
 ssh_h1() { ssh -i "$PROXMOX_SSH_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@${PROXMOX_HOST1_ADDR}" "$@"; }
+ssh_node() { local addr="$1"; shift; ssh -i "$PROXMOX_SSH_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@${addr}" "$@"; }
+
+# 🔴 `pct`/`pvesr` ARE NODE-LOCAL COMMANDS — unlike `ha-manager`/`pvesh`, which are cluster-aware
+# because their state lives in /etc/pve (synced to every node by pmxcfs). `pct exec`/`pct config`
+# only ever look under THIS node's own `/etc/pve/nodes/<this-node>/lxc/<vmid>.conf`, never another
+# node's, and `pvesr create-local-job` creates a job SOURCED FROM wherever it runs. Every core
+# service here is HA-managed (urb-agents#1936/#1937) — HA relocating a guest off whichever node
+# generate-ansible-config.sh happened to declare for it is the NORMAL state, not an edge case.
+# Confirmed live, urb-agents#1937: `pct exec` against host1 for a guest HA-placed on another node
+# failed with "Configuration file 'nodes/<host1>/lxc/<vmid>.conf' does not exist" — guest-ensure.yml
+# itself was already fixed (#596) to recognize the guest exists and stop creating a duplicate, but
+# every step AFTER that in this script still assumed host1 was where the guest actually lives.
+declare -A NODE_ADDR=(
+    ["$PROXMOX_HOST1_NAME"]="$PROXMOX_HOST1_ADDR"
+    ["$PROXMOX_HOST2_NAME"]="$PROXMOX_HOST2_ADDR"
+    ["$PROXMOX_HOST3_NAME"]="$PROXMOX_HOST3_ADDR"
+)
+# Which node actually holds this vmid right now, cluster-wide — not which one generate-ansible-
+# config.sh declared for it. pvesh is cluster-aware, so asking host1 is enough regardless of where
+# the guest itself lives.
+guest_node() {
+    local vmid="$1" node
+    node="$(ssh_h1 "pvesh get /cluster/resources --type vm --output-format json" \
+        | jq -r --arg vmid "$vmid" '.[] | select((.vmid|tostring)==$vmid) | .node')"
+    if [[ -z "$node" ]]; then
+        print_error "VMID ${vmid} is not reported anywhere in the cluster (pvesh /cluster/resources) — is it actually running?"
+        exit 1
+    fi
+    if [[ -z "${NODE_ADDR[$node]:-}" ]]; then
+        print_error "VMID ${vmid} is on node '${node}', which is none of PROXMOX_HOST{1,2,3}_NAME in config.sh."
+        exit 1
+    fi
+    echo "$node"
+}
 
 # ─── preflight: the two things every service below assumes ────────────────────────────────────
 print_section "Preflight"
@@ -136,10 +170,17 @@ for svc in $TARGET_SERVICES; do
         playbooks/guest-ensure.yml \
         -e "guest_file=${decl}" -e "guest_pubkey=${PUBKEY}" -e "pool_name=${POOL_NAME}"
 
-    print_status "Finding ${svc}'s guest IP..."
-    guest_ip="$(ssh_h1 "pct exec ${vmid} -- hostname -I" | awk '{print $1}')"
+    print_status "Finding which node ${svc}'s guest actually lives on..."
+    guest_node_name="$(guest_node "$vmid")"
+    guest_node_addr="${NODE_ADDR[$guest_node_name]}"
+    if [[ "$guest_node_name" != "$PROXMOX_HOST1_NAME" ]]; then
+        print_warning "VMID ${vmid} is on '${guest_node_name}', not host1 — HA relocated it since it was declared."
+    fi
+
+    print_status "Finding ${svc}'s guest IP (via ${guest_node_name})..."
+    guest_ip="$(ssh_node "$guest_node_addr" "pct exec ${vmid} -- hostname -I" | awk '{print $1}')"
     if [[ -z "$guest_ip" ]]; then
-        print_error "Could not get an IP for ${svc} (VMID ${vmid}) — is it actually running?"
+        print_error "Could not get an IP for ${svc} (VMID ${vmid}) on ${guest_node_name} — is it actually running?"
         exit 1
     fi
     # Same stale-host-key reasoning as 04-k3s-post-apply.sh: a rebuilt guest reuses the same
@@ -170,10 +211,15 @@ for svc in $TARGET_SERVICES; do
     print_success "$svc installed and verified"
 
     print_status "Replicating $svc to both other nodes..."
-    ansible-playbook -i "${PROXMOX_HOST1_ADDR}," -u root --private-key "$PROXMOX_SSH_KEY" \
-        playbooks/replication-ensure.yml -e "vmid=${vmid}" -e "target_node=${PROXMOX_HOST2_NAME}"
-    ansible-playbook -i "${PROXMOX_HOST1_ADDR}," -u root --private-key "$PROXMOX_SSH_KEY" \
-        playbooks/replication-ensure.yml -e "vmid=${vmid}" -e "target_node=${PROXMOX_HOST3_NAME}"
+    # 🔴 "local" job — must run ON THE NODE THAT ACTUALLY HOLDS THE GUEST (replication-ensure.yml's
+    # own header), and "both other nodes" means every PROXMOX_HOST*_NAME except wherever the guest
+    # actually is, not host2+host3 unconditionally (that would try to replicate host1 -> host1 if
+    # HA had relocated this guest there).
+    for target_name in "$PROXMOX_HOST1_NAME" "$PROXMOX_HOST2_NAME" "$PROXMOX_HOST3_NAME"; do
+        [[ "$target_name" == "$guest_node_name" ]] && continue
+        ansible-playbook -i "${guest_node_addr}," -u root --private-key "$PROXMOX_SSH_KEY" \
+            playbooks/replication-ensure.yml -e "vmid=${vmid}" -e "target_node=${target_name}"
+    done
 
     print_status "Registering $svc as an HA member..."
     ansible-playbook -i "${PROXMOX_HOST1_ADDR}," -u root --private-key "$PROXMOX_SSH_KEY" \
@@ -201,11 +247,11 @@ _core_services_has() {
 
 if [[ -z "$REGISTRY_IP" ]] && _core_services_has registry && [[ -f "generated/vars/core-services/registry.yml" ]]; then
     _vmid="$(grep -m1 '^  vmid:' "generated/vars/core-services/registry.yml" | awk '{print $2}')"
-    REGISTRY_IP="$(ssh_h1 "pct exec ${_vmid} -- hostname -I" 2>/dev/null | awk '{print $1}')"
+    _node_name="$(guest_node "$_vmid" 2>/dev/null)" && REGISTRY_IP="$(ssh_node "${NODE_ADDR[$_node_name]}" "pct exec ${_vmid} -- hostname -I" 2>/dev/null | awk '{print $1}')"
 fi
 if [[ -z "$FORGEJO_IP" ]] && _core_services_has forgejo && [[ -f "generated/vars/core-services/forgejo.yml" ]]; then
     _vmid="$(grep -m1 '^  vmid:' "generated/vars/core-services/forgejo.yml" | awk '{print $2}')"
-    FORGEJO_IP="$(ssh_h1 "pct exec ${_vmid} -- hostname -I" 2>/dev/null | awk '{print $1}')"
+    _node_name="$(guest_node "$_vmid" 2>/dev/null)" && FORGEJO_IP="$(ssh_node "${NODE_ADDR[$_node_name]}" "pct exec ${_vmid} -- hostname -I" 2>/dev/null | awk '{print $1}')"
 fi
 
 # ─── wire k3s registry trust, ONLY if the lab owner selected a service that needs it ────────────
