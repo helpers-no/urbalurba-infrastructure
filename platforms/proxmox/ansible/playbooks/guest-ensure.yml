@@ -77,19 +77,64 @@
       ansible.builtin.set_fact:
         g_vmid: "{{ vmid | default(guest.vmid) }}"
 
-    - name: Does it already exist here
+    - name: Does it exist on this node
       ansible.builtin.command: "pct config {{ g_vmid }}"
-      register: existing
+      register: existing_local
       changed_when: false
       failed_when: false
       check_mode: false
 
-    - name: Say so and stop if it does
+    # 🔴 A PER-NODE CHECK IS WRONG FOR ANY HA-MANAGED GUEST. Proxmox VMIDs are unique
+    # CLUSTER-WIDE, not per node, and HA can relocate a guest off whichever node this play's own
+    # inventory statically names as "the" node for it. Confirmed live, urb-agents#1937: an
+    # HA-placed guest running on a different node than the one this play always targets looked
+    # ABSENT by a per-node `pct config` check alone, and the play proceeded straight into
+    # `pct create` for a VMID that already existed elsewhere. Only Proxmox's own cluster-wide
+    # VMID-uniqueness refusal caught it — nothing in this playbook would have, so the check
+    # itself has to be cluster-wide, not the create attempt's accidental backstop.
+    - name: Does it exist anywhere in the cluster
+      ansible.builtin.command: "pvesh get /cluster/resources --type vm --output-format json"
+      register: cluster_vms
+      changed_when: false
+      check_mode: false
+      when: existing_local.rc != 0
+
+    - name: Which node actually holds it, if it exists but not here
+      ansible.builtin.set_fact:
+        existing_node: >-
+          {{ (cluster_vms.stdout | from_json
+              | selectattr('vmid', 'equalto', g_vmid | int)
+              | map(attribute='node') | list | first) | default('', true) }}
+      when: existing_local.rc != 0
+
+    - name: Settle whether it exists at all, here or elsewhere
+      ansible.builtin.set_fact:
+        existing: "{{ existing_local if existing_local.rc == 0 else {'rc': (0 if (existing_node | default('', true) | length > 0) else existing_local.rc)} }}"
+
+    # Distinct from `existing.rc` ("does it exist at all, anywhere") — this is "does a guest
+    # this node can act on exist", true either because it's already here or because nothing
+    # found it anywhere and this node is about to create it. False only for the
+    # exists-elsewhere case, where every later `pct exec`/`pct config` against this VMID would
+    # target a guest this node has never heard of.
+    - name: Whether this node holds — or is about to create — the guest
+      ansible.builtin.set_fact:
+        guest_here: "{{ (existing_local.rc == 0) or ((existing_node | default('', true)) | length == 0) }}"
+
+    - name: Say so and stop if it exists here
       ansible.builtin.debug:
         msg: >-
           {{ guest.name }} ({{ g_vmid }}) already exists on {{ inventory_hostname }}.
           ⚠️ This playbook creates; it does not reconfigure a live guest. Nothing changed.
-      when: existing.rc == 0
+      when: existing_local.rc == 0
+
+    - name: Say so and stop if it exists elsewhere in the cluster
+      ansible.builtin.debug:
+        msg: >-
+          {{ guest.name }} ({{ g_vmid }}) already exists on {{ existing_node }}, not
+          {{ inventory_hostname }} — likely HA-relocated since this guest was declared.
+          ⚠️ This playbook creates; it does not reconfigure a live guest, and will not create a
+          second one under the same VMID elsewhere. Nothing changed.
+      when: existing_local.rc != 0 and (existing_node | default('', true) | length > 0)
 
     # ── the template has to be on the node before pct create can use it ──────────────────────
     - name: Is the template cached
@@ -146,6 +191,10 @@
       when: existing.rc != 0
 
     # ── prove it, rather than trusting the exit code ─────────────────────────────────────────
+    # guest_here, not existing.rc: these two re-stamp the key/reverify login even on a repeat run
+    # against a guest that already exists ON THIS NODE (self-healing a drifted key) — only the
+    # exists-ELSEWHERE case must skip them, since `pct exec` here would target a VMID this node
+    # has never heard of.
     - name: Install this platform's key, so the L3 role can reach this guest
       ansible.builtin.command:
         cmd: >-
@@ -154,6 +203,7 @@
            printf "%s\n" "{{ lookup("file", guest_pubkey) }}" > /root/.ssh/authorized_keys &&
            chmod 600 /root/.ssh/authorized_keys'
       changed_when: true
+      when: guest_here
 
     - name: Prove the login works, rather than assuming it
       ansible.builtin.command:
@@ -163,11 +213,17 @@
       register: key_check
       changed_when: false
       failed_when: (key_check.stdout | trim | int) < 1
+      when: guest_here
 
     # 🔴 DATASET PROPERTIES TRAVEL WITH THE DATA AND ARE NOT OPTIONAL. PostgreSQL writes 8K
     # pages; ZFS's 128K default turns one page write into a 128K read-modify-write. A pct
     # declaration cannot express a ZFS property, so it is applied here, on the host, after the
     # volume exists — and it applies to data written AFTER it is set, which is why it belongs here.
+    # existing.rc != 0 here as well as everywhere else below: these read `pct config` on THIS
+    # node, which only has a volume to find if the guest was just created here. Without that
+    # guard, the "exists elsewhere in the cluster" case above would reach this `pct config` for a
+    # VMID this node has never heard of and fail the whole play outright instead of stopping
+    # cleanly, same class of bug as the existence check itself (urb-agents#1937).
     - name: Which volume actually backs each mount that asks for a recordsize
       ansible.builtin.shell:
         cmd: "pct config {{ g_vmid }} | grep '^{{ item.id }}:' | grep -oE 'subvol-[0-9]+-disk-[0-9]+'"
@@ -177,7 +233,9 @@
       loop: "{{ guest.mounts | default([]) | selectattr('zfs_recordsize','defined') | list }}"
       loop_control:
         label: "{{ item.id }}"
-      when: guest.mounts | default([]) | selectattr('zfs_recordsize', 'defined') | list | length > 0
+      when:
+        - existing.rc != 0
+        - guest.mounts | default([]) | selectattr('zfs_recordsize', 'defined') | list | length > 0
 
     - name: Refuse a recordsize mount without pool_name
       ansible.builtin.assert:
@@ -185,7 +243,9 @@
           - pool_name | length > 0
         fail_msg: "A mount asks for zfs_recordsize but no -e pool_name=<zpool> was given."
         quiet: true
-      when: guest.mounts | default([]) | selectattr('zfs_recordsize', 'defined') | list | length > 0
+      when:
+        - existing.rc != 0
+        - guest.mounts | default([]) | selectattr('zfs_recordsize', 'defined') | list | length > 0
 
     - name: ZFS properties on volumes that ask for them
       ansible.builtin.command:
