@@ -133,3 +133,21 @@ CORE_SERVICES="pg bao garage registry forgejo pg-test"
 # CORE_SERVICE_BAO_VMID=408
 # CORE_SERVICE_REGISTRY_VMID=409
 # CORE_SERVICE_FORGEJO_VMID=410
+
+# 🔴 EACH SERVICE'S NFTABLES FIREWALL ALLOW-LIST — empty by design in the role itself ("declare
+# the real allow-list per site, not in a reusable role"), and nothing upstream of the role was
+# ever wired to supply one. Live-confirmed, urb-agents#1944: a confirm/repair run on an
+# already-firewalled guest SILENTLY REPLACED the real, live allow-list with this empty default —
+# caught and reverted by hand on garage before it mattered; would not have been low-stakes on
+# forgejo (locks out its own CI pipeline) or bao (locks out admin access). Comma-separated
+# nftables range syntax ("start-end"; a single host is its own address on both ends — e.g.
+# "192.168.1.50-192.168.1.50"). Leave unset for a service with no real consumers yet — an
+# explicit empty allow-list is fine; this is only unsafe when it happens BY ACCIDENT.
+# 🔵 registry has no entry here: its access control is HTTP-level (anonymousPolicy), not
+# nftables — see roles/registry. pg and pg-test SHARE one value (CORE_SERVICE_PG_*): both run
+# through the same generated/vars/core-services/_extra-vars.yml, so they cannot currently have
+# DIFFERENT real-world allow-lists — only that they have the SAME one, or neither does.
+# CORE_SERVICE_GARAGE_FIREWALL_ALLOW_RANGES=""
+# CORE_SERVICE_BAO_FIREWALL_ALLOW_RANGES=""
+# CORE_SERVICE_FORGEJO_FIREWALL_ALLOW_RANGES=""
+# CORE_SERVICE_PG_FIREWALL_ALLOW_RANGES=""
