@@ -278,6 +278,15 @@ EXTRA_VARS_FILE="$GENERATED_DIR/vars/core-services/_extra-vars.yml"
           echo "forgejo_firewall_allow_ranges:"
           _firewall_ranges_yaml "$CORE_SERVICE_FORGEJO_FIREWALL_ALLOW_RANGES"
         fi
+        # 🔴 NO AUTO-GENERATE HERE, unlike garage's bootstrap credential — these are Forgejo's
+        # OWN app secrets, and the real reference role never auto-generates them either; an
+        # operator runs `forgejo generate secret <TYPE>` once and supplies the result, same as
+        # an adopted lab's real, already-running instance must (urb-agents#1945). Emitted only
+        # when set — left unset, the role's own assert refuses with the exact commands to run,
+        # same message either way, rather than this layer silently inventing a wrong-shaped one.
+        [[ -n "${CORE_SERVICE_FORGEJO_SECRET_KEY:-}" ]] && echo "forgejo_secret_key: \"${CORE_SERVICE_FORGEJO_SECRET_KEY}\""
+        [[ -n "${CORE_SERVICE_FORGEJO_INTERNAL_TOKEN:-}" ]] && echo "forgejo_internal_token: \"${CORE_SERVICE_FORGEJO_INTERNAL_TOKEN}\""
+        [[ -n "${CORE_SERVICE_FORGEJO_JWT_SECRET:-}" ]] && echo "forgejo_jwt_secret: \"${CORE_SERVICE_FORGEJO_JWT_SECRET}\""
         ;;
       pg|pg-test)
         # 🔴 WITHOUT THIS, uis deploy postgresql's external-service proxy cannot reach this

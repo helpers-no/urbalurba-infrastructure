@@ -151,3 +151,22 @@ CORE_SERVICES="pg bao garage registry forgejo pg-test"
 # CORE_SERVICE_BAO_FIREWALL_ALLOW_RANGES=""
 # CORE_SERVICE_FORGEJO_FIREWALL_ALLOW_RANGES=""
 # CORE_SERVICE_PG_FIREWALL_ALLOW_RANGES=""
+
+# 🔴 ONLY IF ADOPTING AN EXISTING FORGEJO — its own app secrets have no auto-generate-and-persist
+# mechanism at all (unlike garage's bootstrap credential, which this tool invents and keeps for
+# you). Forgejo's role asserts these are supplied and never defaults them — correctly, since a
+# missing JWT_SECRET makes Forgejo self-write one into its own read-only app.ini and crash-loop.
+# For a BRAND-NEW forgejo with no prior secrets, generate all three once (needs docker and the
+# pinned image — see roles/forgejo/defaults/main.yml for forgejo_image — on any host, not
+# necessarily this one) and set them here so they survive every future run:
+#   docker run --rm <forgejo_image> forgejo generate secret SECRET_KEY
+#   docker run --rm <forgejo_image> forgejo generate secret INTERNAL_TOKEN
+#   docker run --rm <forgejo_image> forgejo generate secret JWT_SECRET
+# For an ADOPTED, already-running forgejo (urb-agents#1945: a live instance with real admin
+# accounts and app-level OAuth references this tool must not rotate), set these to the guest's
+# OWN existing values instead of generating fresh ones — Gitea/Forgejo invalidates every active
+# session and issued token when these change, so replacing them on a running instance is a
+# rotation with real consequences, not a safe default to fall back on.
+# CORE_SERVICE_FORGEJO_SECRET_KEY=""
+# CORE_SERVICE_FORGEJO_INTERNAL_TOKEN=""
+# CORE_SERVICE_FORGEJO_JWT_SECRET=""
