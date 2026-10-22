@@ -545,6 +545,26 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "external-secrets",
+    "name": "External Secrets Operator",
+    "description": "Syncs Kubernetes Secrets from external secret stores via ExternalSecret/ClusterSecretStore",
+    "category": "MANAGEMENT",
+    "tags": ["secrets", "eso", "vault", "kubernetes"],
+    "abstract": "Syncs Kubernetes Secrets from an external secret store, via the ExternalSecret API",
+    "logo": "",
+    "website": "https://external-secrets.io"
+    ,"summary": "External Secrets Operator (ESO) reads ExternalSecret resources and materialises them as ordinary Kubernetes Secrets, sourced from a named ClusterSecretStore. UIS installs the operator itself only - the store a consuming service needs (e.g. OpenBaos openbao store) is that services own concern, so the same ExternalSecret a developer writes here resolves identically in production."
+    ,"docs": "/docs/services/management/external-secrets"
+    ,"playbook": "026-setup-external-secrets.yml"
+    ,"priority": 21
+    ,"checkCommand": "kubectl get pods -n external-secrets -l app.kubernetes.io/name=external-secrets --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "026-remove-external-secrets.yml"
+    ,"helmChart": "external-secrets/external-secrets"
+    ,"namespace": "external-secrets"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "forgejo-runner",
     "name": "Forgejo Runner",
     "description": "In-cluster Forgejo Actions runner (CI for Forgejo-hosted repos)",
