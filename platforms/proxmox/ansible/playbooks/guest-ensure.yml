@@ -281,10 +281,21 @@
         - existing.rc != 0
         - guest.mounts | default([]) | selectattr('zfs_recordsize', 'defined') | list | length > 0
 
+    # 🔴 LIVE-CONFIRMED, urb-agents#1943: pg-test IS HA-managed, so the "exists elsewhere" case
+    # above is reachable for it (not just theoretical, as this task's prior fix assumed). When
+    # the mount_vols task above is skipped entirely (existing.rc == 0), its OWN registered result
+    # is itself a skip descriptor ({changed: false, skipped: true, results: [{skip_reason: ...}]})
+    # — looping over `mount_vols.results` directly hands this task skip-descriptors that have no
+    # `stdout` key at all, and `loop_control.label` tries to render `item.stdout` to build the
+    # "skipping: (item=...)" display line BEFORE the per-item `when` below is even evaluated —
+    # "Failed to template loop_control.label: 'dict object' has no attribute 'stdout'". `mount_vols
+    # is skipped` is true only when every item was (this task's own `when` is task-global, not
+    # per-item, so it can never be a mix) — short-circuit to an empty loop in that case, same as
+    # if there were never any recordsize mounts to begin with.
     - name: ZFS properties on volumes that ask for them
       ansible.builtin.command:
         cmd: "zfs set recordsize={{ item.item.zfs_recordsize }} {{ pool_name }}/vm/{{ item.stdout | trim }}"
-      loop: "{{ mount_vols.results | default([]) }}"
+      loop: "{{ [] if (mount_vols is skipped) else (mount_vols.results | default([])) }}"
       loop_control:
         label: "{{ item.item.mountpoint }} → {{ pool_name }}/vm/{{ item.stdout | trim }} recordsize={{ item.item.zfs_recordsize }}"
       when: (item.stdout | default('') | trim) | length > 0
