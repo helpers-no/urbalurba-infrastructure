@@ -277,20 +277,46 @@
       loop: "{{ hostvars['localhost'].cluster_wiring }}"
       loop_control: { label: "{{ item.context }}" }
 
+    # 🔴 THE REVIEWER JWT OFF THE COMMAND LINE, same reason the CA cert above is a file and not
+    # inlined — urb-agents#1947: this whole task used to need `no_log: true` purely because this
+    # one field carried a secret in its args, which then censored the task's OWN rc/stdout/stderr
+    # the one time it actually failed. Bao's audit log proved the write itself landed clean with
+    # no error on either side of the round trip, so whatever raised the ansible-level failure was
+    # never visible — no_log hid it, not bao. Writing the jwt to a file and reading it with the
+    # same `@file` syntax already used for kubernetes_ca_cert below removes the only secret this
+    # task's args ever carried, so the next failure (if it recurs) shows its real error directly.
+    - name: Each cluster's reviewer JWT, written to a file — keeps it off the command line below
+      ansible.builtin.copy:
+        content: "{{ item.reviewer_jwt }}"
+        dest: "/tmp/{{ item.context }}-reviewer.jwt"
+        mode: "0600"
+      loop: "{{ hostvars['localhost'].cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+      no_log: true
+
     # 🔴 written on EVERY run, not only when missing — this is config, not a one-time bootstrap
     # step. A rebuilt k3s node changes the API server's address; a stale config here would
     # silently keep validating against an address nobody answers on anymore.
+    # 🔵 RETRIES, NOT A ONE-SHOT COMMAND — urb-agents#1947, live-confirmed: this exact write
+    # failed once against a guest that had just gone through a fresh boot/network-settle, with
+    # bao's own audit log showing the request landed and completed with no error on either side.
+    # The most likely explanation left is a transient loopback hiccup at that exact moment, not a
+    # configuration problem — and this task is idempotent (see above), so retrying it is always
+    # safe.
     - name: Configure each cluster's auth mount with its real API server, CA and reviewer token
       ansible.builtin.command:
         cmd: >-
           bao write auth/{{ item.mount }}/config
           kubernetes_host={{ item.api_server }}
           kubernetes_ca_cert=@/tmp/{{ item.context }}-ca.crt
-          token_reviewer_jwt={{ item.reviewer_jwt }}
+          token_reviewer_jwt=@/tmp/{{ item.context }}-reviewer.jwt
       environment: "{{ bao_env }}"
+      register: auth_mount_config
+      until: auth_mount_config.rc == 0
+      retries: 3
+      delay: 5
       loop: "{{ hostvars['localhost'].cluster_wiring }}"
       loop_control: { label: "{{ item.context }}" }
-      no_log: true
 
     - name: Each cluster's role — binds its ESO ServiceAccount to the read-only policy
       ansible.builtin.command: >-
@@ -321,6 +347,13 @@
     - name: Tidy the temp CA files, one per cluster actually targeted this run
       ansible.builtin.file:
         path: "/tmp/{{ item.context }}-ca.crt"
+        state: absent
+      loop: "{{ hostvars['localhost'].cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
+
+    - name: Tidy the temp reviewer-JWT files, one per cluster actually targeted this run
+      ansible.builtin.file:
+        path: "/tmp/{{ item.context }}-reviewer.jwt"
         state: absent
       loop: "{{ hostvars['localhost'].cluster_wiring }}"
       loop_control: { label: "{{ item.context }}" }
