@@ -170,6 +170,43 @@
           second one under the same VMID elsewhere. Nothing changed.
       when: existing_local.rc != 0 and (existing_node | default('', true) | length > 0)
 
+    # 🔴 THE MIRROR IMAGE OF urb-agents#1940's WARNING, AND THIS ONE MUST BLOCK, NOT WARN —
+    # urb-agents#1967, live-confirmed: pg's declared VMID (405, the convention's default) had
+    # nothing at it — not a collision with an unrelated guest, just genuinely empty — while the
+    # real production pg sat at VMID 203, which config.sh's override was simply never set to.
+    # #1940's own name-mismatch check cannot catch this: it only fires when the DECLARED vmid is
+    # occupied by something else. Here the declared vmid is free, so the play would walk straight
+    # into `pct create` and build a second, unrelated guest that happens to share this service's
+    # name — exactly what happened, requiring a full manual cleanup (ha-manager remove, pvesr
+    # delete, pct destroy --purge, stale ZFS replicas on two other nodes). A #1940-style WARNING
+    # is not enough here: that one lets a merely-risky confirm/repair proceed against a guest that
+    # does exist; this one would let a wasteful, HA-registered CREATE proceed for a guest that was
+    # never supposed to exist. Searching cluster_vms by NAME (not vmid) is cheap — it's the same
+    # data this play already fetched for the VMID-based check above, filtered differently.
+    - name: Does a guest with this exact name already exist elsewhere, under a different VMID
+      ansible.builtin.set_fact:
+        same_name_elsewhere: >-
+          {{ (cluster_vms.stdout | from_json
+              | selectattr('name', 'defined')
+              | selectattr('name', 'equalto', guest.name)
+              | rejectattr('vmid', 'equalto', g_vmid | int)
+              | list) }}
+      when: existing.rc != 0
+
+    - name: Refuse to create a second guest under this name — one already exists, at a different VMID
+      ansible.builtin.fail:
+        msg: >-
+          A guest named '{{ guest.name }}' already exists in this cluster at VMID
+          {{ same_name_elsewhere[0].vmid }} on node {{ same_name_elsewhere[0].node }} — not at the
+          declared VMID {{ g_vmid }}, where nothing exists. This declaration's VMID override is
+          almost certainly missing or stale (urb-agents#1967). Creating a guest here would
+          silently build a SECOND, unrelated instance sharing this service's name — set
+          CORE_SERVICE_{{ guest.name | upper | replace('-', '_') }}_VMID={{ same_name_elsewhere[0].vmid }}
+          in config.sh and re-run, rather than proceeding.
+      when:
+        - existing.rc != 0
+        - (same_name_elsewhere | default([]) | length) > 0
+
     # ── the template has to be on the node before pct create can use it ──────────────────────
     - name: Is the template cached
       ansible.builtin.command: "pveam list local"
