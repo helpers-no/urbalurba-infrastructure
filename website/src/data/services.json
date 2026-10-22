@@ -504,6 +504,27 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "bao",
+    "name": "OpenBao",
+    "description": "Secrets management (KV v2 + kubernetes auth), exposed to the cluster via a ClusterSecretStore",
+    "category": "MANAGEMENT",
+    "tags": ["secrets", "vault", "openbao", "kubernetes-auth"],
+    "abstract": "Secrets management with KV v2 storage and Kubernetes-native auth",
+    "logo": "",
+    "website": "https://openbao.org"
+    ,"summary": "OpenBao deployed in-cluster: raft storage, a static (auto-unseal) seal generated fresh per install, a KV v2 mount named platform, and the kubernetes auth method configured for External Secrets Operator. Exposes a ClusterSecretStore named openbao so an ExternalSecret a developer writes here resolves identically wherever that store exists - the same interface productions own OpenBao (platforms/proxmox) answers. Requires external-secrets."
+    ,"docs": "/docs/services/management/bao"
+    ,"playbook": "027-setup-bao.yml"
+    ,"priority": 22
+    ,"checkCommand": "kubectl exec -n bao bao-0 -- bao status 2>/dev/null | grep -qE ^Sealed\\s+false"
+    ,"removePlaybook": "027-remove-bao.yml"
+    ,"requires": ["external-secrets"]
+    ,"helmChart": "openbao/openbao"
+    ,"namespace": "bao"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "cert-manager",
     "name": "cert-manager",
     "description": "X.509 certificate issuance and renewal for Kubernetes",

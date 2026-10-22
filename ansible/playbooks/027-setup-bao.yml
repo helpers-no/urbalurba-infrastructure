@@ -1,0 +1,552 @@
+---
+# file: ansible/playbooks/027-setup-bao.yml
+# Description:
+# Install OpenBao in-cluster (raft storage, static seal, kubernetes auth - the same mechanisms
+# production's platforms/proxmox/ansible/roles/bao uses, ported into Helm-chart-values form
+# instead of .deb-on-a-VM form), then wire it to External Secrets Operator exactly the way
+# platforms/proxmox/ansible/playbooks/k3s-bao-ensure.yml already does for production - minus the
+# cross-cluster kubeconfig step that playbook needs and this one does not, since OpenBao and the
+# API server it validates against are the SAME cluster here.
+#
+# 🔴 UNVERIFIED IN THIS ENVIRONMENT (no live Rancher Desktop cluster to check against):
+#   - the chart repo/name/version below (confirmed live against openbao/openbao-helm's GitHub repo
+#     at the time this was written, but not re-checked against a live `helm search repo`)
+#   - that the chart's StatefulSet/Service/pod are actually named "bao" (= the Helm release name),
+#     not "bao-openbao" or similar - assumed from the Vault Helm chart's own well-known
+#     release-name-as-resource-name convention, which this chart's values.yaml shape otherwise
+#     mirrors closely, but not independently confirmed with a real `helm template` run.
+# imac must confirm both before trusting this to run unattended.
+#
+# Usage:
+# ansible-playbook playbooks/027-setup-bao.yml -e target_host="rancher-desktop"
+
+- name: Install OpenBao
+  hosts: localhost
+  gather_facts: false
+  vars:
+    manifests_folder: "/mnt/urbalurbadisk/manifests"
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    bao_namespace: "bao"
+    bao_release: "bao"
+    bao_chart: "openbao/openbao"
+    bao_repo_url: "https://openbao.github.io/openbao-helm"
+    # 🔴 Not independently verified against a live Helm repo index - see the file header.
+    bao_chart_version: "0.30.4"
+    bao_values_file: "{{ manifests_folder }}/027-bao-config.yaml"
+    bao_port: 8200
+    installation_timeout: 300
+    # ── the rest of the wiring (ESO, kubernetes auth, KV mount, ClusterSecretStore) ──
+    eso_namespace: "external-secrets"
+    bao_kv_mount: "platform"
+    bao_eso_policy: "eso-read"
+    bao_auth_mount: "kubernetes"
+    bao_seed_secret_namespace: "default"
+    bao_seed_secret_name: "urbalurba-secrets"
+
+  tasks:
+    - name: 1. Check if required variables are provided
+      ansible.builtin.fail:
+        msg: "The variable 'target_host' is mandatory. Use -e target_host=your_host_name to specify it."
+      when: target_host is not defined
+
+    - name: 2. Print playbook description
+      ansible.builtin.debug:
+        msg: "Installing OpenBao on Kubernetes context: {{ target_host }}"
+
+    - name: 3. Create bao namespace if it doesn't exist
+      ansible.builtin.shell: kubectl create namespace {{ bao_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: namespace_result
+      changed_when: namespace_result.rc == 0
+      failed_when: namespace_result.rc != 0
+
+    # ── the seal key: generated once, never regenerated (urbalurba-infrastructure's own
+    # production role carries the identical rule - replacing this key makes every existing
+    # secret unreadable) ──────────────────────────────────────────────────────────────────────
+    - name: 4. Does the seal-key Secret already exist
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: bao-seal-key
+        namespace: "{{ bao_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: existing_seal_secret
+
+    - name: 5. Generate a fresh seal key, only if one does not already exist
+      ansible.builtin.shell: "head -c 32 /dev/urandom | base64 -w0"
+      register: generated_seal_key
+      no_log: true
+      when: (existing_seal_secret.resources | default([]) | length) == 0
+
+    - name: 6. Create the seal-key Secret, only if one does not already exist
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: bao-seal-key
+            namespace: "{{ bao_namespace }}"
+          stringData:
+            seal.key: "{{ generated_seal_key.stdout }}"
+      no_log: true
+      when: (existing_seal_secret.resources | default([]) | length) == 0
+
+    # ── the chart itself ─────────────────────────────────────────────────────────────────────
+    - name: 7. Check existing Helm repositories
+      ansible.builtin.command: helm repo list
+      register: helm_repo_list
+      changed_when: false
+
+    - name: 8. Add the openbao Helm repository if needed
+      kubernetes.core.helm_repository:
+        name: "openbao"
+        repo_url: "{{ bao_repo_url }}"
+      when: "'openbao' not in helm_repo_list.stdout"
+
+    - name: 9. Update Helm repositories
+      ansible.builtin.command: helm repo update --force-update
+      changed_when: false
+
+    - name: 10. Deploy OpenBao via Helm
+      ansible.builtin.command: >
+        helm upgrade --install {{ bao_release }} {{ bao_chart }}
+        -f {{ bao_values_file }}
+        --namespace {{ bao_namespace }}
+        --version {{ bao_chart_version }}
+        --timeout {{ installation_timeout }}s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: bao_helm_result
+      changed_when: true
+
+    - name: 11. Wait for the OpenBao pod to exist and be running
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ bao_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/instance={{ bao_release }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: bao_pods
+      retries: 30
+      delay: 10
+      until: >
+        bao_pods.resources | length > 0 and
+        bao_pods.resources[0].status.phase == "Running"
+
+    - name: 12. This run's pod name, for every kubectl exec/cp below
+      ansible.builtin.set_fact:
+        bao_pod_name: "{{ bao_pods.resources[0].metadata.name }}"
+
+    # 🔴 A sealed vault answers the status endpoint and reports sealed=true - a Running pod is not
+    # a health check, same lesson platforms/proxmox/ansible/roles/bao's own comment states.
+    - name: 13. Seal status
+      kubernetes.core.k8s_exec:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        command: "bao status -format=json"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: bao_status_raw
+      retries: 12
+      delay: 5
+      until: bao_status_raw.rc == 0 or bao_status_raw.rc == 2
+      changed_when: false
+      failed_when: false
+
+    # ⚠️ `bao status` exits 2 when sealed - that is an expected, not a failure, exit code here.
+    - name: 14. Read it
+      ansible.builtin.set_fact:
+        bao_status: "{{ bao_status_raw.stdout | from_json }}"
+
+    # ── initialisation - once, ever. See roles/bao/tasks/main.yml for why the recovery-shares
+    # vs key-shares flags depend on the seal type (static here -> recovery shares, not unseal
+    # keys) and why the output must stay no_log throughout. ────────────────────────────────────
+    - name: 15. Does a persisted root-token Secret already exist
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: bao-dev-init
+        namespace: "{{ bao_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: existing_init_secret
+
+    - name: 16. Initialise, if it never has been
+      kubernetes.core.k8s_exec:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        command: "bao operator init -format=json -recovery-shares=1 -recovery-threshold=1"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: bao_init
+      no_log: true
+      when:
+        - not (bao_status.initialized | default(true))
+        - (existing_init_secret.resources | default([]) | length) == 0
+
+    # 🔵 1 share / 1 threshold, not production's 3/2 - these are RECOVERY shares under a static
+    # seal (they authorise recovery operations, they do not unseal anything), and nobody on a
+    # laptop needs break-glass quorum for a throwaway dev instance. Kept, never discarded: every
+    # later run of this playbook needs the root token again to manage the auth method/KV mount,
+    # the same way production's role re-reads its own persisted init-output.json on every run.
+    - name: 17. Persist the root token, only on the run that actually initialised
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: bao-dev-init
+            namespace: "{{ bao_namespace }}"
+          stringData:
+            init-output.json: "{{ bao_init.stdout }}"
+      no_log: true
+      when: bao_init is defined and bao_init.changed | default(false)
+
+    - name: 18. Read the persisted root token (every run needs it, not only the init run)
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: bao-dev-init
+        namespace: "{{ bao_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: init_secret
+      no_log: true
+
+    - name: 19. Parse it
+      ansible.builtin.set_fact:
+        bao_root_token: "{{ (init_secret.resources[0].data['init-output.json'] | b64decode | from_json).root_token }}"
+      no_log: true
+
+    - name: 20. Unseal, if sealed (static seal does this automatically, but prove it rather than assume it)
+      kubernetes.core.k8s_exec:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        command: "bao status -format=json"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: bao_final_seal_raw
+      retries: 12
+      delay: 5
+      until: (bao_final_seal_raw.stdout | default('') | from_json).sealed is defined and not ((bao_final_seal_raw.stdout | from_json).sealed)
+      changed_when: false
+      failed_when: false
+
+    - name: 21. It must actually be unsealed, or nothing below means anything
+      ansible.builtin.assert:
+        that:
+          - not ((bao_final_seal_raw.stdout | from_json).sealed)
+        fail_msg: >-
+          OpenBao is still sealed after waiting. A static seal should auto-unseal on its own -
+          a vault that stays sealed means the seal-key Secret/mount is wrong, not that this
+          playbook needs to run `bao operator unseal` itself.
+        quiet: true
+
+    # ── the kubernetes auth method, consumed by ESO (BAO-F3's bidirectional auth, simplified:
+    # OpenBao and the API server it validates against are the SAME cluster here, so there is no
+    # cross-cluster kubeconfig step at all - just the in-cluster API server address and the CA
+    # every pod already has mounted) ──────────────────────────────────────────────────────────
+    - name: 22. bao-auth-reviewer ServiceAccount
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata: { name: bao-auth-reviewer, namespace: "{{ eso_namespace }}" }
+
+    - name: 23. bao-auth-reviewer may call TokenReview (system:auth-delegator)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata: { name: bao-auth-reviewer }
+          roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:auth-delegator }
+          subjects:
+            - kind: ServiceAccount
+              name: bao-auth-reviewer
+              namespace: "{{ eso_namespace }}"
+
+    - name: 24. bao-auth-reviewer's long-lived token Secret
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: bao-auth-reviewer-token
+            namespace: "{{ eso_namespace }}"
+            annotations: { kubernetes.io/service-account.name: bao-auth-reviewer }
+          type: kubernetes.io/service-account-token
+
+    - name: 25. Wait for the token controller to populate it
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: bao-auth-reviewer-token
+        namespace: "{{ eso_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: reviewer_secret
+      retries: 12
+      delay: 5
+      until: (reviewer_secret.resources | length > 0) and ('token' in reviewer_secret.resources[0].data | default({}))
+      no_log: true
+
+    # 🔴 THE REVIEWER JWT OFF THE COMMAND LINE, same reason this session's fix to
+    # platforms/proxmox/ansible/playbooks/k3s-bao-ensure.yml (urb-agents#1947) exists at all: a
+    # secret inlined into a command's args forces no_log onto the whole task, which then hides
+    # the real error the one time something actually fails. Copied into the pod as a file instead.
+    - name: 26. Write the reviewer JWT to a local temp file
+      ansible.builtin.copy:
+        content: "{{ reviewer_secret.resources[0].data.token | b64decode }}"
+        dest: "/tmp/bao-reviewer-{{ bao_namespace }}.jwt"
+        mode: "0600"
+      no_log: true
+      delegate_to: localhost
+
+    - name: 27. Copy it into the OpenBao pod
+      kubernetes.core.k8s_cp:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        remote_path: "/tmp/reviewer.jwt"
+        local_path: "/tmp/bao-reviewer-{{ bao_namespace }}.jwt"
+        state: to_pod
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: 28. Enable the kubernetes auth method, if not already
+      kubernetes.core.k8s_exec:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        command: "sh -c \"BAO_TOKEN={{ bao_root_token }} bao auth list -format=json | grep -q '{{ bao_auth_mount }}/' || BAO_TOKEN={{ bao_root_token }} bao auth enable -path={{ bao_auth_mount }} kubernetes\""
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: auth_enable
+      changed_when: "'Success' in (auth_enable.stdout | default(''))"
+      no_log: true
+
+    # 🔵 written on EVERY run, not only when missing - same "config, not bootstrap" rule
+    # platforms/proxmox/ansible/playbooks/k3s-bao-ensure.yml's own copy of this task follows.
+    # kubernetes_host/kubernetes_ca_cert are the IN-CLUSTER API server and CA every pod already
+    # has mounted - simpler than production's cross-cluster kubeconfig read, because OpenBao
+    # itself runs inside the same cluster it is validating callers against.
+    - name: 29. Configure the kubernetes auth method with the in-cluster API server, CA and reviewer token
+      kubernetes.core.k8s_exec:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        command: >-
+          sh -c "BAO_TOKEN={{ bao_root_token }} bao write auth/{{ bao_auth_mount }}/config
+          kubernetes_host=https://kubernetes.default.svc:443
+          kubernetes_ca_cert=@/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          token_reviewer_jwt=@/tmp/reviewer.jwt"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: auth_mount_config
+      until: auth_mount_config.rc == 0
+      retries: 3
+      delay: 5
+      no_log: true
+
+    - name: 30. The eso-read policy
+      ansible.builtin.copy:
+        content: |
+          path "{{ bao_kv_mount }}/data/*" {
+            capabilities = ["read", "list"]
+          }
+          path "{{ bao_kv_mount }}/metadata/*" {
+            capabilities = ["read", "list"]
+          }
+        dest: "/tmp/{{ bao_eso_policy }}.hcl"
+        mode: "0600"
+      delegate_to: localhost
+
+    - name: 31. Copy the policy into the OpenBao pod
+      kubernetes.core.k8s_cp:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        remote_path: "/tmp/{{ bao_eso_policy }}.hcl"
+        local_path: "/tmp/{{ bao_eso_policy }}.hcl"
+        state: to_pod
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: 32. Write the eso-read policy
+      kubernetes.core.k8s_exec:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        command: "sh -c \"BAO_TOKEN={{ bao_root_token }} bao policy write {{ bao_eso_policy }} /tmp/{{ bao_eso_policy }}.hcl\""
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      no_log: true
+      changed_when: true
+
+    - name: 33. The eso role - binds ESO's own ServiceAccount to the read-only policy
+      kubernetes.core.k8s_exec:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        command: >-
+          sh -c "BAO_TOKEN={{ bao_root_token }} bao write auth/{{ bao_auth_mount }}/role/eso
+          bound_service_account_names=external-secrets
+          bound_service_account_namespaces={{ eso_namespace }}
+          policies={{ bao_eso_policy }}
+          ttl=1h"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      no_log: true
+      changed_when: true
+
+    # ── KV v2 mount, seeded from the one source of truth UIS already has for dev credentials
+    # (urbalurba-secrets) - see service-bao.sh's own header for why this, not a second seed file ──
+    - name: 34. Which secrets engines already exist
+      kubernetes.core.k8s_exec:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        command: "sh -c \"BAO_TOKEN={{ bao_root_token }} bao secrets list -format=json\""
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: bao_kv_existing
+      changed_when: false
+      no_log: true
+
+    - name: 35. Enable the platform KV v2 mount, if not already
+      kubernetes.core.k8s_exec:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        command: "sh -c \"BAO_TOKEN={{ bao_root_token }} bao secrets enable -path={{ bao_kv_mount }} -version=2 kv\""
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      when: "(bao_kv_mount ~ '/') not in (bao_kv_existing.stdout | from_json)"
+      no_log: true
+      changed_when: true
+
+    - name: 36. Does urbalurba-secrets exist, to seed from
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: "{{ bao_seed_secret_name }}"
+        namespace: "{{ bao_seed_secret_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: seed_secret
+
+    # 🔵 THE ENTIRE urbalurba-secrets Secret, as one KV v2 entry - not one path per key. Keeps one
+    # source of truth for dev credentials with no second seed file, at the cost of a coarser-
+    # grained path than production's real per-app layout likely uses. See service-bao.sh's header
+    # and the PR description for why this is the default rather than a guess at production's real
+    # path layout.
+    - name: 37. Decode and write the seed file as real JSON (base64 values decoded)
+      ansible.builtin.copy:
+        content: "{{ seed_dict | to_nice_json }}"
+        dest: "/tmp/bao-seed.json"
+        mode: "0600"
+      vars:
+        seed_dict: "{{ dict(seed_secret.resources[0].data.keys() | zip(seed_secret.resources[0].data.values() | map('b64decode'))) }}"
+      when: (seed_secret.resources | default([]) | length) > 0
+      no_log: true
+      delegate_to: localhost
+
+    - name: 38. Copy the seed file into the OpenBao pod
+      kubernetes.core.k8s_cp:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        remote_path: "/tmp/bao-seed.json"
+        local_path: "/tmp/bao-seed.json"
+        state: to_pod
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      when: (seed_secret.resources | default([]) | length) > 0
+
+    - name: "39. Write the dev seed - config, not bootstrap: every run, not only the first"
+      kubernetes.core.k8s_exec:
+        namespace: "{{ bao_namespace }}"
+        pod: "{{ bao_pod_name }}"
+        command: "sh -c \"BAO_TOKEN={{ bao_root_token }} bao kv put {{ bao_kv_mount }}/urbalurba-secrets @/tmp/bao-seed.json\""
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      when: (seed_secret.resources | default([]) | length) > 0
+      no_log: true
+      changed_when: true
+
+    # ── ClusterSecretStore - the interface a developer's ExternalSecret actually depends on ───
+    - name: "40. This run's Service name, for the store's server: field"
+      kubernetes.core.k8s_info:
+        kind: Service
+        namespace: "{{ bao_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/instance={{ bao_release }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: bao_services
+
+    - name: 41. Apply the openbao ClusterSecretStore
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          apiVersion: external-secrets.io/v1
+          kind: ClusterSecretStore
+          metadata:
+            name: openbao
+          spec:
+            provider:
+              vault:
+                server: "http://{{ bao_services.resources[0].metadata.name }}.{{ bao_namespace }}.svc:{{ bao_port }}"
+                path: "{{ bao_kv_mount }}"
+                version: v2
+                auth:
+                  kubernetes:
+                    mountPath: "{{ bao_auth_mount }}"
+                    role: eso
+                    serviceAccountRef:
+                      name: external-secrets
+                      namespace: "{{ eso_namespace }}"
+
+    # ── prove it, end to end - the same proof k3s-bao-ensure.yml's own closing play runs ──────
+    - name: 42. A real ExternalSecret, resolving one key from the seed
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          apiVersion: external-secrets.io/v1
+          kind: ExternalSecret
+          metadata:
+            name: bao-ensure-selftest
+            namespace: "{{ eso_namespace }}"
+          spec:
+            refreshInterval: 1h
+            secretStoreRef: { name: openbao, kind: ClusterSecretStore }
+            target: { name: bao-ensure-selftest }
+            dataFrom:
+              - extract: { key: "urbalurba-secrets" }
+      when: (seed_secret.resources | default([]) | length) > 0
+
+    - name: 43. It must actually materialise, or the store is wired to the wrong place
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: bao-ensure-selftest
+        namespace: "{{ eso_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: selftest_secret
+      retries: 12
+      delay: 5
+      until: (selftest_secret.resources | default([]) | length) > 0
+      when: (seed_secret.resources | default([]) | length) > 0
+
+    - name: 44. Tidy the local temp files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/bao-reviewer-{{ bao_namespace }}.jwt"
+        - "/tmp/{{ bao_eso_policy }}.hcl"
+        - "/tmp/bao-seed.json"
+      delegate_to: localhost
+
+    - name: 45. Display final deployment status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🔐 OpenBao Deployment Status"
+          - "==============================================="
+          - ""
+          - "✅ SUCCESS - OpenBao installed, unsealed, wired to External Secrets Operator"
+          - ""
+          - "ClusterSecretStore: openbao (kv v2 mount: {{ bao_kv_mount }})"
+          - "{{ 'Seeded from urbalurba-secrets, end-to-end resolution proved.' if (seed_secret.resources | default([]) | length) > 0 else 'urbalurba-secrets not found - nothing seeded, store exists but is empty.' }}"
+          - ""
+          - "This instance is DEV-ONLY: TLS and audit logging are deliberately off (see"
+          - "manifests/027-bao-config.yaml). The root token is kept in Secret/bao-dev-init in the"
+          - "{{ bao_namespace }} namespace - needed by this playbook on every future run, not"
+          - "meant for a human to read."
+          - ""
+          - "🔧 Troubleshooting:"
+          - "• Check the pod: kubectl get pods -n {{ bao_namespace }}"
+          - "• Check the store: kubectl get clustersecretstore openbao"
+          - "• Check the self-test: kubectl get secret bao-ensure-selftest -n {{ eso_namespace }}"
+          - "==============================================="
