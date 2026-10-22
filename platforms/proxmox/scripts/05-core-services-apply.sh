@@ -286,7 +286,13 @@ if [[ -n "$REGISTRY_IP" || -n "$FORGEJO_IP" ]]; then
         # this must never drift from what service-forgejo.yml actually configured.
         forgejo_port="$(grep -m1 '^forgejo_http_port:' roles/forgejo/defaults/main.yml | awk '{print $2}')"
         print_status "Forgejo's own registry: direct insecure trust via ${FORGEJO_IP}:${forgejo_port}..."
-        k3s_registry_ensure_args+=(-e "registry_direct_insecure=[{\"domain\": \"${FORGEJO_IP}:${forgejo_port}\", \"endpoint\": \"${FORGEJO_IP}:${forgejo_port}\"}]")
+        # 🔴 `-e key=[...]`/`-e key={...}` (key=value CLI form with inline JSON) is NOT parsed as a
+        # nested structure by this ansible-core version — confirmed live, urb-agents#1938: it comes
+        # through as a plain STRING, and `registry_direct_insecure | map(attribute='domain')` then
+        # iterates the string's own characters, raising "'str object' has no attribute 'domain'" on
+        # the first one. The whole `-e` argument has to BE one JSON object instead (`-e '{"key":
+        # ...}'`), which ansible always parses correctly regardless of key=value quirks.
+        k3s_registry_ensure_args+=(-e "{\"registry_direct_insecure\": [{\"domain\": \"${FORGEJO_IP}:${forgejo_port}\", \"endpoint\": \"${FORGEJO_IP}:${forgejo_port}\"}]}")
     fi
 
     ansible-playbook "${k3s_registry_ensure_args[@]}"
@@ -308,13 +314,18 @@ if [[ -n "$BAO_IP" ]]; then
     print_section "Wire ESO + a ClusterSecretStore to bao"
 
     print_status "Production (proxmox): the real vault-backed store, via ${BAO_IP}..."
+    # 🔴 `-e target_contexts=[...]` (key=value CLI form with inline JSON) is NOT parsed as a list by
+    # this ansible-core version — same bug class as registry_direct_insecure above (urb-agents#1938),
+    # found reading this file afterward rather than live: it comes through as a plain STRING, and
+    # `loop: "{{ target_contexts }}"` refuses outright ("The `loop` value must resolve to a 'list',
+    # not 'str'"). The whole `-e` argument has to BE one JSON object (`-e '{"key": [...]}'`).
     ansible-playbook -i "${BAO_IP}," -u root --private-key "$PROXMOX_SSH_KEY" \
         --ssh-common-args "-o StrictHostKeyChecking=accept-new" \
-        playbooks/k3s-bao-ensure.yml -e "bao_host=${BAO_IP}" -e 'target_contexts=["proxmox"]'
+        playbooks/k3s-bao-ensure.yml -e "bao_host=${BAO_IP}" -e '{"target_contexts": ["proxmox"]}'
     print_success "ClusterSecretStore 'openbao' is Ready on proxmox, proven end to end"
 
     print_status "Test (proxmox-test): the simple plain-Secret-backed store..."
-    ansible-playbook playbooks/k3s-bao-simple-ensure.yml -e 'target_contexts=["proxmox-test"]'
+    ansible-playbook playbooks/k3s-bao-simple-ensure.yml -e '{"target_contexts": ["proxmox-test"]}'
     print_success "ClusterSecretStore 'openbao' is Ready on proxmox-test (plain Secret, no vault)"
 fi
 

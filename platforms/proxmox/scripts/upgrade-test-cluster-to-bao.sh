@@ -57,19 +57,50 @@ fi
 
 cd "$ANSIBLE_DIR"
 ssh_h1() { ssh -i "$PROXMOX_SSH_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@${PROXMOX_HOST1_ADDR}" "$@"; }
+ssh_node() { local addr="$1"; shift; ssh -i "$PROXMOX_SSH_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@${addr}" "$@"; }
 
-print_status "Finding bao's guest IP..."
+# 🔴 Same node-locality bug as 05-core-services-apply.sh (urb-agents#1937): `pct exec` only ever
+# looks under the node it's run ON, and bao is HA-managed, so it may not be on host1 by the time
+# this script runs. `pvesh` IS cluster-aware (asked of host1, answered for the whole cluster).
+declare -A NODE_ADDR=(
+    ["$PROXMOX_HOST1_NAME"]="$PROXMOX_HOST1_ADDR"
+    ["$PROXMOX_HOST2_NAME"]="$PROXMOX_HOST2_ADDR"
+    ["$PROXMOX_HOST3_NAME"]="$PROXMOX_HOST3_ADDR"
+)
+guest_node() {
+    local vmid="$1" node
+    node="$(ssh_h1 "pvesh get /cluster/resources --type vm --output-format json" \
+        | jq -r --arg vmid "$vmid" '.[] | select((.vmid|tostring)==$vmid) | .node')"
+    if [[ -z "$node" ]]; then
+        print_error "VMID ${vmid} is not reported anywhere in the cluster (pvesh /cluster/resources) — is it actually running?"
+        exit 1
+    fi
+    if [[ -z "${NODE_ADDR[$node]:-}" ]]; then
+        print_error "VMID ${vmid} is on node '${node}', which is none of PROXMOX_HOST{1,2,3}_NAME in config.sh."
+        exit 1
+    fi
+    echo "$node"
+}
+
+print_status "Finding which node bao's guest actually lives on..."
 BAO_VMID="$(grep -m1 '^  vmid:' "$ANSIBLE_DIR/generated/vars/core-services/bao.yml" | awk '{print $2}')"
-BAO_IP="$(ssh_h1 "pct exec ${BAO_VMID} -- hostname -I" | awk '{print $1}')"
+BAO_NODE_NAME="$(guest_node "$BAO_VMID")"
+BAO_NODE_ADDR="${NODE_ADDR[$BAO_NODE_NAME]}"
+
+print_status "Finding bao's guest IP (via ${BAO_NODE_NAME})..."
+BAO_IP="$(ssh_node "$BAO_NODE_ADDR" "pct exec ${BAO_VMID} -- hostname -I" | awk '{print $1}')"
 if [[ -z "$BAO_IP" ]]; then
-    print_error "Could not get an IP for bao (VMID ${BAO_VMID}) — is it actually running?"
+    print_error "Could not get an IP for bao (VMID ${BAO_VMID}) on ${BAO_NODE_NAME} — is it actually running?"
     exit 1
 fi
 
 print_status "Wiring proxmox-test to the real bao instance via ${BAO_IP}..."
+# 🔴 `-e target_contexts=[...]` (key=value CLI form with inline JSON) is NOT parsed as a list by
+# this ansible-core version (urb-agents#1938) — it comes through as a plain STRING, and `loop:
+# "{{ target_contexts }}"` refuses outright. The whole `-e` argument has to BE one JSON object.
 ansible-playbook -i "${BAO_IP}," -u root --private-key "$PROXMOX_SSH_KEY" \
     --ssh-common-args "-o StrictHostKeyChecking=accept-new" \
-    playbooks/k3s-bao-ensure.yml -e "bao_host=${BAO_IP}" -e 'target_contexts=["proxmox-test"]'
+    playbooks/k3s-bao-ensure.yml -e "bao_host=${BAO_IP}" -e '{"target_contexts": ["proxmox-test"]}'
 
 print_success "proxmox-test now uses the real vault-backed 'openbao' store, proven end to end."
 echo "  Existing ExternalSecrets on that cluster keep working untouched — only the backend changed."
