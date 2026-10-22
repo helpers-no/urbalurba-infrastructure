@@ -1,0 +1,197 @@
+---
+# nas — Samba file server. Opt-in lab extra, NOT a CORE_SERVICES default — see
+# platforms/proxmox/README.md's "Lab extras" section and urb-agents#1970/#1978 for why.
+#
+# 🔴 THE ONE REAL STRUCTURAL CHANGE FROM THE REFERENCE ROLE: each declared share's path is a
+# Proxmox-managed LXC storage volume (mp0/mp1/... — see generated/vars/lab-extras/nas.yml),
+# deliberately NOT a host bind mount. `pvesr` cannot replicate a bind mount ("unable to replicate
+# mountpoint type 'bind'"), so a bind-mounted share's data would not follow this guest on HA
+# failover; as a real Proxmox storage volume, the service and its data move together. Mechanically
+# this changes nothing below — guest-ensure.yml already creates each mountpoint (and it already IS
+# a real mountpoint, by Proxmox's own LXC mechanism) before this role ever runs, so every "is this
+# path actually mounted" check here still does exactly what it did in the reference role.
+
+- name: The site must say who the users are and what the shares are
+  ansible.builtin.assert:
+    that:
+      - nas_shares | length > 0
+      - nas_users | length > 0
+    fail_msg: >-
+      nas_shares and nas_users are empty. This role deliberately ships no accounts and no shares —
+      they are site data, not role data (see roles/nas/defaults/main.yml). Supply them via
+      .uis.secrets/platforms/proxmox/lab-extras/nas-site-data.yml — see
+      platforms/proxmox/lab-extras-site-data/nas-site-data.yml-template. ⚠️ A default here would
+      produce a file server that runs happily and serves nothing.
+    quiet: true
+
+- name: Samba
+  ansible.builtin.apt:
+    name: [samba, smbclient, acl]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Groups
+  ansible.builtin.group:
+    name: "{{ item.name }}"
+    gid: "{{ item.gid }}"
+    state: present
+  loop: "{{ nas_groups }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Accounts
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    uid: "{{ item.uid }}"
+    group: "{{ item.group | default(omit) }}"
+    comment: "{{ item.comment | default('') }}"
+    shell: /usr/sbin/nologin
+    create_home: false
+    state: present
+  loop: "{{ nas_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# ── share directories ───────────────────────────────────────────────────────────────────────
+# Each path is already a real Proxmox-managed mountpoint by this point (guest-ensure.yml's job,
+# before this role ever runs) — this only sets ownership on each one's root, it never creates the
+# underlying storage.
+- name: Share directories have the right ownership
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ (item.valid_users | default('root')).split()[0] }}"
+    group: "{{ item.force_group | default((item.valid_users | default('root')).split()[0]) }}"
+    mode: "{{ item.directory_mask }}"
+  loop: "{{ nas_shares }}"
+  loop_control:
+    label: "{{ item.name }} -> {{ item.path }}"
+
+- name: Configuration
+  ansible.builtin.template:
+    src: smb.conf.j2
+    dest: /etc/samba/smb.conf
+    owner: root
+    group: root
+    mode: "0644"
+    # 🔵 Samba's own parser is the validator. A bad smb.conf makes smbd refuse to start, and a
+    # file server that is down looks exactly like a network problem from every client.
+    validate: "testparm -s %s"
+  notify: Restart samba
+
+- name: Running
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: [smbd, nmbd]
+
+# ── firewall ─────────────────────────────────────────────────────────────────────────────────
+- name: Resolve the allow-list to live addresses
+  ansible.builtin.set_fact:
+    nas_firewall_allow_addrs: "{{ nas_firewall_allow_hosts | map('extract', hostvars, 'ansible_host') | select('defined') | list }}"
+
+- name: Allow-list for smbd/nmbd
+  ansible.builtin.template:
+    src: nas-nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Reload nftables
+
+- name: nftables enabled and running
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: Apply pending restarts before verifying anything
+  ansible.builtin.meta: flush_handlers
+
+- name: nftables is actually enforcing, not just running
+  ansible.builtin.command: nft list ruleset
+  register: nas_nft_ruleset
+  changed_when: false
+  check_mode: false
+
+- name: The share ports must not be open to anything off the allow-list
+  ansible.builtin.assert:
+    that:
+      - "'policy drop' in nas_nft_ruleset.stdout"
+      - nas_firewall_allow_addrs | length == 0 or nas_firewall_allow_addrs[0] in nas_nft_ruleset.stdout
+      - nas_firewall_allow_ranges | length == 0 or nas_firewall_allow_ranges[0].split('-')[0].split('/')[0] in nas_nft_ruleset.stdout
+    fail_msg: >-
+      nftables is active but the loaded ruleset does not match what was rendered — a running
+      service with a config nobody applied is the same as no firewall.
+    quiet: true
+
+# ── verify ──────────────────────────────────────────────────────────────────────────────────
+- name: What samba thinks it is serving
+  ansible.builtin.command: smbclient -L localhost -N
+  register: nas_shares_listed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Every declared share must be advertised
+  ansible.builtin.assert:
+    that:
+      - item.name in (nas_shares_listed.stdout | default(''))
+    fail_msg: >-
+      Share '{{ item.name }}' is declared but samba is not advertising it.
+      smbclient said: {{ nas_shares_listed.stdout | default('nothing') | trim }}
+    quiet: true
+  loop: "{{ nas_shares }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# 🔴 THE CHECK THAT MATTERS, and the one a port probe cannot make. smbd answering on 445 proves
+# the daemon is up. It does NOT prove a share has its data: if guest-ensure.yml's own mountpoint
+# creation ever silently failed (or a share's declared path doesn't match any configured
+# LAB_EXTRA_NAS_SHARE_MOUNTS pair), samba serves whatever empty directory is left behind without
+# complaint. So ask whether each share path is a MOUNTPOINT, not whether it exists.
+- name: Is each share path actually a mountpoint, or an empty directory pretending to be one
+  ansible.builtin.command: "mountpoint -q {{ item.path }}"
+  register: nas_mounts
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  loop: "{{ nas_shares }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Report which share paths carry no mounted storage
+  ansible.builtin.debug:
+    msg: >-
+      ⚠️ Not a mountpoint: {{ nas_mounts.results | selectattr('rc','ne',0) | map(attribute='item.path') | list | join(', ') }}
+      — samba will serve these as EMPTY shares and report no error. Check that every path here has
+      a matching "path:size_gb" pair in config.sh's LAB_EXTRA_NAS_SHARE_MOUNTS.
+  when: nas_mounts.results | selectattr('rc','ne',0) | list | length > 0
+
+# ── accounts without a samba password cannot log in ─────────────────────────────────────────
+- name: Which accounts samba actually knows about
+  ansible.builtin.command: pdbedit -L
+  register: nas_pdb
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Say plainly which users cannot log in yet
+  ansible.builtin.debug:
+    msg: >-
+      🔴 NO SAMBA PASSWORD SET for: {{ nas_users | map(attribute='name') | reject('in', nas_pdb.stdout) | list | join(', ') }}.
+      These accounts exist in Unix but not in samba, so every login as them will fail with a
+      permission error that reads like a share problem. Set one with `smbpasswd -a <user>`.
+      ⚠️ The role will not invent a password: it would have to live in a declaration, and a
+      declaration lives in git.
+  when: nas_users | map(attribute='name') | reject('in', nas_pdb.stdout) | list | length > 0
+
+- name: Result
+  ansible.builtin.debug:
+    msg: >-
+      samba {{ ansible_facts.packages['samba'][0].version | default('?') }} ·
+      {{ nas_shares | length }} shares advertised ·
+      {{ nas_mounts.results | selectattr('rc','eq',0) | list | length }}/{{ nas_shares | length }} paths are real mountpoints ·
+      accounts known to samba: {{ nas_pdb.stdout_lines | length }}

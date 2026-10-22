@@ -169,7 +169,7 @@ mkdir -p "$GENERATED_DIR/vars/lab-extras"
 write_guest_decl() {
   local outdir="$1" name="$2" vmid="$3" cores="$4" mem="$5" swap="$6" startup="$7" \
         features="$8" rootfs_gb="$9" mount_mp="${10}" mount_gb="${11}" recordsize="${12}" role="${13}" \
-        ip="${14}"
+        ip="${14}" extra_mounts="${15:-}"
   local file="$GENERATED_DIR/vars/${outdir}/${name}.yml"
   cat > "$file" <<EOF
 # GENERATED from config.sh by generate-ansible-config.sh — do not hand-edit.
@@ -201,6 +201,30 @@ EOF
       mountpoint: ${mount_mp}
 EOF
     [[ -n "$recordsize" ]] && echo "      zfs_recordsize: ${recordsize}" >> "$file"
+  fi
+  # 🔵 ADDITIONAL mounts beyond mp0 — "path:size_gb" pairs, comma-separated. Added for nas
+  # (urb-agents#1970/#1978), the first guest here with more than one real Proxmox-managed storage
+  # volume (deliberately NOT a host bind mount — `pvesr`: "unable to replicate mountpoint type
+  # 'bind'", so a bind mount's data would not follow this guest on HA failover; see
+  # roles/nas/tasks/main.yml's own header). Every existing caller passes this empty, so mp0's own
+  # params above are untouched — this only adds mp1, mp2, ... when a guest declares more than one.
+  if [[ -n "$extra_mounts" ]]; then
+    local _mp_idx=1 _pair _mpath _msize
+    IFS=',' read -ra _extra_mount_pairs <<< "$extra_mounts"
+    for _pair in "${_extra_mount_pairs[@]}"; do
+      _mpath="${_pair%%:*}"
+      _msize="${_pair#*:}"
+      if [[ "$_mp_idx" -eq 1 && -z "$mount_mp" ]]; then
+        echo "  mounts:" >> "$file"
+      fi
+      cat >> "$file" <<EOF
+    - id: mp${_mp_idx}
+      storage: ${PROXMOX_STORAGE}
+      size_gb: ${_msize}
+      mountpoint: ${_mpath}
+EOF
+      _mp_idx=$((_mp_idx + 1))
+    done
   fi
   cat >> "$file" <<EOF
   nets:
@@ -260,6 +284,20 @@ done
 # 🔴 KEEP THIS LIST IN STEP WITH scripts/08-lab-extra-add.sh's OWN `case "$NAME" in` ARM — same
 # "two places must agree" shape 07-core-service-add.sh's header already names for CORE_SERVICES.
 LAB_EXTRA_DNS_RESOLVER_VMID="${LAB_EXTRA_DNS_RESOLVER_VMID:-400}"
+LAB_EXTRA_NAS_VMID="${LAB_EXTRA_NAS_VMID:-404}"
+# 🔵 "path:size_gb" pairs, comma-separated — one Proxmox-managed storage volume per declared
+# share (deliberately NOT a host bind mount, same reasoning as roles/nas/tasks/main.yml's own
+# header: a bind mount cannot be replicated by Proxmox, so its data would not follow this guest on
+# HA failover). The FIRST pair becomes mp0, any further ones mp1/mp2/... via write_guest_decl's
+# own extra_mounts param. Each path here must match one `nas_shares[].path` in the lab owner's own
+# site-data file (see README.md's "Lab extras" section) — this script only provisions the storage,
+# it has no view into what Samba will call it or who may read it.
+# 🔴 ONE SHARE BY DEFAULT, not the reference lab's two. The reference's second share is
+# deliberately guest-writable with NO AUTHENTICATION at all — a real, informed, site-specific
+# trust decision (Terje, 2026-10-01: "the LAN is trusted"), not something a generic UIS default
+# should hand a fresh lab owner. Add a second path:size_gb pair here (and a matching nas_shares
+# entry in the site-data file) if you want one.
+LAB_EXTRA_NAS_SHARE_MOUNTS="${LAB_EXTRA_NAS_SHARE_MOUNTS:-/srv/shared:50}"
 
 for extra in $LAB_EXTRAS; do
   case "$extra" in
@@ -267,6 +305,17 @@ for extra in $LAB_EXTRAS; do
     # dnsmasq process and a generated zone file, no database, nothing here that outlives a
     # rebuild — same reasoning as the reference lab's own declaration.
     dns-resolver) write_guest_decl lab-extras dns-resolver "$LAB_EXTRA_DNS_RESOLVER_VMID" 1 512 256 "order=0" "" 4 "" "" "" dns-resolver "$LAB_EXTRA_DNS_RESOLVER_IP" ;;
+    # order=3 — matches the reference lab's own declaration; no startup dependency on anything
+    # else here (unlike dns-resolver's order=0, nothing else needs nas up before it can start).
+    nas)
+      _nas_first_mount="${LAB_EXTRA_NAS_SHARE_MOUNTS%%,*}"
+      _nas_first_path="${_nas_first_mount%%:*}"
+      _nas_first_size="${_nas_first_mount#*:}"
+      _nas_rest_mounts=""
+      [[ "$LAB_EXTRA_NAS_SHARE_MOUNTS" == *,* ]] && _nas_rest_mounts="${LAB_EXTRA_NAS_SHARE_MOUNTS#*,}"
+      write_guest_decl lab-extras nas "$LAB_EXTRA_NAS_VMID" 2 1024 512 "order=3" "" 8 \
+        "$_nas_first_path" "$_nas_first_size" "" nas "$LAB_EXTRA_NAS_IP" "$_nas_rest_mounts"
+      ;;
     *) echo "⚠️  Unknown lab extra '$extra' in LAB_EXTRAS — skipped" >&2 ;;
   esac
 done
@@ -381,19 +430,24 @@ if [[ -f "$EXTRA_VARS_FILE" ]]; then
 fi
 mv "${EXTRA_VARS_FILE}.new" "$EXTRA_VARS_FILE"
 
-# ── lab-extras' own extra-vars — only dns-resolver needs one today ─────────────────────────────
+# ── lab-extras' own extra-vars — ONE shared file, each selected extra APPENDS its own section ──
+# 🔴 APPEND, NOT EACH-OVERWRITES — this file holds every selected lab extra's vars together (same
+# shape as CORE_SERVICES' own shared _extra-vars.yml), not one-file-per-extra. An earlier version
+# of this had dns-resolver and nas each truncate the same file with `>`, which would silently drop
+# whichever one generated first the moment both were ever selected together.
 # 🔵 ZONE_ENTRIES is complete by this point regardless of ordering: every write_vm_decl/
-# write_guest_decl call above (6 k3s VMs, every configured CORE_SERVICES guest, dns-resolver's
-# own self-entry if it's in LAB_EXTRAS) already appended to it as a side effect.
+# write_guest_decl call above (6 k3s VMs, every configured CORE_SERVICES guest, every lab-extra's
+# own self-entry) already appended to it as a side effect.
 LAB_EXTRAS_VARS_FILE="$GENERATED_DIR/vars/lab-extras/_extra-vars.yml"
 _lab_extras_has() {
     local want="$1" _e
     for _e in $LAB_EXTRAS; do [[ "$_e" == "$want" ]] && return 0; done
     return 1
 }
+echo "# GENERATED by generate-ansible-config.sh — do not hand-edit." > "$LAB_EXTRAS_VARS_FILE"
+
 if _lab_extras_has dns-resolver; then
   {
-    echo "# GENERATED by generate-ansible-config.sh — do not hand-edit."
     echo "dns_resolver_zone_entries:"
     for _entry in "${ZONE_ENTRIES[@]}"; do
       _ename="${_entry%%:*}"
@@ -415,7 +469,26 @@ if _lab_extras_has dns-resolver; then
       echo "dns_resolver_firewall_allow_ranges:"
       _firewall_ranges_yaml "$_dns_fw_ranges"
     fi
-  } > "$LAB_EXTRAS_VARS_FILE"
+  } >> "$LAB_EXTRAS_VARS_FILE"
+fi
+
+if _lab_extras_has nas; then
+  {
+    # 🔴 nas_shares/nas_users/nas_groups are DELIBERATELY NOT HERE — same "site data, not role
+    # data" discipline the role itself enforces (see roles/nas/defaults/main.yml): this script
+    # only knows Proxmox-level facts (VMID, IP, mount sizes), never who a lab owner's own human/
+    # agent accounts are or what to name their shares. Supplied separately — see README.md's
+    # "Lab extras" section and 09-lab-extras-apply.sh's own site-data pass-through.
+    if [[ -n "${LAB_EXTRA_NAS_FIREWALL_ALLOW_RANGES+x}" ]]; then
+      _nas_fw_ranges="$LAB_EXTRA_NAS_FIREWALL_ALLOW_RANGES"
+    else
+      _nas_fw_ranges="$CORE_SERVICES_LAN_CIDR"
+    fi
+    if [[ -n "$_nas_fw_ranges" ]]; then
+      echo "nas_firewall_allow_ranges:"
+      _firewall_ranges_yaml "$_nas_fw_ranges"
+    fi
+  } >> "$LAB_EXTRAS_VARS_FILE"
 fi
 
 echo "✓ Generated ansible/generated/inventory.yml, 6 VM declarations under ansible/generated/vars/vms/,"

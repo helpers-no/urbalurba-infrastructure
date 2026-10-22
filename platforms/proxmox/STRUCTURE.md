@@ -20,6 +20,16 @@ platforms/proxmox/
 │                                    with the code deliberately, not split into a separate docs tree)
 ├── STRUCTURE.md                 ✅  this file
 │
+├── lab-extras-site-data/        ✅  `-template` files for a lab extra's own bespoke, structured
+│   │                                 site data (named accounts, named shares) that config.sh's
+│   │                                 flat-scalar style was never meant to carry — see nas below.
+│   └── nas-site-data.yml-template ✅ copy to .uis.secrets/platforms/proxmox/lab-extras/
+│                                    nas-site-data.yml (git-ignored, persistent, never regenerated
+│                                    — same shape config.sh itself already is). Passed to
+│                                    service-nas.yml automatically by 09-lab-extras-apply.sh if
+│                                    present; the role refuses to proceed with a clear message if
+│                                    it's missing or empty.
+│
 ├── scripts/
 │   ├── 00-storage-ensure.sh     ✅  Phase 2: per-host SSH key install (one password, once) +
 │   │                                 ZFS pool creation (typed "YES" to confirm the disk)
@@ -185,6 +195,9 @@ platforms/proxmox/
     ├── service-dns-resolver.yml ✅ L3 for the opt-in dns-resolver lab extra (see README.md's
     │                            "Lab extras" section) — thin, `roles: [dns-resolver]`, same
     │                            shape as every other service-<name>.yml.
+    ├── service-nas.yml       ✅  L3 for the opt-in nas lab extra (see README.md's
+    │                            "Lab extras" section) — thin, `roles: [nas]`, same shape
+    │                            as every other service-<name>.yml.
     ├── roles/
     │   ├── k3s/                  ✅  existing
     │   ├── postgres/             ✅  ported from the maintainer's private lab. Two real bugs
@@ -205,13 +218,22 @@ platforms/proxmox/
     │   │                            registry's already-correct check → load-from-seed → pull →
     │   │                            save-last order.
     │   ├── registry/            ✅
-    │   └── dns-resolver/         ✅  opt-in lab extra, NOT one of the CORE_SERVICES roles
+    │   ├── dns-resolver/         ✅  opt-in lab extra, NOT one of the CORE_SERVICES roles
     │                            above — ported from the maintainer's private lab, judged not
     │                            blind-copied: generates its zone from this platform's own
     │                            generated vars (not Jinja-filtered inventory groups, which
     │                            this platform's generated inventory.yml never populates with
     │                            CORE_SERVICES/lab-extras guests at all) — see the role's own
     │                            defaults/main.yml for the full reasoning.
+    │   └── nas/                  ✅  opt-in lab extra, back after the 2026-10-05 removal (see
+    │                            this file's own "nas's history" note below) — judged not
+    │                            blind-copied: shares are Proxmox-managed storage volumes
+    │                            (mp0/mp1/...), not host bind mounts (pvesr cannot replicate
+    │                            a bind mount, so its data would not follow this guest on HA
+    │                            failover). nas_shares/nas_users stay site data the role
+    │                            refuses to run without, supplied via
+    │                            lab-extras-site-data/nas-site-data.yml-template, not this
+    │                            script — see the role's own defaults/main.yml.
     └── generated/                 ✅  gitignored — inventory.yml, vars/vms/*.yml, and
                                         vars/core-services/*.yml (one guest/service declaration
                                         per configured service, plus a gitignored _extra-vars.yml
@@ -222,23 +244,27 @@ platforms/proxmox/
                                         level down — empty unless LAB_EXTRAS is non-empty.
 ```
 
-## nas — deliberately not part of this platform (2026-10-05)
+## nas's history in this platform (2026-10-05 removed, 2026-10-2X returned as opt-in)
 
 A `nas` role (Samba) existed here briefly, generalized from the maintainer's private lab. Removed
-at Terje's instruction: it's something he needs for his own lab work, not something worth
-maintaining as generic IaC for other lab owners — there's also nothing in UIS itself to single-
-source its config from or connect it to (confirmed when investigating bao/garage/registry's own
-UIS counterparts the same week — nas has no UIS equivalent at all, unlike the other four). The
-real guest this platform once built for it is untouched and still runs; it's simply no longer
-something `CORE_SERVICES`/this code declares or manages.
+on 2026-10-05 at Terje's instruction: it's something he needs for his own lab work, not something
+worth maintaining as generic IaC for other lab owners — there's also nothing in UIS itself to
+single-source its config from or connect it to (confirmed when investigating bao/garage/registry's
+own UIS counterparts the same week — nas has no UIS equivalent at all, unlike the other four). The
+real guest this platform once built for it was untouched and kept running; it was simply no longer
+something `CORE_SERVICES`/this code declared or managed.
 
-⚠️ **`dns-resolver` (see `roles/dns-resolver/` above and README.md's "Lab extras" section) is the
-same kind of lab-specific guest by this exact test** — generalized from the same private lab,
-no UIS equivalent either. The difference: Terje's own explicit call (urb-agents#1970/#1971/#1972),
-made with full knowledge of this nas precedent, was to build dns-resolver in anyway, as an opt-in
-`LAB_EXTRAS` guest rather than leave it outside provision-host entirely. Read both notes together
-before deciding a future lab-specific guest's fate — it isn't a fixed rule either way, it's a
-judgment call Terje makes per guest.
+`dns-resolver` (see `roles/dns-resolver/` above) hit the exact same test shortly after — generalized
+from the same private lab, no UIS equivalent either — and Terje's explicit call there
+(urb-agents#1970/#1971/#1972), made with full knowledge of this nas precedent, was to build it in
+anyway as the first opt-in `LAB_EXTRAS` guest, once that mechanism existed to put it in.
+
+**`nas` itself then got the same call** (urb-agents#1978), once `LAB_EXTRAS` was live and proven
+against real production: back in `roles/nas/` above, as the second opt-in guest, same mechanism —
+not reopening the original 2026-10-05 removal, Terje choosing the same opt-in answer for it that he
+chose for dns-resolver, now that there's a real place to put it. See README.md's "Lab extras"
+section for both guests' own current documentation; read this note for why a future lab-specific
+guest's fate isn't a fixed rule either way, it's a judgment call Terje makes per guest.
 
 ## Why numbering starts at 00
 

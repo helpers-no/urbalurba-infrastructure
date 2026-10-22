@@ -1,0 +1,42 @@
+#!/usr/sbin/nft -f
+# MANAGED BY ANSIBLE — roles/nas/templates/nas-nftables.conf.j2. Local edits are lost on the next
+# run.
+#
+# Restricts smbd (445/tcp) and nmbd (137-139) to the declared allow-list
+# (roles/nas/defaults/main.yml's nas_firewall_allow_hosts, resolved to live addresses, plus
+# nas_firewall_allow_ranges' raw address ranges). Everything else on this guest — management ssh,
+# outbound traffic — is unaffected.
+#
+# 🔵 UNLIKE bao/garage/forgejo, the allow-list here is normally the WHOLE LAN, not a narrow admin
+# band — nas serves humans/agents directly, not just other guests. Same deliberate exception as
+# roles/dns-resolver's own template; see config.sh-template's comment for why.
+flush ruleset
+
+table inet filter {
+	chain input {
+		type filter hook input priority 0; policy drop;
+
+		iif lo accept
+		ct state established,related accept
+		ip protocol icmp accept
+		ip6 nexthdr icmpv6 accept
+		tcp dport 22 accept
+
+{% for addr in nas_firewall_allow_addrs %}
+		ip saddr {{ addr }} tcp dport { 139, 445 } accept
+		ip saddr {{ addr }} udp dport { 137, 138 } accept
+{% endfor %}
+{% for range in nas_firewall_allow_ranges %}
+		ip saddr {{ range }} tcp dport { 139, 445 } accept
+		ip saddr {{ range }} udp dport { 137, 138 } accept
+{% endfor %}
+	}
+
+	chain forward {
+		type filter hook forward priority 0; policy drop;
+	}
+
+	chain output {
+		type filter hook output priority 0; policy accept;
+	}
+}

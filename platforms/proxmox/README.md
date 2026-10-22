@@ -142,13 +142,13 @@ it with `uis platform lab-extra add proxmox <name>` (same add-one-at-a-time mech
 
 Why this is a separate thing at all, rather than a 7th `CORE_SERVICES` entry: a `nas` role (Samba)
 once lived in this platform the same way pg/bao/garage/registry do, generalized from the
-maintainer's own private lab — and was removed outright (see `STRUCTURE.md`'s own "nas —
-deliberately not part of this platform" note) because it wasn't judged worth maintaining as
-generic IaC for every lab owner. `dns-resolver` (below) is the same kind of lab-specific guest by
-that same test — the difference is Terje's own explicit call to build THIS one in anyway, as a
-guest a lab owner can opt into, rather than leave entirely outside provision-host the way `nas`
-was. The opt-in-ness needs to be visible, not just technically true, which is why it isn't just
-another `CORE_SERVICES` case arm.
+maintainer's own private lab — and was removed outright on 2026-10-05 (see `STRUCTURE.md`'s own
+"nas — deliberately not part of this platform" note) because it wasn't judged worth maintaining as
+generic IaC for every lab owner. Both guests below are the same kind of lab-specific guest by that
+same test — the difference is Terje's own explicit call to build them in anyway (dns-resolver
+first, `nas` once that mechanism existed and proved out), as guests a lab owner can opt into,
+rather than leave entirely outside provision-host. The opt-in-ness needs to be visible, not just
+technically true, which is why neither is just another `CORE_SERVICES` case arm.
 
 ### dns-resolver
 
@@ -180,6 +180,43 @@ at 410, but this template's own `CORE_SERVICE_FORGEJO_VMID` already defaults to 
 urb-agents#1940's override note in `config.sh-template`) — defaulting both to the same number would
 collide for a fresh lab owner who enables both. Override `LAB_EXTRA_DNS_RESOLVER_VMID` if you're
 adopting a real dns-resolver guest already at a different VMID (410 is the common case for that).
+
+### nas
+
+A Samba file server. Shares are **Proxmox-managed storage volumes** (`mp0`/`mp1`/...), deliberately
+NOT host bind mounts: `pvesr` cannot replicate a bind mount ("unable to replicate mountpoint type
+'bind'"), so a bind-mounted share's data would not follow this guest on HA failover — as a real
+Proxmox volume, the service and its data move together. This is the one real structural change from
+the reference role; everything else about it (package install, firewall, verification) ported as-is.
+
+```
+./uis platform lab-extra add proxmox nas
+```
+
+**Who your people are and what you call your shares is deliberately NOT in `config.sh`.** The role
+ships no accounts and no shares — same discipline that got the original `nas` role removed from
+this platform once already (a role that ships *this* lab's human/agent identities and share names
+is wrong everywhere except where it was written, same mistake as hardcoding an IP in a role
+default). Supply your own via
+`platforms/proxmox/lab-extras-site-data/nas-site-data.yml-template`, copied to
+`.uis.secrets/platforms/proxmox/lab-extras/nas-site-data.yml` (git-ignored, persistent, never
+regenerated — same shape `config.sh` itself already is) — `09-lab-extras-apply.sh` passes it to
+the role automatically if present, and the role refuses to proceed with a clear message if it's
+missing or empty.
+
+**Samba passwords are never in any file here, ever** — set one per account after the guest is up:
+`ssh <nas guest IP> smbpasswd -a <user>`. A password in a declaration is a password in git, gitignored
+or not.
+
+**`LAB_EXTRA_NAS_SHARE_MOUNTS`** is `"path:size_gb"` pairs, comma-separated — one Proxmox volume
+per declared share. The default is a single `/srv/shared:50`; the reference lab's own second share
+is deliberately guest-writable with **no authentication at all** (Terje, 2026-10-01: "the LAN is
+trusted") and is not something a generic default should hand a fresh lab owner — add a second pair
+here, and a matching `nas_shares` entry in your site-data file, if you want one.
+
+**VMID default is 404**, matching the reference lab's own real nas guest — unlike dns-resolver's
+400-not-410, nothing else in this template already claims 404, so there's no collision to design
+around here.
 
 ## What's deferred (first draft — see the PR description)
 

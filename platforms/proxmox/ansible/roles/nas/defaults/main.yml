@@ -1,0 +1,65 @@
+---
+# nas — defaults. Ported from the maintainer's own private lab (urb-agents#1970/#1978 — same
+# "generic IaC vs lab-specific" test the `nas` role failed once already, this time Terje's
+# explicit call, having seen the `LAB_EXTRAS` mechanism dns-resolver proved out). Judged, not
+# blind-copied — see this role's own tasks/main.yml header for the one real structural change
+# (Proxmox-managed storage volumes instead of host bind mounts).
+
+# ── identity ────────────────────────────────────────────────────────────────────────────────
+nas_server_string: "UIS lab NAS"
+nas_workgroup: WORKGROUP
+# 🔵 SMB2 as the floor. SMB1 is the protocol behind a decade of worms and is off by default in
+# every modern client anyway; naming the minimum means a future package default cannot quietly
+# lower it.
+nas_min_protocol: SMB2
+
+# ── macOS compatibility ─────────────────────────────────────────────────────────────────────
+# 🔵 The `fruit` VFS is what makes Finder behave: resource forks, the right icons, no stray
+# ._ files. Harmless for a Linux-only client, so kept as the default rather than made conditional
+# — `streams_xattr` must follow `fruit` in the list, the order is load-bearing, not stylistic.
+nas_vfs_objects: "fruit streams_xattr"
+nas_fruit_options:
+  "fruit:nfs_aces": "no"
+  "fruit:model": "MacSamba"
+  "fruit:metadata": "stream"
+
+# ── accounts and shares — SUPPLIED BY THE SITE, NOT BY THIS ROLE ────────────────────────────
+#
+# 🔴 EMPTY ON PURPOSE. Who your people/agents are and what you call your shares are THIS lab's
+# facts, not properties of "a samba file server" — a role that ships them is wrong everywhere
+# except where it was written, the same mistake as hardcoding an IP address in a role default.
+# This is exactly why the `nas` role was removed from this platform once already (STRUCTURE.md's
+# "nas — deliberately not part of this platform" note) — this UIS port keeps that same discipline
+# rather than re-introducing the mistake while bringing the role back in as opt-in.
+#
+# 🔵 Supplied via platforms/proxmox/lab-extras-site-data/nas-site-data.yml-template, copied to
+# .uis.secrets/platforms/proxmox/lab-extras/nas-site-data.yml and passed in by
+# 09-lab-extras-apply.sh — see that template file and README.md's "Lab extras" section. The role
+# asserts these exist rather than inventing something: a file server with no shares is a
+# misconfiguration, and a silent default would produce a server that runs and serves nothing.
+#
+# Shape:
+#   nas_groups: [{ name, gid }]
+#   nas_users:  [{ name, uid, group, comment }]
+#   nas_shares: [{ name, comment, path, valid_users|guest_ok, create_mask, directory_mask,
+#                  force_group?, force_create_mode?, force_directory_mode? }]
+#
+# ⚠️ Two things worth repeating wherever these get written:
+#   - **GIDs/UIDs below 1000 are not portable across Debian versions** — use the user range.
+#   - **The ids are not cosmetic.** Each share's path is a real Proxmox-managed mountpoint (see
+#     tasks/main.yml) — the numeric uid/gid on disk is what grants access. Changing one makes
+#     existing files unreadable by their owner.
+nas_users: []
+nas_groups: []
+nas_shares: []
+
+nas_map_to_guest: "Bad User"
+
+# ── firewall ────────────────────────────────────────────────────────────────────────────────
+# Same two-mechanism pattern as every other role here: named inventory hosts, resolved to live
+# ansible_host addresses, plus raw "start-end"/CIDR address ranges. Empty here by design (this
+# role never defaults a real allow-list) — generate-ansible-config.sh supplies the actual
+# whole-LAN default, the one deliberate exception documented in config.sh-template, same as
+# dns-resolver's own.
+nas_firewall_allow_hosts: []
+nas_firewall_allow_ranges: []

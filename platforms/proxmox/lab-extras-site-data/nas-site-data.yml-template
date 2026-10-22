@@ -1,0 +1,62 @@
+# platforms/proxmox/lab-extras-site-data/nas-site-data.yml-template
+#
+# Copy to .uis.secrets/platforms/proxmox/lab-extras/nas-site-data.yml (git-ignored — never commit
+# this file, it names your own people/accounts) and fill in your own values. Passed to
+# playbooks/service-nas.yml by 09-lab-extras-apply.sh automatically, ONLY if that file exists —
+# an install with no file here just never has anything to pass, same "unused is never read" rule
+# every other optional config.sh-template block follows.
+#
+# 🔴 WHY THIS ISN'T IN config.sh. roles/nas deliberately ships no accounts and no shares — see
+# roles/nas/defaults/main.yml's own comment: "a role that ships them is a role that is wrong
+# everywhere except where it was written, the same mistake as putting an IP address in a role
+# default." config.sh is a flat, scalar bash file; these are inherently structured, nested, and
+# genuinely yours (who your people/agents are, what you call your shares, who may read or write
+# them) — forcing that into bash scalars would be a worse fit than just reusing the same
+# "persistent per-install YAML, never regenerated" shape config.sh itself already is.
+#
+# ⚠️ Passwords are NEVER here and never will be — a password in this file is a password in git
+# even though the file itself is gitignored (copies, backups, a future `git add -f` mistake).
+# Each Samba account sets its own out of band once the guest is up:
+#   ssh <nas guest IP> smbpasswd -a <user>
+#
+# ⚠️ UIDs/GIDs below 1000 are the distribution's to allocate and are not portable across Debian
+# versions — use the user range (1000+) for anything declared here.
+#
+# ⚠️ Each `path` below must match one entry in config.sh's own LAB_EXTRA_NAS_SHARE_MOUNTS
+# ("path:size_gb" pairs) — this file names what Samba calls a share and who may use it; config.sh
+# provisions the Proxmox-level storage it lives on. The two must agree, or the share advertises
+# correctly but serves an empty, unmounted directory (roles/nas's own verification step catches
+# this and tells you plainly).
+
+nas_groups:
+  - name: shared
+    gid: 1000
+
+nas_users:
+  - name: labowner
+    uid: 1000
+    group: shared
+    comment: "replace with your own account(s)"
+
+# 🔴 ONE LIST, every share a list item under this SAME `nas_shares:` key — never a second
+# `nas_shares:` key further down (YAML: a repeated mapping key is not merged, the later one simply
+# replaces the first, silently losing every share declared above it).
+nas_shares:
+  - name: shared
+    comment: "general-purpose share"
+    path: /srv/shared
+    valid_users: "labowner"
+    create_mask: "0640"
+    directory_mask: "0750"
+  # A second, deliberately open, no-authentication share — commented out by default, same
+  # reasoning as config.sh-template's own comment on LAB_EXTRA_NAS_SHARE_MOUNTS. Uncomment this
+  # list item AND add a matching second "path:size_gb" pair to config.sh's
+  # LAB_EXTRA_NAS_SHARE_MOUNTS if you want one, with full knowledge of what "guest_ok: true"
+  # means: anyone who can reach :445 can read and write here with no credential.
+  # - name: public
+  #   comment: "open network share — NO AUTHENTICATION"
+  #   path: /srv/public
+  #   guest_ok: true
+  #   create_mask: "0664"
+  #   directory_mask: "0775"
+  #   force_create_mode: "0664"

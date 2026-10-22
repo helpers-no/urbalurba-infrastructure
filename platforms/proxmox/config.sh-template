@@ -227,3 +227,29 @@ LAB_EXTRA_DNS_RESOLVER_IP="192.168.1.26"
 # pg_allowed_networks already reuses — when left unset. Override here for a narrower range,
 # including explicitly empty ("") to go stricter than the default.
 # LAB_EXTRA_DNS_RESOLVER_FIREWALL_ALLOW_RANGES=""
+
+# nas — Samba file server. Shares are Proxmox-managed storage volumes (mp0/mp1/...), deliberately
+# NOT host bind mounts — `pvesr` cannot replicate a bind mount, so its data would not follow this
+# guest on HA failover; as Proxmox volumes, the service and its data move together (see
+# roles/nas/tasks/main.yml's own header). urb-agents#1970/#1978: same "generic IaC vs
+# lab-specific" test as dns-resolver, same answer (Terje's explicit call, having seen the
+# `LAB_EXTRAS` mechanism dns-resolver already proved out).
+# 🔴 VMID DEFAULT IS 404, matching the reference lab's own real nas guest — unlike dns-resolver's
+# 400-not-410, nothing else in this template already claims 404, so no collision to avoid here.
+LAB_EXTRA_NAS_VMID="404"
+LAB_EXTRA_NAS_IP="192.168.1.27"
+
+# "path:size_gb" pairs, comma-separated — one Proxmox-managed storage volume per declared share.
+# Each path here must match one `nas_shares[].path` entry in your own site-data file (see
+# README.md's "Lab extras" section and platforms/proxmox/lab-extras-site-data/nas-site-data.yml-template).
+# 🔴 ONE SHARE BY DEFAULT, not the reference lab's two — its second share is deliberately
+# guest-writable with NO AUTHENTICATION at all (a real, informed, site-specific trust decision:
+# Terje, 2026-10-01, "the LAN is trusted"), not something a generic UIS default should hand a
+# fresh lab owner. Add a second "path:size_gb" pair here (and a matching nas_shares entry in your
+# site-data file) if you want one.
+LAB_EXTRA_NAS_SHARE_MOUNTS="/srv/shared:50"
+
+# Same whole-LAN-by-default exception as LAB_EXTRA_DNS_RESOLVER_FIREWALL_ALLOW_RANGES above, and
+# for the same reason: nas serves humans/agents directly over the whole LAN, not just other
+# guests. Override here for a narrower range, including explicitly empty ("") to go stricter.
+# LAB_EXTRA_NAS_FIREWALL_ALLOW_RANGES=""
