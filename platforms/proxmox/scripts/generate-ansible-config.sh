@@ -145,7 +145,8 @@ mkdir -p "$GENERATED_DIR/vars/core-services"
 
 write_core_service() {
   local name="$1" vmid="$2" cores="$3" mem="$4" swap="$5" startup="$6" \
-        features="$7" rootfs_gb="$8" mount_mp="$9" mount_gb="${10}" recordsize="${11}" role="${12}"
+        features="$7" rootfs_gb="$8" mount_mp="$9" mount_gb="${10}" recordsize="${11}" role="${12}" \
+        ip="${13}"
   local file="$GENERATED_DIR/vars/core-services/${name}.yml"
   cat > "$file" <<EOF
 # GENERATED from config.sh by generate-ansible-config.sh — do not hand-edit.
@@ -182,7 +183,8 @@ EOF
   nets:
     - id: net0
       bridge: vmbr0
-      ip: dhcp
+      ip: "${ip}/${NETWORK_PREFIX_LENGTH}"
+      gw: ${NETWORK_GATEWAY}
 
 service:
   role: ${role}
@@ -208,17 +210,17 @@ CORE_SERVICE_FORGEJO_VMID="${CORE_SERVICE_FORGEJO_VMID:-410}"
 
 for svc in $CORE_SERVICES; do
   case "$svc" in
-    pg)       write_core_service pg       "$CORE_SERVICE_PG_VMID"       4 8192 1024 "order=4" ""                  8  /var/lib/postgresql 200 16K postgres ;;
-    bao)      write_core_service bao      "$CORE_SERVICE_BAO_VMID"      2 1024 512  "order=2" ""                  8  /var/lib/openbao    10  ""  bao ;;
-    garage)   write_core_service garage   "$CORE_SERVICE_GARAGE_VMID"   2 2048 512  "order=3" "nesting=1,keyctl=1" 8  /var/lib/garage     100 ""  garage ;;
-    registry) write_core_service registry "$CORE_SERVICE_REGISTRY_VMID" 2 1024 512  "order=1" "nesting=1,keyctl=1" 8  /var/lib/registry   60  ""  registry ;;
+    pg)       write_core_service pg       "$CORE_SERVICE_PG_VMID"       4 8192 1024 "order=4" ""                  8  /var/lib/postgresql 200 16K postgres "$CORE_SERVICE_PG_IP" ;;
+    bao)      write_core_service bao      "$CORE_SERVICE_BAO_VMID"      2 1024 512  "order=2" ""                  8  /var/lib/openbao    10  ""  bao "$CORE_SERVICE_BAO_IP" ;;
+    garage)   write_core_service garage   "$CORE_SERVICE_GARAGE_VMID"   2 2048 512  "order=3" "nesting=1,keyctl=1" 8  /var/lib/garage     100 ""  garage "$CORE_SERVICE_GARAGE_IP" ;;
+    registry) write_core_service registry "$CORE_SERVICE_REGISTRY_VMID" 2 1024 512  "order=1" "nesting=1,keyctl=1" 8  /var/lib/registry   60  ""  registry "$CORE_SERVICE_REGISTRY_IP" ;;
     # 🔵 A SEPARATE guest, not a database inside "pg" — the test cluster must never be able to
     # read or corrupt production data. Smaller than pg on purpose: test data, test stakes.
-    pg-test)  write_core_service pg-test  "$CORE_SERVICE_PG_TEST_VMID"  2 2048 512  "order=5" ""                  8  /var/lib/postgresql 20  16K postgres ;;
+    pg-test)  write_core_service pg-test  "$CORE_SERVICE_PG_TEST_VMID"  2 2048 512  "order=5" ""                  8  /var/lib/postgresql 20  16K postgres "$CORE_SERVICE_PG_TEST_IP" ;;
     # Self-hosted git host + its own built-in OCI registry — see roles/forgejo and
     # PLAN-system-forgejo-core-service.md. order=6: every other order value above is already
     # taken; Forgejo has no startup dependency on any of them.
-    forgejo)  write_core_service forgejo  "$CORE_SERVICE_FORGEJO_VMID"  2 2048 512  "order=6" "nesting=1,keyctl=1" 8  /var/lib/forgejo    50  ""  forgejo ;;
+    forgejo)  write_core_service forgejo  "$CORE_SERVICE_FORGEJO_VMID"  2 2048 512  "order=6" "nesting=1,keyctl=1" 8  /var/lib/forgejo    50  ""  forgejo "$CORE_SERVICE_FORGEJO_IP" ;;
     *) echo "⚠️  Unknown core service '$svc' in CORE_SERVICES — skipped" >&2 ;;
   esac
 done

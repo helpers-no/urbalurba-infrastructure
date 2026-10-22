@@ -118,6 +118,25 @@ K3S_TEST_SERVICE_CIDR="10.53.0.0/16"
 # additions here (forgejo, pg-test) — not guessed.
 CORE_SERVICES="pg bao garage registry forgejo pg-test"
 
+# 🔴 REQUIRED FOR EVERY SERVICE LISTED ABOVE — NOT AN OPTIONAL OVERRIDE like the blocks below.
+# Live-confirmed, urb-agents#1946: bao was the first genuinely FRESH CORE_SERVICES guest this
+# convention ever actually created (every other service found a pre-existing guest and skipped
+# the create path entirely) — and it came up on a plain DHCP lease, because nothing upstream of
+# `pct create` ever had an IP to put in it. A DHCP lease is not a declared address: it can change
+# on a relocation or lease renewal, silently breaking anything that expects this guest to stay put
+# (its own nftables allow-list entries elsewhere, DNS, bao's cluster auth wiring). Same LAN/CIDR as
+# the Proxmox hosts and k3s VMs above — pick 6 free addresses outside the k3s VM range (.30-.35 by
+# default); the values below are placeholders, not a real lab's addresses. Only the services you
+# actually listed in CORE_SERVICES need a real value here; an unused one is never read, and
+# confirm/repair on an already-existing guest never touches its live network config either way —
+# this only matters the moment a guest is actually freshly created.
+CORE_SERVICE_PG_IP="192.168.1.20"
+CORE_SERVICE_BAO_IP="192.168.1.21"
+CORE_SERVICE_GARAGE_IP="192.168.1.22"
+CORE_SERVICE_REGISTRY_IP="192.168.1.23"
+CORE_SERVICE_FORGEJO_IP="192.168.1.24"
+CORE_SERVICE_PG_TEST_IP="192.168.1.25"
+
 # 🔴 ONLY IF ADOPTING AN EXISTING GUEST BUILT BEFORE THIS CONVENTION EXISTED. Each service's VMID
 # normally comes from the fixed defaults below (405/406/407/408/409/410) — override ONE here only
 # when your real hardware already has a different, unrelated guest at that VMID, or your real
