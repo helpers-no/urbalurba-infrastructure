@@ -18,6 +18,7 @@ Admin tools, GitOps, and utility services for managing the UIS platform.
 | [RedisInsight](./redisinsight.md) | Redis web admin | `./uis deploy redisinsight` |
 | [Nginx](./nginx.md) | Catch-all web server and default backend | `./uis deploy nginx` |
 | [Whoami](./whoami.md) | HTTP request test service | `./uis deploy whoami` |
+| [External Secrets](./external-secrets.md) | Syncs Secrets from an external store | `./uis deploy external-secrets` |
 
 ## Overview
 
@@ -26,3 +27,4 @@ Admin tools, GitOps, and utility services for managing the UIS platform.
 - **pgAdmin** and **RedisInsight** provide web interfaces for their respective databases
 - **Nginx** serves as the default backend — any request that doesn't match a service gets the Nginx landing page
 - **Whoami** is a diagnostic tool for testing ingress and authentication
+- **External Secrets** reads `ExternalSecret` resources and syncs them from an external secret store (e.g. OpenBao) into ordinary Kubernetes Secrets
