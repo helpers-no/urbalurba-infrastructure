@@ -86,11 +86,16 @@
       loop: "{{ target_contexts }}"
 
     # ── each cluster's own API address/CA, read from the kubeconfig itself ─────────────────────
+    # 🔴 `--context <name> ... --minify`, NOT a bare `.clusters[?(@.name=="<context>")]` filter —
+    # same bug as k3s-bao-ensure.yml, urb-agents#1949: a context's name and its cluster's name are
+    # not always the same (this lab's "proxmox" context points at a cluster named "frigg-k3s"),
+    # so the old filter silently matched nothing and produced empty api_server/ca_cert_b64
+    # strings. `--minify` resolves context -> cluster for you.
     - name: Each cluster's real API server address and CA (from the merged kubeconfig)
       ansible.builtin.shell:
         cmd: >-
-          echo "$(kubectl config view --raw -o jsonpath='{.clusters[?(@.name=="{{ item }}")].cluster.server}')
-          $(kubectl config view --raw -o jsonpath='{.clusters[?(@.name=="{{ item }}")].cluster.certificate-authority-data}')"
+          echo "$(kubectl --context {{ item }} config view --raw --minify -o jsonpath='{.clusters[0].cluster.server}')
+          $(kubectl --context {{ item }} config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
       register: cluster_facts_raw
       changed_when: false
       loop: "{{ target_contexts }}"
@@ -104,6 +109,21 @@
         }] }}"
       loop: "{{ cluster_facts_raw.results }}"
       loop_control: { label: "{{ item.item }}" }
+
+    # 🔴 FAIL HERE, LOUDLY — urb-agents#1949: an empty api_server/ca_cert_b64 silently surviving
+    # a string-split is exactly the failure mode this guards against.
+    - name: Every cluster actually resolved a real API server and CA
+      ansible.builtin.assert:
+        that:
+          - item.api_server | length > 0
+          - item.ca_cert_b64 | length > 0
+        fail_msg: >-
+          {{ item.context }} resolved an empty api_server or ca_cert_b64 from the merged
+          kubeconfig. The context name and its cluster's name are not always the same — check
+          `kubectl config get-contexts {{ item.context }}` for the cluster it actually points at.
+        quiet: true
+      loop: "{{ cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
 
     # 🔴 FOUND RUNNING THIS FOR REAL: `spec.provider` is a union — exactly one of
     # vault/kubernetes may be set. A merge-patch (state: present's default) onto an EXISTING
