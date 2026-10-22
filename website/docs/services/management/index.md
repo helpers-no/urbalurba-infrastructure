@@ -19,6 +19,7 @@ Admin tools, GitOps, and utility services for managing the UIS platform.
 | [Nginx](./nginx.md) | Catch-all web server and default backend | `./uis deploy nginx` |
 | [Whoami](./whoami.md) | HTTP request test service | `./uis deploy whoami` |
 | [External Secrets](./external-secrets.md) | Syncs Secrets from an external store | `./uis deploy external-secrets` |
+| [OpenBao](./bao.md) | Secrets management (KV v2, kubernetes auth) | `./uis deploy bao` |
 
 ## Overview
 
@@ -28,3 +29,4 @@ Admin tools, GitOps, and utility services for managing the UIS platform.
 - **Nginx** serves as the default backend — any request that doesn't match a service gets the Nginx landing page
 - **Whoami** is a diagnostic tool for testing ingress and authentication
 - **External Secrets** reads `ExternalSecret` resources and syncs them from an external secret store (e.g. OpenBao) into ordinary Kubernetes Secrets
+- **OpenBao** is a real in-cluster secrets store (KV v2, `kubernetes` auth), the same interface production's own OpenBao answers

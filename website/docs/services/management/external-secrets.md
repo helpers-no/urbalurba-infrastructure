@@ -13,7 +13,7 @@ Syncs Kubernetes Secrets from external secret stores via ExternalSecret/ClusterS
 | **Deploy** | `./uis deploy external-secrets` |
 | **Undeploy** | `./uis undeploy external-secrets` |
 | **Depends on** | None |
-| **Required by** | bao |
+| **Required by** | [bao](./bao.md) |
 | **Helm chart** | `external-secrets/external-secrets` |
 | **Default namespace** | `external-secrets` |
 
@@ -21,7 +21,7 @@ Syncs Kubernetes Secrets from external secret stores via ExternalSecret/ClusterS
 
 External Secrets Operator (ESO) reads `ExternalSecret` resources and materialises them as ordinary
 Kubernetes Secrets, sourced from a named `ClusterSecretStore`. This installs the operator and its
-CRDs only — no `ClusterSecretStore` exists yet. A service that needs one creates and owns it (e.g. OpenBao's `openbao` store, via `./uis deploy bao`).
+CRDs only — no `ClusterSecretStore` exists yet. A service that needs one creates and owns it (e.g. OpenBao's `openbao` store — see [bao](./bao.md)).
 That split means the same `ExternalSecret` a developer writes on a laptop resolves identically
 wherever the store it names actually exists.
 

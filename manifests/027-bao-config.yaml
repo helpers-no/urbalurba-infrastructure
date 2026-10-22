@@ -1,0 +1,59 @@
+# manifests/027-bao-config.yaml — Helm values for OpenBao, dev/in-cluster (ansible/playbooks/027-setup-bao.yml)
+#
+# 🔴 DEV-ONLY DEVIATIONS FROM PRODUCTION (platforms/proxmox/ansible/roles/bao), stated plainly so
+# nobody mistakes this for a security posture recommendation:
+#   - TLS is disabled (tls_disable = "true"). Production terminates TLS with a private CA because
+#     it is reachable from outside the cluster (BAO-F2 in
+#     website/docs/ai-developer/plans/backlog/INVESTIGATE-service-openbao.md); this instance is
+#     reachable only pod-to-pod inside one Rancher Desktop cluster, so that problem does not apply
+#     the same way here. Revisit if this is ever exposed beyond the cluster.
+#   - Audit logging is off (auditStorage disabled). Production rotates a real audit log because it
+#     is a real incident record; a throwaway dev instance generates nothing worth auditing.
+#   - A 1Gi data volume — enough for development data, not a production capacity plan.
+#
+# What's the SAME as production, deliberately (this is the whole point of making OpenBao a real
+# UIS service rather than a fake/proxied one): raft storage, a static seal (not Shamir — unattended
+# restarts on a laptop matter too, same reasoning as production), the KV v2 mount name
+# ("platform"), and the `kubernetes` auth method (not a root token) for ESO. See
+# ansible/playbooks/027-setup-bao.yml for the wiring this values file alone cannot express
+# (the seal key itself, the kubernetes auth method configuration, the ClusterSecretStore).
+server:
+  ha:
+    enabled: true
+    replicas: 1
+    raft:
+      enabled: true
+      config: |
+        ui = true
+        disable_mlock = true
+
+        listener "tcp" {
+          address     = "0.0.0.0:8200"
+          tls_disable = "true"
+        }
+
+        storage "raft" {
+          path = "/openbao/data"
+        }
+
+        # ⚠️ current_key is a FILE REFERENCE, not the key itself — the mounted path below, backed
+        # by a Secret the playbook generates once and never regenerates (replacing it makes
+        # every existing secret unreadable, same as production's own "GENERATED ONCE AND NEVER
+        # REGENERATED" rule).
+        seal "static" {
+          current_key_id = "dev"
+          current_key    = "file:///bao-seal/seal.key"
+        }
+  dataStorage:
+    enabled: true
+    size: 1Gi
+  auditStorage:
+    enabled: false
+  volumes:
+    - name: bao-seal
+      secret:
+        secretName: bao-seal-key
+  volumeMounts:
+    - name: bao-seal
+      mountPath: /bao-seal
+      readOnly: true

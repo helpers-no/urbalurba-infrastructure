@@ -1,0 +1,92 @@
+---
+# file: ansible/playbooks/027-remove-bao.yml
+# Description: Remove OpenBao from Kubernetes
+# Usage:
+# ansible-playbook playbooks/027-remove-bao.yml -e target_host="rancher-desktop" [-e _purge=true]
+
+- name: Remove OpenBao from Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    bao_namespace: "bao"
+    bao_eso_namespace: "external-secrets"
+    bao_release: "bao"
+    deletion_timeout: 180
+
+  tasks:
+    - name: 1. Check for the OpenBao Helm release
+      ansible.builtin.shell: helm list -n {{ bao_namespace }} | grep {{ bao_release }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: helm_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: 2. Uninstall the OpenBao Helm release
+      ansible.builtin.shell: |
+        helm uninstall {{ bao_release }} -n {{ bao_namespace }} --timeout {{ deletion_timeout }}s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: helm_check.rc == 0
+
+    - name: 3. Remove the ExternalSecret and its materialised Secret from the self-test
+      kubernetes.core.k8s:
+        state: absent
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        api_version: external-secrets.io/v1
+        kind: ExternalSecret
+        name: bao-ensure-selftest
+        namespace: "{{ bao_eso_namespace }}"
+      ignore_errors: true
+
+    - name: 4. Remove the ClusterSecretStore
+      kubernetes.core.k8s:
+        state: absent
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        api_version: external-secrets.io/v1
+        kind: ClusterSecretStore
+        name: openbao
+      ignore_errors: true
+
+    - name: 5. Remove the reviewer ServiceAccount/ClusterRoleBinding/token Secret
+      kubernetes.core.k8s:
+        state: absent
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition: "{{ item }}"
+      loop:
+        - { apiVersion: v1, kind: ServiceAccount, metadata: { name: bao-auth-reviewer, namespace: "{{ bao_eso_namespace }}" } }
+        - { apiVersion: rbac.authorization.k8s.io/v1, kind: ClusterRoleBinding, metadata: { name: bao-auth-reviewer } }
+        - { apiVersion: v1, kind: Secret, metadata: { name: bao-auth-reviewer-token, namespace: "{{ bao_eso_namespace }}" } }
+      loop_control: { label: "{{ item.kind }}/{{ item.metadata.name }}" }
+      ignore_errors: true
+
+    # ⚠️ The seal key and the persisted root token: destroying either without the raft data PVC
+    # also being destroyed leaves a vault nobody can read or re-authenticate against. Preserve
+    # both (and the PVC) unless -e _purge=true - same convention 047-remove-garage.yml uses for
+    # its own PVC.
+    - name: 6. Purge the seal key, root token, and raft data - only if explicitly asked
+      kubernetes.core.k8s:
+        state: absent
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        api_version: v1
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ bao_namespace }}"
+      loop:
+        - { kind: Secret, name: bao-seal-key }
+        - { kind: Secret, name: bao-dev-init }
+        - { kind: PersistentVolumeClaim, name: "data-{{ bao_release }}-0" }
+      loop_control: { label: "{{ item.kind }}/{{ item.name }}" }
+      when: _purge is defined and (_purge | bool)
+      ignore_errors: true
+
+    - name: 7. Display final removal status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🗑️  OpenBao Removal Status"
+          - "==============================================="
+          - "{{ '✅ SUCCESS - OpenBao removed' if helm_check.rc == 0 else '⚪ Not found (already removed)' }}"
+          - "{{ '🔥 PURGED - seal key, root token, and raft data deleted too' if (_purge is defined and (_purge | bool)) else 'ℹ️  Seal key, root token, and raft data PRESERVED - pass -e _purge=true to delete them too' }}"
+          - "==============================================="
