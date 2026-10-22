@@ -106,6 +106,35 @@ else
     fail "the seal config references the mounted key by file, not inline" "not found in $VALUES"
 fi
 
+# ── urb-agents#1956 regression checks: the 5 real bugs a live cluster run found ──
+
+if grep -q "SCRIPT_CHECK_COMMAND=\"kubectl get pods -n bao -l app.kubernetes.io/instance=bao" "$SVC"; then
+    pass "SCRIPT_CHECK_COMMAND uses a label selector, not a hardcoded pod name"
+else
+    fail "SCRIPT_CHECK_COMMAND uses a label selector, not a hardcoded pod name" "found a literal pod name, or the check changed shape"
+fi
+
+if grep -qF 'bao_init.stdout | string' "$SETUP"; then
+    pass "the persisted root token is cast with | string before serializing as a Secret"
+else
+    fail "the persisted root token is cast with | string before serializing as a Secret" "missing | string filter"
+fi
+
+if grep -qF 'eso_crd_api_version: "external-secrets.io/v1beta1"' "$SETUP" \
+   && grep -qF 'eso_crd_api_version: "external-secrets.io/v1beta1"' "$REMOVE" \
+   && ! grep -qE 'apiVersion: external-secrets\.io/v1[^b"]' "$SETUP" \
+   && ! grep -qE 'api_version: external-secrets\.io/v1[^b"]' "$REMOVE"; then
+    pass "ClusterSecretStore/ExternalSecret use v1beta1, matching the pinned ESO chart"
+else
+    fail "ClusterSecretStore/ExternalSecret use v1beta1, matching the pinned ESO chart" "v1beta1 var missing, or a bare v1 apiVersion still present"
+fi
+
+if grep -q 'label_selectors:' "$REMOVE" && grep -q 'PersistentVolumeClaim' "$REMOVE" && ! grep -qE 'name: "data-\{\{ bao_release \}\}-0"' "$REMOVE"; then
+    pass "the purged PVC is found by label, not a hardcoded 'data-bao-0' name"
+else
+    fail "the purged PVC is found by label, not a hardcoded 'data-bao-0' name" "still hardcodes the PVC name, or the label lookup is missing"
+fi
+
 # ── the seal key and root token are never regenerated once they exist ──
 
 if grep -q '(existing_seal_secret.resources | default(\[\]) | length) == 0' "$SETUP" \
@@ -123,12 +152,13 @@ else
     fail "remove preserves the seal key/root token/data unless -e _purge=true" "purge guard or one of the preserved resources missing"
 fi
 
-# ── the repo-wide "helm repo update must force" rule ──
+# ── `helm repo update` takes no --force-update flag (that belongs on `helm repo add`) -
+# urb-agents#1956: this exact mistake blocked the playbook outright on a real cluster ──
 
-if grep -q 'helm repo update --force-update' "$SETUP"; then
-    pass "helm repo update uses --force-update"
+if grep -qE 'helm repo update\s*$' "$SETUP" && ! grep -q 'helm repo update --force-update' "$SETUP"; then
+    pass "helm repo update carries no --force-update flag"
 else
-    fail "helm repo update uses --force-update" "not found in $SETUP"
+    fail "helm repo update carries no --force-update flag" "found --force-update on 'helm repo update' in $SETUP"
 fi
 
 # ── docs index and cross-links ──
