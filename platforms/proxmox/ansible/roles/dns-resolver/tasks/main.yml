@@ -1,0 +1,215 @@
+---
+# dns-resolver — dnsmasq-based LAN resolver, generates a hosts-zone from this platform's own
+# generated vars (3 Proxmox hosts, 6 k3s VMs, every configured CORE_SERVICES/lab-extras guest).
+# Opt-in lab extra, NOT a CORE_SERVICES default — see platforms/proxmox/README.md's "Lab extras"
+# section and urb-agents#1970/#1971/#1972 for why.
+#
+# NOTHING IS REPOINTED AT THIS GUEST HERE. Every other guest keeps using config.sh's own
+# NETWORK_DNS (normally your router) unless you deliberately change it — repointing is a separate,
+# later, one-consumer-at-a-time decision, same phasing the reference lab's own rollout used.
+
+# ── 0. prerequisites the base image does not carry ───────────────────────────────────────────
+- name: Packages this role needs
+  ansible.builtin.apt:
+    name:
+      - dnsmasq
+      - bind9-dnsutils   # dig — used below to prove this resolver actually answers, not just runs
+      - iproute2         # ss — the port-53 pre-flight check
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# dnsmasq's own package install starts the service with the stock config — stop it before poking
+# at port 53, or the pre-flight check below always reports dnsmasq itself as the occupant and can
+# never catch anything genuinely in the way.
+- name: Stop the stock config before checking what else might be on port 53
+  ansible.builtin.systemd:
+    name: dnsmasq
+    state: stopped
+  failed_when: false
+
+# ── 1. port 53 must actually be free before this role bets on it ────────────────────────────
+- name: What already answers on port 53
+  ansible.builtin.shell:
+    cmd: "ss -tulnp 2>/dev/null | grep ':53 ' || true"
+  register: dns_resolver_port53
+  changed_when: false
+  check_mode: false
+
+- name: Refuse to continue if something else already holds port 53
+  ansible.builtin.assert:
+    that:
+      - (dns_resolver_port53.stdout | trim | length) == 0
+    fail_msg: >-
+      Something is already listening on :53 before dnsmasq was even started:
+      {{ dns_resolver_port53.stdout }}
+      ⚠️ Installing over it would make dnsmasq fail to bind, or bind and silently lose the race —
+      either way this guest would answer for nothing. Find and stop the occupant (systemd-resolved
+      is the usual suspect on a base image) before re-running this role.
+    quiet: true
+
+# ── 2. the zone and the upstream — both generated/supplied, never derived here ─────────────
+- name: An upstream resolver must actually be configured
+  ansible.builtin.assert:
+    that:
+      - dns_resolver_upstream | length > 0
+    fail_msg: >-
+      dns_resolver_upstream is empty — generate-ansible-config.sh should have passed
+      config.sh's NETWORK_DNS through. Never guess or invent an upstream.
+    quiet: true
+
+# 🔴 An empty or suspiciously small zone handed to a resolver that is meant to answer for this
+# whole lab would fail quietly for everyone. Floor of 3: the 3 Proxmox hosts alone are always
+# present regardless of which CORE_SERVICES/lab-extras a lab owner actually selected — fewer than
+# that means something upstream of this role (generate-ansible-config.sh) is broken, not that this
+# lab is genuinely tiny.
+- name: Refuse to generate from a suspiciously small or empty set
+  ansible.builtin.assert:
+    that: (dns_resolver_zone_entries | length) >= 3
+    fail_msg: >-
+      Only {{ dns_resolver_zone_entries | length }} entr{{ 'y' if (dns_resolver_zone_entries | length) == 1 else 'ies' }}
+      in dns_resolver_zone_entries — refusing to generate the zone. Expected at minimum the 3
+      Proxmox hosts this platform always declares.
+    quiet: true
+
+- name: The generated zone
+  ansible.builtin.template:
+    src: hosts.lan.j2
+    dest: "{{ dns_resolver_zone_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart dnsmasq
+
+# 🔴 CLEANUP, KEPT PERMANENTLY — same landmine the reference role found: a zone file placed under
+# /etc/dnsmasq.d/ is read as dnsmasq CONFIG SYNTAX by Debian's conf-dir, not as a hosts file.
+# Harmless if it never existed; must be removed if an earlier, differently-pathed run left it behind.
+- name: The zone must never live where conf-dir will try to parse it as config
+  ansible.builtin.file:
+    path: "/etc/dnsmasq.d/hosts.{{ dns_resolver_domain }}"
+    state: absent
+  notify: Restart dnsmasq
+
+# ── 3. configuration ─────────────────────────────────────────────────────────────────────────
+- name: dnsmasq.conf, owned outright
+  ansible.builtin.template:
+    src: lan-resolver.conf.j2
+    dest: "{{ dns_resolver_conf_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart dnsmasq
+
+# 🔴 TESTED THE SAME WAY SYSTEMD ACTUALLY STARTS IT, conf-dir included — a bare `dnsmasq --test`
+# only reads dnsmasq.conf and would report this config valid while the real service fails to
+# start. /etc/default/dnsmasq is the one source of truth for what conf-dir systemd-helper
+# actually passes; read it rather than hardcoding the same list twice.
+- name: What conf-dir this guest's dnsmasq actually starts with
+  ansible.builtin.shell:
+    cmd: "grep -oP '^CONFIG_DIR=\\K.*' /etc/default/dnsmasq"
+  register: dns_resolver_config_dir
+  changed_when: false
+  check_mode: false
+
+- name: The config must parse the SAME way systemd will test it before starting
+  ansible.builtin.command:
+    cmd: "dnsmasq --test -7 {{ dns_resolver_config_dir.stdout | trim }}"
+  register: dns_resolver_test
+  changed_when: false
+  failed_when: dns_resolver_test.rc != 0
+
+- name: Enabled and running
+  ansible.builtin.systemd:
+    name: dnsmasq
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# ── firewall ─────────────────────────────────────────────────────────────────────────────────
+- name: Resolve the allow-list to live addresses
+  ansible.builtin.set_fact:
+    dns_resolver_firewall_allow_addrs: "{{ dns_resolver_firewall_allow_hosts | map('extract', hostvars, 'ansible_host') | select('defined') | list }}"
+
+- name: Allow-list for dnsmasq
+  ansible.builtin.template:
+    src: dns-resolver-nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Reload nftables
+
+- name: nftables enabled and running
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true
+    state: started
+
+# 🔴 Handlers run at the END of a play, so a check right here would test the PREVIOUS config and
+# pass — the mistake flagged in roles/bao/registry's own comments.
+- name: Apply any pending restart before verifying anything
+  ansible.builtin.meta: flush_handlers
+
+- name: nftables is actually enforcing, not just running
+  ansible.builtin.command: nft list ruleset
+  register: dns_resolver_nft_ruleset
+  changed_when: false
+  check_mode: false
+
+- name: The resolver must not be open to anything off the allow-list
+  ansible.builtin.assert:
+    that:
+      - "'policy drop' in dns_resolver_nft_ruleset.stdout"
+      - dns_resolver_firewall_allow_addrs | length == 0 or dns_resolver_firewall_allow_addrs[0] in dns_resolver_nft_ruleset.stdout
+      - dns_resolver_firewall_allow_ranges | length == 0 or dns_resolver_firewall_allow_ranges[0].split('-')[0].split('/')[0] in dns_resolver_nft_ruleset.stdout
+    fail_msg: >-
+      nftables is active but the loaded ruleset does not match what was rendered — a running
+      service with a config nobody applied is the same as no firewall.
+    quiet: true
+
+- name: Wait for the listener
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ dns_resolver_port }}"
+    timeout: 30
+
+# ── 4. verify — by asking the running service, not by trusting the tasks above ──────────────
+# 🔵 Queries the FIRST zone entry, never a hardcoded hostname — unlike the reference role (which
+# can safely assume a specific always-present machine in its own lab), this role has no such
+# guaranteed name. dns_resolver_zone_entries[0] is always one of the 3 Proxmox hosts
+# generate-ansible-config.sh always writes first, so it's as stable a thing to assert against as
+# the reference's own choice was for its lab.
+- name: Does it actually resolve a known name from its own generated zone
+  ansible.builtin.command:
+    cmd: "dig @127.0.0.1 -p {{ dns_resolver_port }} +short +time=5 {{ dns_resolver_zone_entries[0].name }}.{{ dns_resolver_domain }}"
+  register: dns_resolver_check_lan
+  changed_when: false
+  check_mode: false
+
+- name: It must answer with that entry's actual address, or this resolver is not telling the truth
+  ansible.builtin.assert:
+    that:
+      - dns_resolver_zone_entries[0].ip in dns_resolver_check_lan.stdout
+    fail_msg: >-
+      dig {{ dns_resolver_zone_entries[0].name }}.{{ dns_resolver_domain }} returned
+      "{{ dns_resolver_check_lan.stdout | trim }}", expected {{ dns_resolver_zone_entries[0].ip }}.
+      ⚠️ A resolver that is up and answers the WRONG thing is worse than one that is down — it
+      fails silently for every client that trusts it.
+    quiet: true
+
+- name: Does it still forward to the internet
+  ansible.builtin.command:
+    cmd: "dig @127.0.0.1 -p {{ dns_resolver_port }} +short +time=5 github.com"
+  register: dns_resolver_check_upstream
+  changed_when: false
+  check_mode: false
+  failed_when: (dns_resolver_check_upstream.stdout | trim | length) == 0
+
+- name: Result
+  ansible.builtin.debug:
+    msg: >-
+      dns-resolver answering on :{{ dns_resolver_port }} ·
+      {{ dns_resolver_zone_entries | length }} `.{{ dns_resolver_domain }}` names generated ·
+      forwards unknown names to {{ dns_resolver_upstream }}
+      ⚠️ NOTHING POINTS AT THIS YET — every other guest keeps using its own configured nameserver
+      until you deliberately repoint it. See README.md's "Lab extras" section.

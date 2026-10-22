@@ -51,6 +51,14 @@ platforms/proxmox/
 │   │                                 adding one guest doesn't re-touch every other already-built
 │   │                                 one. No remove counterpart yet — these guests hold real data,
 │   │                                 a teardown command needs its own careful design.
+│   ├── 08-lab-extra-add.sh      ✅  entry point: `uis platform lab-extra add proxmox <name>`.
+│   │                                 Same shape as 07, deliberately a SEPARATE script/list —
+│   │                                 LAB_EXTRAS, not CORE_SERVICES. See README.md's "Lab extras"
+│   │                                 section and this file's own "nas" note below for why.
+│   ├── 09-lab-extras-apply.sh   ✅  per-extra loop: guest → install → replicate → HA — same
+│   │                                 shape as 05, scoped to LAB_EXTRAS. Empty by default, unlike
+│   │                                 CORE_SERVICES — nothing here builds anything until a lab
+│   │                                 owner opts in via 08.
 │   ├── upgrade-test-cluster-to-bao.sh ✅  never runs automatically — promotes proxmox-test from
 │   │                                 the simple plain-Secret store to the real bao-backed one,
 │   │                                 for when you want to exercise real vault semantics on test
@@ -174,6 +182,9 @@ platforms/proxmox/
     │                                 adds both and the CRD rejects it outright. Both this file and
     │                                 k3s-bao-ensure.yml delete any existing "openbao" store first,
     │                                 needed for switching a cluster's provider in either direction.
+    ├── service-dns-resolver.yml ✅ L3 for the opt-in dns-resolver lab extra (see README.md's
+    │                            "Lab extras" section) — thin, `roles: [dns-resolver]`, same
+    │                            shape as every other service-<name>.yml.
     ├── roles/
     │   ├── k3s/                  ✅  existing
     │   ├── postgres/             ✅  ported from the maintainer's private lab. Two real bugs
@@ -193,14 +204,22 @@ platforms/proxmox/
     │   │                            not exist" on a genuinely fresh guest). Fixed to match
     │   │                            registry's already-correct check → load-from-seed → pull →
     │   │                            save-last order.
-    │   └── registry/            ✅
+    │   ├── registry/            ✅
+    │   └── dns-resolver/         ✅  opt-in lab extra, NOT one of the CORE_SERVICES roles
+    │                            above — ported from the maintainer's private lab, judged not
+    │                            blind-copied: generates its zone from this platform's own
+    │                            generated vars (not Jinja-filtered inventory groups, which
+    │                            this platform's generated inventory.yml never populates with
+    │                            CORE_SERVICES/lab-extras guests at all) — see the role's own
+    │                            defaults/main.yml for the full reasoning.
     └── generated/                 ✅  gitignored — inventory.yml, vars/vms/*.yml, and
                                         vars/core-services/*.yml (one guest/service declaration
                                         per configured service, plus a gitignored _extra-vars.yml
                                         for secrets/site-data — garage's credentials), all built
                                         fresh from config.sh on every run by
                                         generate-ansible-config.sh. No bind mounts, ever, in any
-                                        of these.
+                                        of these. vars/lab-extras/*.yml is the same shape, one
+                                        level down — empty unless LAB_EXTRAS is non-empty.
 ```
 
 ## nas — deliberately not part of this platform (2026-10-05)
@@ -212,6 +231,14 @@ source its config from or connect it to (confirmed when investigating bao/garage
 UIS counterparts the same week — nas has no UIS equivalent at all, unlike the other four). The
 real guest this platform once built for it is untouched and still runs; it's simply no longer
 something `CORE_SERVICES`/this code declares or manages.
+
+⚠️ **`dns-resolver` (see `roles/dns-resolver/` above and README.md's "Lab extras" section) is the
+same kind of lab-specific guest by this exact test** — generalized from the same private lab,
+no UIS equivalent either. The difference: Terje's own explicit call (urb-agents#1970/#1971/#1972),
+made with full knowledge of this nas precedent, was to build dns-resolver in anyway, as an opt-in
+`LAB_EXTRAS` guest rather than leave it outside provision-host entirely. Read both notes together
+before deciding a future lab-specific guest's fate — it isn't a fixed rule either way, it's a
+judgment call Terje makes per guest.
 
 ## Why numbering starts at 00
 

@@ -131,6 +131,7 @@ Platform:
   platform use    [<provider>]   Switch the active platform (interactive picker if no arg)
   platform down   <provider>  Tear down the cluster (delegates to 03-destroy.sh)
   platform core-service add <provider> <name>   Add one host-level guest service (e.g. proxmox forgejo)
+  platform lab-extra   add <provider> <name>   Add one opt-in, not-a-default guest (e.g. proxmox dns-resolver)
 
 Network:
   network create   <provider>             Create the tunnel/route via API (cloudflare: needs OpenTofu + an API token)
@@ -1043,14 +1044,17 @@ cmd_platform() {
         core-service)
             cmd_platform_core-service "$@"
             ;;
+        lab-extra)
+            cmd_platform_lab-extra "$@"
+            ;;
         "")
             log_error "Usage: uis platform <subcmd> [<provider>]"
-            echo "Subcommands: init | list | up | status | use | down | core-service" >&2
+            echo "Subcommands: init | list | up | status | use | down | core-service | lab-extra" >&2
             exit "$EXIT_GENERAL_ERROR"
             ;;
         *)
             log_error "Unknown platform subcommand: $subcmd"
-            echo "Usage: uis platform [init|list|up|status|use|down|core-service] [<provider>]" >&2
+            echo "Usage: uis platform [init|list|up|status|use|down|core-service|lab-extra] [<provider>]" >&2
             exit "$EXIT_GENERAL_ERROR"
             ;;
     esac
@@ -1281,6 +1285,52 @@ cmd_platform_core-service() {
         *)
             log_error "Unknown core-service subcommand: $action"
             echo "Usage: uis platform core-service add <provider> <name>" >&2
+            exit "$EXIT_GENERAL_ERROR"
+            ;;
+    esac
+}
+
+# cmd_platform_lab-extra — same shape as cmd_platform_core-service, deliberately kept as a
+# SEPARATE dispatcher/list rather than folded into it. Lab extras are guests judged genuinely
+# useful to SOME labs but not assumed as a UIS default (today, only platforms/proxmox's
+# dns-resolver) — see that platform's config.sh-template "Lab extras" section and
+# urb-agents#1970/#1971/#1972 for why the distinction is visible here too, not just in config.sh.
+#
+#   uis platform lab-extra add <provider> <name>
+#
+# "remove" is deliberately not wired here yet, same reasoning as core-service's own comment.
+cmd_platform_lab-extra() {
+    local action="${1:-}"
+    shift || true
+    local provider="${1:-}"
+    local name="${2:-}"
+    local repo_root
+    repo_root="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+    case "$action" in
+        add)
+            if [[ -z "$provider" || -z "$name" ]]; then
+                log_error "Usage: uis platform lab-extra add <provider> <name>"
+                exit "$EXIT_GENERAL_ERROR"
+            fi
+
+            local script="$repo_root/platforms/$provider/scripts/08-lab-extra-add.sh"
+            if [[ ! -f "$script" ]]; then
+                log_error "Platform '$provider' has no lab-extra add capability (looked at $script)"
+                exit "$EXIT_GENERAL_ERROR"
+            fi
+
+            export UIS_REPO_ROOT="$repo_root"
+            exec "$script" "$name"
+            ;;
+        "")
+            log_error "Usage: uis platform lab-extra <add> <provider> <name>"
+            echo "Subcommands: add" >&2
+            exit "$EXIT_GENERAL_ERROR"
+            ;;
+        *)
+            log_error "Unknown lab-extra subcommand: $action"
+            echo "Usage: uis platform lab-extra add <provider> <name>" >&2
             exit "$EXIT_GENERAL_ERROR"
             ;;
     esac

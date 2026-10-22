@@ -1,0 +1,12 @@
+---
+# service-dns-resolver — install/configure dnsmasq on a guest already built by guest-ensure.yml
+# from generated/vars/lab-extras/dns-resolver.yml. Opt-in lab extra, not a CORE_SERVICES default
+# — see roles/dns-resolver/tasks/main.yml and README.md's "Lab extras" section.
+#
+#   ansible-playbook -i <guest_ip>, -u root --private-key <key> \
+#       -e @generated/vars/lab-extras/_extra-vars.yml playbooks/service-dns-resolver.yml
+- name: dns-resolver
+  hosts: all
+  gather_facts: true
+  roles:
+    - dns-resolver

@@ -189,3 +189,41 @@ CORE_SERVICE_PG_TEST_IP="192.168.1.25"
 # CORE_SERVICE_FORGEJO_SECRET_KEY=""
 # CORE_SERVICE_FORGEJO_INTERNAL_TOKEN=""
 # CORE_SERVICE_FORGEJO_JWT_SECRET=""
+
+# ── Lab extras — opt-in, NOT part of CORE_SERVICES ──────────────────────────
+# 🔵 EMPTY BY DEFAULT, deliberately, unlike CORE_SERVICES above. These are guests judged genuinely
+# useful to SOME labs but not assumed as a UIS default — see README.md's "Lab extras" section and
+# urb-agents#1970/#1971/#1972 for the reasoning (the same "generic IaC vs lab-specific" test that
+# got the `nas` role removed from this platform entirely still applies; Terje's explicit call for
+# dns-resolver specifically was to build it in anyway, opt-in). Add one at a time with
+# `uis platform lab-extra add proxmox <name>` — never by hand-editing this line and re-running the
+# whole apply chain, same convention as CORE_SERVICES/core-service add.
+LAB_EXTRAS=""
+
+# dns-resolver — dnsmasq-based LAN resolver. Generates a hosts-zone from every guest THIS platform
+# itself declares (3 Proxmox hosts, 6 k3s VMs, every configured CORE_SERVICES/lab-extras guest) —
+# not from a wider inventory this platform doesn't have. Tier-0: `startup: order=0` in its guest
+# declaration makes Proxmox itself boot it before everything else, including registry's order=1 —
+# no extra orchestration needed, the same native mechanism every CORE_SERVICES guest's own
+# `startup=` already uses.
+# 🔴 NOTHING IS REPOINTED AT IT AUTOMATICALLY. Every k3s VM and CORE_SERVICES guest keeps using
+# NETWORK_DNS (your router) above unless you deliberately change it — that's a separate, later,
+# one-consumer-at-a-time decision, not something enabling this guest does for you.
+# 🔴 VMID DEFAULT IS 400, NOT 410 — the reference lab's own real dns-resolver guest happens to run
+# at 410, but THIS template's own CORE_SERVICE_FORGEJO_VMID already defaults to 410 too (see
+# urb-agents#1940's override note above) — defaulting both to the same number here would collide
+# for any fresh lab owner who enables both. Override via LAB_EXTRA_DNS_RESOLVER_VMID if 400 is
+# already taken, or if you're adopting a real dns-resolver guest already at a different VMID
+# (410, matching the reference lab, is the common case for that).
+LAB_EXTRA_DNS_RESOLVER_VMID="400"
+# Only needs a real value once you've actually added "dns-resolver" to LAB_EXTRAS above — same
+# "unused is never read" rule as the CORE_SERVICE_*_IP block.
+LAB_EXTRA_DNS_RESOLVER_IP="192.168.1.26"
+
+# 🔴 THE ONE DELIBERATE EXCEPTION TO "NEVER DEFAULT A REAL ALLOW-LIST" (urb-agents#1944's own
+# rule, followed by every CORE_SERVICE_*_FIREWALL_ALLOW_RANGES above): this guest's whole purpose
+# is "every machine on the LAN queries it", so generate-ansible-config.sh fills this from
+# CORE_SERVICES_LAN_CIDR above — the SAME generic "the whole LAN" value pg/pg-test's own
+# pg_allowed_networks already reuses — when left unset. Override here for a narrower range,
+# including explicitly empty ("") to go stricter than the default.
+# LAB_EXTRA_DNS_RESOLVER_FIREWALL_ALLOW_RANGES=""

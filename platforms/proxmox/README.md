@@ -130,6 +130,57 @@ worth keeping even if your numbers differ:
 
 ---
 
+## Lab extras — opt-in guests, not a UIS default
+
+`CORE_SERVICES` (pg/bao/garage/registry/forgejo/pg-test) ships as the reference lab's own real
+configuration — a fresh lab owner running `init` gets our proven settings, not a blank slate.
+**Lab extras are the opposite**: guests judged genuinely useful to SOME labs but not assumed as a
+UIS default. `LAB_EXTRAS` is empty by default; nothing here gets built unless you deliberately add
+it with `uis platform lab-extra add proxmox <name>` (same add-one-at-a-time mechanism
+`core-service add` uses, kept as a visibly separate list/script pair on purpose — see
+`config.sh-template`'s own "Lab extras" section and urb-agents#1970/#1971/#1972).
+
+Why this is a separate thing at all, rather than a 7th `CORE_SERVICES` entry: a `nas` role (Samba)
+once lived in this platform the same way pg/bao/garage/registry do, generalized from the
+maintainer's own private lab — and was removed outright (see `STRUCTURE.md`'s own "nas —
+deliberately not part of this platform" note) because it wasn't judged worth maintaining as
+generic IaC for every lab owner. `dns-resolver` (below) is the same kind of lab-specific guest by
+that same test — the difference is Terje's own explicit call to build THIS one in anyway, as a
+guest a lab owner can opt into, rather than leave entirely outside provision-host the way `nas`
+was. The opt-in-ness needs to be visible, not just technically true, which is why it isn't just
+another `CORE_SERVICES` case arm.
+
+### dns-resolver
+
+A dnsmasq-based LAN resolver. Generates a hosts-zone from every guest THIS platform itself
+declares — the 3 Proxmox hosts, the 6 k3s VMs, and every configured `CORE_SERVICES`/lab-extras
+guest (including itself) — so every name in the zone is something this platform actually built and
+knows the address of, never a wider or stale inventory. Tier-0: its guest declaration sets
+`startup: order=0`, so Proxmox itself boots it before everything else (including `registry`'s
+`order=1`) — the same native mechanism every `CORE_SERVICES` guest's own `startup=` already uses,
+no new orchestration needed.
+
+```
+./uis platform lab-extra add proxmox dns-resolver
+```
+
+**Nothing is repointed at it automatically.** Every k3s VM and `CORE_SERVICES` guest keeps using
+`NETWORK_DNS` (normally your router) unless you deliberately change it afterward — repointing
+consumers one at a time is a separate, later decision this first build doesn't make for you.
+
+**The one deliberate exception to "never default a real firewall allow-list"**: every other guest
+here leaves its nftables allow-list empty until you explicitly declare one (an empty default is the
+safe choice for most of them — see urb-agents#1944). This guest's whole purpose is "every machine
+on the LAN queries it", so `generate-ansible-config.sh` defaults its allow-range to
+`CORE_SERVICES_LAN_CIDR` (the same "whole LAN" value `pg`/`pg-test` already reuse) unless you
+override `LAB_EXTRA_DNS_RESOLVER_FIREWALL_ALLOW_RANGES` in `config.sh` yourself.
+
+**VMID default is 400, not 410** — the reference lab's own real dns-resolver guest happens to run
+at 410, but this template's own `CORE_SERVICE_FORGEJO_VMID` already defaults to 410 too (see
+urb-agents#1940's override note in `config.sh-template`) — defaulting both to the same number would
+collide for a fresh lab owner who enables both. Override `LAB_EXTRA_DNS_RESOLVER_VMID` if you're
+adopting a real dns-resolver guest already at a different VMID (410 is the common case for that).
+
 ## What's deferred (first draft — see the PR description)
 
 This is a Step 1 in the spirit of `platforms/azure-aks/`'s own first PR: get it genuinely working,
