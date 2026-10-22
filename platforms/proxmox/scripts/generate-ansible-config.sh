@@ -27,7 +27,24 @@ GENERATED_DIR="$PLATFORM_DIR/ansible/generated"
 # shellcheck source=/dev/null
 source "$REPO_ROOT/.uis.secrets/platforms/proxmox/config.sh"
 
+# 🔵 Defaulted, not required — an existing config.sh written before this var existed (every lab's
+# config.sh is real, persistent state under .uis.secrets/, never regenerated from the template on
+# its own) would otherwise trip `set -u` below the moment this script reads it.
+LAB_EXTRAS="${LAB_EXTRAS:-}"
+
 mkdir -p "$GENERATED_DIR/vars/vms"
+
+# 🔵 FED BY write_vm_decl/write_guest_decl BELOW, as a side effect of writing each guest/VM's own
+# declaration — not a separate pass that has to be kept in step with them by hand. This is the
+# data dns-resolver's zone is generated FROM (see roles/dns-resolver/defaults/main.yml's own
+# comment for why this platform doesn't filter ansible inventory groups the way the reference
+# role this was ported from does — this platform's generated inventory.yml never registers
+# CORE_SERVICES/lab-extras guests as inventory hosts at all).
+declare -a ZONE_ENTRIES=(
+  "${PROXMOX_HOST1_NAME}:${PROXMOX_HOST1_ADDR}"
+  "${PROXMOX_HOST2_NAME}:${PROXMOX_HOST2_ADDR}"
+  "${PROXMOX_HOST3_NAME}:${PROXMOX_HOST3_ADDR}"
+)
 
 # ── the inventory: 3 Proxmox hosts + 6 k3s VMs ────────────────────────────
 cat > "$GENERATED_DIR/inventory.yml" <<EOF
@@ -102,6 +119,7 @@ EOF
     echo "  cluster_cidr: \"${ccidr}\"" >> "$file"
     echo "  service_cidr: \"${scidr}\"" >> "$file"
   fi
+  ZONE_ENTRIES+=("${name}:${ip}")
 }
 
 PROD_SERVER_URL="https://${K3S_VM_HOST1_IP}:6443"
@@ -142,12 +160,17 @@ write_vm_decl "$GENERATED_DIR/vars/vms/${PROXMOX_HOST3_NAME}-k3s-test.yml" \
 # own comment. VMIDs/sizing below match the values proven on the reference lab
 # (platform/MIGRATION-services.md); override by editing this script if your hardware differs.
 mkdir -p "$GENERATED_DIR/vars/core-services"
+mkdir -p "$GENERATED_DIR/vars/lab-extras"
 
-write_core_service() {
-  local name="$1" vmid="$2" cores="$3" mem="$4" swap="$5" startup="$6" \
-        features="$7" rootfs_gb="$8" mount_mp="$9" mount_gb="${10}" recordsize="${11}" role="${12}" \
-        ip="${13}"
-  local file="$GENERATED_DIR/vars/core-services/${name}.yml"
+# Shared by write_core_service (below) and the LAB_EXTRAS loop further down — same guest:/service:
+# declaration shape either way, just a different output directory and a different source list
+# (CORE_SERVICES vs LAB_EXTRAS). See config.sh-template's "Lab extras" section for why these are
+# two separate lists rather than one, even though the declaration shape itself doesn't care.
+write_guest_decl() {
+  local outdir="$1" name="$2" vmid="$3" cores="$4" mem="$5" swap="$6" startup="$7" \
+        features="$8" rootfs_gb="$9" mount_mp="${10}" mount_gb="${11}" recordsize="${12}" role="${13}" \
+        ip="${14}"
+  local file="$GENERATED_DIR/vars/${outdir}/${name}.yml"
   cat > "$file" <<EOF
 # GENERATED from config.sh by generate-ansible-config.sh — do not hand-edit.
 guest:
@@ -191,6 +214,11 @@ service:
   playbook: playbooks/service-${name}.yml
   health: vars/${name}-health.yml
 EOF
+  ZONE_ENTRIES+=("${name}:${ip}")
+}
+
+write_core_service() {
+  write_guest_decl "core-services" "$@"
 }
 
 # 🔴 OVERRIDABLE, NOT RE-HARDCODED PER LAB. Config.sh-template documents when to set one of
@@ -222,6 +250,24 @@ for svc in $CORE_SERVICES; do
     # taken; Forgejo has no startup dependency on any of them.
     forgejo)  write_core_service forgejo  "$CORE_SERVICE_FORGEJO_VMID"  2 2048 512  "order=6" "nesting=1,keyctl=1" 8  /var/lib/forgejo    50  ""  forgejo "$CORE_SERVICE_FORGEJO_IP" ;;
     *) echo "⚠️  Unknown core service '$svc' in CORE_SERVICES — skipped" >&2 ;;
+  esac
+done
+
+# ── one guest declaration per configured lab extra — opt-in, NOT CORE_SERVICES ─────────────────
+# See config.sh-template's "Lab extras" section (urb-agents#1970/#1971/#1972) for why this is a
+# separate list rather than a 7th CORE_SERVICES case arm — keeping it visibly separate is the
+# whole point, not an implementation detail.
+# 🔴 KEEP THIS LIST IN STEP WITH scripts/08-lab-extra-add.sh's OWN `case "$NAME" in` ARM — same
+# "two places must agree" shape 07-core-service-add.sh's header already names for CORE_SERVICES.
+LAB_EXTRA_DNS_RESOLVER_VMID="${LAB_EXTRA_DNS_RESOLVER_VMID:-400}"
+
+for extra in $LAB_EXTRAS; do
+  case "$extra" in
+    # order=0 — before everything, INCLUDING registry's order=1. Tiny on purpose: a single
+    # dnsmasq process and a generated zone file, no database, nothing here that outlives a
+    # rebuild — same reasoning as the reference lab's own declaration.
+    dns-resolver) write_guest_decl lab-extras dns-resolver "$LAB_EXTRA_DNS_RESOLVER_VMID" 1 512 256 "order=0" "" 4 "" "" "" dns-resolver "$LAB_EXTRA_DNS_RESOLVER_IP" ;;
+    *) echo "⚠️  Unknown lab extra '$extra' in LAB_EXTRAS — skipped" >&2 ;;
   esac
 done
 
@@ -335,5 +381,43 @@ if [[ -f "$EXTRA_VARS_FILE" ]]; then
 fi
 mv "${EXTRA_VARS_FILE}.new" "$EXTRA_VARS_FILE"
 
+# ── lab-extras' own extra-vars — only dns-resolver needs one today ─────────────────────────────
+# 🔵 ZONE_ENTRIES is complete by this point regardless of ordering: every write_vm_decl/
+# write_guest_decl call above (6 k3s VMs, every configured CORE_SERVICES guest, dns-resolver's
+# own self-entry if it's in LAB_EXTRAS) already appended to it as a side effect.
+LAB_EXTRAS_VARS_FILE="$GENERATED_DIR/vars/lab-extras/_extra-vars.yml"
+_lab_extras_has() {
+    local want="$1" _e
+    for _e in $LAB_EXTRAS; do [[ "$_e" == "$want" ]] && return 0; done
+    return 1
+}
+if _lab_extras_has dns-resolver; then
+  {
+    echo "# GENERATED by generate-ansible-config.sh — do not hand-edit."
+    echo "dns_resolver_zone_entries:"
+    for _entry in "${ZONE_ENTRIES[@]}"; do
+      _ename="${_entry%%:*}"
+      _eip="${_entry#*:}"
+      echo "  - { name: \"${_ename}\", ip: \"${_eip}\" }"
+    done
+    echo "dns_resolver_upstream: \"${NETWORK_DNS}\""
+    echo "dns_resolver_domain: \"${NETWORK_SEARCH_DOMAIN}\""
+    # 🔴 THE ONE DELIBERATE EXCEPTION TO "NEVER DEFAULT A REAL ALLOW-LIST" — see
+    # roles/dns-resolver/defaults/main.yml and config.sh-template's own comment for why. `${VAR+x}`
+    # distinguishes "never set" (use the whole-LAN default) from "set, even to empty" (the lab
+    # owner's own, deliberately narrower or empty, choice).
+    if [[ -n "${LAB_EXTRA_DNS_RESOLVER_FIREWALL_ALLOW_RANGES+x}" ]]; then
+      _dns_fw_ranges="$LAB_EXTRA_DNS_RESOLVER_FIREWALL_ALLOW_RANGES"
+    else
+      _dns_fw_ranges="$CORE_SERVICES_LAN_CIDR"
+    fi
+    if [[ -n "$_dns_fw_ranges" ]]; then
+      echo "dns_resolver_firewall_allow_ranges:"
+      _firewall_ranges_yaml "$_dns_fw_ranges"
+    fi
+  } > "$LAB_EXTRAS_VARS_FILE"
+fi
+
 echo "✓ Generated ansible/generated/inventory.yml, 6 VM declarations under ansible/generated/vars/vms/,"
-echo "  and $(echo $CORE_SERVICES | wc -w) core-service declaration(s) under ansible/generated/vars/core-services/"
+echo "  and $(echo "$CORE_SERVICES" | wc -w) core-service declaration(s) under ansible/generated/vars/core-services/"
+echo "  and $(echo "$LAB_EXTRAS" | wc -w) lab-extra declaration(s) under ansible/generated/vars/lab-extras/"

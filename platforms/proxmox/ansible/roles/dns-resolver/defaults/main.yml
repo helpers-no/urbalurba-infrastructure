@@ -1,0 +1,56 @@
+---
+# dns-resolver — defaults. Every one of these is normally supplied by generate-ansible-config.sh
+# from config.sh (see its own `lab_extra` writer and README.md's "Lab extras" section), the same
+# "generated, not hand-edited" discipline every other role here already follows.
+#
+# 🔴 OPT-IN, NOT A CORE_SERVICES DEFAULT. Ported from the maintainer's own private lab
+# (urb-agents#1970/#1971/#1972 — Terje's explicit call to build this despite the `nas` precedent
+# of NOT folding a lab-specific guest into this platform at all). Judged, not blind-copied: the
+# private lab's role generates its zone from Jinja-filtering `groups['all']` in its own, much
+# larger inventory (every agent machine, every guest, every physical host). This platform's own
+# generated inventory.yml only ever lists the 3 Proxmox hosts + 6 k3s VMs — it does not register
+# CORE_SERVICES guests as inventory hosts at all (they're reached by IP directly, resolved via
+# `pct exec`/`pvesh`, never through `groups['core_services']` or similar). Filtering `groups['all']`
+# here would silently produce an incomplete zone. Fixed at the generation layer instead:
+# generate-ansible-config.sh already knows every guest's name+IP from config.sh (3 hosts, 6 k3s
+# VMs, every configured CORE_SERVICES guest) and emits `dns_resolver_zone_entries` directly as
+# plain data — no inventory introspection in this role at all.
+
+dns_resolver_domain: "lan"
+dns_resolver_port: 53
+
+# List of {name, ip} dicts — see generate-ansible-config.sh's `write_lab_extra_dns_zone`. Never
+# hand-edited; regenerated from config.sh on every run.
+dns_resolver_zone_entries: []
+
+dns_resolver_conf_path: /etc/dnsmasq.conf
+# 🔴 DELIBERATELY NOT UNDER /etc/dnsmasq.d/ — Debian's dnsmasq reads every file in its conf-dir as
+# dnsmasq CONFIG SYNTAX, including one shaped like a hosts file. Same gotcha the reference role
+# found the hard way (dnsmasq.service failing with "bad option" against its own zone file).
+dns_resolver_zone_path: "/etc/dnsmasq-hosts.{{ dns_resolver_domain }}"
+
+# ── upstream ────────────────────────────────────────────────────────────────────────────────
+# 🔴 NO HARDCODED ROUTER ADDRESS, and NO DEFAULT AT ALL — the reference role defaults this to the
+# maintainer's own Deco router; this platform already has a generic equivalent (config.sh's
+# NETWORK_DNS, normally the lab's own router) and generate-ansible-config.sh passes it through
+# explicitly. Left undefined here on purpose — tasks/main.yml asserts it's actually set, the same
+# "required, not silently defaulted" treatment bao's root token and forgejo's app secrets already
+# get, because an unreachable or wrong upstream silently breaks every lookup this resolver doesn't
+# itself answer, worse than refusing to apply at all.
+dns_resolver_upstream: ""
+
+dns_resolver_cache_size: 150
+
+# ── firewall ────────────────────────────────────────────────────────────────────────────────
+# 🔴 UNLIKE EVERY OTHER ROLE HERE, THIS DEFAULT IS NOT EMPTY AT THE GENERATION LAYER. bao/garage/
+# forgejo/postgres all leave their allow-list empty by default in the role itself and require the
+# lab owner to declare one explicitly (urb-agents#1944 — silently defaulting a real allow-list is
+# how a confirm/repair run tears down live access). This guest is the one deliberate exception:
+# its entire purpose is "every machine on the LAN queries it", so an empty-by-default posture
+# would leave it answering nothing for anyone from minute one — the opposite failure from #1944,
+# equally real. generate-ansible-config.sh fills this from the SAME `CORE_SERVICES_LAN_CIDR`
+# value pg/pg-test's own `pg_allowed_networks` already reuses (config.sh's one generic "the whole
+# LAN" value), not a new invented default — override via LAB_EXTRA_DNS_RESOLVER_FIREWALL_ALLOW_RANGES
+# in config.sh for a narrower range, including explicitly empty to go stricter than the default.
+dns_resolver_firewall_allow_hosts: []
+dns_resolver_firewall_allow_ranges: []

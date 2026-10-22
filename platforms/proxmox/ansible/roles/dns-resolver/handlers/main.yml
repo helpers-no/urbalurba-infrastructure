@@ -1,0 +1,13 @@
+---
+- name: Restart dnsmasq
+  ansible.builtin.systemd:
+    name: dnsmasq
+    state: restarted
+    daemon_reload: true
+
+# `reloaded`, not `restarted` — avoids the brief full-open window a flush-then-reapply would
+# create, same reasoning as bao/garage's own nftables handlers here.
+- name: Reload nftables
+  ansible.builtin.systemd:
+    name: nftables
+    state: reloaded

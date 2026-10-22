@@ -1,0 +1,43 @@
+#!/usr/sbin/nft -f
+# MANAGED BY ANSIBLE — roles/dns-resolver/templates/dns-resolver-nftables.conf.j2. Local edits
+# are lost on the next run.
+#
+# Restricts dnsmasq (53/tcp+udp) to the declared allow-list (roles/dns-resolver/defaults/main.yml's
+# dns_resolver_firewall_allow_hosts, resolved to live addresses, plus
+# dns_resolver_firewall_allow_ranges' raw address ranges). Everything else on this guest —
+# management ssh, outbound traffic — is unaffected. Same shape as roles/bao's own template.
+#
+# 🔵 UNLIKE bao/garage/forgejo, the allow-list here is normally the WHOLE LAN, not a narrow admin
+# band — every machine on the network is a legitimate dnsmasq client. See
+# roles/dns-resolver/defaults/main.yml's own comment for why this is the one deliberate exception
+# to "never default a real allow-list".
+flush ruleset
+
+table inet filter {
+	chain input {
+		type filter hook input priority 0; policy drop;
+
+		iif lo accept
+		ct state established,related accept
+		ip protocol icmp accept
+		ip6 nexthdr icmpv6 accept
+		tcp dport 22 accept
+
+{% for addr in dns_resolver_firewall_allow_addrs %}
+		ip saddr {{ addr }} tcp dport {{ dns_resolver_port }} accept
+		ip saddr {{ addr }} udp dport {{ dns_resolver_port }} accept
+{% endfor %}
+{% for range in dns_resolver_firewall_allow_ranges %}
+		ip saddr {{ range }} tcp dport {{ dns_resolver_port }} accept
+		ip saddr {{ range }} udp dport {{ dns_resolver_port }} accept
+{% endfor %}
+	}
+
+	chain forward {
+		type filter hook forward priority 0; policy drop;
+	}
+
+	chain output {
+		type filter hook output priority 0; policy accept;
+	}
+}

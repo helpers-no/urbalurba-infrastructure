@@ -51,31 +51,38 @@ echo "clusters. No cloud cost — it's your own hardware — but it does use"
 echo "real disk/RAM/CPU on each host (see README.md's \"Sizing\")."
 echo
 
-echo "▶ 1/5 Storage (bootstrap the control key, verify all 3 hosts — safe, no disk touched)..."
+echo "▶ 1/7 Storage (bootstrap the control key, verify all 3 hosts — safe, no disk touched)..."
 "$SCRIPT_DIR/00-storage-ensure.sh"
 echo
 echo "  ⚠️ If this is a fresh lab, run './scripts/00-storage-ensure.sh --create-pool' yourself"
 echo "  once (destructive, asks for a typed YES per host) before continuing — not auto-run here."
 echo
 
-echo "▶ 2/5 Cluster join (idempotent — skips cleanly if already clustered)..."
+echo "▶ 2/7 Cluster join (idempotent — skips cleanly if already clustered)..."
 "$SCRIPT_DIR/01-cluster-join.sh"
 echo
 
-echo "▶ 3/5 Preflight (verify the 3 Proxmox hosts are ready)..."
+echo "▶ 3/7 Preflight (verify the 3 Proxmox hosts are ready)..."
 "$SCRIPT_DIR/02-k3s-preflight.sh"
 echo
 
-echo "▶ 4/5 Apply (create 6 VMs, form both k3s clusters)..."
+echo "▶ 4/7 Apply (create 6 VMs, form both k3s clusters)..."
 "$SCRIPT_DIR/03-k3s-apply.sh"
 echo
 
-echo "▶ 5/6 Post-apply (kubeconfig + Traefik + switch UIS target)..."
+echo "▶ 5/7 Post-apply (kubeconfig + Traefik + switch UIS target)..."
 "$SCRIPT_DIR/04-k3s-post-apply.sh"
 echo
 
-echo "▶ 6/6 Core services (${CORE_SERVICES:-none configured}: guest → install → replicate → HA)..."
+echo "▶ 6/7 Core services (${CORE_SERVICES:-none configured}: guest → install → replicate → HA)..."
 "$SCRIPT_DIR/05-core-services-apply.sh"
+echo
+
+# 🔵 LAB_EXTRAS is empty by default (unlike CORE_SERVICES, which ships the reference lab's own
+# real configuration) — a lab owner who never opts in via `uis platform lab-extra add proxmox
+# <name>` has this step build nothing, same "safe, idempotent no-op" shape as every step above.
+echo "▶ 7/7 Lab extras (${LAB_EXTRAS:-none configured}: opt-in guests — see README.md's \"Lab extras\")..."
+"$SCRIPT_DIR/09-lab-extras-apply.sh"
 
 echo
 echo "═══════════════════════════════════════════════════════════"
