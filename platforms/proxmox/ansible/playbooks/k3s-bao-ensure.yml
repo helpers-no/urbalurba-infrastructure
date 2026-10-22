@@ -173,11 +173,19 @@
 
     # ── facts every cluster needs bao configured with — read from the kubeconfig itself, which
     # already embeds them, rather than a second SSH hop into a k3s node for the same bytes ──────
+    # 🔴 `--context <name> ... --minify`, NOT a bare `.clusters[?(@.name=="<context>")]` filter —
+    # urb-agents#1949, live-confirmed: a context's name and its cluster's name are NOT the same
+    # thing in general. On this lab's real merged kubeconfig the context "proxmox" points at a
+    # cluster actually named "frigg-k3s" — the old filter matched nothing, so api_server/
+    # ca_cert_b64 silently became empty strings, carried two tasks downstream to where bao
+    # finally rejected the config write with "no host provided". `--minify` resolves context ->
+    # cluster for you and collapses `clusters[]` to the one entry that actually matters, so
+    # `.clusters[0]` is correct regardless of whether the two names happen to match.
     - name: Each cluster's real API server address and CA (from the merged kubeconfig)
       ansible.builtin.shell:
         cmd: >-
-          echo "$(kubectl config view --raw -o jsonpath='{.clusters[?(@.name=="{{ item.context }}")].cluster.server}')
-          $(kubectl config view --raw -o jsonpath='{.clusters[?(@.name=="{{ item.context }}")].cluster.certificate-authority-data}')"
+          echo "$(kubectl --context {{ item.context }} config view --raw --minify -o jsonpath='{.clusters[0].cluster.server}')
+          $(kubectl --context {{ item.context }} config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
       register: cluster_facts_raw
       changed_when: false
       loop: "{{ clusters }}"
@@ -198,6 +206,22 @@
         loop_var: item
         index_var: idx
         label: "{{ item.0.context }}"
+
+    # 🔴 FAIL HERE, LOUDLY, NOT TWO TASKS DOWNSTREAM INSIDE A CRYPTIC BAO API ERROR —
+    # urb-agents#1949: the exact failure mode this guards against is an empty api_server/
+    # ca_cert_b64 silently surviving a string-split with nothing to catch it.
+    - name: Every cluster actually resolved a real API server and CA
+      ansible.builtin.assert:
+        that:
+          - item.api_server | length > 0
+          - item.ca_cert_b64 | length > 0
+        fail_msg: >-
+          {{ item.context }} resolved an empty api_server or ca_cert_b64 from the merged
+          kubeconfig. The context name and its cluster's name are not always the same — check
+          `kubectl config get-contexts {{ item.context }}` for the cluster it actually points at.
+        quiet: true
+      loop: "{{ cluster_wiring }}"
+      loop_control: { label: "{{ item.context }}" }
 
 - name: Configure bao — kubernetes auth per cluster, KV mount, policy, role
   hosts: all
@@ -293,6 +317,20 @@
       loop: "{{ hostvars['localhost'].cluster_wiring }}"
       loop_control: { label: "{{ item.context }}" }
       no_log: true
+
+    # 🔴 SCRUBBED, NOT JUST NO_LOG'D — urb-agents#1949: `no_log` only redacts a task's OWN
+    # args/result, not an arbitrary field riding along inside a looped-over `item`. The task
+    # right above was the LAST one that ever needs the raw reviewer_jwt (every task below reads
+    # the file instead) — live-confirmed, the hard way: when "Configure each cluster's auth
+    # mount" below failed once, Ansible's own failure JSON printed the entire `item`, including
+    # this live, full Kubernetes ServiceAccount token, in plaintext, in a terminal. Overwriting
+    # the fact itself (not just this one task's loop) protects every task in this play AND the
+    # next play that also reads `cluster_wiring`/`hostvars['localhost'].cluster_wiring` — none of
+    # them ever reference `item.reviewer_jwt` again.
+    - name: Scrub the reviewer JWT out of cluster_wiring now that it is safely on disk, not in a fact
+      ansible.builtin.set_fact:
+        cluster_wiring: "{{ hostvars['localhost'].cluster_wiring | map('combine', {'reviewer_jwt': '(scrubbed - see /tmp/<context>-reviewer.jwt urb-agents#1949)'}) | list }}"
+      delegate_to: localhost
 
     # 🔴 written on EVERY run, not only when missing — this is config, not a one-time bootstrap
     # step. A rebuilt k3s node changes the API server's address; a stale config here would
