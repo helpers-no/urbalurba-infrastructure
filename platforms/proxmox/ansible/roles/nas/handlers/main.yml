@@ -1,0 +1,14 @@
+---
+- name: Restart samba
+  ansible.builtin.systemd:
+    name: smbd
+    state: restarted
+    daemon_reload: true
+
+# `reloaded`, not `restarted` — same reasoning as every other role's nftables handler in this
+# platform (bao/garage/dns-resolver): avoids the brief full-open window a flush-then-reapply
+# would create.
+- name: Reload nftables
+  ansible.builtin.systemd:
+    name: nftables
+    state: reloaded

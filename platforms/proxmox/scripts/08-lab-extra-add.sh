@@ -36,17 +36,17 @@ CONFIG_FILE="$REPO_ROOT/.uis.secrets/platforms/proxmox/config.sh"
 NAME="${1:-}"
 if [[ -z "$NAME" ]]; then
     print_error "Usage: $0 <name>"
-    echo "  Known lab extras: dns-resolver" >&2
+    echo "  Known lab extras: dns-resolver nas" >&2
     exit 2
 fi
 
 # 🔴 KEEP THIS LIST IN STEP WITH generate-ansible-config.sh's OWN `case "$extra" in` ARMS — same
 # "two places must agree" shape 07-core-service-add.sh's header already names for CORE_SERVICES.
 case "$NAME" in
-    dns-resolver) ;;
+    dns-resolver|nas) ;;
     *)
         print_error "Unknown lab extra '$NAME'."
-        echo "  Known lab extras: dns-resolver" >&2
+        echo "  Known lab extras: dns-resolver nas" >&2
         exit 2
         ;;
 esac

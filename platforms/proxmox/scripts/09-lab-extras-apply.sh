@@ -131,9 +131,24 @@ for extra in $TARGET_EXTRAS; do
 
     print_status "service-${extra} (${guest_ip})..."
     extra_vars_file="generated/vars/lab-extras/_extra-vars.yml"
+    extra_args=(-e "@${extra_vars_file}")
+
+    # 🔵 PER-EXTRA SITE DATA — real, persistent, per-install, never regenerated, same shape as
+    # config.sh itself (urb-agents#1935's own "survives a uis-pull" discipline). Some lab extras
+    # (nas today) need bespoke, inherently structured data — named human/agent accounts, named
+    # shares with per-share permission modes — that config.sh's own flat-scalar style was never
+    # meant to carry, and that this script has no business inventing or defaulting (same "site
+    # data, not role data" rule the role itself enforces). A lab owner who needs one copies the
+    # matching `-template` file themselves; this is entirely optional — only passed if present, so
+    # an extra with no such file (dns-resolver today) behaves exactly as before.
+    site_data_file="$REPO_ROOT/.uis.secrets/platforms/proxmox/lab-extras/${extra}-site-data.yml"
+    if [[ -f "$site_data_file" ]]; then
+        extra_args+=(-e "@${site_data_file}")
+    fi
+
     ansible-playbook -i "${guest_ip}," -u root --private-key "$PROXMOX_SSH_KEY" \
         --ssh-common-args "-o StrictHostKeyChecking=accept-new" \
-        -e "@${extra_vars_file}" \
+        "${extra_args[@]}" \
         "playbooks/service-${extra}.yml" || {
         print_error "service-${extra} failed — see ansible output above."
         exit 1

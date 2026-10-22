@@ -1,0 +1,14 @@
+---
+# service-nas — install/configure Samba on a guest already built by guest-ensure.yml from
+# generated/vars/lab-extras/nas.yml. Opt-in lab extra, not a CORE_SERVICES default — see
+# roles/nas/tasks/main.yml and README.md's "Lab extras" section.
+#
+#   ansible-playbook -i <guest_ip>, -u root --private-key <key> \
+#       -e @generated/vars/lab-extras/_extra-vars.yml \
+#       -e @.uis.secrets/platforms/proxmox/lab-extras/nas-site-data.yml \
+#       playbooks/service-nas.yml
+- name: nas
+  hosts: all
+  gather_facts: true
+  roles:
+    - nas

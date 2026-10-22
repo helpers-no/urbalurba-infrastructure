@@ -42,8 +42,15 @@ start_test "every lab extra generate-ansible-config.sh actually builds is accept
 # script's validation, generate-ansible-config.sh's own LAB_EXTRAS dispatch) must list the
 # same names. Reading generate-ansible-config.sh's case arms directly, not hand-copying
 # its list, so this fails the moment the two drift instead of needing a human to notice.
-_gen_names="$(grep -oE '^\s+[a-z][a-z0-9-]*\)\s+write_guest_decl lab-extras' "$GEN_SCRIPT" \
-    | awk '{print $1}' | tr -d ')' | sort -u)"
+# 🔴 ISOLATES THE CASE BLOCK FIRST, not a single-line regex — found running this for real: nas's
+# own arm needs setup lines before its write_guest_decl call (parsing LAB_EXTRA_NAS_SHARE_MOUNTS),
+# so its label and that call are no longer on the same line the way dns-resolver's one-liner arm
+# is. A same-line-only regex silently extracted ONLY dns-resolver here and this whole check passed
+# vacuously for nas — never actually checked it — until caught by hand. Isolating
+# `case "$extra" in ... esac` first and reading every arm LABEL line within it (whether or not
+# code follows on that same line) is robust to either shape.
+_gen_names="$(awk '/case "\$extra" in/{f=1} f{print} /esac/{if(f)exit}' "$GEN_SCRIPT" \
+    | grep -oE '^\s+[a-z][a-z0-9-]*\)' | tr -d ') ' | sort -u)"
 _add_script_names="$(grep -E '^\s+[a-z][a-z0-9-]*(\|[a-z][a-z0-9-]*)*\)\s*;;' "$ADD_SCRIPT" \
     | head -1 | sed -E 's/^\s+//; s/\).*//' | tr '|' '\n' | sort -u)"
 _missing=""
@@ -112,5 +119,25 @@ grep -qE '^for extra in \$TARGET_EXTRAS; do' "$APPLY_SCRIPT" && pass_test \
 start_test "an empty LAB_EXTRAS exits cleanly rather than erroring under set -u"
 grep -q 'LAB_EXTRAS is empty in config.sh' "$APPLY_SCRIPT" && pass_test \
     || fail_test "the empty-LAB_EXTRAS early exit is missing"
+
+print_test_section "09-lab-extras-apply.sh: per-extra site data (nas)"
+
+start_test "a per-extra site-data file is only passed if it actually exists"
+grep -q 'if \[\[ -f "\$site_data_file" \]\]' "$APPLY_SCRIPT" && pass_test \
+    || fail_test "the optional site-data pass-through guard is missing"
+
+start_test "the site-data path is scoped to THIS extra's own name, not a shared/global file"
+grep -qE 'site_data_file="\$REPO_ROOT/\.uis\.secrets/platforms/proxmox/lab-extras/\$\{extra\}-site-data\.yml"' "$APPLY_SCRIPT" \
+    && pass_test || fail_test "the per-extra site-data path convention is missing or changed shape"
+
+print_test_section "generate-ansible-config.sh: nas's multi-mount support"
+
+start_test "write_guest_decl accepts an extra_mounts parameter beyond mp0"
+grep -q 'extra_mounts="\${15:-}"' "$GEN_SCRIPT" && pass_test \
+    || fail_test "write_guest_decl's extra_mounts parameter is missing"
+
+start_test "nas's own case arm actually uses extra_mounts (more than one share mount)"
+grep -q '_nas_rest_mounts' "$GEN_SCRIPT" && pass_test \
+    || fail_test "nas's multi-mount parsing is missing"
 
 print_summary
