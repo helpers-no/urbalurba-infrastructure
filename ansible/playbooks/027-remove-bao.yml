@@ -13,6 +13,9 @@
     bao_eso_namespace: "external-secrets"
     bao_release: "bao"
     deletion_timeout: 180
+    # 🔴 v1beta1, NOT v1 — must match 027-setup-bao.yml's own eso_crd_api_version, or `state:
+    # absent` against a version the CRD doesn't serve just fails instead of removing anything.
+    eso_crd_api_version: "external-secrets.io/v1beta1"
 
   tasks:
     - name: 1. Check for the OpenBao Helm release
@@ -34,7 +37,7 @@
       kubernetes.core.k8s:
         state: absent
         kubeconfig: "{{ merged_kubeconf_file }}"
-        api_version: external-secrets.io/v1
+        api_version: "{{ eso_crd_api_version }}"
         kind: ExternalSecret
         name: bao-ensure-selftest
         namespace: "{{ bao_eso_namespace }}"
@@ -44,7 +47,7 @@
       kubernetes.core.k8s:
         state: absent
         kubeconfig: "{{ merged_kubeconf_file }}"
-        api_version: external-secrets.io/v1
+        api_version: "{{ eso_crd_api_version }}"
         kind: ClusterSecretStore
         name: openbao
       ignore_errors: true
@@ -65,19 +68,44 @@
     # also being destroyed leaves a vault nobody can read or re-authenticate against. Preserve
     # both (and the PVC) unless -e _purge=true - same convention 047-remove-garage.yml uses for
     # its own PVC.
-    - name: 6. Purge the seal key, root token, and raft data - only if explicitly asked
+    - name: 6. Purge the seal key and the persisted root token - only if explicitly asked
       kubernetes.core.k8s:
         state: absent
         kubeconfig: "{{ merged_kubeconf_file }}"
         api_version: v1
-        kind: "{{ item.kind }}"
-        name: "{{ item.name }}"
+        kind: Secret
+        name: "{{ item }}"
         namespace: "{{ bao_namespace }}"
       loop:
-        - { kind: Secret, name: bao-seal-key }
-        - { kind: Secret, name: bao-dev-init }
-        - { kind: PersistentVolumeClaim, name: "data-{{ bao_release }}-0" }
-      loop_control: { label: "{{ item.kind }}/{{ item.name }}" }
+        - bao-seal-key
+        - bao-dev-init
+      when: _purge is defined and (_purge | bool)
+      ignore_errors: true
+
+    # 🔴 LOOKED UP, NOT A HARDCODED NAME — urb-agents#1956, live-confirmed: the chart names its
+    # StatefulSet (and therefore this volumeClaimTemplate's PVC) "bao-openbao-0", not "bao-0" —
+    # the same chart-naming surprise that broke service-bao.sh's SCRIPT_CHECK_COMMAND. A label
+    # selector survives a future chart bump the way a literal name already proved it cannot.
+    - name: 6b. Which PVC(s) this release actually owns - only if purging
+      kubernetes.core.k8s_info:
+        kind: PersistentVolumeClaim
+        namespace: "{{ bao_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/instance={{ bao_release }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: bao_pvcs
+      when: _purge is defined and (_purge | bool)
+
+    - name: 6c. Purge the raft data PVC(s) - only if explicitly asked
+      kubernetes.core.k8s:
+        state: absent
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        api_version: v1
+        kind: PersistentVolumeClaim
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ bao_namespace }}"
+      loop: "{{ bao_pvcs.resources | default([]) }}"
+      loop_control: { label: "{{ item.metadata.name }}" }
       when: _purge is defined and (_purge | bool)
       ignore_errors: true
 

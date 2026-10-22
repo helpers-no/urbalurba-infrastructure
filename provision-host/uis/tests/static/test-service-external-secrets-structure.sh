@@ -92,12 +92,13 @@ else
     fail "every kubectl-invoking task carries KUBECONFIG" "$_missing_kc"
 fi
 
-# ── the repo-wide "helm repo update must force" rule ──
+# ── `helm repo update` takes no --force-update flag (that belongs on `helm repo add`) -
+# urb-agents#1956: this exact mistake blocked the playbook outright on a real cluster ──
 
-if grep -q 'helm repo update --force-update' "$SETUP"; then
-    pass "helm repo update uses --force-update"
+if grep -qE 'helm repo update\s*$' "$SETUP" && ! grep -q 'helm repo update --force-update' "$SETUP"; then
+    pass "helm repo update carries no --force-update flag"
 else
-    fail "helm repo update uses --force-update" "not found in $SETUP"
+    fail "helm repo update carries no --force-update flag" "found --force-update on 'helm repo update' in $SETUP"
 fi
 
 # ── docs index links to this service's page ──

@@ -24,7 +24,15 @@ SCRIPT_CATEGORY="MANAGEMENT"
 # === UIS-Specific (Optional) ===
 SCRIPT_PLAYBOOK="027-setup-bao.yml"
 SCRIPT_MANIFEST=""
-SCRIPT_CHECK_COMMAND="kubectl exec -n bao bao-0 -- bao status 2>/dev/null | grep -qE '^Sealed\s+false'"
+# 🔴 LABEL SELECTOR, NOT A HARDCODED POD NAME — urb-agents#1956, live-confirmed: the openbao Helm
+# chart names its StatefulSet/pod "bao-openbao-0", not "bao-0", for a release named "bao". A
+# literal name broke an earlier draft of this check outright (always exit 1, pod never existed by
+# that name) and made bao silently absent from `uis status` rather than reported unhealthy. Same
+# shape every other service's own check uses (garage, cert-manager, ...) - a label survives a
+# future chart naming change the way a literal pod name already proved it cannot. This script is
+# also `source`d directly elsewhere, so the value must stay a plain string with no $(...) inside
+# it - that would eagerly run at source time instead of staying a live check.
+SCRIPT_CHECK_COMMAND="kubectl get pods -n bao -l app.kubernetes.io/instance=bao --no-headers 2>/dev/null | grep -q Running"
 SCRIPT_REMOVE_PLAYBOOK="027-remove-bao.yml"
 SCRIPT_REQUIRES="external-secrets"
 SCRIPT_PRIORITY="22"

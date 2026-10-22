@@ -63,13 +63,13 @@ Stated plainly in `manifests/027-bao-config.yaml`'s own header, not hidden:
 
 ## Verify
 
-```bash
-# Quick check
-./uis verify bao
+`./uis verify bao` does not exist yet — like most services, bao has only the basic
+`SCRIPT_CHECK_COMMAND` health check `uis deploy`/`uis status` already run, not a dedicated
+`cmd_bao_verify` target. Check it manually:
 
-# Manual check
+```bash
 kubectl get pods -n bao
-kubectl exec -n bao bao-0 -- bao status
+kubectl exec -n bao $(kubectl get pod -n bao -l app.kubernetes.io/instance=bao -o jsonpath='{.items[0].metadata.name}') -- bao status
 kubectl get clustersecretstore openbao
 kubectl get secret bao-ensure-selftest -n external-secrets
 ```

@@ -516,7 +516,7 @@
     ,"docs": "/docs/services/management/bao"
     ,"playbook": "027-setup-bao.yml"
     ,"priority": 22
-    ,"checkCommand": "kubectl exec -n bao bao-0 -- bao status 2>/dev/null | grep -qE ^Sealed\\s+false"
+    ,"checkCommand": "kubectl get pods -n bao -l app.kubernetes.io/instance=bao --no-headers 2>/dev/null | grep -q Running"
     ,"removePlaybook": "027-remove-bao.yml"
     ,"requires": ["external-secrets"]
     ,"helmChart": "openbao/openbao"

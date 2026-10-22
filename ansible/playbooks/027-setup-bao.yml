@@ -37,6 +37,13 @@
     installation_timeout: 300
     # ── the rest of the wiring (ESO, kubernetes auth, KV mount, ClusterSecretStore) ──
     eso_namespace: "external-secrets"
+    # 🔴 v1beta1, NOT v1 — urb-agents#1956, live-confirmed: the ESO chart version pinned in
+    # 026-setup-external-secrets.yml (0.10.7) only serves v1alpha1/v1beta1 on its
+    # ClusterSecretStore/ExternalSecret CRDs; v1 does not exist on that version and the apply
+    # fails outright ("Failed to find exact match for external-secrets.io/v1.ClusterSecretStore").
+    # Keep this in step with whichever CRD version the pinned chart actually serves, not with
+    # whatever ESO's own docs currently show as current.
+    eso_crd_api_version: "external-secrets.io/v1beta1"
     bao_kv_mount: "platform"
     bao_eso_policy: "eso-read"
     bao_auth_mount: "kubernetes"
@@ -105,8 +112,13 @@
         repo_url: "{{ bao_repo_url }}"
       when: "'openbao' not in helm_repo_list.stdout"
 
+    # 🔴 PLAIN `helm repo update` — no `--force-update`. That flag exists on `helm repo add`
+    # (where this repo's own test-metadata.sh enforces it, for idempotency across container
+    # rebuilds), not on `helm repo update` — Helm 3.22.1 has no such flag there at all.
+    # Live-confirmed by imac (urb-agents#1956): this blocked both this playbook and
+    # 026-setup-external-secrets.yml outright, before anything else ran.
     - name: 9. Update Helm repositories
-      ansible.builtin.command: helm repo update --force-update
+      ansible.builtin.command: helm repo update
       changed_when: false
 
     - name: 10. Deploy OpenBao via Helm
@@ -187,6 +199,17 @@
     # laptop needs break-glass quorum for a throwaway dev instance. Kept, never discarded: every
     # later run of this playbook needs the root token again to manage the auth method/KV mount,
     # the same way production's role re-reads its own persisted init-output.json on every run.
+    # 🔴 `| string` IS LOAD-BEARING, not cosmetic — urb-agents#1956, live-confirmed: a bare
+    # `{{ bao_init.stdout }}` is valid JSON, so Ansible's implicit type-casting turns it into a
+    # native dict before the k8s module serializes the Secret, and the API rejects it ("cannot
+    # unmarshal object into Go struct field Secret.stringData of type string"). Retried rather
+    # than one-shot: task 16 above only runs `when: not initialized`, so if THIS task fails after
+    # a successful init, the vault is now initialised with a root token that exists nowhere —
+    # every later run skips both re-init (already initialised) and re-persist (nothing new to
+    # persist), with no path back in short of destroying the whole instance. A retry here is
+    # cheap insurance against exactly that: writing a k8s Secret is simple enough that a transient
+    # failure, not a hard validation error, is the only thing a retry could plausibly fix — but
+    # for THIS class of bug there would be no second chance without one.
     - name: 17. Persist the root token, only on the run that actually initialised
       kubernetes.core.k8s:
         state: present
@@ -198,9 +221,31 @@
             name: bao-dev-init
             namespace: "{{ bao_namespace }}"
           stringData:
-            init-output.json: "{{ bao_init.stdout }}"
+            init-output.json: "{{ bao_init.stdout | string }}"
+      register: bao_init_persisted
+      until: bao_init_persisted is success
+      retries: 3
+      delay: 5
       no_log: true
+      ignore_errors: true
       when: bao_init is defined and bao_init.changed | default(false)
+
+    # 🔴 LOUD AND SPECIFIC ON FAILURE, not a generic Ansible error — urb-agents#1956: this is the
+    # one failure mode in this whole playbook with no way back in (see the comment on task 17).
+    # An operator who hits this needs to know immediately that the instance is unrecoverable, not
+    # spend time debugging a vault that will never accept a fix.
+    - name: 17b. The persist must have actually succeeded, or this instance is unrecoverable
+      ansible.builtin.fail:
+        msg: >-
+          OpenBao was just initialised, but persisting its root token failed. That token now
+          exists NOWHERE — not in the cluster, not in any log (no_log, correctly) — and every
+          future run of this playbook will skip re-init (already initialised) and skip
+          re-persist (nothing new to persist). This instance cannot be recovered. The only way
+          forward is: ./uis undeploy bao -e _purge=true, then ./uis deploy bao again, from
+          nothing.
+      when:
+        - bao_init is defined and bao_init.changed | default(false)
+        - not (bao_init_persisted is success)
 
     - name: 18. Read the persisted root token (every run needs it, not only the init run)
       kubernetes.core.k8s_info:
@@ -469,7 +514,7 @@
         state: present
         kubeconfig: "{{ merged_kubeconf_file }}"
         definition:
-          apiVersion: external-secrets.io/v1
+          apiVersion: "{{ eso_crd_api_version }}"
           kind: ClusterSecretStore
           metadata:
             name: openbao
@@ -493,7 +538,7 @@
         state: present
         kubeconfig: "{{ merged_kubeconf_file }}"
         definition:
-          apiVersion: external-secrets.io/v1
+          apiVersion: "{{ eso_crd_api_version }}"
           kind: ExternalSecret
           metadata:
             name: bao-ensure-selftest
