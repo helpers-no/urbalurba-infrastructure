@@ -104,13 +104,32 @@ declare -A NODE_ADDR=(
 # Which node actually holds this vmid right now, cluster-wide — not which one generate-ansible-
 # config.sh declared for it. pvesh is cluster-aware, so asking host1 is enough regardless of where
 # the guest itself lives.
+#
+# $2 (optional) is the service name this vmid is EXPECTED to be — not asserted, only warned on a
+# mismatch. urb-agents#1940: a hardcoded VMID collided with an unrelated real guest (forgejo's
+# declared 410 was actually dns-resolver on that lab; the real forgejo was at 411), and this
+# function trusted the VMID alone, silently returning the wrong guest's node. A hard refusal here
+# would be wrong too, though — a guest adopted from outside this convention may legitimately be
+# named something this declaration never chose — so this surfaces the mismatch loudly without
+# blocking a run that is otherwise correct once the VMID itself is fixed (config.sh-template's
+# CORE_SERVICE_*_VMID override).
 guest_node() {
-    local vmid="$1" node
-    node="$(ssh_h1 "pvesh get /cluster/resources --type vm --output-format json" \
-        | jq -r --arg vmid "$vmid" '.[] | select((.vmid|tostring)==$vmid) | .node')"
+    local vmid="$1" expected_name="${2:-}" node name cluster_json
+    cluster_json="$(ssh_h1 "pvesh get /cluster/resources --type vm --output-format json")"
+    node="$(echo "$cluster_json" | jq -r --arg vmid "$vmid" '.[] | select((.vmid|tostring)==$vmid) | .node')"
     if [[ -z "$node" ]]; then
         print_error "VMID ${vmid} is not reported anywhere in the cluster (pvesh /cluster/resources) — is it actually running?"
         exit 1
+    fi
+    if [[ -n "$expected_name" ]]; then
+        name="$(echo "$cluster_json" | jq -r --arg vmid "$vmid" '.[] | select((.vmid|tostring)==$vmid) | .name')"
+        if [[ -n "$name" && "$name" != "$expected_name" ]]; then
+            # >&2, deliberately, unlike every other print_* in this file: guest_node's own stdout
+            # is captured via command substitution by every caller ("$(guest_node ...)"), and this
+            # warning must still reach the terminal — not get silently folded into the captured
+            # node-name string — even when the run continues past it.
+            print_warning "VMID ${vmid} exists but is named '${name}', not '${expected_name}' — this usually means the VMID collides with an UNRELATED guest, not ${expected_name}. Double-check before trusting anything derived from it. If ${expected_name}'s real VMID differs, override it via config.sh's CORE_SERVICE_*_VMID." >&2
+        fi
     fi
     if [[ -z "${NODE_ADDR[$node]:-}" ]]; then
         print_error "VMID ${vmid} is on node '${node}', which is none of PROXMOX_HOST{1,2,3}_NAME in config.sh."
@@ -171,7 +190,7 @@ for svc in $TARGET_SERVICES; do
         -e "guest_file=${decl}" -e "guest_pubkey=${PUBKEY}" -e "pool_name=${POOL_NAME}"
 
     print_status "Finding which node ${svc}'s guest actually lives on..."
-    guest_node_name="$(guest_node "$vmid")"
+    guest_node_name="$(guest_node "$vmid" "$svc")"
     guest_node_addr="${NODE_ADDR[$guest_node_name]}"
     if [[ "$guest_node_name" != "$PROXMOX_HOST1_NAME" ]]; then
         print_warning "VMID ${vmid} is on '${guest_node_name}', not host1 — HA relocated it since it was declared."
@@ -245,13 +264,17 @@ _core_services_has() {
     return 1
 }
 
+# 🔴 NOT `guest_node ... 2>/dev/null` — urb-agents#1940's whole fix is the name-mismatch warning
+# guest_node prints on stderr; suppressing stderr here would silently defeat it in exactly the
+# scoped-run fallback case that caused the bug. The not-found hard-exit case is still tolerated
+# (its stdout contamination is discarded by the `&&` short-circuit below regardless of stderr).
 if [[ -z "$REGISTRY_IP" ]] && _core_services_has registry && [[ -f "generated/vars/core-services/registry.yml" ]]; then
     _vmid="$(grep -m1 '^  vmid:' "generated/vars/core-services/registry.yml" | awk '{print $2}')"
-    _node_name="$(guest_node "$_vmid" 2>/dev/null)" && REGISTRY_IP="$(ssh_node "${NODE_ADDR[$_node_name]}" "pct exec ${_vmid} -- hostname -I" 2>/dev/null | awk '{print $1}')"
+    _node_name="$(guest_node "$_vmid" registry)" && REGISTRY_IP="$(ssh_node "${NODE_ADDR[$_node_name]}" "pct exec ${_vmid} -- hostname -I" 2>/dev/null | awk '{print $1}')"
 fi
 if [[ -z "$FORGEJO_IP" ]] && _core_services_has forgejo && [[ -f "generated/vars/core-services/forgejo.yml" ]]; then
     _vmid="$(grep -m1 '^  vmid:' "generated/vars/core-services/forgejo.yml" | awk '{print $2}')"
-    _node_name="$(guest_node "$_vmid" 2>/dev/null)" && FORGEJO_IP="$(ssh_node "${NODE_ADDR[$_node_name]}" "pct exec ${_vmid} -- hostname -I" 2>/dev/null | awk '{print $1}')"
+    _node_name="$(guest_node "$_vmid" forgejo)" && FORGEJO_IP="$(ssh_node "${NODE_ADDR[$_node_name]}" "pct exec ${_vmid} -- hostname -I" 2>/dev/null | awk '{print $1}')"
 fi
 
 # ─── wire k3s registry trust, ONLY if the lab owner selected a service that needs it ────────────

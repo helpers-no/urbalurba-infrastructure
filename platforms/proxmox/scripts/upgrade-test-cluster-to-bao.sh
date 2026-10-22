@@ -20,9 +20,10 @@
 
 set -euo pipefail
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 print_status()  { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 print_section() { echo; echo -e "${GREEN}========================================${NC}"; echo -e "${GREEN}$1${NC}"; echo -e "${GREEN}========================================${NC}"; echo; }
 
@@ -67,13 +68,24 @@ declare -A NODE_ADDR=(
     ["$PROXMOX_HOST2_NAME"]="$PROXMOX_HOST2_ADDR"
     ["$PROXMOX_HOST3_NAME"]="$PROXMOX_HOST3_ADDR"
 )
+# $2 (optional) is the service name this vmid is EXPECTED to be — warned on a mismatch, not
+# asserted (urb-agents#1940: a hardcoded VMID can collide with an unrelated real guest; a hard
+# refusal would also be wrong for a guest legitimately adopted under a different name).
 guest_node() {
-    local vmid="$1" node
-    node="$(ssh_h1 "pvesh get /cluster/resources --type vm --output-format json" \
-        | jq -r --arg vmid "$vmid" '.[] | select((.vmid|tostring)==$vmid) | .node')"
+    local vmid="$1" expected_name="${2:-}" node name cluster_json
+    cluster_json="$(ssh_h1 "pvesh get /cluster/resources --type vm --output-format json")"
+    node="$(echo "$cluster_json" | jq -r --arg vmid "$vmid" '.[] | select((.vmid|tostring)==$vmid) | .node')"
     if [[ -z "$node" ]]; then
         print_error "VMID ${vmid} is not reported anywhere in the cluster (pvesh /cluster/resources) — is it actually running?"
         exit 1
+    fi
+    if [[ -n "$expected_name" ]]; then
+        name="$(echo "$cluster_json" | jq -r --arg vmid "$vmid" '.[] | select((.vmid|tostring)==$vmid) | .name')"
+        if [[ -n "$name" && "$name" != "$expected_name" ]]; then
+            # >&2 — this function's stdout is captured by the caller; the warning must still
+            # reach the terminal rather than get folded into the captured node name.
+            print_warning "VMID ${vmid} exists but is named '${name}', not '${expected_name}' — this usually means the VMID collides with an UNRELATED guest, not ${expected_name}. Double-check before trusting anything derived from it. If ${expected_name}'s real VMID differs, override it via config.sh's CORE_SERVICE_*_VMID." >&2
+        fi
     fi
     if [[ -z "${NODE_ADDR[$node]:-}" ]]; then
         print_error "VMID ${vmid} is on node '${node}', which is none of PROXMOX_HOST{1,2,3}_NAME in config.sh."
@@ -84,7 +96,7 @@ guest_node() {
 
 print_status "Finding which node bao's guest actually lives on..."
 BAO_VMID="$(grep -m1 '^  vmid:' "$ANSIBLE_DIR/generated/vars/core-services/bao.yml" | awk '{print $2}')"
-BAO_NODE_NAME="$(guest_node "$BAO_VMID")"
+BAO_NODE_NAME="$(guest_node "$BAO_VMID" bao)"
 BAO_NODE_ADDR="${NODE_ADDR[$BAO_NODE_NAME]}"
 
 print_status "Finding bao's guest IP (via ${BAO_NODE_NAME})..."

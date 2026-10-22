@@ -191,20 +191,34 @@ service:
 EOF
 }
 
+# 🔴 OVERRIDABLE, NOT RE-HARDCODED PER LAB. Config.sh-template documents when to set one of
+# these: a real cluster can already have an unrelated guest at the default VMID, or the real
+# service guest can have been built independently (before this convention existed) at a
+# different one. Live-confirmed, urb-agents#1940: a hardcoded 410 for forgejo collided with an
+# unrelated real guest (dns-resolver) on a lab whose actual Forgejo was at 411 — guest-ensure.yml
+# and the scoped-run IP-lookup fallback both trusted the VMID alone and silently resolved the
+# wrong guest. Defaults below are unchanged from before; nothing changes for a lab that never sets
+# an override.
+CORE_SERVICE_PG_VMID="${CORE_SERVICE_PG_VMID:-405}"
+CORE_SERVICE_PG_TEST_VMID="${CORE_SERVICE_PG_TEST_VMID:-406}"
+CORE_SERVICE_GARAGE_VMID="${CORE_SERVICE_GARAGE_VMID:-407}"
+CORE_SERVICE_BAO_VMID="${CORE_SERVICE_BAO_VMID:-408}"
+CORE_SERVICE_REGISTRY_VMID="${CORE_SERVICE_REGISTRY_VMID:-409}"
+CORE_SERVICE_FORGEJO_VMID="${CORE_SERVICE_FORGEJO_VMID:-410}"
+
 for svc in $CORE_SERVICES; do
   case "$svc" in
-    pg)       write_core_service pg       405 4 8192 1024 "order=4" ""                  8  /var/lib/postgresql 200 16K postgres ;;
-    bao)      write_core_service bao      408 2 1024 512  "order=2" ""                  8  /var/lib/openbao    10  ""  bao ;;
-    garage)   write_core_service garage   407 2 2048 512  "order=3" "nesting=1,keyctl=1" 8  /var/lib/garage     100 ""  garage ;;
-    registry) write_core_service registry 409 2 1024 512  "order=1" "nesting=1,keyctl=1" 8  /var/lib/registry   60  ""  registry ;;
+    pg)       write_core_service pg       "$CORE_SERVICE_PG_VMID"       4 8192 1024 "order=4" ""                  8  /var/lib/postgresql 200 16K postgres ;;
+    bao)      write_core_service bao      "$CORE_SERVICE_BAO_VMID"      2 1024 512  "order=2" ""                  8  /var/lib/openbao    10  ""  bao ;;
+    garage)   write_core_service garage   "$CORE_SERVICE_GARAGE_VMID"   2 2048 512  "order=3" "nesting=1,keyctl=1" 8  /var/lib/garage     100 ""  garage ;;
+    registry) write_core_service registry "$CORE_SERVICE_REGISTRY_VMID" 2 1024 512  "order=1" "nesting=1,keyctl=1" 8  /var/lib/registry   60  ""  registry ;;
     # 🔵 A SEPARATE guest, not a database inside "pg" — the test cluster must never be able to
     # read or corrupt production data. Smaller than pg on purpose: test data, test stakes.
-    pg-test)  write_core_service pg-test  406 2 2048 512  "order=5" ""                  8  /var/lib/postgresql 20  16K postgres ;;
+    pg-test)  write_core_service pg-test  "$CORE_SERVICE_PG_TEST_VMID"  2 2048 512  "order=5" ""                  8  /var/lib/postgresql 20  16K postgres ;;
     # Self-hosted git host + its own built-in OCI registry — see roles/forgejo and
-    # PLAN-system-forgejo-core-service.md. 410 is the next free VMID after 405-409 above, not the
-    # Epinio PoC's own ad-hoc VMID 411 on its real host. order=6: every other order value above is
-    # already taken; Forgejo has no startup dependency on any of them.
-    forgejo)  write_core_service forgejo 410 2 2048 512  "order=6" "nesting=1,keyctl=1" 8  /var/lib/forgejo    50  ""  forgejo ;;
+    # PLAN-system-forgejo-core-service.md. order=6: every other order value above is already
+    # taken; Forgejo has no startup dependency on any of them.
+    forgejo)  write_core_service forgejo  "$CORE_SERVICE_FORGEJO_VMID"  2 2048 512  "order=6" "nesting=1,keyctl=1" 8  /var/lib/forgejo    50  ""  forgejo ;;
     *) echo "⚠️  Unknown core service '$svc' in CORE_SERVICES — skipped" >&2 ;;
   esac
 done
