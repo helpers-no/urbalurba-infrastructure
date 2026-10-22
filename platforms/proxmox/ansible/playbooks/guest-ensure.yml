@@ -204,7 +204,7 @@
           --{{ m.id }} {{ m.storage }}:{{ m.size_gb }},mp={{ m.mountpoint }}
           {% endfor %}
           {% for n in guest.nets | default([]) %}
-          --{{ n.id }} name={{ n.id | replace('net','eth') }},bridge={{ n.bridge }},ip={{ n.ip }},type=veth
+          --{{ n.id }} name={{ n.id | replace('net','eth') }},bridge={{ n.bridge }},ip={{ n.ip }}{{ ',gw=' ~ n.gw if n.gw is defined else '' }},type=veth
           {% endfor %}
       when: existing.rc != 0
 
