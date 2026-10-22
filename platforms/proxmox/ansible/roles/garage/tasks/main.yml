@@ -137,7 +137,7 @@
     timeout: 90
 
 # ── 🔴 THE ESCALATION FIX ───────────────────────────────────────────────────────────────────
-# `--single-node --default-bucket` leaves the bootstrap key with account-level
+# `--single-node --default-access-key` leaves the bootstrap key with account-level
 # can_create_buckets=true. UIS shipped that as "scoped to one bucket"; testing disproved it with one
 # `aws s3api create-bucket` call that SUCCEEDED (urb-agents#1802). It is Garage's own behaviour,
 # so this role carries the same fix or it ships the same hole (urb-agents#1804).
@@ -249,20 +249,23 @@
       MinIO's convention is unaffected.
     quiet: true
 
-- name: The default bucket must exist
-  ansible.builtin.shell:
-    cmd: "docker exec garage /garage -c /etc/garage.toml bucket list | grep -c '{{ garage_default_bucket }}'"
-  register: garage_bucket
+# 🔵 REPORTED, NOT ASSERTED — unlike the earlier pass at this role, which asserted a specific
+# named default bucket existed (urb-agents#1942). No bucket is expected to exist yet; the first
+# real consumer creates its own, named for what it is.
+- name: What buckets exist right now
+  ansible.builtin.command:
+    cmd: "docker exec garage /garage -c /etc/garage.toml bucket list"
+  register: garage_buckets
   changed_when: false
-  failed_when: (garage_bucket.stdout | trim | int) < 1
   check_mode: false
 
 - name: Result
   ansible.builtin.debug:
     msg: >-
-      Garage {{ garage_version }} · S3 on :{{ garage_s3_port }} · bucket '{{ garage_default_bucket }}' ·
+      Garage {{ garage_version }} · S3 on :{{ garage_s3_port }} ·
       replication {{ garage_replication_factor }} · unsigned → 403 ·
-      bootstrap key can create buckets: {{ garage_cancreate.stdout | default('n/a') | trim }}
-      ⚠️ NOT DONE HERE: no consumer is pointed at this bucket yet (Loki, Tempo, etc.) — whichever
-      service is installed next needs its own bucket/key, created with the same deny-create-bucket
+      bootstrap key can create buckets: {{ garage_cancreate.stdout | default('n/a') | trim }} ·
+      buckets: {{ (garage_buckets.stdout_lines | default([]) | length > 1) | ternary(garage_buckets.stdout_lines[1:] | join('; '), 'none yet') }}
+      ⚠️ NOT DONE HERE: no consumer is pointed at a bucket yet (Loki, Tempo, etc.) — whichever
+      service is installed next creates its own bucket/key, with the same deny-create-bucket
       step above, not handed this bootstrap key.

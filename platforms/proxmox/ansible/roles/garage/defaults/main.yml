@@ -41,15 +41,20 @@ garage_db_engine: sqlite
 garage_access_key: ""
 garage_secret_key: ""
 garage_rpc_secret: ""
-# 🔵 Matches UIS's own rancher-desktop default (GARAGE_DEFAULT_BUCKET in manifests/047-garage-
-# config.yaml) — not Loki's bucket. Loki isn't installed by this platform yet; when it is, that
-# service's own role/declaration should set its own bucket, not this one.
-garage_default_bucket: default-bucket
+# 🔵 NO DEFAULT BUCKET — deliberately, matching the real lab's own role, NOT UIS's rancher-
+# desktop manifest default (GARAGE_DEFAULT_BUCKET in manifests/047-garage-config.yaml, a
+# SEPARATE, unrelated k8s-native Garage deployment with its own reasons to want one). The
+# bootstrap key is created (below) but starts owning nothing; the first real consumer (Loki,
+# Tempo, etc.) creates its own bucket, named for what it actually is, as an explicit operator
+# step. An earlier pass at this role defaulted a bucket here anyway, assuming the guest would be
+# bootstrapped with `--default-bucket` — settled before it was ever run against the real guest,
+# not discovered as a failed task (urb-agents#1942).
 
-# 🔴 THE STEP THAT MUST NOT BE SKIPPED. `--single-node --default-bucket` sets the bootstrap key's
-# ACCOUNT-LEVEL `can_create_buckets=true`, and nothing narrows it back down. UIS shipped that as
-# "a key scoped to one bucket"; testing disproved it with a single `aws s3api create-bucket` call
-# that succeeded, leaving three buckets owned by one credential (`urb-agents#1802`).
+# 🔴 THE STEP THAT MUST NOT BE SKIPPED. `--single-node --default-access-key` sets the bootstrap
+# key's ACCOUNT-LEVEL `can_create_buckets=true`, and nothing narrows it back down. UIS shipped
+# that as "a key scoped to one bucket"; testing disproved it with a single `aws s3api
+# create-bucket` call that succeeded, leaving three buckets owned by one credential
+# (`urb-agents#1802`).
 # ⚠️ This is Garage's own behaviour, not a Kubernetes gap — confirmed in `urb-agents#1804`:
 # *"your role needs the same fix step, or it ships the same hole."*
 garage_deny_create_bucket: true
