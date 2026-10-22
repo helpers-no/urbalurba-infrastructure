@@ -4,3 +4,12 @@
     name: garage
     state: restarted
     daemon_reload: true
+
+- name: Reload garage firewall
+  # 🔴 `reloaded`, NEVER `restarted`. nftables.service's own unit runs `nft flush ruleset` as its
+  # ExecStop — a GLOBAL flush, every table, every family — so restarting it (stop, then start)
+  # wipes Docker's own `ip nat`/`ip filter` tables along with everything else. Same lesson applied
+  # to roles/forgejo's, roles/bao's and roles/postgres's own handlers in this repo.
+  ansible.builtin.systemd:
+    name: nftables
+    state: reloaded

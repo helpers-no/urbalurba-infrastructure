@@ -185,6 +185,52 @@
     quiet: true
   when: garage_deny_create_bucket | bool
 
+# ── firewall ────────────────────────────────────────────────────────────────────────────────
+# Gates BOTH `input` and `forward` — see templates/garage-nftables.conf.j2 for why a Docker-
+# published port needs both, and why this file uses a scoped `destroy table` instead of a global
+# `flush ruleset` (which would also take down Docker's own tables).
+- name: Resolve the allow-list to live addresses
+  ansible.builtin.set_fact:
+    garage_firewall_allow_addrs: "{{ garage_firewall_allow_hosts | map('extract', hostvars, 'ansible_host') | select('defined') | list }}"
+
+- name: Allow-list for the S3 port
+  ansible.builtin.template:
+    src: garage-nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Reload garage firewall
+
+- name: nftables enabled and running
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: Apply pending restarts BEFORE verifying anything
+  ansible.builtin.meta: flush_handlers
+
+- name: The garage_filter table must actually be loaded, not just written to disk
+  ansible.builtin.command: nft list table inet garage_filter
+  register: garage_nft_table
+  changed_when: false
+  check_mode: false
+
+- name: The S3 port must not be reachable from anything off the allow-list, on either hook
+  ansible.builtin.assert:
+    that:
+      - "'hook input' in garage_nft_table.stdout"
+      - "'policy drop' in garage_nft_table.stdout"
+      - "'hook forward' in garage_nft_table.stdout"
+      - "'drop' in garage_nft_table.stdout"
+      - garage_firewall_allow_addrs | length == 0 or garage_firewall_allow_addrs[0] in garage_nft_table.stdout
+      - garage_firewall_allow_ranges | length == 0 or garage_firewall_allow_ranges[0].split('-')[0] in garage_nft_table.stdout
+    fail_msg: >-
+      nftables is active but the loaded garage_filter table does not match what was rendered — a
+      running service with a config nobody applied is the same as no firewall.
+    quiet: true
+
 # ── verify ──────────────────────────────────────────────────────────────────────────────────
 - name: An unsigned request must be refused
   ansible.builtin.command:

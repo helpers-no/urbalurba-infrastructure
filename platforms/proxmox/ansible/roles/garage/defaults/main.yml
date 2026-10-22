@@ -56,5 +56,18 @@ garage_deny_create_bucket: true
 
 # 🔴 BOOTSTRAP: keep the image on local disk so this can start with no internet and a cold docker
 # cache. Without it the object store depends on the registry or the internet being up first, which
-# is the circular dependency the registry exists to avoid. See platform/BOOTSTRAP.md.
+# is the circular dependency the registry exists to avoid.
 garage_seed_image: true
+
+# ── firewall ────────────────────────────────────────────────────────────────────────────────
+# 🔴 WAS MISSING ENTIRELY (urb-agents#1936) — this guest's S3 port had no firewall in front of it
+# at all. Two ways to allow a source, usable together — declare the actual allow-list per site,
+# not here; a reusable role carries no site's machine names or address plan.
+#   garage_firewall_allow_hosts  — inventory hostnames, resolved to their live ansible_host address
+#                                 at apply time (same pattern as roles/bao/roles/forgejo).
+#   garage_firewall_allow_ranges — raw "start-end" address ranges (nftables range syntax), for a
+#                                 whole declared band at once.
+# 🔴 GATES BOTH `input` AND `forward` — see templates/garage-nftables.conf.j2 for why a Docker-
+# published port needs both.
+garage_firewall_allow_hosts: []
+garage_firewall_allow_ranges: []

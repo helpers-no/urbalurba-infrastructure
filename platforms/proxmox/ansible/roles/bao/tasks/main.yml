@@ -1,11 +1,14 @@
 ---
 # ── 0. the address this node will advertise ──────────────────────────────────────────────────
-# 🔵 DISCOVERED. The reference installation's config hardcodes one IP, so the same file on
+# Declared address first (an inventory's own ansible_host — this platform's one source of truth
+# for a guest's address), live-discovery as a fallback for portability (this role may run
+# somewhere with no such declaration), an explicit -e bao_advertise_addr=<ip> overriding either.
+# 🔵 The reference installation's own config hardcodes one IP directly, so the same file on
 # another node would advertise an address that machine does not have — and raft would accept it
 # and then fail to form.
-- name: The address this guest actually has
+- name: The address this guest is declared to have
   ansible.builtin.set_fact:
-    bao_advertise_addr: "{{ bao_advertise_addr | default(ansible_default_ipv4.address) }}"
+    bao_advertise_addr: "{{ bao_advertise_addr | default(ansible_host | default(ansible_default_ipv4.address)) }}"
 
 - name: Refuse to continue without one
   ansible.builtin.assert:
@@ -29,6 +32,7 @@
       - openssl        # the listener's self-signed certificate
       - logrotate      # 🔴 the reference installation's audit log reached 256 MB because nothing
                        #    rotated it
+      - nftables       # the vault port's allow-list
     state: present
     update_cache: true
     cache_valid_time: 3600
@@ -204,6 +208,26 @@
     group: root
     mode: "0644"
 
+# ── 5b. firewall ─────────────────────────────────────────────────────────────────────────────
+- name: Resolve the allow-list to live addresses
+  ansible.builtin.set_fact:
+    bao_firewall_allow_addrs: "{{ bao_firewall_allow_hosts | map('extract', hostvars, 'ansible_host') | select('defined') | list }}"
+
+- name: Allow-list for the vault port
+  ansible.builtin.template:
+    src: openbao-nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Reload nftables
+
+- name: nftables enabled and running
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true
+    state: started
+
 - name: Enabled and running
   ansible.builtin.systemd:
     name: openbao
@@ -298,6 +322,36 @@
     - bao_init is defined
     - bao_init.changed | default(false)
 
+# ── 6b. KV engines ───────────────────────────────────────────────────────────────────────────
+# Read from the init output file, not bao_init.stdout — that's only set on the run that actually
+# initialised the vault; every later run needs the token too.
+- name: The root token, to create mounts with
+  ansible.builtin.slurp:
+    src: "{{ bao_init_output_path }}"
+  register: bao_init_output_raw
+
+- name: Parse it
+  ansible.builtin.set_fact:
+    bao_root_token: "{{ (bao_init_output_raw.content | b64decode | from_json).root_token }}"
+  no_log: true
+
+- name: Which KV engines already exist
+  ansible.builtin.command: "bao secrets list -format=json"
+  environment: &bao_root_env
+    BAO_ADDR: "https://127.0.0.1:{{ bao_port }}"
+    BAO_SKIP_VERIFY: "true"
+    BAO_TOKEN: "{{ bao_root_token }}"
+  register: bao_kv_existing
+  changed_when: false
+  no_log: true
+
+- name: Enable each declared KV v2 mount that isn't there yet
+  ansible.builtin.command: "bao secrets enable -path={{ item }} -version=2 kv"
+  environment: *bao_root_env
+  loop: "{{ bao_kv_mounts }}"
+  when: "(item ~ '/') not in (bao_kv_existing.stdout | from_json)"
+  no_log: true
+
 # ── 7. verify — by asking the running service, not by trusting the tasks above ──────────────
 - name: What is actually running
   ansible.builtin.command:
@@ -351,12 +405,45 @@
     quiet: true
   when: bao_seal == 'static'
 
+- name: nftables is actually enforcing, not just running
+  ansible.builtin.command: nft list ruleset
+  register: bao_nft_ruleset
+  changed_when: false
+  check_mode: false
+
+- name: The vault port must not be open to anything off the allow-list
+  ansible.builtin.assert:
+    that:
+      - "'policy drop' in bao_nft_ruleset.stdout"
+      - bao_firewall_allow_addrs | length == 0 or bao_firewall_allow_addrs[0] in bao_nft_ruleset.stdout
+      - bao_firewall_allow_ranges | length == 0 or bao_firewall_allow_ranges[0].split('-')[0] in bao_nft_ruleset.stdout
+    fail_msg: >-
+      nftables is active but the loaded ruleset does not match what was rendered — a running
+      service with a config nobody applied is the same as no firewall.
+    quiet: true
+
+- name: Every declared KV mount must actually exist
+  ansible.builtin.command: "bao secrets list -format=json"
+  environment: *bao_root_env
+  register: bao_kv_final
+  changed_when: false
+  no_log: true
+
+- name: It must, or every "bao kv put" against it fails with a route-not-found error
+  ansible.builtin.assert:
+    that: "(item ~ '/') in (bao_kv_final.stdout | from_json)"
+    fail_msg: "{{ item }}/ is not mounted."
+    quiet: true
+  loop: "{{ bao_kv_mounts }}"
+
 - name: Result
   ansible.builtin.debug:
     msg: >-
       bao {{ bao_final.json.version }} · cluster '{{ bao_final.json.cluster_name }}' ·
       seal={{ bao_seal }} · storage={{ bao_final.json.storage_type }} ·
       listening on {{ bao_advertise_addr }}:{{ bao_port }} ·
+      firewall: {{ bao_firewall_allow_addrs | length }} address(es) + {{ bao_firewall_allow_ranges | length }} range(s) allowed to {{ bao_port }} ·
+      kv mounts: {{ bao_kv_mounts | join(', ') }} ·
       audit rotated at {{ bao_audit_rotate_size }} ({{ bao_audit_rotate_keep }} kept)
       ⚠️ NOT PROVEN HERE: that a secret written now can be read after a reboot. That is the only
-      test of what a vault is for, and it needs a restart — see vars/guests/bao.yml maintenance.
+      test of what a vault is for, and it needs a restart.

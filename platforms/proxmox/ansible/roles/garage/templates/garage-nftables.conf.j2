@@ -1,0 +1,61 @@
+#!/usr/sbin/nft -f
+# MANAGED BY ANSIBLE — roles/garage/templates/garage-nftables.conf.j2. Local edits are lost on the
+# next run.
+#
+# Restricts the S3 port to the declared allow-list (roles/garage/defaults/main.yml's
+# garage_firewall_allow_hosts, resolved to live addresses, plus garage_firewall_allow_ranges' raw
+# address ranges). SSH and outbound traffic are unaffected.
+#
+# 🔴 BOTH `input` AND `forward` ARE GATED, DELIBERATELY. Docker runs TWO mechanisms for a
+# `docker run -p` published port AT THE SAME TIME: a DNAT rule in its own `ip nat` table, and a
+# `docker-proxy` userspace process listening directly on this guest's own `0.0.0.0:{{ garage_s3_port }}`.
+# Which one actually handles a given connection depends on whether the DNAT rule currently exists
+# — when it does, PREROUTING rewrites the destination before routing, so the packet is ROUTED TO
+# FORWARD, never reaching `input` at all; when it doesn't (e.g. right after something flushes just
+# the nat table), the untouched docker-proxy process still answers via the ordinary `input` path.
+# Both can happen on the same guest within one session. An allow-list on only one hook is only
+# sometimes effective — looks fine, then silently stops working on the next restart for a reason
+# that has nothing to do with this file.
+#
+# 🔴 `destroy table`, NOT `flush ruleset`. Docker keeps its own `ip nat`/`ip filter` tables (visible
+# in `nft list ruleset` even though nothing here created them) — `flush ruleset` is global, every
+# table, every family, and would take those down with it. `destroy table` is scoped to this one
+# named table, and is a no-op (not an error) the first time it doesn't exist yet, so this file is
+# safe to re-apply on every run and every boot.
+#
+# 🔴 chain forward POLICY IS ACCEPT, unlike chain input. `forward`'s DEFAULT-DENY equivalent is
+# Docker's own DOCKER-USER chain; this chain exists only to DROP the one thing it allow-lists
+# against, not to become a second, competing default-deny gate for all forwarded traffic on this
+# guest. Priority -5 (below Docker's own filter table's priority of 0) means our drop happens
+# BEFORE the packet reaches Docker's own forwarding/DNAT-destination logic.
+destroy table inet garage_filter
+table inet garage_filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+
+		iif lo accept
+		ct state established,related accept
+		ip protocol icmp accept
+		ip6 nexthdr ipv6-icmp accept
+		tcp dport 22 accept
+
+{% for addr in garage_firewall_allow_addrs %}
+		ip saddr {{ addr }} tcp dport {{ garage_s3_port }} accept
+{% endfor %}
+{% for range in garage_firewall_allow_ranges %}
+		ip saddr {{ range }} tcp dport {{ garage_s3_port }} accept
+{% endfor %}
+	}
+
+	chain forward {
+		type filter hook forward priority -5; policy accept;
+
+{% for addr in garage_firewall_allow_addrs %}
+		ip saddr {{ addr }} tcp dport {{ garage_s3_port }} accept
+{% endfor %}
+{% for range in garage_firewall_allow_ranges %}
+		ip saddr {{ range }} tcp dport {{ garage_s3_port }} accept
+{% endfor %}
+		tcp dport {{ garage_s3_port }} counter drop
+	}
+}
