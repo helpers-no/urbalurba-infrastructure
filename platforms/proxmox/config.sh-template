@@ -117,3 +117,19 @@ K3S_TEST_SERVICE_CIDR="10.53.0.0/16"
 # real lab's live state before this default was set, including the two
 # additions here (forgejo, pg-test) — not guessed.
 CORE_SERVICES="pg bao garage registry forgejo pg-test"
+
+# 🔴 ONLY IF ADOPTING AN EXISTING GUEST BUILT BEFORE THIS CONVENTION EXISTED. Each service's VMID
+# normally comes from the fixed defaults below (405/406/407/408/409/410) — override ONE here only
+# when your real hardware already has a different, unrelated guest at that VMID, or your real
+# service guest was built independently at a different one. Live-confirmed, urb-agents#1940: a
+# lab adopting an existing Forgejo built via an earlier ad-hoc process (not this convention) had
+# it at VMID 411, not the convention's 410 — 410 on that same cluster belonged to a completely
+# unrelated, unrelated guest (dns-resolver). `core-service add proxmox forgejo`'s own scoped-run
+# IP lookup silently resolved THAT guest's address instead and wrote it into production's
+# registries.yaml. Set the ONE that's wrong for your lab; leave the rest commented out.
+# CORE_SERVICE_PG_VMID=405
+# CORE_SERVICE_PG_TEST_VMID=406
+# CORE_SERVICE_GARAGE_VMID=407
+# CORE_SERVICE_BAO_VMID=408
+# CORE_SERVICE_REGISTRY_VMID=409
+# CORE_SERVICE_FORGEJO_VMID=410

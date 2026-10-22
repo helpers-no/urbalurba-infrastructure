@@ -111,6 +111,40 @@
       ansible.builtin.set_fact:
         existing: "{{ existing_local if existing_local.rc == 0 else {'rc': (0 if (existing_node | default('', true) | length > 0) else existing_local.rc)} }}"
 
+    # ⚠️ WARN, DON'T BLOCK — a VMID is not proof of identity. urb-agents#1940: a hardcoded VMID
+    # collided with an UNRELATED pre-existing guest on a real lab (forgejo's declared VMID 410
+    # was actually dns-resolver there; the real forgejo was at 411) and every later step trusted
+    # the VMID alone, silently resolving the wrong guest's address into production. Checked here
+    # so the mismatch is visible the moment it would matter, from the data this play already has
+    # (no extra API call) — not asserted/fatal, because a guest adopted from outside this
+    # convention may legitimately be named something this declaration never chose.
+    - name: What this VMID is actually named, if it exists here
+      ansible.builtin.set_fact:
+        existing_name: "{{ existing_local.stdout_lines | select('match', '^hostname:') | list | first | default('hostname:', true) | regex_replace('^hostname:\\s*', '') }}"
+      when: existing_local.rc == 0
+
+    - name: What this VMID is actually named, if it exists elsewhere
+      ansible.builtin.set_fact:
+        existing_name: >-
+          {{ (cluster_vms.stdout | from_json
+              | selectattr('vmid', 'equalto', g_vmid | int)
+              | map(attribute='name') | list | first) | default('', true) }}
+      when: existing_local.rc != 0 and (existing_node | default('', true) | length > 0)
+
+    - name: Warn if this VMID's real name does not match the declaration
+      ansible.builtin.debug:
+        msg: >-
+          ⚠️ VMID {{ g_vmid }} exists but is named '{{ existing_name | default('', true) }}', not
+          '{{ guest.name }}'. This usually means the VMID collides with an UNRELATED guest, not
+          the one this declaration describes (urb-agents#1940) — double-check before trusting
+          anything derived from this VMID (its IP, what role it plays). If this lab's real
+          {{ guest.name }} guest lives at a different VMID, override it (see config.sh-template's
+          CORE_SERVICE_*_VMID) rather than proceeding against this one.
+      when:
+        - existing.rc == 0
+        - (existing_name | default('', true)) | length > 0
+        - existing_name != guest.name
+
     # Distinct from `existing.rc` ("does it exist at all, anywhere") — this is "does a guest
     # this node can act on exist", true either because it's already here or because nothing
     # found it anywhere and this node is about to create it. False only for the
