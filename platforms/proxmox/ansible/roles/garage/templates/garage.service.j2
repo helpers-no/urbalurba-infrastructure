@@ -18,17 +18,16 @@ ExecStart=/usr/bin/docker run --rm --name garage \
   -v {{ garage_data_dir }}/data:{{ garage_data_dir }}/data \
   -e GARAGE_DEFAULT_ACCESS_KEY={{ garage_access_key }} \
   -e GARAGE_DEFAULT_SECRET_KEY={{ garage_secret_key }} \
-  -e GARAGE_DEFAULT_BUCKET={{ garage_default_bucket }} \
   --memory={{ garage_mem_limit | default('768m') }} \
   --log-opt max-size={{ garage_log_max_size | default('10m') }} \
   --log-opt max-file={{ garage_log_max_file | default('3') }} \
   {{ garage_image }} \
-  {# 🔴 --default-bucket takes NO ARGUMENT. The bucket name comes from GARAGE_DEFAULT_BUCKET;
-     passing it positionally makes garage reject the whole command line, and the error prints a
-     usage hint rather than naming the offending flag. `--default-bucket` implies
-     `--default-access-key`, which reads GARAGE_DEFAULT_ACCESS_KEY/SECRET_KEY. Both require
-     `--single-node`. Read from `garage server --help` in the pinned image, not from the docs. #}
-  /garage -c /etc/garage.toml server --single-node --default-bucket
+  {# 🔵 NO --default-bucket: deliberately. It implies --default-access-key and would create a
+     bucket with a name nothing here currently needs — the first real consumer creates its own,
+     named for what it is. --default-access-key alone still bootstraps the key this role denies
+     create-bucket on below. Both flags require --single-node. Read from `garage server --help`
+     in the pinned image, not from the docs — it says exactly this (urb-agents#1942). #}
+  /garage -c /etc/garage.toml server --single-node --default-access-key
 ExecStop=/usr/bin/docker stop garage
 
 [Install]
