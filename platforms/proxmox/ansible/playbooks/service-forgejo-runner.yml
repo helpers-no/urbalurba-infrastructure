@@ -1,0 +1,22 @@
+---
+# service-forgejo-runner — install and register Forgejo Runner on a guest already built by
+# vm-ensure.yml from generated/vars/lab-extras/forgejo-runner.yml. Opt-in lab extra, not a
+# CORE_SERVICES default, and a VM, not an LXC — see roles/forgejo-runner/tasks/main.yml and
+# README.md's "Lab extras" section.
+#
+#   ansible-playbook -i <guest_ip>, -u <VM_CIUSER> --private-key <key> \
+#       -e @generated/vars/lab-extras/_extra-vars.yml \
+#       -e @.uis.secrets/platforms/proxmox/lab-extras/forgejo-runner-site-data.yml \
+#       playbooks/service-forgejo-runner.yml
+#
+# 🔵 -u <VM_CIUSER>, NOT root, AND become: true — unlike the LXC lab-extras (dns-resolver, nas),
+# which connect as root the same way every CORE_SERVICES guest does, this guest's cloud-init
+# identity is VM_CIUSER (same as every k3s VM — see k3s-ensure.yml's own inventory note). Every
+# task in this role needs root (apt installs, docker, systemd, /etc/docker/daemon.json), so
+# play-level become is the safer choice here, not per-task.
+- name: Forgejo Runner
+  hosts: all
+  become: true
+  gather_facts: true
+  roles:
+    - forgejo-runner

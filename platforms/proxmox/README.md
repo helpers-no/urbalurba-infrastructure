@@ -133,11 +133,13 @@ Why this is a separate thing at all, rather than a 7th `CORE_SERVICES` entry: a 
 once lived in this platform the same way pg/bao/garage/registry do, generalized from the
 maintainer's own private lab — and was removed outright on 2026-10-05 (see `STRUCTURE.md`'s own
 "nas — deliberately not part of this platform" note) because it wasn't judged worth maintaining as
-generic IaC for every lab owner. Both guests below are the same kind of lab-specific guest by that
-same test — the difference is Terje's own explicit call to build them in anyway (dns-resolver
-first, `nas` once that mechanism existed and proved out), as guests a lab owner can opt into,
-rather than leave entirely outside provision-host. The opt-in-ness needs to be visible, not just
-technically true, which is why neither is just another `CORE_SERVICES` case arm.
+generic IaC for every lab owner. All three guests below are the same kind of lab-specific guest by
+that same test — the difference is Terje's own explicit call to build them in anyway (dns-resolver
+first, `nas` once that mechanism existed and proved out, `forgejo-runner` once it was clear
+`vm-ensure.yml` already generalized far enough to carry a VM-kind guest too), as guests a lab owner
+can opt into, rather than leave entirely outside provision-host. The opt-in-ness needs to be
+visible, not just technically true, which is why none of them is just another `CORE_SERVICES` case
+arm.
 
 ### dns-resolver
 
@@ -206,6 +208,48 @@ here, and a matching `nas_shares` entry in your site-data file, if you want one.
 **VMID default is 404**, matching the reference lab's own real nas guest — unlike dns-resolver's
 400-not-410, nothing else in this template already claims 404, so there's no collision to design
 around here.
+
+### forgejo-runner
+
+A Forgejo Actions CI runner — the first lab extra that's a **QEMU VM, not an LXC**. It runs
+Docker, and nesting Docker-in-LXC is its own can of worms this platform has never needed to open;
+a VM sidesteps it entirely. `09-lab-extras-apply.sh` branches on each declaration's own
+`service.kind` to call `vm-ensure.yml` instead of `guest-ensure.yml`, and skips the
+replicate/HA-register steps entirely — there's nothing worth Proxmox-HA-protecting on disposable
+CI-runner compute, unlike `pg`/`bao`/`garage`/`nas`'s own real data (urb-agents#1982, F5 of
+`INVESTIGATE-host-provision-host-adoption.md`).
+
+```
+./uis platform lab-extra add proxmox forgejo-runner
+```
+
+**Requires `forgejo` in `CORE_SERVICES` first** — a runner with no Forgejo instance to register
+against is useless. Unlike dns-resolver/nas, which both stand alone, this is the first lab extra
+with a real dependency on another opt-in piece; `generate-ansible-config.sh` refuses loudly at
+generation time if `forgejo-runner` is in `LAB_EXTRAS` without `forgejo` also selected. Run `uis
+platform core-service add proxmox forgejo` first if you haven't already.
+
+**Docker-in-Docker vs skopeo, and network isolation, were both Terje's own explicit calls, ported
+as-is rather than re-litigated** (urb-agents#1926/#1982): job containers run as siblings on this
+guest's own Docker daemon via the automounted host socket (not nested Docker-in-Docker — less
+isolation, but no privileged container and no nested firewall concern, acceptable for a
+single-tenant guest nothing else runs on), and the firewall is a **deny-list**, not an allow-list
+(default-accept outbound, explicit deny of every other guest/host this platform currently knows
+about — computed automatically, never hand-maintained). Both decisions, and the real bugs found
+porting the reference role (a job-image Docker CLI defaulting to HTTPS against Forgejo's own
+plain-HTTP registry; the Docker socket's GID not matching a hardcoded assumption), are documented
+in `roles/forgejo-runner/tasks/main.yml`'s own comments.
+
+**The registration token is the one real secret this guest needs, and it's never defaulted.**
+Mint it once the `forgejo` guest is up (the binary refuses to run as root):
+`ssh <forgejo guest IP> docker exec --user git forgejo forgejo actions generate-runner-token`.
+Supply it via `platforms/proxmox/lab-extras-site-data/forgejo-runner-site-data.yml-template`,
+copied to `.uis.secrets/platforms/proxmox/lab-extras/forgejo-runner-site-data.yml` — same
+git-ignored, persistent, never-regenerated convention as `nas`'s own site-data file.
+
+**VMID default is 411** — right after forgejo's own 410, no collision with anything else this
+template defaults. Sized 4 cores/8192MB/40GB, matching the reference lab's own real guest at this
+exact workload (Docker image builds), proven live — not a guess.
 
 ## What's deferred (first draft — see the PR description)
 

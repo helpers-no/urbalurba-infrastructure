@@ -23,12 +23,15 @@ platforms/proxmox/
 ├── lab-extras-site-data/        ✅  `-template` files for a lab extra's own bespoke, structured
 │   │                                 site data (named accounts, named shares) that config.sh's
 │   │                                 flat-scalar style was never meant to carry — see nas below.
-│   └── nas-site-data.yml-template ✅ copy to .uis.secrets/platforms/proxmox/lab-extras/
-│                                    nas-site-data.yml (git-ignored, persistent, never regenerated
-│                                    — same shape config.sh itself already is). Passed to
-│                                    service-nas.yml automatically by 09-lab-extras-apply.sh if
-│                                    present; the role refuses to proceed with a clear message if
-│                                    it's missing or empty.
+│   ├── nas-site-data.yml-template ✅ copy to .uis.secrets/platforms/proxmox/lab-extras/
+│   │                                 nas-site-data.yml (git-ignored, persistent, never regenerated
+│   │                                 — same shape config.sh itself already is). Passed to
+│   │                                 service-nas.yml automatically by 09-lab-extras-apply.sh if
+│   │                                 present; the role refuses to proceed with a clear message if
+│   │                                 it's missing or empty.
+│   └── forgejo-runner-site-data.yml-template ✅ same convention, one field: forgejo_runner_token
+│                                    (a minted registration secret, never defaulted — see the
+│                                    role's own defaults/main.yml).
 │
 ├── scripts/
 │   ├── 00-storage-ensure.sh     ✅  Phase 2: per-host SSH key install (one password, once) +
@@ -65,10 +68,13 @@ platforms/proxmox/
 │   │                                 Same shape as 07, deliberately a SEPARATE script/list —
 │   │                                 LAB_EXTRAS, not CORE_SERVICES. See README.md's "Lab extras"
 │   │                                 section and this file's own "nas" note below for why.
-│   ├── 09-lab-extras-apply.sh   ✅  per-extra loop: guest → install → replicate → HA — same
-│   │                                 shape as 05, scoped to LAB_EXTRAS. Empty by default, unlike
-│   │                                 CORE_SERVICES — nothing here builds anything until a lab
-│   │                                 owner opts in via 08.
+│   ├── 09-lab-extras-apply.sh   ✅  per-extra loop, branching on each declaration's own
+│   │                                 `service.kind` (lxc or vm): lxc → guest-ensure → install →
+│   │                                 replicate → HA, same shape as 05; vm (forgejo-runner) →
+│   │                                 vm-ensure → install, no replicate/HA — disposable CI-runner
+│   │                                 compute has nothing worth Proxmox-HA-protecting. Empty by
+│   │                                 default, unlike CORE_SERVICES — nothing here builds anything
+│   │                                 until a lab owner opts in via 08.
 │   ├── upgrade-test-cluster-to-bao.sh ✅  never runs automatically — promotes proxmox-test from
 │   │                                 the simple plain-Secret store to the real bao-backed one,
 │   │                                 for when you want to exercise real vault semantics on test
@@ -198,6 +204,10 @@ platforms/proxmox/
     ├── service-nas.yml       ✅  L3 for the opt-in nas lab extra (see README.md's
     │                            "Lab extras" section) — thin, `roles: [nas]`, same shape
     │                            as every other service-<name>.yml.
+    ├── service-forgejo-runner.yml ✅ L3 for the opt-in forgejo-runner lab extra (see README.md's
+    │                            "Lab extras" section) — `hosts: all`, `become: true` (VM-kind:
+    │                            connects as VM_CIUSER, not root, unlike every LXC
+    │                            service-<name>.yml here), `roles: [forgejo-runner]`.
     ├── roles/
     │   ├── k3s/                  ✅  existing
     │   ├── postgres/             ✅  ported from the maintainer's private lab. Two real bugs
@@ -225,15 +235,27 @@ platforms/proxmox/
     │                            this platform's generated inventory.yml never populates with
     │                            CORE_SERVICES/lab-extras guests at all) — see the role's own
     │                            defaults/main.yml for the full reasoning.
-    │   └── nas/                  ✅  opt-in lab extra, back after the 2026-10-05 removal (see
-    │                            this file's own "nas's history" note below) — judged not
-    │                            blind-copied: shares are Proxmox-managed storage volumes
-    │                            (mp0/mp1/...), not host bind mounts (pvesr cannot replicate
-    │                            a bind mount, so its data would not follow this guest on HA
-    │                            failover). nas_shares/nas_users stay site data the role
-    │                            refuses to run without, supplied via
-    │                            lab-extras-site-data/nas-site-data.yml-template, not this
-    │                            script — see the role's own defaults/main.yml.
+    │   ├── nas/                  ✅  opt-in lab extra, back after the 2026-10-05 removal (see
+    │   │                        this file's own "nas's history" note below) — judged not
+    │   │                        blind-copied: shares are Proxmox-managed storage volumes
+    │   │                        (mp0/mp1/...), not host bind mounts (pvesr cannot replicate
+    │   │                        a bind mount, so its data would not follow this guest on HA
+    │   │                        failover). nas_shares/nas_users stay site data the role
+    │   │                        refuses to run without, supplied via
+    │   │                        lab-extras-site-data/nas-site-data.yml-template, not this
+    │   │                        script — see the role's own defaults/main.yml.
+    │   └── forgejo-runner/       ✅  opt-in lab extra, the first VM-kind one (urb-agents#1982) —
+    │                            judged not blind-copied: Docker-in-Docker/socket-mount posture
+    │                            and the deny-list firewall are both ported as-is (Terje's own
+    │                            explicit call, not re-litigated), but the deny-list itself is
+    │                            built from this platform's own generated ZONE_ENTRIES, not
+    │                            inventory-resolved hostnames (same structural gap dns-resolver's
+    │                            own zone generation already worked around). Depends on `forgejo`
+    │                            being a selected CORE_SERVICES entry — the first lab extra with a
+    │                            real dependency on another opt-in piece, refused loudly at
+    │                            generation time otherwise. See the role's own defaults/main.yml
+    │                            and tasks/main.yml for the three real bugs preserved from the
+    │                            reference role's own live debugging.
     └── generated/                 ✅  gitignored — inventory.yml, vars/vms/*.yml, and
                                         vars/core-services/*.yml (one guest/service declaration
                                         per configured service, plus a gitignored _extra-vars.yml
@@ -265,6 +287,19 @@ not reopening the original 2026-10-05 removal, Terje choosing the same opt-in an
 chose for dns-resolver, now that there's a real place to put it. See README.md's "Lab extras"
 section for both guests' own current documentation; read this note for why a future lab-specific
 guest's fate isn't a fixed rule either way, it's a judgment call Terje makes per guest.
+
+**A Forgejo Actions CI runner (urb-agents#1982, F5 of `INVESTIGATE-host-provision-host-adoption.md`)
+had been paused earlier** (urb-agents#1926/#1929) on the premise that building it needed scaffolding
+this platform didn't have yet — a generic standalone-VM provisioning path, since `vm-ensure.yml`'s
+every caller was hardwired to k3s node parameters. That premise didn't hold up: `vm-ensure.yml`
+itself was ALREADY fully generic in both this platform's copy and the reference lab's own (zero
+k3s-aware code in either file — confirmed by reading both side by side, not assumed from the earlier
+pause). The actual narrowing lived one level up, in how `generate-ansible-config.sh` and
+`03-k3s-apply.sh` happened to be the only things calling it, not in the mechanism. Scoped down to
+four small pieces (a generic VM-declaration writer, a VM-kind branch in `08`/`09`, the role port
+itself, a site-data file for the registration token) and built once Terje confirmed the DinD/
+socket-mount and deny-list firewall posture, both ported as-is from the reference lab's own proven,
+already-debugged role — not re-litigated as fresh choices for this general-purpose version.
 
 ## Why numbering starts at 00
 
