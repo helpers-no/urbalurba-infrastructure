@@ -15,10 +15,10 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Investigate: Forgejo Actions runner — the other half of the CI decision never got built](INVESTIGATE-system-forgejo-runner.md) | — | 2026-10-23 |
+| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-23 |
 | [Plan: Forgejo + its Actions runner, in-cluster (Rancher Desktop)](PLAN-system-forgejo-rancher-desktop.md) | — | 2026-10-21 |
 | [Plan: Forgejo as a platforms/proxmox core service](PLAN-system-forgejo-core-service.md) | Add Forgejo (self-hosted git host + its own built-in OCI registry) as a new | 2026-10-21 |
-| [Investigate: Forgejo Actions runner — the other half of the CI decision never got built](INVESTIGATE-system-forgejo-runner.md) | Give UIS's Forgejo install (`PLAN-system-forgejo-core-service.md`) a real, | 2026-10-21 |
-| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-21 |
 | [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-10-20 |
 | [Investigate: Epinio Deploy Path for UIS](INVESTIGATE-service-epinio-deploy-path.md) | Decide how UIS itself (CLI surface, service layout, docs) should incorporate | 2026-10-20 |
 | [Plan: Registry cache — provision the cache itself (zot, not registry:2)](PLAN-system-registry-cache-001-provision.md) | Provision a single zot instance as UIS's pull-through registry cache — the | 2026-10-05 |
