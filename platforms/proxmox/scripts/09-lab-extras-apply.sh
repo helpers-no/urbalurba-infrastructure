@@ -2,15 +2,16 @@
 # File: platforms/proxmox/scripts/09-lab-extras-apply.sh
 #
 # Description:
-#   Build every guest in LAB_EXTRAS. Each declaration's own `service.kind` (lxc or vm — see
-#   generate-ansible-config.sh's write_guest_decl/write_vm_extra_decl) decides the mechanism:
-#     - lxc (dns-resolver, nas): guest-ensure.yml, then replicate to both other nodes and
-#       register under the same flat HA rule CORE_SERVICES guests use. Same guest -> install ->
-#       replicate -> HA-register shape as 05-core-services-apply.sh, deliberately NOT merged into
-#       that script or its CORE_SERVICES list — see config.sh-template's "Lab extras" section
-#       (urb-agents#1970/#1971/#1972) for why these stay a visibly separate, empty-by-default list.
-#     - vm (forgejo-runner): vm-ensure.yml instead, and NO replicate/HA-register step — see
-#       urb-agents#1982: disposable CI-runner compute has nothing worth Proxmox-HA-protecting.
+#   Build every guest in LAB_EXTRAS: guest-ensure.yml, then replicate to both other nodes and
+#   register under the same flat HA rule CORE_SERVICES guests use. Same guest -> install ->
+#   replicate -> HA-register shape as 05-core-services-apply.sh, deliberately NOT merged into
+#   that script or its CORE_SERVICES list — see config.sh-template's "Lab extras" section
+#   (urb-agents#1970/#1971/#1972) for why these stay a visibly separate, empty-by-default list.
+#
+#   (A VM-kind branch existed here briefly for forgejo-runner, urb-agents#1982 — retired
+#   urb-agents#1997 once the pod-based successor, scripts/forgejo-runner-pod-deploy.sh, was
+#   live-verified. See STRUCTURE.md's "nas's history in this platform" note for the full
+#   timeline.)
 #
 #   NOT part of `up.sh`'s historical 5-step chain in spirit — it IS now one more step of it (see
 #   up.sh), but LAB_EXTRAS is empty by default, so a lab owner who never opts in never has this
@@ -110,29 +111,13 @@ for extra in $TARGET_EXTRAS; do
         continue
     fi
     vmid="$(grep -m1 '^  vmid:' "$decl" | awk '{print $2}')"
-    # 🔵 kind: lxc|vm — written by write_guest_decl/write_vm_extra_decl in
-    # generate-ansible-config.sh. Defaults to lxc for safety if somehow absent (every declaration
-    # this script actually reads carries it; this is not expected to trigger in practice).
-    kind="$(grep -m1 '^  kind:' "$decl" | awk '{print $2}')"
-    kind="${kind:-lxc}"
 
-    print_section "$extra (VMID $vmid, kind=$kind)"
+    print_section "$extra (VMID $vmid)"
 
-    if [[ "$kind" == "vm" ]]; then
-        # 🔴 THE GENERATED INVENTORY, NOT A BARE COMMA ADDRESS — vm-ensure.yml's play is
-        # `hosts: proxmox` (a NAMED group), unlike guest-ensure.yml's `hosts: all`. A bare
-        # `-i "${addr},"` ad-hoc inventory has no such group and would match nothing.
-        print_status "vm-ensure..."
-        ansible-playbook -i generated/inventory.yml --limit "$PROXMOX_HOST1_NAME" \
-            -u root --private-key "$PROXMOX_SSH_KEY" \
-            playbooks/vm-ensure.yml \
-            -e "vm_file=${decl}" -e "control_pubkey_file=${PUBKEY}"
-    else
-        print_status "guest-ensure..."
-        ansible-playbook -i "${PROXMOX_HOST1_ADDR}," -u root --private-key "$PROXMOX_SSH_KEY" \
-            playbooks/guest-ensure.yml \
-            -e "guest_file=${decl}" -e "guest_pubkey=${PUBKEY}"
-    fi
+    print_status "guest-ensure..."
+    ansible-playbook -i "${PROXMOX_HOST1_ADDR}," -u root --private-key "$PROXMOX_SSH_KEY" \
+        playbooks/guest-ensure.yml \
+        -e "guest_file=${decl}" -e "guest_pubkey=${PUBKEY}"
 
     print_status "Finding which node ${extra}'s guest actually lives on..."
     guest_node_name="$(guest_node "$vmid" "$extra")"
@@ -142,16 +127,7 @@ for extra in $TARGET_EXTRAS; do
     fi
 
     print_status "Finding ${extra}'s guest IP..."
-    if [[ "$kind" == "vm" ]]; then
-        # 🔵 READ FROM THE DECLARATION, NOT DISCOVERED LIVE — unlike an LXC guest's DHCP-ish
-        # `pct exec hostname -I`, vm-ensure.yml sets this VM's address statically via cloud-init
-        # (`--ipconfig0`), proven reachable by vm-ensure.yml's own SSH-login proof already. No
-        # guest-agent round trip needed.
-        guest_ip="$(grep -m1 '^  ip:' "$decl" | awk '{print $2}' | tr -d '"')"
-        guest_ip="${guest_ip%%/*}"
-    else
-        guest_ip="$(ssh_node "$guest_node_addr" "pct exec ${vmid} -- hostname -I" | awk '{print $1}')"
-    fi
+    guest_ip="$(ssh_node "$guest_node_addr" "pct exec ${vmid} -- hostname -I" | awk '{print $1}')"
     if [[ -z "$guest_ip" ]]; then
         print_error "Could not get an IP for ${extra} (VMID ${vmid}) on ${guest_node_name} — is it actually running?"
         exit 1
@@ -164,25 +140,17 @@ for extra in $TARGET_EXTRAS; do
 
     # 🔵 PER-EXTRA SITE DATA — real, persistent, per-install, never regenerated, same shape as
     # config.sh itself (urb-agents#1935's own "survives a uis-pull" discipline). Some lab extras
-    # (nas, forgejo-runner) need bespoke data — named human/agent accounts, a registration token
-    # — that config.sh's own flat-scalar style was never meant to carry, and that this script has
-    # no business inventing or defaulting (same "site data, not role data" rule the role itself
-    # enforces). A lab owner who needs one copies the matching `-template` file themselves; this
-    # is entirely optional — only passed if present, so an extra with no such file (dns-resolver
-    # today) behaves exactly as before.
+    # (nas) need bespoke data — named human/agent accounts — that config.sh's own flat-scalar
+    # style was never meant to carry, and that this script has no business inventing or defaulting
+    # (same "site data, not role data" rule the role itself enforces). A lab owner who needs one
+    # copies the matching `-template` file themselves; this is entirely optional — only passed if
+    # present, so an extra with no such file (dns-resolver today) behaves exactly as before.
     site_data_file="$REPO_ROOT/.uis.secrets/platforms/proxmox/lab-extras/${extra}-site-data.yml"
     if [[ -f "$site_data_file" ]]; then
         extra_args+=(-e "@${site_data_file}")
     fi
 
-    # 🔵 A VM-kind guest's declared ciuser, NOT root — unlike LXC, where root is the standing
-    # convention everywhere else in this platform, a VM's cloud-init identity is VM_CIUSER
-    # (k3s-ensure.yml's own `guests:` inventory group follows the same rule). The role itself
-    # carries `become: true` to get root where it actually needs it.
-    service_ssh_user="root"
-    [[ "$kind" == "vm" ]] && service_ssh_user="$VM_CIUSER"
-
-    ansible-playbook -i "${guest_ip}," -u "$service_ssh_user" --private-key "$PROXMOX_SSH_KEY" \
+    ansible-playbook -i "${guest_ip}," -u root --private-key "$PROXMOX_SSH_KEY" \
         --ssh-common-args "-o StrictHostKeyChecking=accept-new" \
         "${extra_args[@]}" \
         "playbooks/service-${extra}.yml" || {
@@ -191,24 +159,16 @@ for extra in $TARGET_EXTRAS; do
     }
     print_success "$extra installed and verified"
 
-    if [[ "$kind" == "vm" ]]; then
-        # 🔴 NO REPLICATION, NO HA — deliberately. Unlike pg/bao/garage/nas (real data that must
-        # follow a node failure), a VM-kind lab-extra like forgejo-runner is disposable compute:
-        # nothing it holds is worth Proxmox-HA-protecting, and registering it as an HA member
-        # would just mean Proxmox tries to restart a CI runner that was never promised uptime.
-        print_status "$extra is a VM-kind lab-extra — stateless compute, no replication or HA registration (see README.md's \"Lab extras\" section)."
-    else
-        print_status "Replicating $extra to both other nodes..."
-        for target_name in "$PROXMOX_HOST1_NAME" "$PROXMOX_HOST2_NAME" "$PROXMOX_HOST3_NAME"; do
-            [[ "$target_name" == "$guest_node_name" ]] && continue
-            ansible-playbook -i "${guest_node_addr}," -u root --private-key "$PROXMOX_SSH_KEY" \
-                playbooks/replication-ensure.yml -e "vmid=${vmid}" -e "target_node=${target_name}"
-        done
+    print_status "Replicating $extra to both other nodes..."
+    for target_name in "$PROXMOX_HOST1_NAME" "$PROXMOX_HOST2_NAME" "$PROXMOX_HOST3_NAME"; do
+        [[ "$target_name" == "$guest_node_name" ]] && continue
+        ansible-playbook -i "${guest_node_addr}," -u root --private-key "$PROXMOX_SSH_KEY" \
+            playbooks/replication-ensure.yml -e "vmid=${vmid}" -e "target_node=${target_name}"
+    done
 
-        print_status "Registering $extra as an HA member..."
-        ansible-playbook -i "${PROXMOX_HOST1_ADDR}," -u root --private-key "$PROXMOX_SSH_KEY" \
-            playbooks/ha-ensure.yml --tags member -e "vmid=${vmid}"
+    print_status "Registering $extra as an HA member..."
+    ansible-playbook -i "${PROXMOX_HOST1_ADDR}," -u root --private-key "$PROXMOX_SSH_KEY" \
+        playbooks/ha-ensure.yml --tags member -e "vmid=${vmid}"
 
-        print_success "$extra fully protected: replicated + HA-registered"
-    fi
+    print_success "$extra fully protected: replicated + HA-registered"
 done

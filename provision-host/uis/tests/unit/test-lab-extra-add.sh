@@ -106,25 +106,6 @@ UIS_REPO_ROOT="$TMP" "$TMP/scripts/08-lab-extra-add.sh" dns-resolver >/dev/null 
 grep -qx 'LAB_EXTRAS="dns-resolver"' "$CONFIG_UNDER_TEST" \
     && pass_test || fail_test "config.sh after add on a LAB_EXTRAS-less file: $(cat "$CONFIG_UNDER_TEST")"
 
-print_test_section "08-lab-extra-add.sh: forgejo-runner depends on forgejo (urb-agents#1982)"
-
-start_test "forgejo-runner is refused when forgejo is not in CORE_SERVICES"
-_stub_platform_dir
-_out=$(UIS_REPO_ROOT="$TMP" "$TMP/scripts/08-lab-extra-add.sh" forgejo-runner 2>&1); _rc=$?
-if [[ "$_rc" -ne 0 ]] && grep -q "needs 'forgejo' in CORE_SERVICES" <<< "$_out"; then
-    pass_test
-else
-    fail_test "expected a refusal naming the forgejo dependency, got (rc=$_rc): $_out"
-fi
-
-start_test "forgejo-runner is accepted once forgejo is in CORE_SERVICES"
-_stub_platform_dir
-echo 'LAB_EXTRAS=""' > "$CONFIG_UNDER_TEST"
-echo 'CORE_SERVICES="forgejo"' >> "$CONFIG_UNDER_TEST"
-UIS_REPO_ROOT="$TMP" "$TMP/scripts/08-lab-extra-add.sh" forgejo-runner >/dev/null 2>&1
-grep -qx 'LAB_EXTRAS=" forgejo-runner"' "$CONFIG_UNDER_TEST" \
-    && pass_test || fail_test "config.sh after add: $(cat "$CONFIG_UNDER_TEST")"
-
 print_test_section "09-lab-extras-apply.sh: single-extra scoping (TARGET_EXTRAS)"
 
 start_test "an explicit arg not in config.sh's LAB_EXTRAS is refused"
@@ -159,42 +140,22 @@ start_test "nas's own case arm actually uses extra_mounts (more than one share m
 grep -q '_nas_rest_mounts' "$GEN_SCRIPT" && pass_test \
     || fail_test "nas's multi-mount parsing is missing"
 
-print_test_section "09-lab-extras-apply.sh: VM-kind lab extras (forgejo-runner, urb-agents#1982)"
+print_test_section "generate-ansible-config.sh/09-lab-extras-apply.sh: VM-kind retired (urb-agents#1997)"
 
-start_test "a VM-kind declaration calls vm-ensure.yml, not guest-ensure.yml"
-grep -q 'playbooks/vm-ensure.yml' "$APPLY_SCRIPT" && pass_test \
-    || fail_test "the vm-ensure.yml branch is missing"
+start_test "write_vm_extra_decl no longer exists — the VM-kind lab extra was removed outright"
+grep -q '^write_vm_extra_decl()' "$GEN_SCRIPT" \
+    && fail_test "write_vm_extra_decl still exists — was it supposed to be removed?" || pass_test
 
-start_test "a VM-kind declaration skips replication and HA registration"
-grep -q 'stateless compute, no replication or HA registration' "$APPLY_SCRIPT" && pass_test \
-    || fail_test "the VM-kind replicate/HA-skip branch is missing"
+start_test "service.kind is gone from generated declarations — lxc is the only shape again"
+grep -qE '^\s*kind: (lxc|vm)$' "$GEN_SCRIPT" \
+    && fail_test "a 'kind:' field still appears in a generated declaration" || pass_test
 
-start_test "a VM-kind declaration connects as VM_CIUSER, not root"
-grep -q 'service_ssh_user="\$VM_CIUSER"' "$APPLY_SCRIPT" && pass_test \
-    || fail_test "the VM-kind ssh-user branch is missing"
+start_test "09-lab-extras-apply.sh no longer branches on vm-ensure.yml"
+grep -q 'playbooks/vm-ensure.yml' "$APPLY_SCRIPT" \
+    && fail_test "the vm-ensure.yml branch still exists in 09-lab-extras-apply.sh" || pass_test
 
-print_test_section "generate-ansible-config.sh: VM-kind lab extras (forgejo-runner, urb-agents#1982)"
-
-start_test "write_vm_extra_decl exists, as the VM counterpart to write_guest_decl"
-grep -q '^write_vm_extra_decl()' "$GEN_SCRIPT" && pass_test \
-    || fail_test "write_vm_extra_decl is missing"
-
-start_test "write_guest_decl/write_vm_extra_decl both emit service.kind, for 09's dispatch"
-_kind_lxc=$(grep -c '^  kind: lxc$' "$GEN_SCRIPT")
-_kind_vm=$(grep -c '^  kind: vm$' "$GEN_SCRIPT")
-[[ "$_kind_lxc" -ge 1 && "$_kind_vm" -ge 1 ]] && pass_test \
-    || fail_test "expected both 'kind: lxc' and 'kind: vm' to appear in generated declarations"
-
-start_test "forgejo-runner's own case arm refuses generation if forgejo is not in CORE_SERVICES"
-grep -q "is in LAB_EXTRAS but 'forgejo' is not in CORE_SERVICES" "$GEN_SCRIPT" && pass_test \
-    || fail_test "the forgejo-runner dependency check is missing from generate-ansible-config.sh"
-
-start_test "forgejo-runner's instance URL is resolved from CORE_SERVICE_FORGEJO_IP, never hardcoded"
-grep -q 'forgejo_runner_instance_url: .*CORE_SERVICE_FORGEJO_IP' "$GEN_SCRIPT" && pass_test \
-    || fail_test "forgejo_runner_instance_url is not resolved from the forgejo core-service's own IP"
-
-start_test "forgejo-runner's firewall deny-list excludes forgejo itself"
-grep -qE '_ename" == "forgejo" \|\| "\$_ename" == "forgejo-runner"' "$GEN_SCRIPT" && pass_test \
-    || fail_test "the deny-list exclusion for forgejo/forgejo-runner is missing"
+start_test "forgejo-runner is no longer a recognized lab extra in 08-lab-extra-add.sh"
+grep -qE '^\s*dns-resolver\|nas\|forgejo-runner\)' "$ADD_SCRIPT" \
+    && fail_test "forgejo-runner is still accepted as a lab extra name" || pass_test
 
 print_summary

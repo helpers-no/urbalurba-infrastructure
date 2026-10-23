@@ -30,8 +30,11 @@ platforms/proxmox/
 │   │                                 present; the role refuses to proceed with a clear message if
 │   │                                 it's missing or empty.
 │   └── forgejo-runner-site-data.yml-template ✅ same convention, one field: forgejo_runner_token
-│                                    (a minted registration secret, never defaulted — see the
-│                                    role's own defaults/main.yml).
+│                                    (a minted registration secret, never defaulted). Consumed by
+│                                    scripts/forgejo-runner-pod-deploy.sh below — not a lab extra's
+│                                    own site data any more (its VM-kind predecessor was retired,
+│                                    urb-agents#1997), kept at this path since it's the same
+│                                    genuine site data regardless of which mechanism reads it.
 │
 ├── scripts/
 │   ├── 00-storage-ensure.sh     ✅  Phase 2: per-host SSH key install (one password, once) +
@@ -68,13 +71,12 @@ platforms/proxmox/
 │   │                                 Same shape as 07, deliberately a SEPARATE script/list —
 │   │                                 LAB_EXTRAS, not CORE_SERVICES. See README.md's "Lab extras"
 │   │                                 section and this file's own "nas" note below for why.
-│   ├── 09-lab-extras-apply.sh   ✅  per-extra loop, branching on each declaration's own
-│   │                                 `service.kind` (lxc or vm): lxc → guest-ensure → install →
-│   │                                 replicate → HA, same shape as 05; vm (forgejo-runner) →
-│   │                                 vm-ensure → install, no replicate/HA — disposable CI-runner
-│   │                                 compute has nothing worth Proxmox-HA-protecting. Empty by
-│   │                                 default, unlike CORE_SERVICES — nothing here builds anything
-│   │                                 until a lab owner opts in via 08.
+│   ├── 09-lab-extras-apply.sh   ✅  per-extra loop: guest-ensure → install → replicate → HA,
+│   │                                 same shape as 05. Empty by default, unlike CORE_SERVICES —
+│   │                                 nothing here builds anything until a lab owner opts in via
+│   │                                 08. (A VM-kind branch existed here briefly for forgejo-runner,
+│   │                                 retired urb-agents#1997 — see this file's own "nas's history
+│   │                                 in this platform" note below.)
 │   ├── upgrade-test-cluster-to-bao.sh ✅  never runs automatically — promotes proxmox-test from
 │   │                                 the simple plain-Secret store to the real bao-backed one,
 │   │                                 for when you want to exercise real vault semantics on test
@@ -99,9 +101,9 @@ platforms/proxmox/
 │   │                                 CORE_SERVICES guest address from config.sh, flips the
 │   │                                 active kubectl context to "proxmox", and calls that
 │   │                                 playbook with `-e forgejo_external_url=...` (urb-
-│   │                                 agents#1982's pod-based successor to roles/
-│   │                                 forgejo-runner/'s own VM-kind lab extra below — see
-│   │                                 README.md's "Lab extras" section for both).
+│   │                                 agents#1982's pod-based successor to the VM-kind lab extra
+│   │                                 this platform once had — retired urb-agents#1997 once this
+│   │                                 was live-verified; see README.md's "Lab extras" section).
 │   ├── generate-ansible-config.sh ✅  also generates vars/core-services/*.yml + secrets now
 │   ├── init.sh                  ✅  interactive wizard → config.sh
 │   ├── up.sh                    ✅  chains all 5 numbered build steps in one unbroken run
@@ -215,10 +217,6 @@ platforms/proxmox/
     ├── service-nas.yml       ✅  L3 for the opt-in nas lab extra (see README.md's
     │                            "Lab extras" section) — thin, `roles: [nas]`, same shape
     │                            as every other service-<name>.yml.
-    ├── service-forgejo-runner.yml ✅ L3 for the opt-in forgejo-runner lab extra (see README.md's
-    │                            "Lab extras" section) — `hosts: all`, `become: true` (VM-kind:
-    │                            connects as VM_CIUSER, not root, unlike every LXC
-    │                            service-<name>.yml here), `roles: [forgejo-runner]`.
     ├── roles/
     │   ├── k3s/                  ✅  existing
     │   ├── postgres/             ✅  ported from the maintainer's private lab. Two real bugs
@@ -246,27 +244,20 @@ platforms/proxmox/
     │                            this platform's generated inventory.yml never populates with
     │                            CORE_SERVICES/lab-extras guests at all) — see the role's own
     │                            defaults/main.yml for the full reasoning.
-    │   ├── nas/                  ✅  opt-in lab extra, back after the 2026-10-05 removal (see
-    │   │                        this file's own "nas's history" note below) — judged not
-    │   │                        blind-copied: shares are Proxmox-managed storage volumes
-    │   │                        (mp0/mp1/...), not host bind mounts (pvesr cannot replicate
-    │   │                        a bind mount, so its data would not follow this guest on HA
-    │   │                        failover). nas_shares/nas_users stay site data the role
-    │   │                        refuses to run without, supplied via
-    │   │                        lab-extras-site-data/nas-site-data.yml-template, not this
-    │   │                        script — see the role's own defaults/main.yml.
-    │   └── forgejo-runner/       ✅  opt-in lab extra, the first VM-kind one (urb-agents#1982) —
-    │                            judged not blind-copied: Docker-in-Docker/socket-mount posture
-    │                            and the deny-list firewall are both ported as-is (Terje's own
-    │                            explicit call, not re-litigated), but the deny-list itself is
-    │                            built from this platform's own generated ZONE_ENTRIES, not
-    │                            inventory-resolved hostnames (same structural gap dns-resolver's
-    │                            own zone generation already worked around). Depends on `forgejo`
-    │                            being a selected CORE_SERVICES entry — the first lab extra with a
-    │                            real dependency on another opt-in piece, refused loudly at
-    │                            generation time otherwise. See the role's own defaults/main.yml
-    │                            and tasks/main.yml for the three real bugs preserved from the
-    │                            reference role's own live debugging.
+    │   └── nas/                  ✅  opt-in lab extra, back after the 2026-10-05 removal (see
+    │                        this file's own "nas's history" note below) — judged not
+    │                        blind-copied: shares are Proxmox-managed storage volumes
+    │                        (mp0/mp1/...), not host bind mounts (pvesr cannot replicate
+    │                        a bind mount, so its data would not follow this guest on HA
+    │                        failover). nas_shares/nas_users stay site data the role
+    │                        refuses to run without, supplied via
+    │                        lab-extras-site-data/nas-site-data.yml-template, not this
+    │                        script — see the role's own defaults/main.yml.
+    │                        (A third opt-in role, forgejo-runner/, lived here briefly as the
+    │                        first VM-kind lab extra — urb-agents#1982 — and was removed
+    │                        outright, urb-agents#1997, once its pod-based successor
+    │                        (scripts/forgejo-runner-pod-deploy.sh above) was live-verified. See
+    │                        this file's own "nas's history" note below for the full timeline.)
     └── generated/                 ✅  gitignored — inventory.yml, vars/vms/*.yml, and
                                         vars/core-services/*.yml (one guest/service declaration
                                         per configured service, plus a gitignored _extra-vars.yml
@@ -328,8 +319,21 @@ Desktop service (`forgejo_external_url`, a new mode that skips the in-cluster-Fo
 — the Deployment existence check, Service-DNS instance URL, `.localhost`/Traefik hostAliases
 workaround — all three only ever applied when Forgejo runs in the SAME cluster), not a second,
 duplicated mechanism; `scripts/forgejo-runner-pod-deploy.sh` above is the thin Proxmox-specific
-wrapper. See README.md's "Lab extras" section for both the VM-kind (superseded) and pod-based
-(preferred) documentation, kept side by side until the retirement actually happens.
+wrapper.
+
+**The retirement actually happened, urb-agents#1997.** ops live-verified the pod-based version and
+confirmed it covers both real use cases (also standing up a second pod, `github-runner`, for
+urb-agents' own CLI releases — neither the VM nor the pod alone had covered that before). The real
+VM (`epinio-runner`, VMID 292) was destroyed on ops's side — stopped, purged, no
+replication/HA to clean up (it had neither); hosts.yml/ADDRESSING.md/runbook.md/Kuma/Forgejo's own
+firewall allow-list were all updated to match, confirmed live, not just in the file. On this side,
+`write_vm_extra_decl`, the `service.kind: lxc|vm` branch in `08`/`09` (collapsed back to its
+original lxc-only shape), `platforms/proxmox/ansible/roles/forgejo-runner/`, and
+`ansible/playbooks/service-forgejo-runner.yml` were all removed outright rather than kept standing
+— unlike `nas`'s own precedent above (judged not assumed, but still useful to some labs), this one
+was judged genuinely OUT: a fresh lab owner should get the pod-based path, full stop, not a VM-kind
+choice they have no context for. See README.md's "Lab extras" section for the current,
+single-path forgejo-runner documentation.
 
 ## Why numbering starts at 00
 

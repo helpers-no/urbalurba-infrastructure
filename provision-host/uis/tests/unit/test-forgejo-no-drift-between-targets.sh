@@ -40,12 +40,18 @@ fi
 
 print_test_section "Forgejo Runner: same version on both deployment targets (once the Proxmox side exists)"
 
+# 🔵 A Proxmox-specific VM-kind role once lived at PROXMOX_RUNNER_DEFAULTS (urb-agents#1982) and
+# was removed outright, urb-agents#1997, once the pod-based successor (640-setup-forgejo-runner.yml
+# itself, targeted at Proxmox's own k3s cluster via forgejo-runner-pod-deploy.sh) was
+# live-verified and covers both platforms with ONE pinned version — there is no separate Proxmox
+# side left to drift against. These two checks stay as a regression guard in case a
+# platform-specific role ever returns, not because one is expected to.
 start_test "if the Proxmox runner role exists yet, its version is readable"
 if [[ -f "$PROXMOX_RUNNER_DEFAULTS" ]]; then
     _proxmox_runner_version=$(grep -oE 'forgejo_runner_version: "[0-9][0-9.]*"' "$PROXMOX_RUNNER_DEFAULTS" | grep -oE '[0-9][0-9.]*')
     [[ -n "$_proxmox_runner_version" ]] && pass_test || fail_test "role exists but no version found in $PROXMOX_RUNNER_DEFAULTS"
 else
-    skip_test "Proxmox runner not built yet (INVESTIGATE-system-forgejo-runner.md, still backlog) — nothing to compare against"
+    skip_test "no Proxmox-specific runner role (retired urb-agents#1997 in favor of the shared pod-based playbook) — nothing to compare against"
 fi
 
 start_test "640-setup-forgejo-runner.yml's pinned runner version matches the Proxmox side, if it exists"
@@ -57,7 +63,7 @@ if [[ -f "$PROXMOX_RUNNER_DEFAULTS" ]]; then
         fail_test "Proxmox pins '$_proxmox_runner_version', Rancher Desktop pins '$_rd_runner_version' — these must match"
     fi
 else
-    skip_test "Proxmox runner not built yet — nothing to compare against"
+    skip_test "no Proxmox-specific runner role — nothing to compare against"
 fi
 
 print_test_section "Service metadata: the dependency chain is correct"

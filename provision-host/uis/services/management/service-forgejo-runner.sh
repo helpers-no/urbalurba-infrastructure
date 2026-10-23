@@ -5,10 +5,10 @@
 # DinD sidecar, the register flow) for every k3s cluster it applies to, Rancher Desktop
 # or one of this lab's own Proxmox k3s clusters (urb-agents#1982: "k3s is k3s," same
 # reasoning bao+ESO already use). Supersedes the earlier framing of this as purely the
-# "Rancher Desktop counterpart" to a dedicated Proxmox VM runner
-# (platforms/proxmox/ansible/roles/forgejo-runner/) — that VM-based lab extra is this pod-
-# based version's predecessor, kept standing per ops's own instruction until this is
-# live-verified.
+# "Rancher Desktop counterpart" to a dedicated Proxmox VM runner — that VM-based lab extra
+# was this pod-based version's predecessor, retired outright (urb-agents#1997) once this
+# was live-verified; see platforms/proxmox/STRUCTURE.md's "nas's history in this platform"
+# note for the full timeline.
 #
 # 🔵 THE ONE REAL PLATFORM DIFFERENCE: whether Forgejo itself is in-cluster or external.
 # 640-setup-forgejo-runner.yml's own `forgejo_external_url` var switches modes — see that

@@ -254,26 +254,9 @@ LAB_EXTRA_NAS_SHARE_MOUNTS="/srv/shared:50"
 # guests. Override here for a narrower range, including explicitly empty ("") to go stricter.
 # LAB_EXTRA_NAS_FIREWALL_ALLOW_RANGES=""
 
-# forgejo-runner — Forgejo Actions CI runner, as a QEMU VM (NOT an LXC — it runs Docker, and
-# nesting Docker-in-LXC is its own can of worms this platform has never needed to open; a VM
-# sidesteps it entirely). urb-agents#1982 (F5 of INVESTIGATE-host-provision-host-adoption.md):
-# scoped and built once Terje confirmed the DinD/socket-mount approach and the deny-list firewall
-# posture, both ported as-is from the reference lab's own proven, already-debugged
-# roles/forgejo-runner — not re-litigated as fresh choices for this general-purpose version.
-# 🔴 REQUIRES "forgejo" IN CORE_SERVICES ABOVE — a runner with no Forgejo instance to register
-# against is useless. generate-ansible-config.sh refuses loudly, at generation time, if this is
-# in LAB_EXTRAS without forgejo also selected; run `uis platform core-service add proxmox forgejo`
-# first if you haven't already.
-# 🔵 VMID DEFAULT IS 411 — right after forgejo's own 410, no collision with anything else this
-# template defaults. Sized 4 cores/8192MB/40GB in generate-ansible-config.sh's own case arm (not
-# configurable here) — not a guess, the reference lab's own real epinio-runner guest at this exact
-# workload (Docker image builds), proven live.
-LAB_EXTRA_FORGEJO_RUNNER_VMID="411"
-LAB_EXTRA_FORGEJO_RUNNER_IP="192.168.1.28"
-
-# No firewall allow-range var here, unlike dns-resolver/nas above — this guest's firewall is a
-# DENY-list (default-accept outbound, explicit deny of every address with no legitimate reason for
-# a CI runner to reach), not an allow-list, computed automatically from every other guest this
-# platform already knows about. See README.md's "Lab extras" section for the full reasoning and
-# platforms/proxmox/lab-extras-site-data/forgejo-runner-site-data.yml-template for the one real
-# secret this guest needs (a registration token, minted by hand, never defaulted).
+# forgejo-runner — NOT a lab extra. The Forgejo Actions CI runner is a k3s pod on this platform's
+# own production cluster (./scripts/forgejo-runner-pod-deploy.sh), the same Deployment that
+# already runs on Rancher Desktop — "k3s is k3s," one implementation, both platform targets
+# (urb-agents#1982). An earlier VM-kind lab extra existed here briefly and was retired once that
+# pod-based version was live-verified (urb-agents#1997) — see STRUCTURE.md's "nas's history in
+# this platform" note for the full timeline.
