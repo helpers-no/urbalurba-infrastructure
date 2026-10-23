@@ -1,12 +1,20 @@
 #!/bin/bash
 # service-forgejo-runner.sh - Forgejo Actions runner service metadata
 #
-# In-cluster CI runner for Forgejo Actions — the Rancher Desktop (dev/test) counterpart
-# to the dedicated Proxmox VM runner (platforms/proxmox, ops's own proven IaC). Same
-# runner image/version and registration flow reused, not independently invented;
-# execution mechanism differs (a private docker:dind sidecar here, a real host Docker
-# socket there) because this target has no spare dedicated host to mount one from — see
-# website/docs/ai-developer/plans/backlog/PLAN-system-forgejo-rancher-desktop.md.
+# In-cluster CI runner for Forgejo Actions — ONE implementation (this Deployment, the
+# DinD sidecar, the register flow) for every k3s cluster it applies to, Rancher Desktop
+# or one of this lab's own Proxmox k3s clusters (urb-agents#1982: "k3s is k3s," same
+# reasoning bao+ESO already use). Supersedes the earlier framing of this as purely the
+# "Rancher Desktop counterpart" to a dedicated Proxmox VM runner
+# (platforms/proxmox/ansible/roles/forgejo-runner/) — that VM-based lab extra is this pod-
+# based version's predecessor, kept standing per ops's own instruction until this is
+# live-verified.
+#
+# 🔵 THE ONE REAL PLATFORM DIFFERENCE: whether Forgejo itself is in-cluster or external.
+# 640-setup-forgejo-runner.yml's own `forgejo_external_url` var switches modes — see that
+# file's own header. `platforms/proxmox/scripts/forgejo-runner-pod-deploy.sh` is the thin
+# wrapper that resolves the Proxmox forgejo CORE_SERVICES guest's own address and supplies
+# it, the same documented workaround the CLI-gap note below already uses.
 #
 # Needs a registration token minted by hand after a Forgejo admin account exists — same
 # "never defaulted" rule the Proxmox runner role enforces.
@@ -50,5 +58,5 @@ SCRIPT_ABSTRACT="CI runner for Forgejo Actions workflows, in-cluster"
 SCRIPT_LOGO=""
 SCRIPT_WEBSITE="https://forgejo.org/docs/latest/admin/actions/"
 SCRIPT_TAGS="ci,actions,runner,forgejo"
-SCRIPT_SUMMARY="Registers a Forgejo Actions runner against this install's own Forgejo (uis deploy forgejo), executing workflow jobs via a private docker:dind sidecar. The in-cluster counterpart of the dedicated Proxmox VM runner built for production — same runner version and registration flow, different job-isolation mechanism because this target has no spare dedicated host."
+SCRIPT_SUMMARY="Registers a Forgejo Actions runner against this install's own Forgejo (uis deploy forgejo), executing workflow jobs via a private docker:dind sidecar. The SAME Deployment runs identically on Rancher Desktop and on a Proxmox k3s cluster — only whether Forgejo is in-cluster or an external LXC guest differs, via the forgejo_external_url setup var."
 SCRIPT_DOCS="/docs/services/management/forgejo-runner"

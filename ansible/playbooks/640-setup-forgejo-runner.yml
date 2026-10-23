@@ -1,28 +1,40 @@
 ---
 # file: ansible/playbooks/640-setup-forgejo-runner.yml
 # Description:
-# Install the Forgejo Actions runner as an in-cluster `uis deploy forgejo-runner` service
-# — the Rancher Desktop (dev/test) counterpart to the dedicated Proxmox VM runner
-# (platforms/proxmox/ansible/roles/forgejo-runner/ — proven, live-tested; the production
-# install, ops's own IaC). Same settings reused here (pinned runner image/version,
-# register --no-interactive flow, operator-supplied token, generate-config then patch
-# one field) — not independently invented. Execution mechanism differs out of real
-# necessity: the Proxmox runner mounts a REAL host Docker socket on a VM nothing else
-# runs on; there is no spare dedicated host here, so this uses a `docker:dind` sidecar
-# private to this one Pod as the closest in-cluster equivalent of "a dedicated Docker
-# daemon nothing else touches." See
-# website/docs/ai-developer/plans/backlog/PLAN-system-forgejo-rancher-desktop.md for the
-# full translation record.
+# Install the Forgejo Actions runner as an in-cluster `uis deploy forgejo-runner` service —
+# the SAME Deployment (DinD sidecar, shared docker.sock emptyDir, register flow) on every
+# k3s cluster this applies to, Rancher Desktop or one of this lab's own Proxmox k3s
+# clusters (urb-agents#1982, F5 of INVESTIGATE-host-provision-host-adoption.md: "k3s is
+# k3s... one implementation, both platform targets," the same reasoning bao+ESO already
+# use). The platforms/proxmox VM-based runner (roles/forgejo-runner — proven, live-tested)
+# is this pod-based version's predecessor, kept standing per ops's own instruction until
+# this is live-verified.
 #
-# Prerequisite: `uis deploy forgejo` (SCRIPT_REQUIRES enforces this) and a registration
-# token, which — same as the Proxmox role — this playbook does NOT mint automatically.
-# Mint it once a Forgejo admin account exists (see 635-setup-forgejo.yml's own summary
-# message):
+# 🔴 THE ONE REAL PLATFORM DIFFERENCE: whether Forgejo itself is IN-CLUSTER or EXTERNAL.
+# On Rancher Desktop, `uis deploy forgejo` runs forgejo as a Deployment in THIS same
+# cluster, reachable by Service DNS. On a Proxmox k3s cluster, `forgejo` is a CORE_SERVICES
+# LXC guest OUTSIDE the cluster entirely, reached by its own LAN address — there is no
+# Forgejo Deployment to find and no `.localhost` dev-hostname quirk to work around, since a
+# real LAN IP is already real DNS as far as any resolver is concerned. Pass
+# `-e forgejo_external_url=http://<forgejo guest IP>:<port>/` to switch into that mode;
+# everything else in this playbook (and the Deployment manifest itself) is unaffected —
+# omit it and behavior is byte-identical to before this flag existed.
+# `platforms/proxmox/scripts/forgejo-runner-pod-deploy.sh` is the thin wrapper that resolves
+# that URL from config.sh and calls this playbook directly (the same documented workaround
+# service-forgejo-runner.sh's own header comment already uses for the pre-existing
+# `uis deploy <service> -- -e key=value` CLI gap, urb-agents#1928 — not a new invention).
+#
+# Prerequisite: `uis deploy forgejo` (SCRIPT_REQUIRES enforces this) in-cluster, OR forgejo
+# already running and reachable at `forgejo_external_url` — and a registration token, which
+# — same as the Proxmox role — this playbook does NOT mint automatically. Mint it once a
+# Forgejo admin account exists (see 635-setup-forgejo.yml's own summary message):
 #   kubectl exec -n forgejo deploy/forgejo -- forgejo actions generate-runner-token
 #
 # Usage:
 # ansible-playbook playbooks/640-setup-forgejo-runner.yml -e target_host="rancher-desktop" \
 #   -e forgejo_runner_token="..."
+# ansible-playbook playbooks/640-setup-forgejo-runner.yml -e target_host="proxmox" \
+#   -e forgejo_external_url="http://192.168.1.24:3000/" -e forgejo_runner_token="..."
 
 - name: Install the Forgejo Actions runner
   hosts: localhost
@@ -46,11 +58,10 @@
     # tag, not pinned by digest. Worth tightening the same way the Proxmox role tightened
     # Forgejo's own image (tag → verified digest) once this has run live.
     forgejo_runner_dind_image: "docker:27-dind"
-    # In-cluster Service DNS — the Rancher Desktop equivalent of the Proxmox role's own
-    # forgejo_runner_instance_url (a LAN IP there; a cluster-local name here, same
-    # "resolved at apply time, never hand-copied" rule either way).
-    forgejo_runner_instance_url: "http://forgejo.{{ forgejo_namespace }}.svc.cluster.local:{{ forgejo_runner_http_port }}/"
-    forgejo_runner_insecure_registry: "forgejo.{{ forgejo_namespace }}.svc.cluster.local:{{ forgejo_runner_http_port }}"
+    # 🔴 EXTERNAL-FORGEJO SWITCH — empty means "forgejo runs in THIS cluster" (the only mode
+    # that existed before urb-agents#1982's pod-based build). Non-empty means "forgejo runs
+    # somewhere else, reachable at this URL" — see this file's own header comment.
+    forgejo_external_url: ""
     forgejo_runner_name: "rancher-desktop-runner"
     # 🔴 PLACEHOLDER LABELS, FLAGGED — same caveat the Proxmox role's own defaults/main.yml
     # carries: no real workflow file exists yet to test against. Revisit once one does.
@@ -77,24 +88,60 @@
         quiet: true
       no_log: true
 
+    # 🔴 THE EXTERNAL-FORGEJO BRANCH — see this file's own header. Computed once, early, so
+    # every later task (the manifest's own template render included) sees the same two
+    # facts regardless of which mode this run is in.
+    - name: 1c. Resolve whether this run targets an external Forgejo
+      ansible.builtin.set_fact:
+        forgejo_runner_is_external: "{{ forgejo_external_url | length > 0 }}"
+
+    - name: 1d. Resolve the instance URL and insecure-registry host:port
+      ansible.builtin.set_fact:
+        forgejo_runner_instance_url: >-
+          {{ forgejo_external_url if forgejo_runner_is_external
+             else ('http://forgejo.' + forgejo_namespace + '.svc.cluster.local:' + (forgejo_runner_http_port | string) + '/') }}
+        forgejo_runner_insecure_registry: >-
+          {{ (forgejo_external_url | urlsplit('netloc')) if forgejo_runner_is_external
+             else ('forgejo.' + forgejo_namespace + '.svc.cluster.local:' + (forgejo_runner_http_port | string)) }}
+        # Empty unless the in-cluster Traefik lookup below actually runs — the manifest's own
+        # hostAliases block is conditional on this being non-empty, so an external Forgejo
+        # simply never gets one (it has no `.localhost` special-TLD problem to work around).
+        forgejo_runner_traefik_ip: ""
+
     - name: 2. Print playbook description
       ansible.builtin.debug:
-        msg: "Installing the Forgejo Actions runner on Kubernetes context: {{ target_host }}, instance: {{ forgejo_runner_instance_url }}"
+        msg: >-
+          Installing the Forgejo Actions runner on Kubernetes context: {{ target_host }},
+          instance: {{ forgejo_runner_instance_url }}
+          ({{ 'external' if forgejo_runner_is_external else 'in-cluster' }} Forgejo)
 
-    - name: 3. Verify Forgejo itself is reachable (hard prerequisite)
+    - name: 3. Verify Forgejo itself is reachable (hard prerequisite, in-cluster only)
       kubernetes.core.k8s_info:
         kind: Deployment
         name: forgejo
         namespace: "{{ forgejo_namespace }}"
         kubeconfig: "{{ merged_kubeconf_file }}"
       register: forgejo_check
+      when: not forgejo_runner_is_external
 
-    - name: 3b. Refuse if Forgejo is not installed
+    - name: 3b. Refuse if Forgejo is not installed (in-cluster only)
       ansible.builtin.fail:
         msg: >-
           Forgejo was not found in the '{{ forgejo_namespace }}' namespace — run
           'uis deploy forgejo' first.
-      when: forgejo_check.resources | default([]) | length == 0
+      when:
+        - not forgejo_runner_is_external
+        - forgejo_check.resources | default([]) | length == 0
+
+    # 🔵 THE EXTERNAL COUNTERPART OF 3/3b — a plain TCP connect, since there is no Kubernetes
+    # object to query for an external Forgejo. Proves the address/port are actually reachable
+    # from this host before anything downstream tries to register against them.
+    - name: 3c. Verify an external Forgejo is actually reachable
+      ansible.builtin.wait_for:
+        host: "{{ forgejo_external_url | urlsplit('hostname') }}"
+        port: "{{ forgejo_external_url | urlsplit('port') | default(forgejo_runner_http_port, true) }}"
+        timeout: 10
+      when: forgejo_runner_is_external
 
     - name: 4. Create forgejo-runner namespace if it doesn't exist
       ansible.builtin.shell: kubectl create namespace {{ forgejo_runner_namespace }} --dry-run=client -o yaml | kubectl apply -f -
@@ -117,17 +164,21 @@
     # and route the `*.localhost` hostname at it via hostAliases — Traefik does
     # Host-header routing to Forgejo:3000 from port 80, exactly how host-side traffic
     # already reaches it. imac proved this exact fix direction by hand before this
-    # playbook had it.
+    # playbook had it. ONLY APPLIES in-cluster — an external Forgejo is reached by a real LAN
+    # address, which is already real DNS as far as any resolver is concerned; the
+    # `.localhost` special-use-TLD problem this works around simply does not exist for it.
     - name: 5. Get Traefik ClusterIP for in-cluster *.localhost hostname routing
       ansible.builtin.command: kubectl get svc traefik -n kube-system -o jsonpath={.spec.clusterIP}
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: forgejo_runner_traefik_ip_result
       changed_when: false
+      when: not forgejo_runner_is_external
 
     - name: 5b. Store Traefik ClusterIP
       ansible.builtin.set_fact:
         forgejo_runner_traefik_ip: "{{ forgejo_runner_traefik_ip_result.stdout }}"
+      when: not forgejo_runner_is_external
 
     - name: 6. Apply the registration token Secret
       kubernetes.core.k8s:
@@ -209,9 +260,7 @@
           - "🐳 Execution: a private docker:dind sidecar, not a real host Docker Engine"
           - "  (the Proxmox runner's own choice) — see the PLAN doc for why."
           - ""
-          - "📦 Registry push routing: forgejo.localhost is aliased to Traefik's ClusterIP"
-          - "  ({{ forgejo_runner_traefik_ip }}) inside this Pod via hostAliases — needed"
-          - "  because .localhost is a special-use TLD no in-cluster resolver can look up."
+          - "{{ ('📦 Registry push routing: forgejo.localhost is aliased to Traefik ClusterIP (' + forgejo_runner_traefik_ip + ') inside this Pod via hostAliases — needed because .localhost is a special-use TLD no in-cluster resolver can look up.') if not forgejo_runner_is_external else ('📦 Registry push routing: ' + forgejo_runner_instance_url + ' is a real LAN address — no .localhost hostAliases workaround needed.') }}"
           - ""
           - "🔧 Troubleshooting:"
           - "• Check pods: kubectl get pods -n {{ forgejo_runner_namespace }}"

@@ -91,6 +91,17 @@ platforms/proxmox/
 │   │                                 found running this for real: a stale postgresql/minio entry
 │   │                                 pointing at a since-wiped host. This script only ever
 │   │                                 touches the one `postgresql:` key, never the whole file.
+│   ├── forgejo-runner-pod-deploy.sh ✅ NOT a Proxmox guest — a k3s Deployment, applied the
+│   │                                 same way any UIS service is. Thin wrapper around the
+│   │                                 UIS-wide `uis deploy forgejo-runner`
+│   │                                 (/mnt/urbalurbadisk/ansible/playbooks/
+│   │                                 640-setup-forgejo-runner.yml): resolves forgejo's own
+│   │                                 CORE_SERVICES guest address from config.sh, flips the
+│   │                                 active kubectl context to "proxmox", and calls that
+│   │                                 playbook with `-e forgejo_external_url=...` (urb-
+│   │                                 agents#1982's pod-based successor to roles/
+│   │                                 forgejo-runner/'s own VM-kind lab extra below — see
+│   │                                 README.md's "Lab extras" section for both).
 │   ├── generate-ansible-config.sh ✅  also generates vars/core-services/*.yml + secrets now
 │   ├── init.sh                  ✅  interactive wizard → config.sh
 │   ├── up.sh                    ✅  chains all 5 numbered build steps in one unbroken run
@@ -300,6 +311,25 @@ four small pieces (a generic VM-declaration writer, a VM-kind branch in `08`/`09
 itself, a site-data file for the registration token) and built once Terje confirmed the DinD/
 socket-mount and deny-list firewall posture, both ported as-is from the reference lab's own proven,
 already-debugged role — not re-litigated as fresh choices for this general-purpose version.
+
+**That VM-based answer was itself superseded within the same hour**, before ops's live
+verification of it even began. A parallel architecture review (Terje + ops, reading
+`INVESTIGATE-agent-self-hosted-runner-iac.md`) landed on ephemeral Forgejo-Runner PODS in k3s
+instead — "k3s is k3s," one implementation shared with the already-shipped Rancher Desktop
+`uis deploy forgejo-runner` service (`ansible/playbooks/640-setup-forgejo-runner.yml`), rather than
+Proxmox-specific VM IaC. The redirect comment landed on urb-agents#1982 while the VM version was
+already mid-build; it was missed and the VM version shipped and was reported anyway before the
+miss was caught — see [[check-for-mid-work-bus-comments]] for the process lesson. Terje's explicit
+instruction: don't revert the VM-kind lab extra unilaterally (it's real, tested IaC, not harmful
+sitting there), build the pod-based version as the actual F5 deliverable, and once THAT is
+live-verified, the VM-kind lab extra (and the reference lab's own `epinio-runner` VM it was modeled
+on) are expected to be retired in favor of it. Built as a generalization of the existing Rancher
+Desktop service (`forgejo_external_url`, a new mode that skips the in-cluster-Forgejo assumptions
+— the Deployment existence check, Service-DNS instance URL, `.localhost`/Traefik hostAliases
+workaround — all three only ever applied when Forgejo runs in the SAME cluster), not a second,
+duplicated mechanism; `scripts/forgejo-runner-pod-deploy.sh` above is the thin Proxmox-specific
+wrapper. See README.md's "Lab extras" section for both the VM-kind (superseded) and pod-based
+(preferred) documentation, kept side by side until the retirement actually happens.
 
 ## Why numbering starts at 00
 
