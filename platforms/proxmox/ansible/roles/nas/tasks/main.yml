@@ -57,12 +57,20 @@
 # Each path is already a real Proxmox-managed mountpoint by this point (guest-ensure.yml's job,
 # before this role ever runs) — this only sets ownership on each one's root, it never creates the
 # underlying storage.
+#
+# 🔴 FIXED (urb-agents#1980, live-confirmed by ops): `valid_users` and `guest_ok: true` are
+# mutually exclusive by design (a share is either "some specific users" or "anyone, anonymously"),
+# so a guest_ok share has neither `valid_users` nor `force_group` set and used to fall through to
+# the `root` default for BOTH owner and group — but Samba's own anonymous-connection identity is
+# `nobody:nogroup`, not `root`, so a guest_ok share ended up unwritable by the very identity it was
+# declared open to. Default to `nobody:nogroup` when guest_ok is set instead; the root:root
+# fallback stays for the genuinely-undefined case (neither valid_users nor guest_ok set).
 - name: Share directories have the right ownership
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
-    owner: "{{ (item.valid_users | default('root')).split()[0] }}"
-    group: "{{ item.force_group | default((item.valid_users | default('root')).split()[0]) }}"
+    owner: "{{ item.valid_users.split()[0] if item.valid_users is defined else ('nobody' if item.guest_ok | default(false) else 'root') }}"
+    group: "{{ item.force_group | default(item.valid_users.split()[0] if item.valid_users is defined else ('nogroup' if item.guest_ok | default(false) else 'root')) }}"
     mode: "{{ item.directory_mask }}"
   loop: "{{ nas_shares }}"
   loop_control:
