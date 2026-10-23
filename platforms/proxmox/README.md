@@ -215,10 +215,6 @@ defer anything without a clear need yet.
 - **Full `init`/`up`/`down`/`status` parity with `platforms/azure-aks/`** — the richer
   non-interactive escape hatches, the full C-1 state-machine edge cases, are not all implemented.
   The golden path (a human running these commands from a real terminal) is what's been verified.
-- **The LXC-services phase** (a reference lab's basic services — a database, a secrets store,
-  object storage — built as plain LXC containers alongside the k3s VMs) is NOT scripted here. It's
-  independent of the k3s layer this platform's own verification bar tests, and genuinely optional
-  for a lab that just wants the two k3s clusters.
 - **Storage-class aliasing**: not included, on the theory that a plain k3s cluster's bundled
   `local-path` provisioner needs no alias (the same theory `rancher-desktop`, also plain k3s,
   already relies on). Flag it if a UIS service's deploy surfaces a missing storage class — the fix
