@@ -17,10 +17,12 @@
 #   service-forgejo-runner.sh's own header comment already uses for the pre-existing
 #   `uis deploy <service> -- -e key=value` CLI gap (urb-agents#1928) — not a new invention.
 #
-#   This is the pod-based successor to platforms/proxmox/ansible/roles/forgejo-runner/'s own
-#   VM-based lab extra (PR #611→#616, built via `uis platform lab-extra add proxmox
-#   forgejo-runner`). That VM-kind lab extra is kept standing per ops's own explicit
-#   instruction until THIS is live-verified — do not remove it here.
+#   This is the pod-based successor to a VM-based lab extra (PR #611→#616, built via
+#   `uis platform lab-extra add proxmox forgejo-runner`) that briefly lived at
+#   platforms/proxmox/ansible/roles/forgejo-runner/. Now that THIS is live-verified, that
+#   VM-kind lab extra and the reference lab's own `epinio-runner` VM it was modeled on have
+#   both been retired (urb-agents#1997) — see STRUCTURE.md's "nas's history in this platform"
+#   note for the full timeline.
 #
 # Prerequisites:
 #   - `forgejo` in CORE_SERVICES and already built (same dependency the VM-kind lab extra

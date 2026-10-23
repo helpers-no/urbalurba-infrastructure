@@ -176,7 +176,6 @@ write_guest_decl() {
 guest:
   name: ${name}
   vmid: ${vmid}
-  kind: lxc
   ostype: debian
   template: "debian-13-standard_13.6-1_amd64.tar.zst"
   cores: ${cores}
@@ -234,7 +233,6 @@ EOF
       gw: ${NETWORK_GATEWAY}
 
 service:
-  kind: lxc
   role: ${role}
   playbook: playbooks/service-${name}.yml
   health: vars/${name}-health.yml
@@ -244,46 +242,6 @@ EOF
 
 write_core_service() {
   write_guest_decl "core-services" "$@"
-}
-
-# write_vm_extra_decl <name> <vmid> <cores> <mem_mb> <disk_gb> <ip> <role>
-#
-# 🔵 THE VM COUNTERPART TO write_guest_decl, for a lab-extra that needs a QEMU VM instead of an
-# LXC container — forgejo-runner is the first (urb-agents#1982: it runs Docker, and nesting
-# Docker-in-LXC is its own can of worms this platform has never needed to open; a VM sidesteps it
-# entirely, same choice the reference lab made for its own epinio-runner). Writes the SAME `vm:`
-# shape write_vm_decl already writes for the six k3s VMs (vm-ensure.yml reads this block and has
-# never been k3s-aware — see that function's own header), but with NO `k3s:` block, since nothing
-# here ever installs k3s on it. `service.kind: vm` is what 09-lab-extras-apply.sh branches on to
-# call vm-ensure.yml instead of guest-ensure.yml, and to skip the replicate+HA-register steps that
-# make sense for a stateful LXC guest but not for disposable CI-runner compute.
-write_vm_extra_decl() {
-  local name="$1" vmid="$2" cores="$3" mem="$4" disk="$5" ip="$6" role="$7"
-  local file="$GENERATED_DIR/vars/lab-extras/${name}.yml"
-  cat > "$file" <<EOF
-# GENERATED from config.sh by generate-ansible-config.sh — do not hand-edit.
-vm:
-  name: ${name}
-  vmid: ${vmid}
-  cores: ${cores}
-  memory: ${mem}
-  disk_gb: ${disk}
-  storage: ${PROXMOX_STORAGE}
-  bridge: vmbr0
-  cloud_image: ${VM_CLOUD_IMAGE}
-  cloud_image_url: "${VM_CLOUD_IMAGE_URL}"
-  ip: "${ip}/${NETWORK_PREFIX_LENGTH}"
-  gateway: "${NETWORK_GATEWAY}"
-  nameserver: "${NETWORK_DNS}"
-  searchdomain: ${NETWORK_SEARCH_DOMAIN}
-  ciuser: ${VM_CIUSER}
-
-service:
-  kind: vm
-  role: ${role}
-  playbook: playbooks/service-${name}.yml
-EOF
-  ZONE_ENTRIES+=("${name}:${ip}")
 }
 
 # 🔴 OVERRIDABLE, NOT RE-HARDCODED PER LAB. Config.sh-template documents when to set one of
@@ -339,11 +297,6 @@ LAB_EXTRA_NAS_VMID="${LAB_EXTRA_NAS_VMID:-404}"
 # should hand a fresh lab owner. Add a second path:size_gb pair here (and a matching nas_shares
 # entry in the site-data file) if you want one.
 LAB_EXTRA_NAS_SHARE_MOUNTS="${LAB_EXTRA_NAS_SHARE_MOUNTS:-/srv/shared:50}"
-# 🔵 VMID 411 — right after forgejo's own 410, no collision with anything else this template
-# defaults (400 dns-resolver, 404 nas, 405-410 pg/pg-test/garage/bao/registry/forgejo, 490/491/
-# 290/291/190/191 the six k3s VMs). Sized 4 cores/8192MB/40GB — not a guess, the reference lab's
-# own real epinio-runner guest at this exact workload (Docker image builds), proven live.
-LAB_EXTRA_FORGEJO_RUNNER_VMID="${LAB_EXTRA_FORGEJO_RUNNER_VMID:-411}"
 
 for extra in $LAB_EXTRAS; do
   case "$extra" in
@@ -361,22 +314,6 @@ for extra in $LAB_EXTRAS; do
       [[ "$LAB_EXTRA_NAS_SHARE_MOUNTS" == *,* ]] && _nas_rest_mounts="${LAB_EXTRA_NAS_SHARE_MOUNTS#*,}"
       write_guest_decl lab-extras nas "$LAB_EXTRA_NAS_VMID" 2 1024 512 "order=3" "" 8 \
         "$_nas_first_path" "$_nas_first_size" "" nas "$LAB_EXTRA_NAS_IP" "$_nas_rest_mounts"
-      ;;
-    # 🔴 DEPENDS ON forgejo BEING A SELECTED CORE_SERVICES ENTRY — unlike dns-resolver/nas, which
-    # both stand alone, a CI runner with nothing to register against is useless. Refuse loudly at
-    # generation time rather than silently building a VM that can never finish its own
-    # registration task (urb-agents#1982's own open question, confirmed by ops/Terje: build it).
-    forgejo-runner)
-      _fr_has_forgejo=0
-      for _svc in $CORE_SERVICES; do [[ "$_svc" == "forgejo" ]] && _fr_has_forgejo=1 && break; done
-      if [[ "$_fr_has_forgejo" -eq 0 ]]; then
-        echo "✗ forgejo-runner is in LAB_EXTRAS but 'forgejo' is not in CORE_SERVICES — run" >&2
-        echo "  'uis platform core-service add proxmox forgejo' first; a runner with no Forgejo" >&2
-        echo "  instance to register against is useless." >&2
-        exit 1
-      fi
-      write_vm_extra_decl forgejo-runner "$LAB_EXTRA_FORGEJO_RUNNER_VMID" 4 8192 40 \
-        "$LAB_EXTRA_FORGEJO_RUNNER_IP" forgejo-runner
       ;;
     *) echo "⚠️  Unknown lab extra '$extra' in LAB_EXTRAS — skipped" >&2 ;;
   esac
@@ -550,42 +487,6 @@ if _lab_extras_has nas; then
       echo "nas_firewall_allow_ranges:"
       _firewall_ranges_yaml "$_nas_fw_ranges"
     fi
-  } >> "$LAB_EXTRAS_VARS_FILE"
-fi
-
-if _lab_extras_has forgejo-runner; then
-  {
-    # forgejo_runner_token is DELIBERATELY NOT HERE — genuine site data (a minted, one-time
-    # registration secret), same "site data, not role data" discipline as nas's own users/shares.
-    # Supplied via .uis.secrets/platforms/proxmox/lab-extras/forgejo-runner-site-data.yml.
-    #
-    # 🔴 NO HARDCODED ADDRESS — resolved here from the forgejo CORE_SERVICES guest's OWN config.sh
-    # IP, the same "no default, resolved at apply time" rule roles/forgejo's own forgejo_domain
-    # already follows. The case arm above already refused generation if forgejo isn't selected, so
-    # CORE_SERVICE_FORGEJO_IP is guaranteed set by the time this runs. Port 3000 must match
-    # roles/forgejo/defaults/main.yml's own forgejo_http_port — not read dynamically from there
-    # (separate bash vs Jinja contexts), so if that default ever changes, this needs a matching edit.
-    echo "forgejo_runner_instance_url: \"http://${CORE_SERVICE_FORGEJO_IP}:3000/\""
-
-    # 🔴 DENY-LIST, NOT AN ALLOW-LIST — ported faithfully from the reference lab's own
-    # epinio-runner firewall (urb-agents#1926/#1982, Terje: "same deny-list posture... not
-    # re-litigating it as a fresh choice"). Default-accept, explicit deny of every address this
-    # guest has no legitimate reason to reach: this lab's own Proxmox hosts and every currently
-    # selected CORE_SERVICES/lab-extras guest holding real data or secrets — EXCEPT forgejo
-    # itself, which is the one thing this runner must reach. Deliberately simpler than the
-    # reference's own deny-list (which also carves out its -test k3s nodes as an intentional
-    # Epinio-PoC deploy target): UIS has no generic "test cluster is the deploy target" concept to
-    # generalize that carve-out from, so this denies ALL SIX k3s VMs too, prod and test alike —
-    # the more conservative generalization, not a guess at a PoC-specific exception that wouldn't
-    # mean anything for a fresh lab. ZONE_ENTRIES is complete by this point (every write_vm_decl/
-    # write_guest_decl/write_vm_extra_decl call above already appended to it).
-    echo "forgejo_runner_firewall_deny_addrs:"
-    for _entry in "${ZONE_ENTRIES[@]}"; do
-      _ename="${_entry%%:*}"
-      _eip="${_entry#*:}"
-      [[ "$_ename" == "forgejo" || "$_ename" == "forgejo-runner" ]] && continue
-      echo "  - \"${_eip}\""
-    done
   } >> "$LAB_EXTRAS_VARS_FILE"
 fi
 

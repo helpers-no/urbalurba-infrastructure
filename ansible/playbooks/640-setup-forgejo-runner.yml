@@ -6,9 +6,10 @@
 # k3s cluster this applies to, Rancher Desktop or one of this lab's own Proxmox k3s
 # clusters (urb-agents#1982, F5 of INVESTIGATE-host-provision-host-adoption.md: "k3s is
 # k3s... one implementation, both platform targets," the same reasoning bao+ESO already
-# use). The platforms/proxmox VM-based runner (roles/forgejo-runner — proven, live-tested)
-# is this pod-based version's predecessor, kept standing per ops's own instruction until
-# this is live-verified.
+# use). A platforms/proxmox VM-based runner (proven, live-tested) was this pod-based
+# version's predecessor, retired outright (urb-agents#1997) once this was live-verified;
+# see platforms/proxmox/STRUCTURE.md's "nas's history in this platform" note for the full
+# timeline.
 #
 # 🔴 THE ONE REAL PLATFORM DIFFERENCE: whether Forgejo itself is IN-CLUSTER or EXTERNAL.
 # On Rancher Desktop, `uis deploy forgejo` runs forgejo as a Deployment in THIS same
@@ -49,9 +50,9 @@
     # answer — see the PLAN doc's "What this plan does NOT resolve."
     forgejo_runner_namespace: "forgejo-runner"
     forgejo_runner_http_port: 3000
-    # 🔵 SAME VERSION AS platforms/proxmox/ansible/roles/forgejo-runner/defaults/main.yml
-    # — verified live 2026-10-19 by the proven reference (pulling it, not trusting search
-    # results). One version, both targets.
+    # 🔵 SAME VERSION the retired platforms/proxmox VM-based runner once pinned — verified
+    # live 2026-10-19 by the proven reference (pulling it, not trusting search results).
+    # One version, both targets.
     forgejo_runner_version: "13.2.0"
     forgejo_runner_image: "code.forgejo.org/forgejo/runner:{{ forgejo_runner_version }}"
     # 🔴 NOT independently verified this session — a reasonably recent, well-known stable

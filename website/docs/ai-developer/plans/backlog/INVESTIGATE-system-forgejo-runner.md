@@ -4,7 +4,17 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog
+## Status: Superseded (resolved 2026-10-23, not via this document's own plan)
+
+⚠️ **The goal below was achieved, but not through PLAN-001/PLAN-002 as proposed here.**
+`urb-agents#1982` built the dedicated-VM path this document describes (`08-lab-extra-add.sh`/
+`09-lab-extras-apply.sh`, a VM-kind lab extra), and it was live-tested — then `urb-agents#1997`
+retired it in favor of an ephemeral k3s-pod runner instead, reusing the already-shipped Rancher
+Desktop `uis deploy forgejo-runner` service ("k3s is k3s," one implementation, both platform
+targets) rather than Proxmox-specific VM IaC. See `platforms/proxmox/STRUCTURE.md`'s "nas's
+history in this platform" note for the full timeline. F1-F3 and the open questions below were
+real findings at the time and are kept for history, not because the VM path they describe is
+still the current answer.
 
 **Goal**: Give UIS's Forgejo install (`PLAN-system-forgejo-core-service.md`) a real,
 registered Forgejo Actions runner on a dedicated Proxmox VM — the half of Terje's
