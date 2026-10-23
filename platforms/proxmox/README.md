@@ -209,7 +209,17 @@ here, and a matching `nas_shares` entry in your site-data file, if you want one.
 400-not-410, nothing else in this template already claims 404, so there's no collision to design
 around here.
 
-### forgejo-runner
+### forgejo-runner (VM-kind lab extra — superseded, kept standing)
+
+⚠️ **A pod-based successor now exists and is the preferred path.** `./scripts/
+forgejo-runner-pod-deploy.sh` deploys the SAME Forgejo Actions runner as a k3s pod on this
+platform's own production cluster instead — one implementation shared with the Rancher Desktop
+`uis deploy forgejo-runner` service, rather than Proxmox-specific VM IaC (urb-agents#1982: "k3s is
+k3s," same reasoning bao+ESO already use). This VM-kind lab extra is kept standing, not removed,
+per Terje's own instruction, until the pod-based version is live-verified — at which point this
+section (and the VM it describes) are expected to be retired. See "forgejo-runner (pod-based,
+preferred)" below for the current path; read on only if you need the VM-based history or are
+comparing the two.
 
 A Forgejo Actions CI runner — the first lab extra that's a **QEMU VM, not an LXC**. It runs
 Docker, and nesting Docker-in-LXC is its own can of worms this platform has never needed to open;
@@ -250,6 +260,40 @@ git-ignored, persistent, never-regenerated convention as `nas`'s own site-data f
 **VMID default is 411** — right after forgejo's own 410, no collision with anything else this
 template defaults. Sized 4 cores/8192MB/40GB, matching the reference lab's own real guest at this
 exact workload (Docker image builds), proven live — not a guess.
+
+### forgejo-runner (pod-based, preferred)
+
+Not a lab extra at all — a k3s Deployment, applied to this platform's own production cluster the
+same way any other UIS service is. `08-lab-extra-add.sh`/`09-lab-extras-apply.sh` have nothing to
+do with it; this is `uis deploy forgejo-runner` (`ansible/playbooks/640-setup-forgejo-runner.yml`,
+`manifests/640-forgejo-runner.yaml.j2` — the same Deployment that already runs on Rancher
+Desktop), targeted at this cluster via a thin wrapper:
+
+```
+./scripts/forgejo-runner-pod-deploy.sh
+```
+
+**Still requires `forgejo` in `CORE_SERVICES`** — same dependency, same refusal, as the VM-kind
+version above. **Still needs the same registration token**, via the exact same site-data file
+(`platforms/proxmox/lab-extras-site-data/forgejo-runner-site-data.yml-template`, copied to
+`.uis.secrets/platforms/proxmox/lab-extras/forgejo-runner-site-data.yml`) — reused as-is, since
+it's the same genuine site data regardless of which mechanism consumes it.
+
+**The one real translation**: `forgejo` here is an external CORE_SERVICES LXC guest (a real LAN
+address), not an in-cluster Deployment — unlike on Rancher Desktop, where `uis deploy forgejo`
+runs inside the same cluster. The wrapper script resolves `CORE_SERVICE_FORGEJO_IP` from
+`config.sh` and passes it to the setup playbook as `-e forgejo_external_url=...`, which skips the
+in-cluster Deployment check (a plain TCP reachability check instead), uses that address directly
+as the instance URL and insecure-registry value, and skips the Traefik/`.localhost` hostAliases
+workaround entirely — a real LAN address has no special-use-TLD resolver problem to work around.
+Everything else (the DinD sidecar, the shared socket emptyDir, the register flow) is byte-
+identical to the Rancher Desktop deployment — genuinely one implementation, not two.
+
+Docker-in-Docker (socket-mount, not nested Docker-in-Docker) was Terje's own explicit call for
+this runner, ported as-is from the VM version rather than re-litigated (urb-agents#1926/#1982) —
+see `manifests/640-forgejo-runner.yaml.j2`'s own comments for the three real bugs found running
+this live (a job-image Docker CLI too old, the socket's GID not matching a hardcoded assumption,
+`docker logs` writing to stderr not stdout).
 
 ## What's deferred (first draft — see the PR description)
 

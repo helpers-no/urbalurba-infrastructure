@@ -1,29 +1,34 @@
 # File: manifests/640-forgejo-runner.yaml.j2
 #
 # Description:
-# Forgejo Actions runner, as an in-cluster `uis deploy forgejo-runner` service — the
-# Rancher Desktop (dev/test) counterpart to the dedicated Proxmox VM runner in
-# platforms/proxmox/ansible/roles/forgejo-runner/. That proven, live-tested reference
-# uses a HOST Docker socket mount (explicitly NOT Docker-in-Docker, NOT a Kubernetes-
-# native execution plugin — see the PLAN doc's Part 1 findings for why both were
-# considered and set aside). There is no spare dedicated host here to mount a REAL
-# Docker socket from, so this translates "a dedicated Docker daemon nothing else
-# touches" into its closest Kubernetes-native equivalent: a `docker:dind` sidecar,
-# private to this one Pod, reached the same way the proven config already expects
-# (`docker_host: "automount"` finding /var/run/docker.sock — a shared emptyDir makes
-# that path exist here exactly as it does on the VM).
+# Forgejo Actions runner, as an in-cluster `uis deploy forgejo-runner` service — the SAME
+# manifest regardless of which k3s cluster it applies to (urb-agents#1982: "k3s is k3s,"
+# one implementation for Rancher Desktop and for one of this lab's own Proxmox k3s
+# clusters alike). Predecessor: the dedicated Proxmox VM runner in
+# platforms/proxmox/ansible/roles/forgejo-runner/, proven and live-tested, which uses a
+# HOST Docker socket mount (explicitly NOT Docker-in-Docker, NOT a Kubernetes-native
+# execution plugin — see the PLAN doc's Part 1 findings for why both were considered and
+# set aside). There is no spare dedicated host to mount a REAL Docker socket from inside a
+# k3s Pod, so this translates "a dedicated Docker daemon nothing else touches" into its
+# closest Kubernetes-native equivalent: a `docker:dind` sidecar, private to this one Pod,
+# reached the same way the proven config already expects (`docker_host: "automount"`
+# finding /var/run/docker.sock — a shared emptyDir makes that path exist here exactly as
+# it does on the VM).
 #
 # Template Variables (from the setup playbook):
 # - forgejo_runner_namespace
 # - forgejo_runner_image (pinned version, same as the Proxmox role)
-# - forgejo_runner_instance_url (in-cluster Forgejo Service DNS)
+# - forgejo_runner_instance_url (in-cluster Forgejo Service DNS, OR the external Forgejo
+#   URL when the setup playbook's own forgejo_external_url mode is in use — see that
+#   file's own header)
 # - forgejo_runner_name
 # - forgejo_runner_labels (comma-joined)
 # - forgejo_runner_dind_image
 # - forgejo_runner_insecure_registry (the Forgejo registry's host:port, for the dind
 #   sidecar's own daemon — job containers push through THIS daemon, not the k3s node's)
 # - forgejo_runner_traefik_ip (Traefik's ClusterIP, looked up live — routes the
-#   .localhost registry-auth redirect, which no in-cluster resolver can otherwise reach)
+#   .localhost registry-auth redirect, which no in-cluster resolver can otherwise reach.
+#   Empty in external-Forgejo mode — see the hostAliases block below.)
 #
 # The registration token (forgejo-runner-token Secret, key TOKEN) is operator-supplied,
 # NOT auto-minted by this playbook — same rule the Proxmox role's own
@@ -97,10 +102,17 @@ spec:
       # does Host-header routing to Forgejo:3000 from port 80, exactly how host-side
       # traffic already reaches it. Applies to every container in the Pod, including
       # the dind sidecar where the actual docker login/push happens.
+      #
+      # 🔵 CONDITIONAL — urb-agents#1982's own external-Forgejo mode leaves
+      # forgejo_runner_traefik_ip empty (the setup playbook's own task 5/5b never run for
+      # it). A real LAN address is already real DNS as far as any resolver is concerned —
+      # there is no `.localhost` special-TLD problem here to work around at all.
+{% if forgejo_runner_traefik_ip %}
       hostAliases:
         - ip: "{{ forgejo_runner_traefik_ip }}"
           hostnames:
             - forgejo.localhost
+{% endif %}
       initContainers:
         # One-shot setup: generate config.yaml (the tool's own generator, not a
         # hand-written file — same discipline as the Proxmox role's own comment on why:
