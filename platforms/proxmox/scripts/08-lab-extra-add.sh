@@ -36,17 +36,17 @@ CONFIG_FILE="$REPO_ROOT/.uis.secrets/platforms/proxmox/config.sh"
 NAME="${1:-}"
 if [[ -z "$NAME" ]]; then
     print_error "Usage: $0 <name>"
-    echo "  Known lab extras: dns-resolver nas" >&2
+    echo "  Known lab extras: dns-resolver nas forgejo-runner" >&2
     exit 2
 fi
 
 # 🔴 KEEP THIS LIST IN STEP WITH generate-ansible-config.sh's OWN `case "$extra" in` ARMS — same
 # "two places must agree" shape 07-core-service-add.sh's header already names for CORE_SERVICES.
 case "$NAME" in
-    dns-resolver|nas) ;;
+    dns-resolver|nas|forgejo-runner) ;;
     *)
         print_error "Unknown lab extra '$NAME'."
-        echo "  Known lab extras: dns-resolver nas" >&2
+        echo "  Known lab extras: dns-resolver nas forgejo-runner" >&2
         exit 2
         ;;
 esac
@@ -58,6 +58,20 @@ fi
 # shellcheck source=/dev/null
 source "$CONFIG_FILE"
 LAB_EXTRAS="${LAB_EXTRAS:-}"
+CORE_SERVICES="${CORE_SERVICES:-}"
+
+# 🔴 forgejo-runner DEPENDS ON forgejo BEING A SELECTED CORE_SERVICES ENTRY — a runner with no
+# Forgejo instance to register against is useless (urb-agents#1982). dns-resolver/nas both stand
+# alone; this is the first lab-extra with a real dependency on another opt-in piece.
+if [[ "$NAME" == "forgejo-runner" ]]; then
+    _has_forgejo=0
+    for _svc in $CORE_SERVICES; do [[ "$_svc" == "forgejo" ]] && _has_forgejo=1 && break; done
+    if [[ "$_has_forgejo" -eq 0 ]]; then
+        print_error "forgejo-runner needs 'forgejo' in CORE_SERVICES first — it has nothing to register against otherwise."
+        echo "  Run 'uis platform core-service add proxmox forgejo' first." >&2
+        exit 1
+    fi
+fi
 
 _already_present=0
 for _e in $LAB_EXTRAS; do

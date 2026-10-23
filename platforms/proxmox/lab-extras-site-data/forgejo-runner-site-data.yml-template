@@ -1,0 +1,23 @@
+# platforms/proxmox/lab-extras-site-data/forgejo-runner-site-data.yml-template
+#
+# Copy to .uis.secrets/platforms/proxmox/lab-extras/forgejo-runner-site-data.yml (git-ignored —
+# never commit this file, it carries a real credential) and fill in your own value. Passed to
+# playbooks/service-forgejo-runner.yml by 09-lab-extras-apply.sh automatically, ONLY if that file
+# exists — an install with no file here just never has anything to pass, same "unused is never
+# read" rule every other optional config.sh-template block follows.
+#
+# 🔴 WHY THIS ISN'T IN config.sh. roles/forgejo-runner deliberately ships no token — see that
+# role's own defaults/main.yml: "a role that ships a real credential is wrong everywhere except
+# where it was written." config.sh is a flat, scalar bash file meant for Proxmox-level facts
+# (VMIDs, IPs, sizing); a registration token is a genuine secret, the same "site data, not role
+# data" discipline nas's own users/shares already follow.
+#
+# ⚠️ Mint the token yourself, once, after the forgejo CORE_SERVICES guest is up (the binary
+# refuses to run as root, so this runs as the `git` user inside Forgejo's own container):
+#   ssh <forgejo CORE_SERVICES guest IP> docker exec --user git forgejo forgejo actions generate-runner-token
+# Paste the result below. The token is consumed once, at registration (it writes a `.runner`
+# file on the runner guest itself and is never needed again) — rotating it later means minting a
+# new one and re-running `uis platform lab-extra add proxmox forgejo-runner`, which is idempotent
+# and safe to repeat.
+
+forgejo_runner_token: ""

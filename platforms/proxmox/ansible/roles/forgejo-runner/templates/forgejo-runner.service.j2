@@ -1,0 +1,28 @@
+# MANAGED BY ANSIBLE — roles/forgejo-runner/templates/forgejo-runner.service.j2
+[Unit]
+Description=Forgejo Runner ({{ forgejo_runner_version }}) — registered to {{ forgejo_runner_instance_url }}
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+ExecStartPre=-/usr/bin/docker rm -f forgejo-runner
+# --group-add: the socket's real GID (read live, not assumed) -- uid 1000 inside the image is not
+# otherwise a member of the host's docker group, and group membership does not cross into a
+# container on its own.
+ExecStart=/usr/bin/docker run --rm --name forgejo-runner \
+  --group-add {{ forgejo_runner_socket_stat.stat.gid }} \
+  -v {{ forgejo_runner_data_dir }}:/data \
+  -v {{ forgejo_runner_docker_socket }}:{{ forgejo_runner_docker_socket }} \
+  -w /data \
+  --memory={{ forgejo_runner_mem_limit | default('768m') }} \
+  --log-opt max-size={{ forgejo_runner_log_max_size | default('10m') }} \
+  --log-opt max-file={{ forgejo_runner_log_max_file | default('3') }} \
+  {{ forgejo_runner_image }} \
+  forgejo-runner daemon --config /data/config.yaml
+ExecStop=/usr/bin/docker stop forgejo-runner
+
+[Install]
+WantedBy=multi-user.target

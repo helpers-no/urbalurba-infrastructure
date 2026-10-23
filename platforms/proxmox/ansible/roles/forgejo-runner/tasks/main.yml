@@ -1,0 +1,213 @@
+---
+# forgejo-runner — Forgejo Actions CI runner. Opt-in lab extra, NOT a CORE_SERVICES default, and
+# a QEMU VM, NOT an LXC (see generate-ansible-config.sh's write_vm_extra_decl) — this role runs
+# Docker, and nesting Docker-in-LXC is its own can of worms this platform has never needed to
+# open. See README.md's "Lab extras" section and urb-agents#1970/#1982.
+#
+# 🔴 THE REAL PORT DECISIONS, both Terje's own explicit call, not re-litigated here (urb-agents#
+# 1926/#1982): Docker-in-Docker vs skopeo → host-socket mount, same as the reference's own proven,
+# already-debugged approach (three real bugs found and fixed there — preserved as comments below,
+# not just the fixes). Network isolation → the SAME deny-list firewall posture as the reference
+# lab's own epinio-runner (default-accept outbound, explicit deny of production addresses) —
+# folded into THIS role rather than a second VM-level role, since this guest's only job here is
+# forgejo-runner (the reference's own VM also serves urb-agents' own CLI release builds, a second
+# consumer this platform has no equivalent of).
+#
+# 🔴 THE ONE REAL STRUCTURAL CHANGE FROM THE REFERENCE: the deny-list is built by
+# generate-ansible-config.sh from this platform's own ZONE_ENTRIES (every Proxmox host, k3s VM,
+# and CORE_SERVICES/lab-extras guest this install actually has), not resolved from inventory
+# hostvars the way the reference role's own firewall does — this platform's generated
+# inventory.yml never registers CORE_SERVICES/lab-extras guests as inventory hosts at all (the
+# same structural gap dns-resolver's own zone generation already worked around). See
+# roles/dns-resolver/defaults/main.yml's comment for the fuller version of this same note.
+
+- name: The registration token must be supplied, never defaulted
+  ansible.builtin.assert:
+    that:
+      - forgejo_runner_token | length > 0
+    fail_msg: >-
+      forgejo_runner_token is required and this role ships none. Mint one (as the `git` user
+      inside the forgejo CORE_SERVICES guest — the binary refuses to run as root):
+        docker exec --user git forgejo forgejo actions generate-runner-token
+      Supply it via .uis.secrets/platforms/proxmox/lab-extras/forgejo-runner-site-data.yml — see
+      platforms/proxmox/lab-extras-site-data/forgejo-runner-site-data.yml-template.
+    quiet: true
+  no_log: true
+
+- name: The Forgejo instance URL must be resolved, never guessed
+  ansible.builtin.assert:
+    that:
+      - forgejo_runner_instance_url | length > 0
+    fail_msg: >-
+      forgejo_runner_instance_url is empty. generate-ansible-config.sh resolves this from the
+      forgejo CORE_SERVICES guest's own IP and refuses to build this guest at all unless forgejo
+      is a selected CORE_SERVICES entry — if you're seeing this, something upstream of this role
+      was bypassed (e.g. this playbook run by hand without the generated extra-vars file).
+    quiet: true
+
+- name: Docker
+  ansible.builtin.apt:
+    name: [docker.io, curl, ca-certificates]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# 🔴 FOUND LIVE BY ops, GATE 12 OF THE EPINIO INVESTIGATION (bug 1 of 3): a job built via
+# `docker login`/`docker push` from inside a job container failed with "server gave HTTP response
+# to HTTPS client" — Docker defaults to HTTPS for any registry, and Forgejo's own built-in
+# registry (same guest, plain HTTP, no TLS — same as every other service in this platform) needs
+# an explicit exception. This is the HOST's Docker Engine config (/etc/docker/daemon.json), not
+# something a job script can set for itself: jobs reach Docker via the automounted host socket
+# (docker_host: automount, below), so they share the host daemon's one config, and only the host
+# can apply and restart it.
+- name: This host's Docker Engine must trust Forgejo's registry over plain HTTP
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: "{{ {'insecure-registries': [forgejo_runner_instance_url | urlsplit('netloc')]} | to_nice_json }}\n"
+    mode: "0644"
+  notify: Restart docker
+
+- name: Apply any pending Docker restart before anything tries to use it
+  ansible.builtin.meta: flush_handlers
+
+# 🔴 THE SOCKET'S GROUP, NOT A HARDCODED GID — bug 2 of 3. The socket is root:docker 0660, and
+# uid 1000 inside the container (not a member of the host's docker group — group membership does
+# not cross into a container on its own) got "permission denied" connecting to it. Reading the
+# real GID from the live socket, rather than assuming the conventional "docker" group always has
+# the same GID on every host, is what makes `--group-add` actually correct instead of a guess.
+- name: What group actually owns the Docker socket
+  ansible.builtin.stat:
+    path: "{{ forgejo_runner_docker_socket }}"
+  register: forgejo_runner_socket_stat
+
+- name: Data directory
+  ansible.builtin.file:
+    path: "{{ forgejo_runner_data_dir }}"
+    state: directory
+    # 🔵 OWNED BY uid 1000 — measured live: `docker run --rm --entrypoint id <image>` → uid=1000
+    # gid=1000. Root-owned 0750 meant the container could not even open the directory
+    # ("permission denied" on config.yaml) — the fix is correct ownership, not wider permissions.
+    owner: "1000"
+    group: "1000"
+    mode: "0750"
+
+- name: Pull the pinned image if it is not already cached
+  ansible.builtin.command:
+    cmd: "docker pull {{ forgejo_runner_image }}"
+  register: forgejo_runner_pull
+  changed_when: "'Downloaded newer image' in (forgejo_runner_pull.stdout | default(''))"
+  failed_when: false
+
+# ── config — generated by the binary itself, not hand-written from assumed schema ────────────
+- name: Generate the default config if it does not exist yet
+  ansible.builtin.shell:
+    cmd: "docker run --rm {{ forgejo_runner_image }} forgejo-runner generate-config > {{ forgejo_runner_data_dir }}/config.yaml"
+    creates: "{{ forgejo_runner_data_dir }}/config.yaml"
+
+# 🔴 "automount" NOT THE DEFAULT "-" — the documented option that finds and mounts an available
+# docker host (this guest's own /var/run/docker.sock) into JOB containers automatically. Without
+# it, a job that itself needs docker (buildah/buildkit-style builds) has nothing to use.
+- name: Point job containers at this host's own Docker socket
+  ansible.builtin.lineinfile:
+    path: "{{ forgejo_runner_data_dir }}/config.yaml"
+    regexp: '^\s*docker_host:\s*"-"\s*$'
+    line: '  docker_host: "automount"'
+  notify: Restart forgejo-runner
+
+# ── registration — ONE TIME, writes .runner, never re-run once it exists ─────────────────────
+- name: Register with Forgejo, if not already registered
+  ansible.builtin.command:
+    cmd: >-
+      docker run --rm --user 1000:1000
+      --group-add {{ forgejo_runner_socket_stat.stat.gid }}
+      -v {{ forgejo_runner_data_dir }}:/data -w /data {{ forgejo_runner_image }}
+      forgejo-runner register --no-interactive
+      --instance {{ forgejo_runner_instance_url }}
+      --token {{ forgejo_runner_token }}
+      --name {{ forgejo_runner_name }}
+      --labels {{ forgejo_runner_labels | join(',') }}
+    creates: "{{ forgejo_runner_data_dir }}/.runner"
+  no_log: true   # the command line carries the token
+
+- name: The .runner file must actually exist now, not just report success
+  ansible.builtin.stat:
+    path: "{{ forgejo_runner_data_dir }}/.runner"
+  register: forgejo_runner_file
+
+- name: Fail loudly if registration did not actually produce a .runner file
+  ansible.builtin.assert:
+    that: forgejo_runner_file.stat.exists
+    fail_msg: "register reported success (or was skipped) but {{ forgejo_runner_data_dir }}/.runner does not exist."
+    quiet: true
+
+- name: Unit
+  ansible.builtin.template:
+    src: forgejo-runner.service.j2
+    dest: /etc/systemd/system/forgejo-runner.service
+    mode: "0644"
+  notify: Restart forgejo-runner
+
+- name: Running
+  ansible.builtin.systemd:
+    name: forgejo-runner
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply any pending restart before verifying anything
+  ansible.builtin.meta: flush_handlers
+
+# 🔴 PROVE IT FROM THE RUNNER'S OWN LOGS — connected-and-polling, not just "the process started".
+# 🔴 CHECKS stderr TOO, NOT JUST stdout — found live: `docker logs` puts this daemon's own log
+# lines on stderr, not stdout. A check reading only `.stdout` reported failure on a genuinely
+# healthy, already-running daemon.
+- name: Wait for the daemon to report it is polling, not just that the container started
+  ansible.builtin.command: "docker logs --tail 50 forgejo-runner"
+  register: forgejo_runner_logs
+  until: "'declared successfully' in (forgejo_runner_logs.stdout + forgejo_runner_logs.stderr) or '[poller] launched' in (forgejo_runner_logs.stdout + forgejo_runner_logs.stderr)"
+  retries: 10
+  delay: 3
+  changed_when: false
+
+# ── firewall ─────────────────────────────────────────────────────────────────────────────────
+# 🔴 A DENY-LIST, NOT AN ALLOW-LIST — the one deliberate exception to every other role's firewall
+# shape here (bao/garage/nas/dns-resolver all default-DROP with a narrow allow-list). This guest
+# runs semi-trusted CI build code by design; the goal is enforcing "no reach into this lab's real
+# data/secrets" as a network control, not enumerating every legitimate build-time destination
+# (Docker Hub, release artefacts, language registries — an allow-list here would just become a
+# stream of false negatives). Ported from the reference lab's own epinio-runner firewall on
+# Terje's explicit instruction (urb-agents#1926/#1982: "same deny-list posture... not
+# re-litigating it").
+- name: Deny-list firewall for forward/output
+  ansible.builtin.template:
+    src: forgejo-runner-nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Reload nftables
+
+- name: nftables enabled and running
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: Apply any pending nftables reload before verifying anything
+  ansible.builtin.meta: flush_handlers
+
+- name: nftables is actually enforcing, not just running
+  ansible.builtin.command: nft list ruleset
+  register: forgejo_runner_nft_ruleset
+  changed_when: false
+  check_mode: false
+
+- name: The deny-list must actually be loaded, not just rendered
+  ansible.builtin.assert:
+    that:
+      - "'policy accept' in forgejo_runner_nft_ruleset.stdout"
+      - forgejo_runner_firewall_deny_addrs | length == 0 or forgejo_runner_firewall_deny_addrs[0] in forgejo_runner_nft_ruleset.stdout
+    fail_msg: >-
+      nftables is active but the loaded ruleset does not match what was rendered — a running
+      firewall with a config nobody applied is the same as no firewall.
+    quiet: true
