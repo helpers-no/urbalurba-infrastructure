@@ -594,7 +594,7 @@
     "abstract": "CI runner for Forgejo Actions workflows, in-cluster",
     "logo": "",
     "website": "https://forgejo.org/docs/latest/admin/actions/"
-    ,"summary": "Registers a Forgejo Actions runner against this installs own Forgejo (uis deploy forgejo), executing workflow jobs via a private docker:dind sidecar. The in-cluster counterpart of the dedicated Proxmox VM runner built for production — same runner version and registration flow, different job-isolation mechanism because this target has no spare dedicated host."
+    ,"summary": "Registers a Forgejo Actions runner against this installs own Forgejo (uis deploy forgejo), executing workflow jobs via a private docker:dind sidecar. The SAME Deployment runs identically on Rancher Desktop and on a Proxmox k3s cluster — only whether Forgejo is in-cluster or an external LXC guest differs, via the forgejo_external_url setup var."
     ,"docs": "/docs/services/management/forgejo-runner"
     ,"playbook": "640-setup-forgejo-runner.yml"
     ,"priority": 81
