@@ -178,11 +178,52 @@ pf_ensure_legacy_kubeconf() {
 }
 
 
+# ----- pf_ensure_kubeconf_restored -------------------------------------------
+# Regenerate PF_KUBECONFIG from the persistent legacy copy if it is missing.
+#
+# 🔴 FOUND LIVE, urb-agents#1982 (ops, live-verifying the forgejo-runner pod
+# build): PF_KUBECONFIG sits under the container's own image/working layer,
+# NOT a persistent bind mount — a `uis pull` wipes it, same as every other
+# non-.uis.secrets/.uis.extend path. PF_LEGACY_KUBECONFIG DOES persist (it's
+# under .uis.secrets/generated/), but pf_lockstep_flip (and pf_probe_reachable/
+# pf_context_exists) read/write PF_KUBECONFIG directly with no existence
+# check, so `kubectl config use-context` fails outright with "no context
+# exists with the name: ..." even when that exact context is present and
+# correct in the persistent legacy copy the whole time. Concretely: pull the
+# image, then immediately run anything that calls pf_lockstep_flip (e.g.
+# platforms/proxmox/scripts/point-postgresql-at.sh or
+# forgejo-runner-pod-deploy.sh) without an intervening full `up` — this is
+# not platform-specific, every pf_* function that trusts PF_KUBECONFIG
+# without checking it first is equally exposed.
+#
+# 🔵 NOT "always read from the legacy path instead" — that would reintroduce
+# exactly the bug PF_KUBECONFIG exists to avoid: this file's own header
+# comment explains kubectl's WRITES to the bind-mounted legacy path trigger
+# the lima/9P flock phantom-file bug, which is why PF_KUBECONFIG (plain,
+# in-container, not bind-mounted) is "truth for reads" at all. Restoring
+# PF_KUBECONFIG FROM the legacy copy via plain `cp` — never kubectl — is safe
+# in this direction; the flock issue is specific to kubectl writing TO the
+# bind mount, not to a plain file copy reading from it.
+pf_ensure_kubeconf_restored() {
+    [[ -f "$PF_KUBECONFIG" ]] && return 0
+    [[ -f "$PF_LEGACY_KUBECONFIG" ]] || return 0
+
+    local kc_dir
+    kc_dir="$(dirname "$PF_KUBECONFIG")"
+    mkdir -p "$kc_dir" 2>/dev/null || return 1
+
+    cp --remove-destination "$PF_LEGACY_KUBECONFIG" "$PF_KUBECONFIG" 2>/dev/null || return 1
+    chmod 600 "$PF_KUBECONFIG" 2>/dev/null || true
+    return 0
+}
+
+
 # ----- pf_active_platform -----------------------------------------------------
 # Echo the kubectl current-context name (the active platform per Q1). Empty
 # string if unset (e.g. fresh kubeconfig).
 pf_active_platform() {
     pf_ensure_kubeconf_seeded
+    pf_ensure_kubeconf_restored
     KUBECONFIG="$PF_KUBECONFIG" kubectl config current-context 2>/dev/null || echo ""
 }
 
@@ -196,6 +237,7 @@ pf_active_platform() {
 pf_probe_reachable() {
     local ctx="${1:-}"
     [[ -z "$ctx" ]] && return 2
+    pf_ensure_kubeconf_restored
     KUBECONFIG="$PF_KUBECONFIG" kubectl --context "$ctx" \
         --request-timeout="$PF_PROBE_TIMEOUT" \
         get --raw /version >/dev/null 2>&1
@@ -212,6 +254,7 @@ pf_probe_reachable() {
 pf_context_exists() {
     local ctx="${1:-}"
     [[ -z "$ctx" ]] && return 1
+    pf_ensure_kubeconf_restored
     KUBECONFIG="$PF_KUBECONFIG" kubectl config get-contexts "$ctx" >/dev/null 2>&1
 }
 
@@ -243,6 +286,13 @@ pf_context_exists() {
 # Single writer means the three locations can never silently diverge.
 pf_lockstep_flip() {
     local platform="${1:?pf_lockstep_flip: missing platform argument}"
+
+    # 🔴 FOUND LIVE, urb-agents#1982 — PF_KUBECONFIG does not survive a `uis
+    # pull`; without this, `kubectl config use-context` below fails outright
+    # with "no context exists" even when the context is present and correct
+    # in the persistent legacy copy the whole time. See
+    # pf_ensure_kubeconf_restored's own comment for the full story.
+    pf_ensure_kubeconf_restored
 
     # 1. Truth for reads (in-container).
     KUBECONFIG="$PF_KUBECONFIG" kubectl config use-context "$platform" >/dev/null
@@ -464,7 +514,8 @@ pf_banner() {
 
 # Make the functions available to child shells if needed (sub-shell invocations
 # from ansible's `shell` module, etc.). Most callers source this file directly.
-export -f pf_ensure_kubeconf_seeded pf_ensure_legacy_kubeconf pf_active_platform pf_probe_reachable
+export -f pf_ensure_kubeconf_seeded pf_ensure_legacy_kubeconf pf_ensure_kubeconf_restored
+export -f pf_active_platform pf_probe_reachable
 export -f pf_context_exists
 export -f pf_lockstep_flip pf_remove_context pf_list_platforms
 export -f pf_platform_summary pf_banner

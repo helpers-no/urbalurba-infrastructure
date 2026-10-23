@@ -62,7 +62,16 @@
     # that existed before urb-agents#1982's pod-based build). Non-empty means "forgejo runs
     # somewhere else, reachable at this URL" — see this file's own header comment.
     forgejo_external_url: ""
-    forgejo_runner_name: "rancher-desktop-runner"
+    # 🔴 FOUND LIVE BY ops, urb-agents#1982: this used to be a hardcoded
+    # "rancher-desktop-runner" — the external-Forgejo branch correctly
+    # generalized the instance URL but missed this one, so a Proxmox-deployed
+    # runner registered in Forgejo's own runner list under the wrong name.
+    # Derived from target_host (already a required var — see task 1) so every
+    # future external-target caller gets a correct, distinct name
+    # automatically, rather than needing each wrapper script to remember an
+    # explicit override. Byte-identical to before for Rancher Desktop
+    # (target_host="rancher-desktop" → "rancher-desktop-runner").
+    forgejo_runner_name: "{{ target_host }}-runner"
     # 🔴 PLACEHOLDER LABELS, FLAGGED — same caveat the Proxmox role's own defaults/main.yml
     # carries: no real workflow file exists yet to test against. Revisit once one does.
     forgejo_runner_labels: "docker,ubuntu-latest:docker://node:22-bookworm"
