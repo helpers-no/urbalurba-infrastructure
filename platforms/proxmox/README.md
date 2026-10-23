@@ -13,54 +13,43 @@ for why that's the deliberate choice for this platform shape, not an AKS-style o
 
 ---
 
-## Before you start — NOT scripted, read this first
+## Before you start
 
-Three things need to be true before `./uis platform up proxmox` can do anything:
+Only one thing is a genuine, out-of-scope prerequisite. Everything else is scripted:
 
 1. **Proxmox is installed on all three machines.** Out of scope here — that's the Proxmox
    installer's own job (write the ISO, boot it, pick the small disk for Proxmox itself). Any
-   current Proxmox major version works; all three should match each other.
+   current Proxmox major version works; all three should match each other. No tool here installs
+   an OS onto hardware that doesn't have one yet.
 
-2. **Each machine has a ZFS pool/storage, same name on every host.** Replication and guest
-   mobility both match by storage *name*, so this has to be identical everywhere:
-   ```bash
-   # on each machine, find the stable disk identifier (never a kernel name like /dev/sdb —
-   # those move between boots):
-   ls /dev/disk/by-id/ | grep -v part
+That's it. `./scripts/00-storage-ensure.sh --create-pool` and `./uis platform up proxmox` handle
+the rest — including the two steps that used to be hand-typed `zpool`/`pvecm` commands:
 
-   zpool create -o ashift=12 tank /dev/disk/by-id/<your-disk-id>
-   zfs set compression=lz4 tank
-   zfs create -p tank/vm
-   pvesm add zfspool tank-vm --pool tank/vm --content rootdir,images --sparse 1
-   ```
-   `PROXMOX_STORAGE` in `config.sh` must match whatever name you used for the `pvesm add` above
-   (`tank-vm` in this example).
+- **ZFS pool/storage.** `./scripts/00-storage-ensure.sh --create-pool` auto-detects a candidate
+  disk per host, shows you exactly which one, and asks for a typed `YES` before touching anything
+  — it never proceeds on an assumption. ⚠️ **Destructive** on whatever disk it finds; run this
+  once per fresh lab, by hand, before the first `up` — `up.sh` itself only ever runs this same
+  script's non-destructive bootstrap/verify mode (step 1/7), never `--create-pool`. `PROXMOX_STORAGE`
+  in `config.sh` must match the storage name it registers (`tank-vm` by default).
+- **Proxmox clustering.** `./uis platform up proxmox` drives this itself (step 2/7,
+  `01-cluster-join.sh`): `pvecm create` on the first host (fully automated, local-only, no remote
+  auth needed) and `pvecm add` for the other two, held open on an interactive pty just for the one
+  moment that genuinely needs a human. 🔴 **This is the one step in the whole chain that cannot be
+  automated away** — `pvecm add` authenticates over the Proxmox API with the *target's* root
+  password, typed interactively. No SSH key, no amount of automation, removes that; it's not a gap
+  in this platform, it's how Proxmox clustering works. When prompted:
+  - type that host's root password
+  - type the literal word `yes` at the fingerprint prompt, not just `y` (a bare `y` fails it and
+    costs a full re-run)
 
-3. **The three machines are joined into one Proxmox cluster.** 🔴 **This is the one step that
-   genuinely needs a human** — `pvecm add` authenticates over the Proxmox API with the *target's
-   root password*, typed interactively. No SSH key, no amount of automation, removes that; it's not
-   a gap in this platform, it's how Proxmox clustering works.
-   ```bash
-   # every machine needs every OTHER machine's name resolvable — this estate has no assumed DNS,
-   # so add entries to /etc/hosts on EVERY machine for every OTHER machine:
-   #   <addr> <name>.lan <name>
+  `PROXMOX_CLUSTER_NAME` in `config.sh` should match whatever cluster name you configured — it's
+  passed to `pvecm create` automatically. The step is idempotent: a warm re-run against an
+  already-clustered lab checks quorum and skips cleanly.
 
-   # on the first machine (the one with the least to lose, or just pick one):
-   pvecm create homelab
-
-   # on each of the other two:
-   pvecm add <first-machine's-name-or-address>
-   #   - prompts for the FIRST machine's root password — type it
-   #   - prompts "Are you sure you want to continue connecting (yes/no)?" — type the
-   #     literal word "yes", not "y" (a bare "y" fails it and costs a full re-run)
-
-   # verify from any machine:
-   pvecm status      # expect: Quorate: Yes, 3 nodes
-   ```
-   `PROXMOX_CLUSTER_NAME` in `config.sh` should match whatever you passed to `pvecm create`.
-
-Once all three are true, `./uis platform init proxmox` and `./uis platform up proxmox`
-take it from there.
+So the real sequence for a fresh lab is: `./uis platform init proxmox` (wizard) →
+`./scripts/00-storage-ensure.sh --create-pool` (once, destructive, asks for confirmation) →
+`./uis platform up proxmox` (prompts you for each target's root password when it reaches
+cluster-join, then takes it the rest of the way).
 
 ---
 
@@ -235,13 +224,24 @@ defer anything without a clear need yet.
   already relies on). Flag it if a UIS service's deploy surfaces a missing storage class — the fix
   would follow `platforms/azure-aks/manifests/000-storage-class-azure-alias.yaml`'s exact pattern,
   pointed at k3s's own provisioner instead of Azure's.
+- **The true zero-to-hero path has not been witnessed in one continuous run.** Every
+  CORE_SERVICES/LAB_EXTRAS live-verification to date (F1/F3/F4) adopted an already-running lab's
+  existing guests — a real, valuable test (it's what surfaced the VMID/firewall/secrets override
+  mechanisms), but structurally different from "three genuinely blank machines, storage through
+  services, one continuous run, nothing pre-existing." Each individual phase (`00-storage-ensure`,
+  `01-cluster-join`, k3s apply, core-services apply) has its own track record on real hardware, but
+  nobody has yet run all of them back-to-back against machines that have never seen Proxmox
+  clustering or a single guest before. Component-proven and adoption-proven, not yet witnessed as
+  one fresh build — flagged honestly rather than implied-covered (urb-agents#1981).
 
 ## Troubleshooting
 
 - **`02-k3s-preflight.sh` fails on SSH reachability** — the printed public key needs adding to each
   Proxmox host's `/root/.ssh/authorized_keys` by hand first.
-- **`02-k3s-preflight.sh` fails on cluster membership** — see "Before you start" above; this step is
-  deliberately never auto-attempted.
+- **`02-k3s-preflight.sh` fails on cluster membership** — `./uis platform up proxmox` (step 2/7,
+  `01-cluster-join.sh`) handles this automatically now, but still needs a human at the prompt for
+  each target's root password — see "Before you start" above. Run `01-cluster-join.sh` directly
+  (or re-run `up`) rather than typing `pvecm` commands by hand.
 - **A VM boots but SSH never answers** — check `qm status <vmid>` on that host directly; cloud-init
   can take a few minutes on first boot if it's also running a package upgrade.
 - **`k3s-ensure.yml` fails waiting for the node to report Ready** — the node object can take several
