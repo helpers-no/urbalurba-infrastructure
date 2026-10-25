@@ -156,6 +156,9 @@ ArgoCD:
   argocd list                   List registered ArgoCD applications
   argocd verify                 Run E2E health checks on ArgoCD server
 
+Authentik:
+  authentik verify               Verify application, provider and outpost configuration
+
 Enonic XP:
   enonic verify                  Run E2E health checks on Enonic XP
 
@@ -2324,6 +2327,7 @@ cmd_verify() {
         echo "  cloudflare      Check Cloudflare secrets, network, and pod status"
         echo "  alloy           Run E2E health checks on Alloy log collection"
         echo "  argocd          Run E2E health checks on ArgoCD server"
+        echo "  authentik       Verify application, provider and outpost configuration"
         echo "  backstage       Run E2E health checks on Backstage (RHDH)"
         echo "  browserless     Verify browserless renders a real page"
         echo "  neko            Verify neko serves both a human and an agent"
@@ -2355,6 +2359,9 @@ cmd_verify() {
             ;;
         argocd)
             cmd_argocd_verify
+            ;;
+        authentik)
+            cmd_authentik_verify
             ;;
         backstage)
             cmd_backstage_verify
@@ -2398,6 +2405,7 @@ cmd_verify() {
             echo "  cloudflare      Check Cloudflare secrets, network, and pod status"
             echo "  alloy           Run E2E health checks on Alloy log collection"
             echo "  argocd          Run E2E health checks on ArgoCD server"
+            echo "  authentik       Verify application, provider and outpost configuration"
             echo "  backstage       Run E2E health checks on Backstage (RHDH)"
             echo "  browserless     Verify browserless renders a real page"
         echo "  neko            Verify neko serves both a human and an agent"
@@ -2756,6 +2764,17 @@ cmd_argocd_list() {
 cmd_argocd_verify() {
     print_section "Verifying ArgoCD Deployment"
     run_verify_playbook "220-test-argocd.yml"
+}
+
+# 070-verify-authentik.yml existed, unreachable from the CLI, since it was
+# written — nothing dispatched to it (freeverse, urb-agents#2013), and the
+# website/docs/services/identity/authentik.md Verify section documented a
+# command that did not exist. Defaults to app_name=whoami, same as the
+# playbook's own default (the whoami service UIS deploys as Authentik's own
+# protected-service test fixture).
+cmd_authentik_verify() {
+    print_section "Verifying Authentik Deployment"
+    run_verify_playbook "070-verify-authentik.yml"
 }
 
 # ============================================================
@@ -3589,6 +3608,26 @@ main() {
                     echo ""
                     echo "Commands:"
                     echo "  openmetadata verify    Run E2E health checks on OpenMetadata"
+                    exit "$EXIT_GENERAL_ERROR"
+                    ;;
+            esac
+            ;;
+        # `uis authentik verify` is the form VERIFY_SERVICES stores, so
+        # test-all reaches the E2E test through here - not through
+        # `uis verify authentik`. Both are registered; a service with only
+        # one of them is unreachable from whichever path it is missing.
+        authentik)
+            local subcmd="${1:-}"
+            shift 2>/dev/null || true
+            case "$subcmd" in
+                verify)
+                    cmd_authentik_verify
+                    ;;
+                *)
+                    log_error "Unknown authentik command: $subcmd"
+                    echo ""
+                    echo "Commands:"
+                    echo "  authentik verify    Verify application, provider and outpost configuration"
                     exit "$EXIT_GENERAL_ERROR"
                     ;;
             esac

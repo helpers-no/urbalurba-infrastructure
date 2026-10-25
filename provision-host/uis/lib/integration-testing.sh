@@ -93,6 +93,7 @@ neko:neko verify
 dagster:dagster verify
 postgresql:postgresql verify
 argocd:argocd verify
+authentik:authentik verify
 backstage:backstage verify
 enonic:enonic verify
 minio:minio verify
