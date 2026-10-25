@@ -137,6 +137,14 @@
         # --timeout.
         #
         # The retry covers creation; the timeout covers readiness.
+        #
+        # ⚠️ OBSERVED, NOT YET FIXED: a pod EVICTED (e.g. a low-disk event) still
+        # matches this selector and sits in phase Failed, which `--for=condition=ready`
+        # has no way to report as unsatisfiable — so this blocks for the full
+        # retries*timeout budget instead of failing fast, until the evicted pod is
+        # deleted (freeverse, urb-agents#2013, 2026-10-17). Not reproduced live from
+        # this environment; a real fix (e.g. deleting Failed-phase pods matching this
+        # selector before waiting) needs a cluster to verify against, not a guess.
         - name: "Step 2.2: Wait for whoami pods to be ready"
           ansible.builtin.shell: |
             kubectl wait --for=condition=ready pod -l app=whoami -n default --timeout={{ test_timeout }}s

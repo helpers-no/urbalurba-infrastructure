@@ -168,13 +168,13 @@ install_ansible_kubernetes() {
         # A pin exists for reproducibility, not for any particular version, so
         # these freeze the state that is proven working.
         #
-        # 🔴 community.postgresql is the exception, and pinned BACKWARDS on
-        # purpose: at 5.0.0 the four `*-create-postgres.yml` playbooks cannot
-        # run at all, because they pass `port:` and 5.0.0 removed it.
+        # 🔴 community.postgresql is pinned WITHIN the 3.x major on purpose: at
+        # 5.0.0 the four `*-create-postgres.yml` playbooks cannot run at all,
+        # because they pass `port:` and 5.0.0 removed it.
         #
         # ⚠️ AN EARLIER VERSION OF THIS COMMENT GAVE A REASON THAT IS FALSE.
         # It said `port` and `login_port` are not interchangeable, so renaming
-        # could not work. They ARE: 3.4.0 defines `port:` with
+        # could not work. They ARE: 3.x defines `port:` with
         # `aliases: [ login_port ]`, and 5.0.0 accepts `login_port` as the
         # canonical name. **`login_port` works on both**, so renaming the 43
         # call sites is a real alternative to this pin (imac, #1721 — I had
@@ -182,13 +182,25 @@ install_ansible_kubernetes() {
         # it because it is an alias, then read my pattern not matching as the
         # parameter not existing).
         #
-        # 🔵 The pin stands on the reason that was always true: 3.4.0 is what
+        # 🔴 3.4.0 ITSELF WAS THE WRONG 3.x VERSION — IT DOES NOT KNOW POSTGRESQL
+        # 18. `postgresql_db` reads the server's locale via a hardcoded
+        # `daticulocale` column, which PostgreSQL 18 renamed to `datlocale`; the
+        # module fails outright against an 18.x server (`column "daticulocale"
+        # does not exist`), so a freshly created database could never be
+        # re-run, and every later `./uis deploy authentik` failed (freeverse,
+        # urb-agents#2013). 3.14.3 — the latest 3.x release, confirmed still
+        # carrying `port:`/`login_port` as aliases of each other, same as
+        # 3.4.0 — reads whichever of the two columns the connected server
+        # actually has. Still 3.x, so the `port:` reasoning above is unchanged;
+        # only the specific 3.x version moves.
+        #
+        # 🔵 The pin stands on the reason that was always true: 3.x is what
         # those playbooks were written and tested against, it works, and
         # moving to 5.x is an upgrade someone should choose rather than a
         # repair someone is forced into. Renaming is the alternative whenever
         # anyone wants 5.x — and it is now known to be available.
         install_collection kubernetes.core      6.6.0  "git+https://github.com/ansible-collections/kubernetes.core.git,6.6.0" || collections_failed=1
-        install_collection community.postgresql 3.4.0  "git+https://github.com/ansible-collections/community.postgresql.git,3.4.0" || collections_failed=1
+        install_collection community.postgresql 3.14.3 "git+https://github.com/ansible-collections/community.postgresql.git,3.14.3" || collections_failed=1
         install_collection community.general    13.4.0 "git+https://github.com/ansible-collections/community.general.git,13.4.0" || collections_failed=1
 
         if [ "$collections_failed" -eq 0 ]; then

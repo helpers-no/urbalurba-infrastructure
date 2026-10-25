@@ -197,6 +197,16 @@
         - (confirm | default('')) | lower != 'yes'
         - (delete_confirmation.user_input | default('')) | lower != 'yes'
 
+    # ⚠️ OBSERVED, NOT YET FIXED: on a host-network provision-host container where
+    # something (e.g. an earlier run's own forward) already holds localhost:5432,
+    # `kubectl port-forward` here fails to bind and that failure is silently
+    # discarded (output only reaches pg-portforward.log, never checked) — task 11
+    # below then finds the PRE-EXISTING forward still answering and proceeds
+    # correctly, but only because it happens to point at the same service
+    # (freeverse, urb-agents#2013, 2026-10-17). Not reproduced live from this
+    # environment; needs a cluster to confirm a fix (e.g. checking for an
+    # existing forward to THIS service before starting a new one) rather than a
+    # guess at the right condition to check.
     - name: 10. Start port-forward to PostgreSQL in background
       shell: |
         kubectl port-forward svc/postgresql 5432:5432 -n default > /tmp/pg-portforward.log 2>&1 &
@@ -227,9 +237,19 @@
     # answering as PostgreSQL at all" (rc 2, exactly the dead/stale-target case) from "a real
     # server answered but is rejecting connections" (rc 1, e.g. still starting up) from "a real
     # server is accepting connections" (rc 0) — all WITHOUT needing valid credentials, so this
-    # check runs before any password is even tried. Already used elsewhere in this repo
-    # (040-database-postgresql.yml, platforms/proxmox/ansible/roles/postgres), so the binary is
-    # a safe assumption in this container.
+    # check runs before any password is even tried.
+    #
+    # 🔴 AN EARLIER VERSION OF THIS COMMENT CLAIMED THE BINARY WAS "ALREADY A SAFE ASSUMPTION
+    # IN THIS CONTAINER" BECAUSE IT IS "ALREADY USED ELSEWHERE IN THIS REPO" — that was false.
+    # 040-database-postgresql.yml's pg_isready runs INSIDE the postgres pod (Bitnami's own
+    # readiness probe), and platforms/proxmox/ansible/roles/postgres's runs on the Proxmox VM
+    # that role itself installs postgres onto — neither runs in THIS container, which is a bare
+    # Ubuntu image. The binary was genuinely absent here, this task failed with rc 2 on every
+    # `./uis deploy authentik`, and task 11.2 below reported that as "nothing answered as
+    # PostgreSQL" (freeverse, urb-agents#2013). Fixed by adding `postgresql-client` to
+    # Dockerfile.uis-provision-host — the binary is a safe assumption in this container NOW,
+    # because it is actually installed into it, not because something unrelated uses it
+    # somewhere else.
     - name: 11.1. Confirm a real PostgreSQL server answers through the tunnel (not just the port accepting)
       ansible.builtin.command: pg_isready -h localhost -p 5432
       register: pg_isready_result

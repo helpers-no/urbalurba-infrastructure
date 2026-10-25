@@ -16,6 +16,16 @@ RUN apt-get update && apt-get install -y sudo && \
     chmod 0440 /etc/sudoers.d/ansible
 
 # Install basic tools
+#
+# postgresql-client (pg_isready, psql): u09/u06/u10-*-create-postgres.yml run
+# pg_isready against localhost on THIS container to tell a dead/stale
+# port-forward target apart from a bad password (urb-agents#1917 bug #565).
+# That check assumed the binary was already present here "because it's used
+# elsewhere in this repo" — but every other use is pg_isready running INSIDE
+# a postgres pod/VM that ships its own client, not inside this Ubuntu-based
+# container. Without the package the command itself is missing, Ansible
+# returns rc 2, and task 11.2 misreports that as "nothing answered as
+# PostgreSQL" on every `./uis deploy authentik` (freeverse, urb-agents#2013).
 RUN apt-get update && \
     apt-get install -y \
     apt-utils \
@@ -26,6 +36,7 @@ RUN apt-get update && \
     python3 \
     python3-pip \
     python3-bcrypt \
+    postgresql-client \
     vim \
     bash-completion \
     jq \
