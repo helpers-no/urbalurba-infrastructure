@@ -1,0 +1,124 @@
+# File: manifests/645-github-runner.yaml.j2
+#
+# Description:
+# GitHub Actions self-hosted runner, as an in-cluster `uis deploy github-runner` service —
+# the same proven architecture as forgejo-runner (640-forgejo-runner.yaml.j2): a
+# persistent Deployment, one container running the runner itself, one `docker:27-dind`
+# sidecar for job execution. Promoted from ops's own hand-applied, fleet-specific manifest
+# (urb-agents#2029/#2030).
+#
+# Template Variables (from the setup playbook):
+# - github_runner_namespace
+# - github_runner_image (pinned)
+# - github_runner_dind_image
+# - github_runner_repo ('owner/repo')
+# - github_runner_name
+# - github_runner_labels (comma-joined)
+#
+# 🔴 REGISTRATION HAPPENS IN THE MAIN CONTAINER'S OWN STARTUP COMMAND, NOT AN INIT
+# CONTAINER (ops, urb-agents#2030, found live): `ghcr.io/actions/actions-runner` resolves
+# config.sh/run.sh against its own baked-in install dir (/home/runner) with no
+# --config-style indirection — a separate init container's registration has zero effect
+# on the daemon the main container runs afterward. Unlike Forgejo's runner (and unlike
+# this repo's own convention elsewhere), there is no "register once, skip on restart"
+# guard here either: `config.sh --replace` runs unconditionally on every container start.
+# That is deliberate, not an oversight — see 645-setup-github-runner.yml's own header for
+# why (the registration token is short-lived and there is no persistent volume to protect
+# a stale one from being reused anyway).
+#
+# 🔵 NO hostAliases BLOCK, UNLIKE forgejo-runner's. github.com/api.github.com are real,
+# globally-resolvable public hostnames — reachable identically from the Pod's own network
+# namespace and the dind sidecar's inner one (urb-agents#2028's class of problem is
+# specific to a `.localhost` dev hostname, which does not exist here at all).
+#
+# 🔵 SAME supplementalGroups FIX AS forgejo-runner, SAME REASON (urb-agents#1928, round 3):
+# fsGroup governs volume-content ownership at mount time, not a socket dockerd creates
+# itself after the fact with an explicit chown. 2375 is docker:27-dind's own docker GID —
+# re-verify if the pinned dind tag/version ever changes.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github-runner
+  namespace: {{ github_runner_namespace }}
+  labels:
+    app: github-runner
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: two runner processes must never register under the
+  # same identity at once (same reasoning forgejo-runner's own Deployment strategy uses).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: github-runner
+  template:
+    metadata:
+      labels:
+        app: github-runner
+    spec:
+      securityContext:
+        supplementalGroups: [2375]
+      containers:
+        - name: runner
+          image: {{ github_runner_image }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -eu
+              cd /home/runner
+              ./config.sh --unattended --replace \
+                --url "https://github.com/${GITHUB_RUNNER_REPO}" \
+                --token "${GITHUB_RUNNER_TOKEN}" \
+                --name "${GITHUB_RUNNER_NAME}" \
+                --labels "${GITHUB_RUNNER_LABELS}" \
+                --work _work
+              exec ./run.sh
+          # SECRET-VERSION: none — read fresh on every container start (`config.sh
+          # --replace` runs unconditionally, no `.runner`-exists guard, unlike
+          # forgejo-runner — see 645-setup-github-runner.yml's own header for why). A
+          # Secret update does NOT reach an already-running pod (binds at container
+          # start, same as everywhere else this repository's own secretKeyRef rule
+          # applies) — but nothing restarts this pod automatically either way, and the
+          # registration token is only ever consumed once, at startup, not re-read
+          # afterward. A restart with a stale Secret simply fails to re-register,
+          # which is the same accepted "needs a fresh uis deploy run" limitation this
+          # playbook already documents, not a new gap this annotation would close.
+          env:
+            - name: GITHUB_RUNNER_REPO
+              value: "{{ github_runner_repo }}"
+            - name: GITHUB_RUNNER_NAME
+              value: "{{ github_runner_name }}"
+            - name: GITHUB_RUNNER_LABELS
+              value: "{{ github_runner_labels }}"
+            - name: GITHUB_RUNNER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: github-runner-token
+                  key: TOKEN
+          resources:
+            limits:
+              memory: "768Mi"
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run
+        # The dedicated Docker daemon — private to this Pod, nothing else reaches it.
+        # Same choice forgejo-runner already made, same reasoning: no spare dedicated
+        # host to mount a real Docker socket from inside a k3s Pod.
+        - name: dind
+          image: {{ github_runner_dind_image }}
+          # 🔴 PRIVILEGED, FLAGGED, NOT HIDDEN — same open question forgejo-runner's own
+          # manifest already flags. Scoped to this Pod alone; no other workload in the
+          # cluster can reach this daemon.
+          securityContext:
+            privileged: true
+          env:
+            - name: DOCKER_TLS_CERTDIR
+              value: ""
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run
+      volumes:
+        - name: docker-sock
+          emptyDir: {}

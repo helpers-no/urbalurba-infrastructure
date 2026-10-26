@@ -423,4 +423,28 @@ else
     fail_test "DEFAULT_ACTIONS_URL missing despite being set to self: $OUT"
 fi
 
+# ---------------------------------------------------------------------------
+# 645-github-runner.yaml.j2 (urb-agents#2030): the GitHub-protocol counterpart to
+# forgejo-runner, added here from the start — not retrofitted after a regression shipped,
+# the way 635-forgejo.yaml.j2 was (urb-agents#2027).
+# ---------------------------------------------------------------------------
+
+CTX='{"github_runner_namespace":"github-runner","github_runner_image":"ghcr.io/actions/actions-runner:2.337.0","github_runner_dind_image":"docker:27-dind","github_runner_repo":"owner/repo","github_runner_name":"rancher-desktop-github-runner","github_runner_labels":"self-hosted,linux,x64,docker"}'
+
+start_test "645-github-runner.yaml.j2 renders and parses"
+OUT="$(_render 645-github-runner.yaml.j2 "$CTX")"
+if [[ "$OUT" == \{* ]]; then pass_test; else fail_test "$OUT"; fi
+
+start_test "...and the github-runner Deployment carries all four registration env vars"
+if python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+dep = next((x for x in d["deployments"] if x["name"] == "github-runner"), None)
+sys.exit(0 if dep and set(["GITHUB_RUNNER_REPO","GITHUB_RUNNER_NAME","GITHUB_RUNNER_LABELS","GITHUB_RUNNER_TOKEN"]) <= set(dep["envNames"]) else 1)
+' "$OUT" 2>/dev/null; then
+    pass_test
+else
+    fail_test "expected all four GITHUB_RUNNER_* env vars on the github-runner Deployment: $OUT"
+fi
+
 print_summary

@@ -1,0 +1,237 @@
+---
+# file: ansible/playbooks/645-setup-github-runner.yml
+# Description:
+# Install a GitHub Actions self-hosted runner as an in-cluster `uis deploy github-runner`
+# service — the same proven architecture as forgejo-runner (640-setup-forgejo-runner.yml):
+# a persistent Deployment, one container running the runner itself, one `docker:27-dind`
+# sidecar for job execution. Promoted from ops's own hand-applied, fleet-specific manifest
+# (urb-agents#2029/#2030), made generic: operator supplies the target repo and a PAT,
+# rather than one hardcoded repo for one purpose.
+#
+# 🔴 A GITHUB RUNNER IS NOT A FORGEJO RUNNER WITH A DIFFERENT URL. They register against
+# incompatible protocols (urb-agents#1911 flagged this as an open question early on) — this
+# playbook is its own thing, not a parameterized copy, even though the Pod shape it
+# produces (runner + dind sidecar) is deliberately identical to forgejo-runner's.
+#
+# 🔵 NO PERSISTENT VOLUME FOR REGISTRATION STATE, DELIBERATELY. GitHub's registration
+# token is short-lived (1 hour) — unlike Forgejo's reusable shared secret, there is no
+# long-lived credential whose reuse a PVC would protect. This playbook mints a fresh
+# token at EVERY run (task 5 below) and the runner container registers fresh on every
+# container start (`config.sh --replace`, not gated on a `.runner` file existing) — so a
+# pod that is still running keeps working indefinitely (the token is only consumed at
+# registration, never needed again), and a pod that restarts for any reason needs a fresh
+# `uis deploy github-runner` run with a valid PAT to come back up. That is the accepted
+# tradeoff ops's own hand-applied version already made in production, not a gap introduced
+# here — see urb-agents#2030's own "don't over-design this" note. Revisit only if a real
+# restart-without-redeploy requirement ever surfaces.
+#
+# 🔴 INIT CONTAINERS DO NOT WORK FOR THIS IMAGE (ops, urb-agents#2030, found live building
+# the hand-applied version). `ghcr.io/actions/actions-runner` resolves `config.sh`/`run.sh`
+# against its own install directory (`/home/runner`, baked in at build time) with no
+# `--config`-style indirection the way Forgejo's runner binary has — registering in a
+# separate init container has zero effect on the daemon the main container actually runs
+# afterward. Registration, therefore, happens inline in the main container's own startup
+# command (the manifest template's `command:`), not as a separate step here or there.
+#
+# No `.localhost`-hostname problem here at all (unlike forgejo-runner, urb-agents#2028) —
+# github.com and api.github.com are real, globally-resolvable public hostnames, reachable
+# the same way from any network namespace, including the dind sidecar's inner one.
+#
+# Usage:
+# ansible-playbook playbooks/645-setup-github-runner.yml -e target_host="rancher-desktop" \
+#   -e github_runner_repo="owner/repo" -e github_runner_pat="..."
+
+- name: Install a GitHub Actions self-hosted runner
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    manifests_dir: "/mnt/urbalurbadisk/manifests"
+    github_runner_namespace: "github-runner"
+
+    # 🔵 Pinned, same image ops already proved live building the hand-applied version
+    # (urb-agents#2030). Re-verify against ghcr.io before bumping, same discipline every
+    # other pinned image in this repo follows.
+    github_runner_image: "ghcr.io/actions/actions-runner:2.337.0"
+    github_runner_dind_image: "docker:27-dind"
+
+    # Derived from target_host, same reasoning forgejo_runner_name already uses
+    # (640-setup-forgejo-runner.yml) — distinct names so deploying this against the same
+    # repo from two different clusters never collides under one registration name.
+    github_runner_name: "{{ target_host }}-github-runner"
+
+    # 🔵 DECIDED, urb-agents#2030: plain comma-separated labels — GitHub's own convention
+    # (`self-hosted,linux,x64,docker`), unlike Forgejo's `name:backend` pairs. No real
+    # `.github/workflows/*.yml` exists yet to test these against (same caveat
+    # forgejo_runner_labels carried before urb-agents#2022 exercised it for real) —
+    # revisit once one does.
+    github_runner_labels: "self-hosted,linux,x64,docker"
+
+  tasks:
+    - name: 1. Check if required variables are provided
+      ansible.builtin.fail:
+        msg: "The variable 'target_host' is mandatory. Use -e target_host=your_host_name to specify it."
+      when: target_host is not defined
+
+    - name: 1b. The target repository must be supplied, never defaulted
+      ansible.builtin.assert:
+        that:
+          - github_runner_repo is defined
+          - github_runner_repo | length > 0
+          - github_runner_repo is search('^[^/\s]+/[^/\s]+$')
+        fail_msg: >-
+          github_runner_repo is required, in 'owner/repo' form (e.g. 'terchris/urb-agents')
+          — pass it: -e github_runner_repo="owner/repo".
+        quiet: true
+
+    - name: 1c. The Personal Access Token must be supplied, never defaulted or stored
+      ansible.builtin.assert:
+        that:
+          - github_runner_pat is defined
+          - github_runner_pat | length > 0
+        fail_msg: >-
+          github_runner_pat is required and this playbook stores none — it is used once,
+          here, to mint a short-lived registration token via GitHub's own API, and
+          discarded. Needs the 'Administration' repository permission (fine-grained PAT)
+          or the classic 'repo' scope. Pass it: -e github_runner_pat=...
+        quiet: true
+      no_log: true
+
+    - name: 2. Print playbook description
+      ansible.builtin.debug:
+        msg: >-
+          Installing a GitHub Actions runner on Kubernetes context: {{ target_host }},
+          repo: {{ github_runner_repo }}, name: {{ github_runner_name }}
+
+    - name: 3. Create github-runner namespace if it doesn't exist
+      ansible.builtin.shell: kubectl create namespace {{ github_runner_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: namespace_result
+      changed_when: namespace_result.rc == 0
+      failed_when: namespace_result.rc != 0
+
+    # 🔴 MINTED HERE, NEVER STORED — the whole point of this task. GitHub's own API:
+    # POST /repos/{owner}/{repo}/actions/runners/registration-token, Bearer-authed with
+    # the operator's PAT, returns a registration token valid for ~1 hour. Only THIS
+    # response's token reaches the cluster (task 5) — github_runner_pat itself never
+    # does, matching ops's own "no PAT needs to live in the cluster long-term" finding.
+    - name: 4. Mint a short-lived registration token from GitHub's API
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/{{ github_runner_repo }}/actions/runners/registration-token"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ github_runner_pat }}"
+          Accept: "application/vnd.github+json"
+        status_code: [201]
+        body_format: json
+        body: {}
+      register: github_runner_token_result
+      no_log: true
+
+    - name: 4b. Confirm a token actually came back
+      ansible.builtin.assert:
+        that:
+          - github_runner_token_result.json.token is defined
+          - github_runner_token_result.json.token | length > 0
+        fail_msg: >-
+          GitHub's registration-token API did not return a token. Confirm
+          github_runner_repo is correct and github_runner_pat has the 'Administration'
+          repository permission (fine-grained) or 'repo' scope (classic).
+        quiet: true
+      no_log: true
+
+    - name: 5. Apply the registration token Secret
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: github-runner-token
+            namespace: "{{ github_runner_namespace }}"
+          type: Opaque
+          stringData:
+            TOKEN: "{{ github_runner_token_result.json.token }}"
+      no_log: true
+
+    - name: 6. Render the Deployment manifest
+      ansible.builtin.template:
+        src: "{{ manifests_dir }}/645-github-runner.yaml.j2"
+        dest: /tmp/645-github-runner.yaml
+        mode: "0600"
+
+    - name: 7. Apply the Deployment
+      kubernetes.core.k8s:
+        state: present
+        src: /tmp/645-github-runner.yaml
+        kubeconfig: "{{ merged_kubeconf_file }}"
+
+    - name: 7b. Clean up the rendered manifest
+      ansible.builtin.file:
+        path: /tmp/645-github-runner.yaml
+        state: absent
+      changed_when: false
+
+    - name: 8. Wait for the runner pod to be ready
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ github_runner_namespace }}"
+        label_selectors:
+          - "app=github-runner"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: github_runner_pods
+      retries: 30
+      delay: 10
+      until: >
+        github_runner_pods.resources | length > 0 and
+        github_runner_pods.resources[0].status.phase == "Running" and
+        (github_runner_pods.resources[0].status.containerStatuses | default([]) | selectattr('ready') | list | length) == (github_runner_pods.resources[0].status.containerStatuses | default([]) | length) and
+        (github_runner_pods.resources[0].status.containerStatuses | default([]) | length) > 0
+
+    # 🔵 "Listening for Jobs" / "Connected to GitHub" are the runner's own standard
+    # startup log lines (documented behavior, not independently verified against this
+    # exact pinned version from this environment — no live cluster here). Same
+    # ignore_errors resilience forgejo-runner's own equivalent wait uses: a pod that is
+    # Ready but whose log does not confirm this gets reported honestly below, not assumed.
+    - name: 9. Wait for the runner to report it is listening, not just that the pod started
+      ansible.builtin.command: >-
+        kubectl logs -n {{ github_runner_namespace }} deploy/github-runner -c runner --tail=50
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: github_runner_logs
+      until: "'Listening for Jobs' in (github_runner_logs.stdout + github_runner_logs.stderr)"
+      retries: 15
+      delay: 5
+      changed_when: false
+      ignore_errors: true
+
+    - name: 10. Display final deployment status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🚀 GitHub Runner Deployment Status"
+          - "==============================================="
+          - ""
+          - "{{ '✅ SUCCESS - runner is listening' if (github_runner_logs is defined and github_runner_logs.rc is defined and github_runner_logs.rc == 0 and 'Listening for Jobs' in (github_runner_logs.stdout + github_runner_logs.stderr)) else '⚠️ Pod is Ready, but the log did not confirm it is listening — check logs by hand' }}"
+          - ""
+          - "📦 Repository: {{ github_runner_repo }}"
+          - "🏷️  Name: {{ github_runner_name }}"
+          - "🏷️  Labels: {{ github_runner_labels }}"
+          - "  (placeholder — revisit once a real .github/workflows/*.yml targets this"
+          - "  runner, same caveat forgejo_runner_labels carried before it was exercised)"
+          - ""
+          - "🐳 Execution: a private docker:dind sidecar, not a real host Docker Engine"
+          - "  (same choice forgejo-runner already made, same reasoning)"
+          - ""
+          - "⚠️  No persistence: a pod restart needs a fresh 'uis deploy github-runner'"
+          - "  run with a valid PAT (the registration token used to bring this pod up has"
+          - "  likely expired by the time any restart happens). See this playbook's own"
+          - "  header for why that is the accepted tradeoff, not a gap."
+          - ""
+          - "🔧 Troubleshooting:"
+          - "• Check pods: kubectl get pods -n {{ github_runner_namespace }}"
+          - "• Runner logs: kubectl logs -n {{ github_runner_namespace }} deploy/github-runner -c runner"
+          - "• dind logs: kubectl logs -n {{ github_runner_namespace }} deploy/github-runner -c dind"
+          - "==============================================="
