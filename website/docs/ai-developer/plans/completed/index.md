@@ -27,13 +27,13 @@ line, which carries one for the plans whose authors recorded it.
 | [Plan: Forgejo + its Actions runner, in-cluster (Rancher Desktop)](PLAN-system-forgejo-rancher-desktop.md) | — | 2026-10-26 |
 | [Plan: Forgejo as a platforms/proxmox core service](PLAN-system-forgejo-core-service.md) | — | 2026-10-26 |
 | [Plan: Epinio build-safety policy — a broken push has no automatic protection](PLAN-service-epinio-002-build-safety.md) | Decide, and document, what UIS does about Gate 8's finding — `epinio push --git` | 2026-10-26 |
+| [---](PLAN-extensions-in-app-databases.md) | — | 2026-10-26 |
+| [Plan: advertise only the `configure` handlers that exist](PLAN-cli-configure-retract-unimplemented.md) | `SCRIPT_CONFIGURABLE="true"` appears only on services that actually have a | 2026-10-26 |
 | [Investigate: Forgejo Actions runner — the other half of the CI decision never got built](INVESTIGATE-system-forgejo-runner.md) | — | 2026-10-26 |
 | [Plan: cert-manager as a UIS service](PLAN-system-cert-manager-001-install.md) | Give UIS an in-cluster certificate-issuing capability (`uis deploy cert-manager`) — | 2026-10-20 |
 | [Plan: Epinio install (no identity, no custom storage/registry wiring)](PLAN-service-epinio-001-install.md) | `uis deploy epinio` installs Epinio against this platform's existing Traefik, | 2026-10-20 |
 | [Plan: SemaphoreUI user-facing documentation](PLAN-service-semaphore-002-docs.md) | A lab owner who has just run `uis deploy semaphore` can find, on the | 2026-10-05 |
 | [Plan: Bump Dagster from 1.13.19 to 1.13.25](PLAN-service-dagster-version-upgrade.md) | Move the pinned Dagster chart/core version from `1.13.19` to the current latest | 2026-10-05 |
-| [---](PLAN-extensions-in-app-databases.md) | — | 2026-10-01 |
-| [Plan: advertise only the `configure` handlers that exist](PLAN-cli-configure-retract-unimplemented.md) | `SCRIPT_CONFIGURABLE="true"` appears only on services that actually have a | 2026-09-29 |
 | [---](PLAN-network-cloudflare-port-and-docs-lift-up.md) | — | 2026-09-17 |
 | [Summer vacation work summary: 18 July – 19 August 2026](STATUS-summer-vacation-2026-07-18-to-08-19.md) | — | 2026-09-07 |
 | [PLAN-008: Service Migration Status & Remaining Work](STATUS-service-migration.md) | Track migration status of all 26 UIS services and complete remaining work for services that are not fully migrated. | 2026-09-07 |
