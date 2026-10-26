@@ -61,11 +61,19 @@
     github_runner_name: "{{ target_host }}-github-runner"
 
     # 🔵 DECIDED, urb-agents#2030: plain comma-separated labels — GitHub's own convention
-    # (`self-hosted,linux,x64,docker`), unlike Forgejo's `name:backend` pairs. No real
-    # `.github/workflows/*.yml` exists yet to test these against (same caveat
-    # forgejo_runner_labels carried before urb-agents#2022 exercised it for real) —
-    # revisit once one does.
+    # (`self-hosted,linux,x64,docker`), unlike Forgejo's `name:backend` pairs. This default
+    # is just a starting point — ops's own production use (urb-agents#2032) overrides it
+    # with `self-hosted,linux,uis` to match what cli-release.yml/cli.yml/
+    # enforcer-heartbeat.yml actually target.
     github_runner_labels: "self-hosted,linux,x64,docker"
+
+    # 🔴 768Mi OOM-KILLED A REAL RELEASE BUILD, urb-agents#2032 — see the manifest
+    # template's own comment for the full story. Proven live by ops: 2Gi limit / 1Gi
+    # request runs the real cli-release.yml workflow (bun install/typecheck/test/
+    # 5-platform-compile) clean, 768Mi did not. Configurable so a heavier workload can
+    # raise it without another PR, but the DEFAULT is what's actually proven, not a guess.
+    github_runner_memory_request: "1Gi"
+    github_runner_memory_limit: "2Gi"
 
   tasks:
     - name: 1. Check if required variables are provided

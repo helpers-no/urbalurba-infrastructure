@@ -14,6 +14,7 @@
 # - github_runner_repo ('owner/repo')
 # - github_runner_name
 # - github_runner_labels (comma-joined)
+# - github_runner_memory_request / github_runner_memory_limit
 #
 # 🔴 REGISTRATION HAPPENS IN THE MAIN CONTAINER'S OWN STARTUP COMMAND, NOT AN INIT
 # CONTAINER (ops, urb-agents#2030, found live): `ghcr.io/actions/actions-runner` resolves
@@ -97,9 +98,22 @@ spec:
                 secretKeyRef:
                   name: github-runner-token
                   key: TOKEN
+          # 🔴 768Mi OOM-KILLED A REAL RELEASE BUILD (ops, urb-agents#2032, live on
+          # production's own cli-release.yml: bun install/typecheck/test/5-platform-compile
+          # — exit 137, "Last State: Terminated, Reason: OOMKilled" mid-typecheck). Neither
+          # this repo's own build nor imac's test (#2031) exercised a real build — both only
+          # ran lightweight sudo/apt-get/docker smoke steps, which fit fine in 768Mi and hid
+          # this. ops proved 2Gi limit / 1Gi request live (kubectl-patched the production
+          # pod, re-ran the exact same workflow: full success, all 5 platforms, 5m20s) —
+          # the OLD hand-applied manifest this replaced used 1536Mi, for reference.
+          # Configurable (github_runner_memory_limit/_request), defaulting to what's
+          # actually proven, not a guess — a heavier workload than cli-release.yml can raise
+          # it without another PR.
           resources:
+            requests:
+              memory: "{{ github_runner_memory_request }}"
             limits:
-              memory: "768Mi"
+              memory: "{{ github_runner_memory_limit }}"
           volumeMounts:
             - name: docker-sock
               mountPath: /var/run

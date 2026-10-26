@@ -125,6 +125,7 @@ for d in docs:
             "secretKey": secret_key,
             "envNames": env_names,
             "hasVolumeMounts": any("volumeMounts" in c for c in containers),
+            "containers": [{"name": c.get("name"), "resources": c.get("resources", {})} for c in containers],
         })
 
 print(json.dumps({"documents": len(docs),
@@ -429,7 +430,7 @@ fi
 # the way 635-forgejo.yaml.j2 was (urb-agents#2027).
 # ---------------------------------------------------------------------------
 
-CTX='{"github_runner_namespace":"github-runner","github_runner_image":"ghcr.io/actions/actions-runner:2.337.0","github_runner_dind_image":"docker:27-dind","github_runner_repo":"owner/repo","github_runner_name":"rancher-desktop-github-runner","github_runner_labels":"self-hosted,linux,x64,docker"}'
+CTX='{"github_runner_namespace":"github-runner","github_runner_image":"ghcr.io/actions/actions-runner:2.337.0","github_runner_dind_image":"docker:27-dind","github_runner_repo":"owner/repo","github_runner_name":"rancher-desktop-github-runner","github_runner_labels":"self-hosted,linux,x64,docker","github_runner_memory_request":"1Gi","github_runner_memory_limit":"2Gi"}'
 
 start_test "645-github-runner.yaml.j2 renders and parses"
 OUT="$(_render 645-github-runner.yaml.j2 "$CTX")"
@@ -445,6 +446,20 @@ sys.exit(0 if dep and set(["GITHUB_RUNNER_REPO","GITHUB_RUNNER_NAME","GITHUB_RUN
     pass_test
 else
     fail_test "expected all four GITHUB_RUNNER_* env vars on the github-runner Deployment: $OUT"
+fi
+
+start_test "🔴 urb-agents#2032: the runner container's memory limit is not the 768Mi that OOM-killed a real build"
+if python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+dep = next((x for x in d["deployments"] if x["name"] == "github-runner"), None)
+runner = next((c for c in (dep or {}).get("containers", []) if c["name"] == "runner"), None)
+limit = (runner or {}).get("resources", {}).get("limits", {}).get("memory")
+sys.exit(0 if limit and limit != "768Mi" else 1)
+' "$OUT" 2>/dev/null; then
+    pass_test
+else
+    fail_test "runner container memory limit is missing or back to the proven-too-low 768Mi: $OUT"
 fi
 
 print_summary
