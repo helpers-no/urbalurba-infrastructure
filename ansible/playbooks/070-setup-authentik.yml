@@ -38,6 +38,31 @@
     # Helm chart references
     authentik_chart: "authentik/authentik"
     authentik_repo_url: "https://charts.goauthentik.io"
+    # 🔴 NOT A SIMPLE PIN BUMP TO 2026.5 (the latest stable as of 2026-10-26,
+    # urb-agents#2021) — real, concrete reasons found researching this, not assumed:
+    #
+    # 1. 2025.10 removes Redis entirely ("fully removing the need for Redis" — its own
+    #    release notes). This repo's 075-authentik-config.yaml.j2 still configures an
+    #    external redis: block (AUTHENTIK_REDIS__PASSWORD, redis-master.default.svc...)
+    #    — dead config at best past 2025.10, unconfirmed whether merely ignored or an
+    #    error, needs removing and re-verifying live, not left in place and hoped-fine.
+    # 2. 2025.10 also changes the default OAuth scope mapping's `email_verified` claim
+    #    from true to false — directly touches what urb-agents#2021 asked to keep
+    #    working (freeverse's own three scope mappings on the OAuth2 provider).
+    # 3. 2026.2 deprecates `user.ak_groups` for `user.groups` — this repo's OWN
+    #    blueprints (073-authentik-2-openwebui-blueprint.yaml.j2,
+    #    073-authentik-service-protection-blueprint.yaml.j2, 6 call sites between them)
+    #    use `user.ak_groups.all()` directly. Still works (a warning, not a hard
+    #    break) but is real technical debt this bump would surface, not invent.
+    # 4. 2026.5 changes the default listen address from 0.0.0.0 to [::] — worth
+    #    confirming against an IPv4-only cluster (Rancher Desktop, this lab's own k3s)
+    #    before assuming it binds the same way.
+    #
+    # None of these are blockers on their own, but together they make this a real
+    # follow-up PLAN (remove the Redis config, update the 6 ak_groups call sites,
+    # re-verify the OIDC scope mappings and the listen address live) — not something
+    # to decide by flipping this string. See urb-agents#2021's own bus thread for the
+    # full writeup. Staying on 2025.8.1 until that PLAN exists and is verified live.
     authentik_version: "2025.8.1"
     
     # Manifest files (following manual deployment guide order)
