@@ -174,6 +174,24 @@ jobs:
       - name: Install jq
         run: sudo apt-get install -y jq
 
+      # 🔴 WITHOUT THIS, THE TEST ENVIRONMENT DEPENDS ON WHATEVER THE RUNNER
+      # IMAGE HAPPENS TO SHIP, EXACTLY THE DEFECT CLASS THE jq/yq STEPS ABOVE
+      # ALREADY GUARD AGAINST.
+      #
+      # test-secrets-generate-names-its-source.sh calls generate_kubernetes_secrets()
+      # (provision-host/uis/lib/first-run.sh), which refuses cleanly and never
+      # writes its output file if `envsubst` is missing. GitHub's ubuntu-latest
+      # happens to ship `gettext-base` (envsubst's package) pre-installed, so
+      # this was never declared and never noticed — until the same job ran on
+      # a different runner image (catthehacker/ubuntu:act-22.04, Forgejo's
+      # mirror comparison, urb-agents#2022) that does not ship it, confirmed
+      # directly (`which envsubst` → not found) rather than assumed. The real
+      # product image (Dockerfile.uis-provision-host) already installs
+      # gettext-base unconditionally — this was only ever a gap in the test
+      # job's own setup, never in what a real user runs.
+      - name: Install gettext-base (envsubst)
+        run: sudo apt-get install -y gettext-base
+
       - name: Install yq (mikefarah v4)
         # 🔴 WITHOUT THIS, EVERY yq-DEPENDENT ASSERTION SKIPS AND NOBODY NOTICES.
         # Three prometheus assertions have skipped on every run since they were
