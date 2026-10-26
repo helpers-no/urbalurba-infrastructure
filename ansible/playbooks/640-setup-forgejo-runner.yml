@@ -73,9 +73,18 @@
     # explicit override. Byte-identical to before for Rancher Desktop
     # (target_host="rancher-desktop" → "rancher-desktop-runner").
     forgejo_runner_name: "{{ target_host }}-runner"
-    # 🔴 PLACEHOLDER LABELS, FLAGGED — same caveat the Proxmox role's own defaults/main.yml
-    # carries: no real workflow file exists yet to test against. Revisit once one does.
-    forgejo_runner_labels: "docker,ubuntu-latest:docker://node:22-bookworm"
+    # 🔴 WAS A PLACEHOLDER, FLAGGED AS SUCH — the caveat this comment carried ("no real
+    # workflow file exists yet to test against") is resolved: urb-agents#2022 exercised a
+    # real workflow (this repo's own test-uis.yml) against a real pod running the OLD
+    # default (`node:22-bookworm`, bare, no sudo/docker/apt-get) and it failed exactly as a
+    # placeholder would predict — "sudo: command not found", "docker: command not found".
+    # ops verified `catthehacker/ubuntu:act-22.04` live before picking it (confirmed sudo,
+    # docker, apt-get, python3, curl, git all present and functional) — a known,
+    # act-compatible community image, chosen over the much heavier `full-*` variant since
+    # nothing either real workflow in this estate uses needs it. Same registration-labels
+    # convention Forgejo Actions itself expects: `runs-on: ubuntu-latest` resolves to
+    # whichever image this label maps to at registration time, not a real Ubuntu VM.
+    forgejo_runner_labels: "docker,ubuntu-latest:docker://catthehacker/ubuntu:act-22.04"
 
   tasks:
     - name: 1. Check if required variables are provided
