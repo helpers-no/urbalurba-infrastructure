@@ -5,7 +5,7 @@
 # forgejo` service — the Rancher Desktop (dev/test) counterpart to the Proxmox LXC guest
 # in platforms/proxmox/ansible/roles/forgejo/. Same proven settings translated to
 # Kubernetes, not independently designed — see
-# website/docs/ai-developer/plans/backlog/PLAN-system-forgejo-rancher-desktop.md.
+# website/docs/ai-developer/plans/completed/PLAN-system-forgejo-rancher-desktop.md.
 #
 # Scope: git host + registry only. No admin account (explicit operator step, same as the
 # Proxmox guest). No git-ssh (HTTP clone + the registry only, this phase). The Actions
