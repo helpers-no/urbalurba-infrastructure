@@ -74,7 +74,8 @@ These are proof-of-concept gates, not implementation details to paper over:
   (`urb-agents#1912`): it is not another entry behind the existing pull-through cache,
   and whatever provisions the forge must not independently clobber the cache's own
   `registries.yaml` wiring.
-- The object store as Epinio's S3 backend: untested with Epinio specifically.
+- ~~The object store as Epinio's S3 backend: untested with Epinio specifically.~~
+  **Resolved 2026-10-26 — see "Gate 8 resolved" below and the Next Steps checklist.**
 - Dockerfile builds, and Docker-in-Docker vs. a rootless pusher (e.g. `skopeo`) for
   pushing images from CI — open.
 - This platform has no `cert-manager`; TLS ends at the network edge, upstream of the
@@ -229,6 +230,21 @@ fits there alongside ArgoCD rather than in a new range.
 
 ---
 
+## Gate 8 resolved (2026-10-26) — build-safety is a documented v1 limitation, not a defect
+
+`urb-agents#1911`'s full 18-test gate run against the `-test` cluster PoC found Gate 8
+failing: a broken `epinio push --git` can take a previously-working app down, with no
+automatic protection and no configuration fix — confirmed against Epinio's own CLI (no
+rollback/revision command exists). This is specific to the buildpack push path; the
+registry-image path (`--container-image-url`, Gate 12) is unaffected, since its build step
+runs in CI before anything reaches Epinio.
+
+Decided in [PLAN-service-epinio-002-build-safety](../completed/PLAN-service-epinio-002-build-safety.md)
+(`urb-agents#2019`, one of `#1911`'s four pre-production conditions): accept for v1, steer
+teams needing broken-build protection to the registry path (already proven, Gate 12), and
+bind whatever PLAN later wraps `epinio push` as `uis epinio push` to carry this split
+forward rather than rediscover it.
+
 ## What stays open until the proof-of-concept reports back
 
 The items in "What is explicitly NOT decided or verified yet" above are not re-summarized
@@ -268,12 +284,23 @@ original ask.
       2026-10-20** (`#1921`). Both moved to `completed/`. Two real bugs found and fixed
       along the way (missing `epinio` secrets-template entry; a chart version bundling
       broken MinIO images) — see the PLANs themselves for detail.
-- [ ] `PLAN-service-epinio-002-namespace-and-push.md` — not started
-- [ ] `PLAN-service-epinio-003-identity.md` — not started; waits on the two secret files
+- [x] [PLAN-service-epinio-002-build-safety](../completed/PLAN-service-epinio-002-build-safety.md) —
+      Gate 8's finding decided and documented (`#2019`). **Renumbered the two PLANs below
+      by one** so this number is not reused: what was `-002-namespace-and-push` is now
+      `-003`, what was `-003-identity` is now `-004`.
+- [ ] `PLAN-service-epinio-003-namespace-and-push.md` — not started. Must read
+      `-002-build-safety`'s decision before designing `uis epinio push`, not rediscover it.
+- [ ] `PLAN-service-epinio-004-identity.md` — not started; waits on the two secret files
       ops is delivering (`#1919`)
-- [ ] Object store wiring (Garage) and network isolation remain open and should be
-      resolved in a later PLAN, not assumed. Cert issuer is resolved — see
-      [PLAN-system-cert-manager-001-install](../completed/PLAN-system-cert-manager-001-install.md).
+- [x] Object store wiring (Garage): **proven as of 2026-10-26** (ops, `urb-agents#2019`,
+      against the real `-test` cluster and real `garage` guest — push/build/restage all
+      verified against a Garage-backed `s3:` config, not SeaweedFS). Two follow-ups from
+      that pass, neither chased further there: `epinio-server` needs an explicit
+      `kubectl rollout restart` after an S3 backend swap (same Helm-doesn't-restart-the-pod
+      gotcha already known for Dex), and the stored `epinio-admin-password` no longer
+      matches the live secret (worth a deliberate rotate-or-disable-local-auth decision
+      once this integration is actually built). Network isolation remains open and should
+      be resolved in whichever PLAN touches it, not assumed.
 - [ ] On a production-rollout no-go from ops's side: fall back to scoped Argo CD access as
       its own PLAN against the existing ArgoCD path (does not block the UIS-side PLANs
       above, which target any cluster, not specifically production)
