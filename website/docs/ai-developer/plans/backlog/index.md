@@ -31,7 +31,6 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | [Investigate: OpenBao — deployable on a laptop, and the same interface in production](INVESTIGATE-service-openbao.md) | — | 2026-10-05 |
 | [Investigate: Dagster Orchestration Platform for UIS](INVESTIGATE-service-dagster.md) | UIS today has no data-pipeline orchestrator. Applications that need to ingest, transform, and catalogue data have three options — each with drawbacks: | 2026-10-05 |
 | [---](PLAN-secrets-ansible-credentials-in-output.md) | — | 2026-10-01 |
-| [---](PLAN-extensions-in-app-databases.md) | — | 2026-10-01 |
 | [---](INVESTIGATE-system-loki-tempo-minio-dependency.md) | — | 2026-10-01 |
 | [---](INVESTIGATE-service-minio-to-garage.md) | — | 2026-10-01 |
 | [---](PLAN-undeploy-purge-verb.md) | — | 2026-09-29 |

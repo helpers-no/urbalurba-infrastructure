@@ -4,7 +4,10 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-**Status:** Backlog
+**Status:** Completed 2026-09-29 — 1.6.169 (stale "Backlog" line never updated when this
+shipped — verified against the live code 2026-10-26: the six services declare
+`SCRIPT_CONFIGURABLE="false"`, only `postgresql`/`postgrest` declare `"true"`, matching
+this plan's own Acceptance section exactly)
 
 **Goal**: `SCRIPT_CONFIGURABLE="true"` appears only on services that actually have a
 `configure` handler, so `uis configure <service>` never advertises a capability that

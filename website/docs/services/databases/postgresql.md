@@ -47,7 +47,7 @@ grep -o avx2 /proc/cpuinfo | head -1     # Linux: empty means no AVX2
 sysctl -n machdep.cpu.leaf7_features     # macOS: look for AVX2
 ```
 
-⚠️ Since 1.6.178 `vector` is activated in **every** database, so on such a host this is one query away for every application, not only the one that wanted embeddings. See [PLAN — extensions per app](../../ai-developer/plans/backlog/PLAN-extensions-in-app-databases.md).
+⚠️ Since 1.6.178 `vector` is activated in **every** database, so on such a host this is one query away for every application, not only the one that wanted embeddings. See [PLAN — extensions per app](../../ai-developer/plans/completed/PLAN-extensions-in-app-databases.md).
 
 :::
 
