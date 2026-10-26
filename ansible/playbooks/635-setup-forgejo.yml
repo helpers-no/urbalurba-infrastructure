@@ -63,13 +63,29 @@
     #
     # Setting this to "self" (point resolution at THIS instance's own mirrored actions
     # instead) is a real, available option for a lab that wants full offline-capable CI —
-    # proven to work (urb-agents#2022) — but it has a real, ongoing maintenance cost found
-    # out the hard way: `self` REPLACES the built-in curated set entirely rather than
-    # layering on top of it, so EVERY action any workflow references needs its own local
-    # mirror repo, forever, including ones that already worked fine against the built-in
-    # default. Not the right default for everyone, so it's exposed here as an opt-in
-    # instead of forced — same shape as `forgejo_external_url` in
-    # 640-setup-forgejo-runner.yml (an opt-in override, empty by default).
+    # proven to work (urb-agents#2022, against a real LAN address) — but it has a real,
+    # ongoing maintenance cost found out the hard way: `self` REPLACES the built-in
+    # curated set entirely rather than layering on top of it, so EVERY action any
+    # workflow references needs its own local mirror repo, forever, including ones that
+    # already worked fine against the built-in default. Not the right default for
+    # everyone, so it's exposed here as an opt-in instead of forced — same shape as
+    # `forgejo_external_url` in 640-setup-forgejo-runner.yml (an opt-in override, empty
+    # by default).
+    #
+    # 🔴 KNOWN BROKEN ON A `.localhost` DOMAIN (Rancher Desktop), urb-agents#2028 — refused
+    # below, not silently attempted. Confirmed live by imac: the forgejo-runner Pod's
+    # `hostAliases` entry for `forgejo.localhost` patches only the POD's own /etc/hosts;
+    # the git-clone-for-actions step runs inside a container spawned through the dind
+    # sidecar's own INNER Docker engine, a separate network namespace with a fresh
+    # /etc/hosts and no hostAlias entries at all, so `forgejo.localhost` falls through to
+    # the RFC 6761 loopback default there and every clone fails to connect — not specific
+    # to unmirrored actions, ALL of them, mirrored or not. A real fix is a genuine design
+    # call (extend hostAliases into dind's inner network somehow, or give actions
+    # resolution its own internal-facing URL distinct from the human-facing ROOT_URL) —
+    # not attempted here blind, since it needs live iteration against that nested-network
+    # namespace this environment cannot do. Does not reproduce on Proxmox, which uses a
+    # real routable LAN address, not a `.localhost` hostname needing this hostAlias trick
+    # at all.
     forgejo_actions_default_url: ""
 
   tasks:
@@ -77,6 +93,24 @@
       ansible.builtin.fail:
         msg: "The variable 'target_host' is mandatory. Use -e target_host=your_host_name to specify it."
       when: target_host is not defined
+
+    - name: 1b. Refuse the actions-self-mirror opt-in on a .localhost domain (urb-agents#2028)
+      ansible.builtin.fail:
+        msg: >-
+          forgejo_actions_default_url=self does not work against forgejo_domain
+          '{{ forgejo_domain }}' — confirmed live (urb-agents#2028): the forgejo-runner
+          Pod's hostAliases entry for a .localhost hostname only patches the Pod's own
+          /etc/hosts, not the fresh /etc/hosts of a container spawned through the dind
+          sidecar's own inner Docker engine, where the actual git-clone-for-actions step
+          runs — so every clone fails to connect, mirrored action or not. Not yet fixed;
+          a real fix is a design call, not a quick one (see this task's own comment in
+          the playbook). Leave forgejo_actions_default_url unset (Forgejo's own built-in
+          curated mirror) on a .localhost domain, or set a real, routable LAN address for
+          forgejo_domain instead (the Proxmox target does this already and does not hit
+          this failure).
+      when:
+        - forgejo_actions_default_url | default('') | length > 0
+        - forgejo_domain is search('\.localhost$')
 
     - name: 2. Print playbook description
       ansible.builtin.debug:
