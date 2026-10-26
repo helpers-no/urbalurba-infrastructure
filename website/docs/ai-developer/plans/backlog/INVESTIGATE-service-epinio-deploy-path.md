@@ -74,8 +74,9 @@ These are proof-of-concept gates, not implementation details to paper over:
   (`urb-agents#1912`): it is not another entry behind the existing pull-through cache,
   and whatever provisions the forge must not independently clobber the cache's own
   `registries.yaml` wiring.
-- ~~The object store as Epinio's S3 backend: untested with Epinio specifically.~~
-  **Resolved 2026-10-26 — see "Gate 8 resolved" below and the Next Steps checklist.**
+- The object store as Epinio's S3 backend: **the concept is proven** (ops's own PoC
+  harness, `urb-agents#2019`, 2026-10-26) **but the real UIS mechanism is not — still
+  open, tor-agent's to build.** See the Next Steps checklist.
 - Dockerfile builds, and Docker-in-Docker vs. a rootless pusher (e.g. `skopeo`) for
   pushing images from CI — open.
 - This platform has no `cert-manager`; TLS ends at the network edge, upstream of the
@@ -292,15 +293,23 @@ original ask.
       `-002-build-safety`'s decision before designing `uis epinio push`, not rediscover it.
 - [ ] `PLAN-service-epinio-004-identity.md` — not started; waits on the two secret files
       ops is delivering (`#1919`)
-- [x] Object store wiring (Garage): **proven as of 2026-10-26** (ops, `urb-agents#2019`,
-      against the real `-test` cluster and real `garage` guest — push/build/restage all
-      verified against a Garage-backed `s3:` config, not SeaweedFS). Two follow-ups from
-      that pass, neither chased further there: `epinio-server` needs an explicit
-      `kubectl rollout restart` after an S3 backend swap (same Helm-doesn't-restart-the-pod
-      gotcha already known for Dex), and the stored `epinio-admin-password` no longer
-      matches the live secret (worth a deliberate rotate-or-disable-local-auth decision
-      once this integration is actually built). Network isolation remains open and should
-      be resolved in whichever PLAN touches it, not assumed.
+- [ ] Object store wiring (Garage): **concept proven against ops's own PoC harness only
+      (`urb-agents#2019`), 2026-10-26 — ops's own correction, same comment thread.** The
+      PoC proof (`service-epinio-poc.yml`, real `-test` cluster, real `garage` guest,
+      push/build/restage verified end to end against Garage instead of SeaweedFS) is
+      reference material, same shape as the gate 17/18 identity handoff — it does **not**
+      touch `625-setup-epinio.yml`/`00-master-secrets.yml.template`, which still point at
+      the bundled SeaweedFS. **Still open, and explicitly tor-agent's to build** (not ops's,
+      not done by the PoC alone): incorporate Garage as the real UIS mechanism's S3 backend
+      — judged against the PoC's proof, not copied blind — then imac tests it on Rancher
+      Desktop, then ops live-verifies against the real Garage guest on Proxmox (same
+      live-Proxmox-pass requirement every other CORE_SERVICES/LAB_EXTRAS item gets, for
+      HA/replication/real-network behavior no test cluster reproduces). One gotcha already
+      known from the PoC pass, to carry into that build: `epinio-server` needs an explicit
+      `kubectl rollout restart` after an S3 backend swap (Helm re-renders the Secret but
+      nothing in the pod template changes — same class gate 18 already found for Dex).
+      Network isolation remains open and should be resolved in whichever PLAN touches it,
+      not assumed.
 - [ ] On a production-rollout no-go from ops's side: fall back to scoped Argo CD access as
       its own PLAN against the existing ArgoCD path (does not block the UIS-side PLANs
       above, which target any cluster, not specifically production)
