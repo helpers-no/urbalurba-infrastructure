@@ -189,8 +189,19 @@ jobs:
       # product image (Dockerfile.uis-provision-host) already installs
       # gettext-base unconditionally — this was only ever a gap in the test
       # job's own setup, never in what a real user runs.
+      # ⚠️ `apt-get update` FIRST. `jq` above resolves without it because it's
+      # already present in this runner's baked-in image — an already-installed
+      # package needs no fresh index. `gettext-base` genuinely isn't in this
+      # image's baked-in package lists (confirmed live on
+      # catthehacker/ubuntu:act-22.04, ops, urb-agents#2022: "Package
+      # 'gettext-base' has no installation candidate" without this), so
+      # without a fresh index there's nothing to resolve it against. GitHub's
+      # hosted ubuntu-latest apparently keeps a current-enough cache (or ships
+      # the package directly) that this never surfaced there.
       - name: Install gettext-base (envsubst)
-        run: sudo apt-get install -y gettext-base
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext-base
 
       - name: Install yq (mikefarah v4)
         # 🔴 WITHOUT THIS, EVERY yq-DEPENDENT ASSERTION SKIPS AND NOBODY NOTICES.
