@@ -31,11 +31,15 @@ authentik:
     port: 5432
     password: ""  # Empty - loaded via global.env
 
-  # External Redis configuration
-  redis:
-    host: "redis-master.default.svc.cluster.local"
-    port: 6379
-    password: ""  # Empty - loaded via global.env
+  # 🔴 NO redis: BLOCK HERE (urb-agents#2021, part 2) — removed as part of the
+  # 2025.8.1 -> 2025.10.3 bump below. Confirmed from 2025.10's own release notes
+  # ("fully removing the need for Redis"): caching/outpost/websockets already moved to
+  # Postgres before this repo's previous pin, and 2025.10 finishes the job. Not
+  # independently confirmed whether supplying this block would still be merely ignored
+  # at 2025.10.3 rather than erroring - removed rather than left in place and hoped
+  # harmless. The shared `redis` deployment this playbook's own "Check Redis dependency"
+  # precondition step still gates on is NOT this: that is a separate, shared UIS service
+  # other things may still depend on, deliberately left untouched here.
 
 # CRITICAL: Environment variables for Authentik + outpost communication
 global:
@@ -80,13 +84,6 @@ global:
         secretKeyRef:
           name: urbalurba-secrets
           key: AUTHENTIK_POSTGRESQL__PASSWORD
-    # Redis password
-    - name: AUTHENTIK_REDIS__PASSWORD
-      valueFrom:
-        secretKeyRef:
-          name: urbalurba-secrets
-          key: AUTHENTIK_REDIS__PASSWORD
-
     # CSRF trusted origins for external domain access
     # DYNAMICALLY GENERATED from protected_services and domains configuration
     # Allows admin UI access via all configured domains
@@ -205,13 +202,26 @@ worker:
   # 🔴 SAME FIX AS server: ABOVE, URB-AGENTS#2021 — see that block's own comment for the
   # full root-cause story. This is the container that actually crash-looped in the
   # original report (dramatiq workers, not gunicorn).
+  #
+  # 🔴 LIMIT RAISED 1Gi -> 1.5Gi, URB-AGENTS#2021 PART 2 (freeverse, same live cluster):
+  # once the SIGBUS fix above let the worker survive, it ran for ~17 minutes draining a
+  # real backlog (a bulk provisioning's leftover tasks) at ~200 tasks/min, then hit this
+  # limit and got OOMKilled (exit -9). Confirmed from authentik/dramatiq's own source:
+  # there is no per-process memory ceiling or task-count-based respawn knob (Celery's
+  # old `max_tasks_per_child` was removed when authentik migrated off Celery to dramatiq,
+  # 2025.07.28 PR #13492, and dramatiq itself has no equivalent) — concurrency
+  # (worker.processes/threads, left at their defaults of 1/2 here, not touched) is the
+  # only other lever, and lowering it trades routine throughput for a backlog scenario
+  # that the version bump below should make much rarer. 1.5Gi is a reasoned margin given
+  # the node sits at 49% memory per freeverse's own report, not load-tested against a
+  # backlog this size recurring — raise further if it recurs.
   resources:
     requests:
       cpu: "100m"
       memory: "256Mi"
     limits:
       cpu: "1"
-      memory: "1Gi"
+      memory: "1.5Gi"
 
   # Blueprint volume configuration for automatic discovery
   volumes:

@@ -516,4 +516,34 @@ else
     fail_test "expected a memory limit on both server and worker: $RAW"
 fi
 
+start_test "🔴 urb-agents#2021 part 2: the worker's memory limit is not the 1Gi that OOM-killed a real backlog drain"
+if echo "$RAW" | python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+limit = d["worker_resources"].get("limits", {}).get("memory")
+sys.exit(0 if limit and limit != "1Gi" else 1)
+' 2>/dev/null; then
+    pass_test
+else
+    fail_test "worker memory limit is missing or back to the proven-too-low 1Gi: $RAW"
+fi
+
+start_test "🔴 urb-agents#2021 part 2: no authentik-specific redis: config or AUTHENTIK_REDIS__PASSWORD env (2025.10+ does not need one)"
+if python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/075-authentik-config.yaml.j2').read())
+ctx = json.loads('$AUTHENTIK_CTX')
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+has_redis_block = 'redis' in d.get('authentik', {})
+env_names = [e['name'] for e in d.get('global', {}).get('env', [])]
+import sys
+sys.exit(0 if not has_redis_block and 'AUTHENTIK_REDIS__PASSWORD' not in env_names else 1)
+" 2>/dev/null; then
+    pass_test
+else
+    fail_test "expected no authentik.redis block and no AUTHENTIK_REDIS__PASSWORD env var"
+fi
+
 print_summary
