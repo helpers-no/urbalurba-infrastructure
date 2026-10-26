@@ -625,6 +625,25 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "github-runner",
+    "name": "GitHub Runner",
+    "description": "In-cluster GitHub Actions self-hosted runner (CI for GitHub-hosted repos)",
+    "category": "MANAGEMENT",
+    "tags": ["ci", "actions", "runner", "github"],
+    "abstract": "CI runner for GitHub Actions workflows, in-cluster",
+    "logo": "",
+    "website": "https://docs.github.com/en/actions/hosting-your-own-runners"
+    ,"summary": "Registers a GitHub Actions self-hosted runner against an operator-supplied repository, executing workflow jobs via a private docker:dind sidecar — the same proven architecture as forgejo-runner, for GitHubs own (incompatible) runner protocol instead of Forgejos. The SAME Deployment runs identically on Rancher Desktop and on a Proxmox k3s cluster."
+    ,"docs": "/docs/services/management/github-runner"
+    ,"playbook": "645-setup-github-runner.yml"
+    ,"priority": 82
+    ,"checkCommand": "kubectl get pods -n github-runner -l app=github-runner --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "645-remove-github-runner.yml"
+    ,"namespace": "github-runner"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "nextcloud",
     "name": "Nextcloud",
     "description": "Self-hosted collaboration platform with file sync and document editing",
