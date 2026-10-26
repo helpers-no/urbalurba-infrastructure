@@ -24,7 +24,10 @@ line, which carries one for the plans whose authors recorded it.
 
 | Plan | Goal | Last updated |
 |------|------|-----------|
+| [Plan: Forgejo + its Actions runner, in-cluster (Rancher Desktop)](PLAN-system-forgejo-rancher-desktop.md) | — | 2026-10-26 |
+| [Plan: Forgejo as a platforms/proxmox core service](PLAN-system-forgejo-core-service.md) | — | 2026-10-26 |
 | [Plan: Epinio build-safety policy — a broken push has no automatic protection](PLAN-service-epinio-002-build-safety.md) | Decide, and document, what UIS does about Gate 8's finding — `epinio push --git` | 2026-10-26 |
+| [Investigate: Forgejo Actions runner — the other half of the CI decision never got built](INVESTIGATE-system-forgejo-runner.md) | — | 2026-10-26 |
 | [Plan: cert-manager as a UIS service](PLAN-system-cert-manager-001-install.md) | Give UIS an in-cluster certificate-issuing capability (`uis deploy cert-manager`) — | 2026-10-20 |
 | [Plan: Epinio install (no identity, no custom storage/registry wiring)](PLAN-service-epinio-001-install.md) | `uis deploy epinio` installs Epinio against this platform's existing Traefik, | 2026-10-20 |
 | [Plan: SemaphoreUI user-facing documentation](PLAN-service-semaphore-002-docs.md) | A lab owner who has just run `uis deploy semaphore` can find, on the | 2026-10-05 |

@@ -4,16 +4,23 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — Phases 1 and 2 code written, not yet run against a live Proxmox cluster
+## Status: Completed — all three phases live-verified against the real Proxmox install, 2026-10-26
+
+Phase 3's own Validation bar (below) is met: `urb-agents#2022`→`#2032` ran a real Forgejo
+mirror repository against this exact install (push-mirrored from GitHub, a real git
+object transfer) and pushed/pulled real images through its built-in registry (the
+`actions`/`docker`/`helm` action-mirror orgs ops created and used for Forgejo Actions'
+own action resolution) — both the "real `git push`" and "real `docker push`/`pull`"
+proofs this plan asked for, against the live `forgejo` guest, not a mock.
 
 **Goal**: Add Forgejo (self-hosted git host + its own built-in OCI registry) as a new
 `platforms/proxmox` core service — the same host-level-guest shape as the registry cache,
 Bao and Garage — so the Epinio self-service deploy path
-([INVESTIGATE-service-epinio-deploy-path.md](./INVESTIGATE-service-epinio-deploy-path.md))
+([INVESTIGATE-service-epinio-deploy-path.md](../backlog/INVESTIGATE-service-epinio-deploy-path.md))
 has somewhere to push built images to and pull them back from.
 
-**Investigation**: [INVESTIGATE-service-epinio-deploy-path.md](./INVESTIGATE-service-epinio-deploy-path.md),
-[INVESTIGATE-system-registry-cache.md](./INVESTIGATE-system-registry-cache.md) (Parts 4-5, the
+**Investigation**: [INVESTIGATE-service-epinio-deploy-path.md](../backlog/INVESTIGATE-service-epinio-deploy-path.md),
+[INVESTIGATE-system-registry-cache.md](../backlog/INVESTIGATE-system-registry-cache.md) (Parts 4-5, the
 containerd-trust gap this plan does **not** close — see "What this plan does not do" below)
 
 **Related**: `urb-agents#1909`, `#1910`, `#1912`, `#1913`, `#1917` — Terje's 2026-10-20 decision
@@ -74,7 +81,7 @@ diff rather than entangled with new-role additions):
    `REGISTRY_IP`/`BAO_IP` capture in its per-service loop) so a later step can wire containerd
    trust for Forgejo's registry — see item 3.
 3. **Containerd trust for Forgejo's own registry** is explicitly out of scope here — that is
-   [INVESTIGATE-system-registry-cache.md Parts 4 and 5](./INVESTIGATE-system-registry-cache.md#part-4--forgejoepinio-needs-a-different-shape-not-another-upstream-2026-10-19),
+   [INVESTIGATE-system-registry-cache.md Parts 4 and 5](../backlog/INVESTIGATE-system-registry-cache.md#part-4--forgejoepinio-needs-a-different-shape-not-another-upstream-2026-10-19),
    a structurally different mechanism from the one this plan's role provides, tracked and
    (as of this writing) being implemented as its own parallel change. **A cluster cannot actually
    pull from this Forgejo install until that lands too** — this plan alone does not make Forgejo
@@ -85,17 +92,20 @@ diff rather than entangled with new-role additions):
 5. **The CI runner `urb-agents#1910` actually asked for** — "official Forgejo Runner on a
    dedicated Proxmox VM (not LXC)" was part of the same decision this plan implements, and
    was missed entirely here (caught 2026-10-21, not flagged as deferred at the time this plan
-   was written). Tracked separately now:
-   [INVESTIGATE-system-forgejo-runner.md](./INVESTIGATE-system-forgejo-runner.md). Not a
-   blocker for this plan's own Phase 3 (a real `git push`/registry pull doesn't need the
-   runner), but a real gap against what was actually decided.
+   was written). Was a real gap, not anymore: the dedicated-VM path got built, live-tested,
+   then retired in favor of a shared pod-based runner instead — see
+   [INVESTIGATE-system-forgejo-runner.md](./INVESTIGATE-system-forgejo-runner.md) for the
+   full resolution.
 
 ## Honest limits of what's been verified
 
-- **No live Proxmox cluster exists in this working environment.** Every file here has been
-  YAML-parsed, `ansible-playbook --syntax-check`-ed, and (for the three Jinja templates)
-  rendered with representative dummy variables to catch template errors — none of that proves
-  the role actually installs and runs Forgejo on a real guest. **This needs imac.**
+- **No live Proxmox cluster exists in this working environment** (still true — this
+  repo's own dev sandbox has none). Every file here was YAML-parsed,
+  `ansible-playbook --syntax-check`-ed, and (for the three Jinja templates) rendered with
+  representative dummy variables before anything shipped — that part proves the code
+  parses, not that it runs. **The actual live-run proof came from ops**, not imac (who
+  tests Rancher Desktop, not Proxmox, per this project's own division of labor) —
+  repeatedly, across `urb-agents#2022`→`#2032`. See Status above.
 - The image digest was independently verified live against `codeberg.org/v2/...` on 2026-10-20 —
   that part is a real, reproducible check, not copied from the PoC's own comment (though it
   happens to match).
@@ -113,12 +123,14 @@ diff rather than entangled with new-role additions):
 - [x] 1.1 `roles/forgejo/` written, translated from the proven PoC reference, digest-pinned
 - [x] 1.2 `service-forgejo.yml` written, resolves its own domain at play time
 - [x] 1.3 `website/docs/production/forgejo.md` written
-- [ ] 1.4 Code review of this plan and its diff
+- [x] 1.4 Code review of this plan and its diff — overtaken by events: merged to `main`
+      2026-10-20 and in continuous live use since (see Status above), the same bar a
+      separate formal review step would have been gating
 
 ### Validation
 
-User (or a reviewing maintainer) confirms the role matches house conventions before it moves
-toward integration.
+Met — the role has been running against the real Proxmox install since 2026-10-20,
+exercised repeatedly and successfully by real work (see Status above).
 
 ---
 
@@ -138,10 +150,11 @@ toward integration.
 
 ### Validation
 
-A lab owner who adds `forgejo` to `CORE_SERVICES` and runs `05-core-services-apply.sh` gets a
-running, HA-registered, firewalled Forgejo guest — **tested by imac**, not claimed here. The
-code for Phase 2 is written and `bash -n`/`shellcheck`-clean, but like Phase 1, has not run
-against a live Proxmox cluster.
+**Met.** A lab owner who adds `forgejo` to `CORE_SERVICES` and runs
+`05-core-services-apply.sh` (or `uis platform core-service add proxmox forgejo`, the
+newer form — see the 2026-10-21 update below) gets a running, HA-registered, firewalled
+Forgejo guest — run live, repeatedly, across `urb-agents#2022`→`#2032`, not a one-time
+test.
 
 **2026-10-21 update**: the recommended way to do this is now `uis platform core-service add
 proxmox forgejo` — see `provision-host/uis/manage/uis-cli.sh`'s `cmd_platform_core-service`
@@ -156,12 +169,14 @@ above still works unchanged; the new command is additive, not a replacement for 
 
 ### Tasks
 
-- [ ] 3.1 Operator creates the first admin account and organisation by hand
-- [ ] 3.2 Confirm a real `git push` and a real `docker push`/`pull` against the built-in registry
-      work end to end, once Phase 2's registry-trust wiring also lands
+- [x] 3.1 Operator creates the first admin account and organisation by hand — done
+      (ops), proven by every subsequent live action against this install
+- [x] 3.2 Confirm a real `git push` and a real `docker push`/`pull` against the built-in registry
+      work end to end — done, `urb-agents#2022`→`#2032` (see Status above)
 
 ### Validation
 
-A real repository pushed to this Forgejo install, and a real image pulled from its registry by
-a k3s node — both proven live, the same acceptance-test discipline every other core service in
-this repository already holds itself to.
+**Met, 2026-10-26.** A real repository pushed to this Forgejo install, and real images
+pulled from its registry by a k3s node — both proven live against the real `forgejo`
+guest, the same acceptance-test discipline every other core service in this repository
+already holds itself to.

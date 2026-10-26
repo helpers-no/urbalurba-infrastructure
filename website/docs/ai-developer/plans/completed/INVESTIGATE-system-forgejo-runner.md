@@ -24,7 +24,7 @@ handoff that named the decision, not something this document can resolve by gues
 
 **Related**: [PLAN-system-forgejo-core-service.md](./PLAN-system-forgejo-core-service.md)
 (the git host this runner attaches to — done, merged, not yet live-tested),
-[INVESTIGATE-service-epinio-deploy-path.md](./INVESTIGATE-service-epinio-deploy-path.md)
+[INVESTIGATE-service-epinio-deploy-path.md](../backlog/INVESTIGATE-service-epinio-deploy-path.md)
 (records the same decision independently, see "What this is NOT" below),
 `urb-agents#1910` (the authoritative decision record)
 

@@ -4,7 +4,23 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — six real issues found live by imac across four rounds, all fixed; the full sequence (steps 1-5, including a real Actions build+push) completed successfully in round 4; the one remaining fix (round 4's own finding) awaits re-verification
+## Status: Completed — this plan's own stated Validation bar met live, 2026-10-26
+
+**Validation closed**: "a real Forgejo Actions workflow file in a real repository on this
+install runs to completion on this runner — proven live by imac" (this file's own bar,
+below) — met during `urb-agents#2022`→`#2028`, a separately-motivated investigation (a
+GitHub/Forgejo CI comparison) that happened to exercise exactly this plan's own
+acceptance test as a side effect: imac deployed Forgejo + forgejo-runner fresh on Rancher
+Desktop (1.6.240/1.6.241), pushed a real workflow via a real `git push`, and it ran to
+completion through the runner's dind sidecar (`sudo`, `apt-get install`, `docker version`,
+all green, real step logs pulled). One regression surfaced and was fixed same-day
+(`urb-agents#2027`: a Jinja whitespace bug unrelated to this plan's own content, in a
+later addition to `635-forgejo.yaml.j2`); re-tested clean afterward. Round 4's F8 fix
+(registry push routed at Traefik's ClusterIP) is confirmed working as part of this same
+pass — no separate re-verification needed beyond what already happened.
+
+Six real issues found live by imac across four rounds (2026-10-21/22), all fixed — see
+below for the full list, kept for history.
 
 ## Bugs found live (imac, urb-agents#1928) — all fixed
 
@@ -133,8 +149,9 @@ settled it.
 
 **Related**: `PLAN-system-forgejo-core-service.md` (the Proxmox production install — stays
 exactly as built, not replaced by this plan), `INVESTIGATE-system-forgejo-runner.md` (the
-Proxmox runner — still not built, separate follow-up, NOT this plan), `urb-agents#1910`
-(the original CI decision), `urb-agents#1926`/`#1927` (ops's proven reference IaC,
+Proxmox runner's originally-proposed dedicated-VM path — superseded; see "No longer
+outstanding, for the record" below), `urb-agents#1910` (the original CI decision),
+`urb-agents#1926`/`#1927` (ops's proven reference IaC,
 `terchris/home` @ `539c030` — the source this plan translates from)
 
 **Created**: 2026-10-21
@@ -331,21 +348,26 @@ re-litigated for Proxmox's:
    cross-namespace RBAC grants), not a NetworkPolicy (UIS has none anywhere yet). Real but
    modest, not claimed as complete.
 
-### Still outstanding — NOT this plan
+### No longer outstanding, for the record
 
-The Proxmox-side Actions runner (`INVESTIGATE-system-forgejo-runner.md`) is still
-unbuilt — only the git host (`PLAN-system-forgejo-core-service.md`) exists on Proxmox so
-far. Building it is a separate piece of work, translating `roles/forgejo-runner` +
-`roles/epinio-runner` (the dedicated-VM firewall precedent) into this repository's
-`CORE_SERVICES`/`vm-ensure.yml` mechanism — tracked on that INVESTIGATE doc, not folded
-into this one.
+This section used to say the Proxmox-side Actions runner
+(`../completed/INVESTIGATE-system-forgejo-runner.md`) was still unbuilt, separate from
+this plan. That framing was itself overtaken: the dedicated-VM path that INVESTIGATE
+proposed was built and then retired outright (`urb-agents#1982`→`#1997`) in favor of
+*this plan's own* pod-based `forgejo-runner` service, reused as-is on Proxmox — "k3s is
+k3s," one implementation, both platform targets, exactly the framing this plan's own
+goal states. See `platforms/proxmox/STRUCTURE.md`'s "nas's history in this platform"
+note for the full timeline, and the completed INVESTIGATE doc for why a second,
+VM-specific implementation was judged unnecessary.
 
 ### Validation
 
 Same acceptance bar as every other service in this repository: a real Forgejo Actions
-workflow file in a real repository on this install runs to completion on this runner —
-proven live by imac, not claimed here. Nothing in this plan has run against a live
-cluster; this environment has none.
+workflow file in a real repository on this install runs to completion on this runner.
+
+**Met, 2026-10-26** (`urb-agents#2022`→`#2028`) — see this file's own Status line above
+for the full account. Not claimed from this environment, which still has no live
+cluster; proven by imac on real Rancher Desktop.
 
 ---
 
