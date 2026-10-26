@@ -462,4 +462,58 @@ else
     fail_test "runner container memory limit is missing or back to the proven-too-low 768Mi: $OUT"
 fi
 
+# ---------------------------------------------------------------------------
+# 075-authentik-config.yaml.j2: the server/worker /dev/shm + resources fix
+# (urb-agents#2021). This file is Helm VALUES, not a rendered Kubernetes
+# manifest — render.py's Deployment-shaped parsing does not apply, so this
+# parses the raw values directly instead.
+# ---------------------------------------------------------------------------
+
+AUTHENTIK_CTX='{"domains":{"localhost":{"enabled":true,"protocol":"http","base_domain":"localhost"},"tailscale":{"enabled":true,"protocol":"https","base_domain":"example.ts.net"}},"protected_services":[{"name":"whoami","domains":"auto"}]}'
+
+start_test "075-authentik-config.yaml.j2 renders and parses"
+OUT="$(_render 075-authentik-config.yaml.j2 "$AUTHENTIK_CTX")"
+if [[ "$OUT" == \{* ]]; then pass_test; else fail_test "$OUT"; fi
+
+RAW="$(python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/075-authentik-config.yaml.j2').read())
+ctx = json.loads('$AUTHENTIK_CTX')
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+worker_vols = [v['name'] for v in d.get('worker', {}).get('volumes', [])]
+worker_mounts = [v['name'] for v in d.get('worker', {}).get('volumeMounts', [])]
+server_vols = [v['name'] for v in d.get('server', {}).get('volumes', [])]
+server_mounts = [v['name'] for v in d.get('server', {}).get('volumeMounts', [])]
+print(json.dumps({
+    'worker_resources': d.get('worker', {}).get('resources', {}),
+    'server_resources': d.get('server', {}).get('resources', {}),
+    'worker_has_dshm': 'dshm' in worker_vols and 'dshm' in worker_mounts,
+    'server_has_dshm': 'dshm' in server_vols and 'dshm' in server_mounts,
+}))
+" 2>&1)"
+
+start_test "🔴 urb-agents#2021: worker and server both have a memory-backed /dev/shm, not the 64Mi container default"
+if echo "$RAW" | python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+sys.exit(0 if d["worker_has_dshm"] and d["server_has_dshm"] else 1)
+' 2>/dev/null; then
+    pass_test
+else
+    fail_test "expected a dshm volume+mount on both server and worker: $RAW"
+fi
+
+start_test "...and both server and worker carry a memory limit (not left unbounded)"
+if echo "$RAW" | python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+sys.exit(0 if d["worker_resources"].get("limits", {}).get("memory") and d["server_resources"].get("limits", {}).get("memory") else 1)
+' 2>/dev/null; then
+    pass_test
+else
+    fail_test "expected a memory limit on both server and worker: $RAW"
+fi
+
 print_summary

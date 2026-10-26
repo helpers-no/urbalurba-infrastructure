@@ -125,6 +125,37 @@ server:
     # hosts:                     # Managed by IngressRoute with HostRegexp
     #   - authentik.localhost    # Pattern: authentik\..+ for multi-domain support
 
+  # 🔴 NO /dev/shm OVERRIDE AND NO resources: HERE CAUSED urb-agents#2021 (freeverse,
+  # live on Terje's Rancher Desktop cluster): authentik-worker SIGBUS-crash-looped
+  # (dramatiq: "Worker with PID N exited unexpectedly (code -7)") after a large bulk
+  # provisioning (230k queued tasks). Root cause, grounded in upstream's own history —
+  # not independently reproduced here, no live cluster to test against:
+  # goauthentik/authentik's prometheus multiprocess metrics (django-prometheus +
+  # prometheus_client's MultiProcessValue, lifecycle/gunicorn.conf.py) write
+  # `authentik_prometheus_tmp` files under /dev/shm, and multiple independent upstream
+  # reports (goauthentik/authentik#10768, #16386, #22856, #25876 — the last confirming
+  # this still recurs as of 2026.8.1, so a version bump alone would not fix it) describe
+  # exactly this failure mode: the default Kubernetes 64Mi tmpfs fills, and a process
+  # writing to a full tmpfs via mmap gets SIGBUS, not a normal write error. A separate,
+  # independent third-party report (d-buckner/bloud#267) describes the identical crash
+  # on authentik-SERVER's gunicorn workers for the same reason — this is not
+  # worker-specific, so both get the fix.
+  #
+  # Fix: a dedicated, generously-sized /dev/shm (256Mi — 4x the 64Mi default; this
+  # platform's own node sits at 49% memory per freeverse's report, so there is real
+  # headroom) plus resources: sized to comfortably cover that shm allocation alongside
+  # normal process memory, not just the app's own footprint. Values are a reasoned
+  # starting point (in the same range Charmed Authentik's own production floor uses for
+  # the server: 500m/1Gi), not load-tested against this platform — a team hitting them
+  # under heavier load should raise, not assume they are final.
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
   # Blueprint volume configuration for automatic discovery
   volumes:
     # Mount blueprint ConfigMaps as volumes for automatic discovery
@@ -140,6 +171,10 @@ server:
     - name: service-protection-blueprint
       configMap:
         name: service-protection-blueprint
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 256Mi
   volumeMounts:
     # Mount blueprints to /blueprints/ directory for discovery
     - name: test-users-groups-blueprint
@@ -154,6 +189,8 @@ server:
     - name: service-protection-blueprint
       mountPath: /blueprints/service-protection
       readOnly: true
+    - name: dshm
+      mountPath: /dev/shm
 
 # Worker configuration with blueprint volume mounting and metrics
 worker:
@@ -165,6 +202,17 @@ worker:
     serviceMonitor:
       enabled: false  # Set to true if using Prometheus Operator
 
+  # 🔴 SAME FIX AS server: ABOVE, URB-AGENTS#2021 — see that block's own comment for the
+  # full root-cause story. This is the container that actually crash-looped in the
+  # original report (dramatiq workers, not gunicorn).
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
   # Blueprint volume configuration for automatic discovery
   volumes:
     # Mount blueprint ConfigMaps as volumes for automatic discovery
@@ -180,6 +228,10 @@ worker:
     - name: service-protection-blueprint
       configMap:
         name: service-protection-blueprint
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 256Mi
   volumeMounts:
     # Mount blueprints to /blueprints/ directory for discovery
     - name: test-users-groups-blueprint
@@ -194,6 +246,8 @@ worker:
     - name: service-protection-blueprint
       mountPath: /blueprints/service-protection
       readOnly: true
+    - name: dshm
+      mountPath: /dev/shm
 
 # Disable built-in Postgres/Redis (using external services)
 postgresql:
