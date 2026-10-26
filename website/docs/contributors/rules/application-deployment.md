@@ -8,32 +8,63 @@ this document exists to prevent.
 **Decided**: 2026-09-07 by Terje, with the UIS maintainer. Supersedes nothing; this
 is the first time the question has been answered in writing.
 
+**Amended 2026-10-26** (`urb-agents#1911`→`#2023`): a third mechanism, Epinio, is now
+permanent — not a PoC-only exception to the two below. See "A third mechanism: Epinio"
+below; nothing above this note changes.
+
 ---
 
 ## The rule
 
-> **`uis` provisions. ArgoCD deploys. The seam is `uis configure`, which writes a
-> Kubernetes Secret that the application's own manifest reads.**
+> **`uis` provisions. ArgoCD deploys what a repo declares as a manifest. Epinio builds
+> and deploys what a repo does not declare as a manifest at all. The seam between `uis`
+> and ArgoCD is `uis configure`, which writes a Kubernetes Secret that the application's
+> own manifest reads.**
 
-Both mechanisms are permanent. This is **not** a transition where one replaces the
-other later.
+All three mechanisms are permanent. This is **not** a transition where one replaces
+another later.
 
-| Owner | Owns | Why it cannot be the other one |
+| Owner | Owns | Why it cannot be one of the others |
 |---|---|---|
-| **`uis`** | databases, roles, secrets, and **platform-service configuration** — a Dagster code location, a PostgREST instance | None of these is a Kubernetes manifest in the application's repository. A code location is a Helm values overlay; a PostgREST instance is a generated password. **ArgoCD has no object to reconcile** |
-| **ArgoCD** | the **workload** — `Deployment`, `Service`, `Ingress`, in the application's own repo under `uis/` (or `manifests/` for repositories that predate that layout) | Reconciling a running workload against git is exactly what it is for, and `uis argocd register` already does it |
+| **`uis`** | databases, roles, secrets, and **platform-service configuration** — a Dagster code location, a PostgREST instance | None of these is a Kubernetes manifest in the application's repository. A code location is a Helm values overlay; a PostgREST instance is a generated password. **ArgoCD has no object to reconcile, and Epinio builds from source — there is no source here to build** |
+| **ArgoCD** | the **workload** — `Deployment`, `Service`, `Ingress`, in the application's own repo under `uis/` (or `manifests/` for repositories that predate that layout) | Reconciling a running workload against git is exactly what it is for, and `uis argocd register` already does it. The developer has already written the manifest Epinio would otherwise generate |
+| **Epinio** | source code with **no manifest in the repository at all** — buildpack or container-image push, self-service status/logs, no kubeconfig | Neither of the above fits: there is no platform-service configuration to write, and no manifest for ArgoCD to reconcile — Epinio generates the workload at push time and then reconciles what it generated |
 
 ### The test for any application
 
-> **Does it bring its own workload, or does it configure platform services to run
-> its code?**
+> **Does it bring its own workload as a manifest, configure a platform service to run
+> its code, or bring only source code with no manifest at all?**
 
-- **Brings its own workload** → ArgoCD. `uis argocd register <name> <repo-url>`.
+- **Brings its own workload as a manifest** → ArgoCD. `uis argocd register <name> <repo-url>`.
 - **Configures platform services** → `uis`. A template declaration; see
   [INVESTIGATE-templates-multi-surface-application](../../ai-developer/plans/backlog/INVESTIGATE-templates-multi-surface-application.md).
+- **Brings source code and wants it built and run, with no manifest** → Epinio —
+  `epinio push` (buildpack or `--container-image-url`); see
+  [INVESTIGATE-service-epinio-deploy-path](../../ai-developer/plans/backlog/INVESTIGATE-service-epinio-deploy-path.md)
+  for the UIS-side build-out and its own current state.
 
 ⚠️ **The answer is per-object, not per-application.** One application can legitimately
-need both, and the first real one does.
+need more than one of these, and the first real one (Atlas, below) already needs two.
+
+---
+
+## A third mechanism: Epinio
+
+Epinio matches neither branch of the original 2026-09-07 test: it **builds** a workload
+from source the developer never writes as a Kubernetes manifest, and then **it**
+deploys and reconciles that workload — not ArgoCD, and not `uis configure`.
+
+This started as a proof-of-concept exception, approved by Terje for the PoC specifically
+(`urb-agents#1915`). `urb-agents#1911` closed with a GO on production rollout to
+tor/frigg/odin, gated on four conditions — one of them exactly this: whether the
+exception stays PoC-scoped or becomes permanent. **Terje's decision (`urb-agents#2023`):
+permanent.** ArgoCD and Epinio are both standing, legitimate ways to get a workload
+running — Epinio is not a stepping stone to either of the other two, and a team is not
+expected to "graduate" off it.
+
+A team can still move from Epinio to ArgoCD later (export the generated manifest,
+register it) — that migration path is a natural consequence of the shape above, not
+a requirement.
 
 ---
 

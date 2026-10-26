@@ -110,12 +110,40 @@
         fail_msg: "FATAL: urbalurba-secrets not found in {{ epinio_namespace }} namespace. Secrets must be applied before deploying Epinio."
         success_msg: "urbalurba-secrets found in {{ epinio_namespace }} namespace"
 
+    # 🔴 WITHOUT global.customTlsIssuer, EPINIO ISSUES FROM ITS OWN BUNDLED CA, NOT uis-ca.
+    #
+    # `certManager.enabled: true` only tells the chart "cert-manager's controller/CRDs
+    # exist, use them" — it does NOT point Epinio's own endpoint at this platform's
+    # shared `uis-ca` ClusterIssuer. Confirmed directly against the pinned chart's own
+    # source (epinio/helm-charts @ epinio-1.14.3, templates/certificates/):
+    # `global.tlsIssuer` defaults to `"epinio-ca"`, one of FOUR issuers the chart creates
+    # and manages itself (`epinio-ca`, `selfsigned-issuer`, `letsencrypt-staging`,
+    # `letsencrypt-production`) — a second, separate self-signed CA from `uis-ca`, exactly
+    # the "bespoke Epinio-only CA" pattern Terje's decision rejects (urb-agents#1911 →
+    # #2023: cert-manager is a shared UIS service, not a per-component mount).
+    # `global.customTlsIssuer`, when set, overrides `tlsIssuer` for the Certificate the
+    # chart actually issues for Epinio's own hostname — in
+    # `templates/certificates/epinio-certificate.yaml`, `issuerRef.name` resolves to
+    # `customTlsIssuer` if set, else falls back to `tlsIssuer`. Setting it below is the fix.
+    #
+    # ⚠️ The chart still creates its own unused `epinio-ca`/`selfsigned-issuer`
+    # ClusterIssuers regardless (templates/certificates/cluster-issuers.yaml only gates
+    # the two `letsencrypt-*` ones on `global.tlsIssuer`) — harmless, dead resources once
+    # redirected here, not a bug to chase.
+    #
+    # ⚠️ Dex's own certificate (not relevant to THIS install — Dex/OIDC is PLAN-004-identity,
+    # not enabled by this playbook) has its OWN gap worth recording before anyone builds
+    # that PLAN blind: `templates/certificates/dex-certificate.yaml`'s fallback path (fired
+    # when `ingress.tls.enabled` is false) hardcodes `issuerRef.name: epinio-ca` and does
+    # NOT read `customTlsIssuer` at all — an upstream chart inconsistency between this
+    # Certificate and Epinio's own, not something this setting fixes for Dex too.
     - name: 9. Write temporary Helm values
       ansible.builtin.copy:
         dest: /tmp/epinio-values.yaml
         content: |
           global:
             domain: {{ default_epinio_domain }}
+            customTlsIssuer: uis-ca
           certManager:
             install: false
             enabled: true

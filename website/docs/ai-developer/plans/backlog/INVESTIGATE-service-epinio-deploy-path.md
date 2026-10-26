@@ -192,6 +192,12 @@ in silently — the existing rule's table is a decision record, and a third path
 its "owns / why it cannot be the other one" test. The rule document should gain a row,
 not be contradicted by omission elsewhere.
 
+**Done 2026-10-26** (`urb-agents#2023`): [application-deployment.md](../../../contributors/rules/application-deployment.md)
+amended with Epinio as a permanent third mechanism — a three-row table, a three-way
+test, and its own section recording Terje's decision that this is standing, not
+PoC-scoped. The proposal below is what that amendment actually shipped, not a draft
+still waiting on the doc.
+
 ### The test, extended
 
 | | mechanism |
@@ -275,7 +281,10 @@ original ask.
 ## Next steps
 
 - [x] Lab proof-of-concept runs its identity gates — **passed 2026-10-20** (`#1917`)
-- [x] Rule exception approved by Terje (`#1915`), PR #564 merged
+- [x] Rule exception approved by Terje for the PoC (`#1915`; PR #564 is this
+      INVESTIGATE doc's own creation, not the rule amendment). **Made permanent and the
+      rule document itself amended, 2026-10-26 (`#2023`)** — see "The seam: Epinio is a
+      third path" above, "Done 2026-10-26" note.
 - [x] Terje's answer on identity-provider reuse-vs-fresh received (`#1919`): fresh
       Authentik, reuse GitHub+Okta. Secrets delivery destination given back; not yet
       confirmed received.
