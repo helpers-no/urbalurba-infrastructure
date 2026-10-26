@@ -15,6 +15,7 @@ Investigations and plans waiting for implementation, sorted by last updated date
 
 | Document | Goal | Updated |
 |----------|------|---------|
+| [Investigate: generic monitoring + patch/image-currency tracking for pod-based UIS services](INVESTIGATE-system-pod-service-health-and-currency.md) | Decide whether/how UIS should have a generic mechanism, analogous to | 2026-10-26 |
 | [Investigate: Epinio Deploy Path for UIS](INVESTIGATE-service-epinio-deploy-path.md) | Decide how UIS itself (CLI surface, service layout, docs) should incorporate | 2026-10-26 |
 | [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-26 |
 | [Investigate: Forgejo Actions runner — the other half of the CI decision never got built](INVESTIGATE-system-forgejo-runner.md) | — | 2026-10-23 |
