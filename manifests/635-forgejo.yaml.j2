@@ -207,13 +207,22 @@ spec:
                 secretKeyRef:
                   name: forgejo-app-secrets
                   key: JWT_SECRET
-{%- if forgejo_actions_default_url %}
+{# urb-agents#2027: plain {% if %}/{% endif %} at column 0, no manual `-` trim markers.
+   Ansible's own Jinja environment already runs trim_blocks=True (strips the newline
+   right AFTER a tag's %}); adding {%- ALSO strips the newline BEFORE it, and combined
+   with a non-zero-indent {% endif %} tag (lstrip_blocks=False, so leading whitespace on
+   its line is literal output) that merged this block's surrounding lines into one,
+   breaking YAML both with and without this var set. Verified by rendering through
+   jinja2.Environment(trim_blocks=True, lstrip_blocks=False) — Ansible's actual
+   defaults — not assumed from a plain jinja2.Environment(), which is what missed this
+   the first time. #}
+{% if forgejo_actions_default_url %}
             # Opt-in only (urb-agents#2025) — empty by default, which leaves Forgejo on
             # its own built-in curated action mirror. See forgejo_actions_default_url's
             # own comment in 635-setup-forgejo.yml for why that's the default, not this.
             - name: GITEA__actions__DEFAULT_ACTIONS_URL
               value: "{{ forgejo_actions_default_url }}"
-{%- endif %}
+{% endif %}
           volumeMounts:
             # app.ini is NOT mounted here — the init-config initContainer above
             # already wrote a real, writable copy onto this same PVC at

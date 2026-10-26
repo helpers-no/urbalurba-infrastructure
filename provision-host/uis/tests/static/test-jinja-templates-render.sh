@@ -112,8 +112,10 @@ for d in docs:
     if d.get("kind") == "Deployment":
         containers = d.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
         secret_key = None
+        env_names = []
         for c in containers:
             for e in (c.get("env") or []):
+                env_names.append(e.get("name"))
                 ref = (e.get("valueFrom") or {}).get("secretKeyRef")
                 if ref:
                     secret_key = ref.get("key")
@@ -121,6 +123,8 @@ for d in docs:
             "name": d.get("metadata", {}).get("name"),
             "podLabel": (d.get("spec", {}).get("template", {}).get("metadata", {}).get("labels") or {}).get("app"),
             "secretKey": secret_key,
+            "envNames": env_names,
+            "hasVolumeMounts": any("volumeMounts" in c for c in containers),
         })
 
 print(json.dumps({"documents": len(docs),
@@ -342,6 +346,81 @@ if [[ "$OUT" == \{* ]] \
     pass_test
 else
     fail_test "$OUT"
+fi
+
+# ---------------------------------------------------------------------------
+# 635-forgejo.yaml.j2: the forgejo_actions_default_url opt-in conditional.
+#
+# 🔴 urb-agents#2027: `{%- if %}`/`{%- endif %}` combined with Ansible's own
+# trim_blocks=True ate the newline on BOTH sides of this block regardless of
+# which branch rendered, merging `volumeMounts:` onto the previous line in the
+# DEFAULT case and into the block's own content in the opt-in case — breaking
+# `uis deploy forgejo` outright, in both branches, discovered live by imac only
+# after this had already merged. The bug this file exists to catch (an
+# unparseable template shipping green) recurred because this specific
+# template was never added here — the harness itself (trim_blocks=True,
+# lstrip_blocks=False, matching Ansible exactly) was already correct the
+# whole time.
+# ---------------------------------------------------------------------------
+
+_FORGEJO_CTX_BASE='"forgejo_image":"test/forgejo:1","forgejo_http_port":3000,"forgejo_domain":"forgejo.localhost","forgejo_namespace":"forgejo"'
+
+start_test "635-forgejo.yaml.j2 renders and parses with the opt-in unset (the plain, documented 'uis deploy forgejo')"
+CTX="{${_FORGEJO_CTX_BASE},\"forgejo_actions_default_url\":\"\"}"
+OUT="$(_render 635-forgejo.yaml.j2 "$CTX")"
+if [[ "$OUT" == \{* ]]; then pass_test; else fail_test "$OUT"; fi
+
+start_test "...and the forgejo container still has volumeMounts (not merged into the previous line)"
+if python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+dep = next((x for x in d["deployments"] if x["name"] == "forgejo"), None)
+sys.exit(0 if dep and dep["hasVolumeMounts"] else 1)
+' "$OUT" 2>/dev/null; then
+    pass_test
+else
+    fail_test "forgejo Deployment missing volumeMounts, or not found: $OUT"
+fi
+
+start_test "...and GITEA__actions__DEFAULT_ACTIONS_URL is absent when the opt-in is unset"
+if python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+dep = next((x for x in d["deployments"] if x["name"] == "forgejo"), None)
+sys.exit(0 if dep and "GITEA__actions__DEFAULT_ACTIONS_URL" not in dep["envNames"] else 1)
+' "$OUT" 2>/dev/null; then
+    pass_test
+else
+    fail_test "DEFAULT_ACTIONS_URL present despite being unset: $OUT"
+fi
+
+start_test "635-forgejo.yaml.j2 renders and parses with the opt-in set to 'self'"
+CTX="{${_FORGEJO_CTX_BASE},\"forgejo_actions_default_url\":\"self\"}"
+OUT="$(_render 635-forgejo.yaml.j2 "$CTX")"
+if [[ "$OUT" == \{* ]]; then pass_test; else fail_test "$OUT"; fi
+
+start_test "...and the forgejo container still has volumeMounts (not merged into the opt-in block)"
+if python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+dep = next((x for x in d["deployments"] if x["name"] == "forgejo"), None)
+sys.exit(0 if dep and dep["hasVolumeMounts"] else 1)
+' "$OUT" 2>/dev/null; then
+    pass_test
+else
+    fail_test "forgejo Deployment missing volumeMounts, or not found: $OUT"
+fi
+
+start_test "...and GITEA__actions__DEFAULT_ACTIONS_URL is present, with the right value, when opted in"
+if python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+dep = next((x for x in d["deployments"] if x["name"] == "forgejo"), None)
+sys.exit(0 if dep and "GITEA__actions__DEFAULT_ACTIONS_URL" in dep["envNames"] else 1)
+' "$OUT" 2>/dev/null; then
+    pass_test
+else
+    fail_test "DEFAULT_ACTIONS_URL missing despite being set to self: $OUT"
 fi
 
 print_summary
