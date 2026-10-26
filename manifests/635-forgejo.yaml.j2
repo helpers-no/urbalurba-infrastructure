@@ -207,6 +207,13 @@ spec:
                 secretKeyRef:
                   name: forgejo-app-secrets
                   key: JWT_SECRET
+{%- if forgejo_actions_default_url %}
+            # Opt-in only (urb-agents#2025) — empty by default, which leaves Forgejo on
+            # its own built-in curated action mirror. See forgejo_actions_default_url's
+            # own comment in 635-setup-forgejo.yml for why that's the default, not this.
+            - name: GITEA__actions__DEFAULT_ACTIONS_URL
+              value: "{{ forgejo_actions_default_url }}"
+{%- endif %}
           volumeMounts:
             # app.ini is NOT mounted here — the init-config initContainer above
             # already wrote a real, writable copy onto this same PVC at

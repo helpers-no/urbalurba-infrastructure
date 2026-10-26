@@ -32,6 +32,12 @@
 #
 # Usage:
 # ansible-playbook playbooks/635-setup-forgejo.yml -e target_host="rancher-desktop"
+#
+# Optional, for a lab that wants Forgejo Actions to resolve `uses:` actions against ONLY
+# this instance's own mirrors (fully offline-capable, real ongoing maintenance cost — see
+# forgejo_actions_default_url's own comment below, urb-agents#2025):
+# ansible-playbook playbooks/635-setup-forgejo.yml -e target_host="rancher-desktop" \
+#   -e forgejo_actions_default_url="self"
 
 - name: Install Forgejo (git host + built-in OCI registry)
   hosts: localhost
@@ -47,6 +53,24 @@
     # running identically on both UIS deployment targets. Re-verify the same way before
     # bumping either copy.
     forgejo_image: "codeberg.org/forgejo/forgejo@sha256:a3e33d03e771d3e58b27de5573c3a25dc4f670583a6724c1878a6d0bbecf3556"
+
+    # 🔵 DECIDED, urb-agents#2025: default to Forgejo's OWN built-in curated action mirror
+    # (data.forgejo.org) — i.e. leave this empty, do NOT set `[actions] DEFAULT_ACTIONS_URL`
+    # at all. That default already covers the common actions (checkout, setup-node, etc.)
+    # with zero maintenance, which is the right default for the common UIS case: someone
+    # deploying `forgejo` + `forgejo-runner` to try self-hosted CI, not specifically
+    # chasing air-gapped operation.
+    #
+    # Setting this to "self" (point resolution at THIS instance's own mirrored actions
+    # instead) is a real, available option for a lab that wants full offline-capable CI —
+    # proven to work (urb-agents#2022) — but it has a real, ongoing maintenance cost found
+    # out the hard way: `self` REPLACES the built-in curated set entirely rather than
+    # layering on top of it, so EVERY action any workflow references needs its own local
+    # mirror repo, forever, including ones that already worked fine against the built-in
+    # default. Not the right default for everyone, so it's exposed here as an opt-in
+    # instead of forced — same shape as `forgejo_external_url` in
+    # 640-setup-forgejo-runner.yml (an opt-in override, empty by default).
+    forgejo_actions_default_url: ""
 
   tasks:
     - name: 1. Check if required variables are provided
