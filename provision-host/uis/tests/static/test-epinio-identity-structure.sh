@@ -73,4 +73,17 @@ grep -qF -- '--reuse-values' <<< "$pb" \
     && pass_test \
     || fail_test "--reuse-values missing" "a plain helm upgrade -f would discard everything 625-setup-epinio.yml already configured that isn't also in this file"
 
+# 🔴 urb-agents#2045 (imac, live): `.localhost` is a special-use TLD and resolves to
+# loopback inside Dex's own pod with no DNS lookup at all — the identical trap class as
+# urb-agents#1928's original forgejo.localhost bug. Dex needs a hostAliases entry
+# pointing the Authentik hostname at Traefik's ClusterIP, only when that hostname
+# actually ends in .localhost.
+start_test "🔴 Dex's Deployment gets a hostAliases entry for a .localhost Authentik hostname"
+if grep -qF 'hostAliases: "{{ epinio_identity_host_aliases }}"' <<< "$pb" \
+    && grep -qF "is match('.*\\.localhost\$')" <<< "$pb"; then
+    pass_test
+else
+    fail_test "hostAliases wiring missing or not gated on .localhost" "Dex would get connection refused dialing authentik.localhost's own loopback resolution, found live during the PoC's own class of bug (#1928) recurring here"
+fi
+
 print_summary

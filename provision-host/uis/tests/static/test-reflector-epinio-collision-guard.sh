@@ -63,4 +63,17 @@ else
     fail_test "SCRIPT_CHECK_COMMAND not cluster-wide" "uis status/deploy would report 'not deployed' even when Epinio's bundled copy already satisfies this service's whole purpose"
 fi
 
+# 🔴 urb-agents#2045 (imac, live): the detection task's jsonpath value has an unquoted
+# space inside `{range .items[*]}` - ansible.builtin.command's own shlex-based argument
+# splitting breaks it into two argv tokens, and kubectl errors on a stray second
+# argument. The whole jsonpath value must be single-quoted.
+start_test "🔴 the jsonpath detection command is quoted, not split by its own internal space"
+if grep -qF -- "-o 'jsonpath={range .items[*]}" <<< "$pb"; then
+    pass_test
+elif grep -qF "jsonpath={range .items[*]}" <<< "$pb"; then
+    fail_test "jsonpath value is unquoted" "found live by imac: ansible.builtin.command's shlex-based splitting breaks on the space inside {range .items[*]}, and kubectl errors on a stray second argument"
+else
+    fail_test "could not find the jsonpath detection command at all" "has task 6 moved or been renamed?"
+fi
+
 print_summary

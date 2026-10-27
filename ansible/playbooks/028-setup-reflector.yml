@@ -68,9 +68,14 @@
     # service's whole purpose once Epinio is installed. Detecting it and skipping avoids the
     # collision entirely rather than fighting over the resource name.
     - name: 6. Check for a reflector controller already running anywhere in the cluster
+      # 🔴 FOUND LIVE BY imac (urb-agents#2045): unquoted, the space inside `{range
+      # .items[*]}` breaks `ansible.builtin.command`'s own shlex-based argument splitting
+      # into extra argv tokens, and kubectl then errors on a stray second resource
+      # argument — single-quoting the whole jsonpath value (same as a real shell would
+      # need) fixes it.
       ansible.builtin.command: >
         kubectl get pods -A -l app.kubernetes.io/name=reflector
-        -o jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}
+        -o 'jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: existing_reflector_pods
