@@ -1,0 +1,42 @@
+# 076-authentik-tlsstore.yaml
+#
+# Description:
+# A workaround for the bug tracked in
+# website/docs/ai-developer/plans/backlog/INVESTIGATE-system-traefik-incluster-sni.md: on this
+# cluster, Traefik's Kubernetes CRD provider never converts an IngressRoute's `tls.secretName`
+# into a loaded certificate — confirmed via imac's own live debug-level capture (urb-agents#2046),
+# not inference: the dynamic configuration's own `tls` section stayed a bare `{}` across every
+# snapshot, with the router config, the Secret's freshness, and RBAC all independently ruled out.
+# Two earlier attempts at a per-route fix (`tls.domains`, PR #647) were shipped, re-tested live,
+# and retracted (PR #648) — this does NOT touch that mechanism again.
+#
+# This uses a different, independently-verified-from-source code path instead: the `TLSStore` CRD
+# is loaded by `buildTLSStores()` (pkg/provider/kubernetes/crd/kubernetes.go, confirmed against
+# traefik/traefik tag v3.7.4), which fetches `spec.defaultCertificate.secretName` directly via
+# `client.GetSecret()` and parses it with `getCertificateBlocks()` — it never goes through
+# `getTLSHTTP()`/`getTLS()`, the exact function pair that silently fails to register a cert for
+# the broken per-route path. Different function, different code, so the broken path is not reused
+# even partially.
+#
+# 🔴 THIS IS A CLUSTER-WIDE DEFAULT, NOT A PER-ROUTE FIX. Traefik only ever uses the ONE TLSStore
+# named "default" (its own documented rule — a second one in another namespace is rejected
+# outright, and the Kubernetes CRD provider drops BOTH silently if that happens — see
+# `buildTLSStores`'s own `nsDefault` check). This makes Authentik's certificate the fallback for
+# ANY unmatched SNI on the `websecure` entrypoint, cluster-wide. That's a safe default today
+# because zero OTHER IngressRoutes in this cluster declare a `tls:` block at all (confirmed by
+# imac's own survey, urb-agents#2046) — nothing else's behavior changes. It is NOT a generic
+# multi-service TLS mechanism: the day a second service needs its own real in-cluster cert
+# presented by SNI, this single global slot cannot serve both, and that will need a real decision,
+# not another default-store trick.
+#
+# 🔴 UNVERIFIED LIVE AS OF THIS COMMIT. Shipped for imac to test against a real Rancher Desktop
+# cluster — do not treat this as "the fix" until that comes back confirmed, the same discipline
+# the retracted tls.domains attempt (PR #647) should have followed from the start.
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: authentik
+spec:
+  defaultCertificate:
+    secretName: authentik-server-tls

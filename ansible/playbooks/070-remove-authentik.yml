@@ -33,6 +33,7 @@
     authentik_ingressroute_file: "{{ manifests_folder }}/076-authentik-ingressroute.yaml"
     authentik_ingressroute_tls_file: "{{ manifests_folder }}/076-authentik-ingressroute-tls.yaml"
     authentik_server_tls_certificate_file: "{{ manifests_folder }}/076-authentik-server-tls-certificate.yaml"
+    authentik_tlsstore_file: "{{ manifests_folder }}/076-authentik-tlsstore.yaml"
     forward_auth_middleware_file: "{{ manifests_folder }}/077-authentik-forward-auth-middleware.yaml"
 
   tasks:
@@ -85,6 +86,13 @@
       kubernetes.core.k8s:
         state: absent
         src: "{{ authentik_ingressroute_tls_file }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      failed_when: false
+
+    - name: 6.15. Remove the default TLSStore (Traefik in-cluster SNI workaround)
+      kubernetes.core.k8s:
+        state: absent
+        src: "{{ authentik_tlsstore_file }}"
         kubeconfig: "{{ merged_kubeconf_file }}"
       failed_when: false
 
