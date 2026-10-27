@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Partially live-tested by imac (`urb-agents#2044`/`#2045`/`#2046`) — GitHub connector verified short of browser login; Authentik connector's real platform-level blocker (tracked separately) now root-caused and fixed, not yet re-verified live; Okta not yet attempted
+## Status: Partially live-tested by imac (`urb-agents#2044`/`#2045`/`#2046`) — GitHub connector verified short of browser login; Authentik connector still blocked by a platform-level TLS/SNI issue (tracked separately, root cause not yet actually found — a first fix attempt was retracted after live re-testing disproved it); Okta not yet attempted
 
 **Goal**: wire Epinio's own bundled Dex to up to three identity providers (GitHub,
 Authentik, Okta), each mapping its own groups/teams to namespace roles, instead of
@@ -152,17 +152,16 @@ fixed, one bigger blocker found and NOT fixed here:**
   recurring in this new connector. Fixed the same proven way
   (`640-setup-forgejo-runner.yml`'s own pattern: look up Traefik's ClusterIP, alias the
   hostname to it, only when that hostname actually ends in `.localhost`).
-- **Past both of those, the connector was still blocked** — not by anything in this
-  plan's own scope: Traefik never associated Authentik's real certificate with any SNI
-  value at all, because `HostRegexp()` match rules have no literal domain for Traefik to
-  build its certificate store from. Confirmed by imac with the exact Traefik log line
-  naming the mechanism, host-side and in-cluster identically — not an in-cluster-specific
-  issue after all (the original "not in-cluster-specific" framing turned out right, just
-  for a different reason than first guessed). Root cause and fix now live in
+- **Past both of those, the connector is still blocked** — not by anything in this
+  plan's own scope. Confirmed host-side and in-cluster identically (not an
+  in-cluster-specific issue), so it's purely a Traefik TLS/SNI question. A first fix
+  attempt (`tls.domains`, based on reading a Traefik log line as a cert-selection
+  mechanism) was **retracted** after imac re-tested it live with a full Traefik restart
+  and got the identical wrong certificate — the log line turned out to be about a
+  different Traefik concept (`TLSOptions` resolution) entirely, confirmed by reading
+  Traefik's own source. The real mechanism is still not found; see
   [INVESTIGATE-system-traefik-incluster-sni](./INVESTIGATE-system-traefik-incluster-sni.md)
-  — `tls.domains` added to `076-authentik-ingressroute-tls.yaml.j2`. **Implemented,
-  render-tested, not yet live-verified** — see that document's own "Fix implemented"
-  section for the one re-verification step needed.
+  for the full retraction and what live instrumentation is actually needed next.
 
 **Okta connector: not attempted** — no real Okta tenant available; shares the
 Authentik-identical `insecureEnableGroups`/`insecureSkipEmailVerified` code path already
@@ -172,6 +171,5 @@ issue above — Okta is a real external IdP, not reached through this platform's
 
 **Still needed, live**: confirm a user with no matching group lands with no roles (not
 admin by accident) — still only checked by inference, not an observed failed login; Okta
-with a real tenant; and re-running the Authentik connector's own sign-in now that
-`INVESTIGATE-system-traefik-incluster-sni.md`'s fix has landed, to confirm it actually
-resolves the real cert being served.
+with a real tenant; and the Authentik connector's own end-to-end sign-in, once
+`INVESTIGATE-system-traefik-incluster-sni.md`'s real root cause is actually found.

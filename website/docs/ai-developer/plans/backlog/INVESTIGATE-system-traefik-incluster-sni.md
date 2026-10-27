@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Root cause confirmed and fixed for Authentik (PR pending) — not yet live-verified
+## Status: Backlog — the PR #647 fix did NOT resolve it; original root cause claim retracted
 
 **Goal**: figure out how an in-cluster workload reaches another `HostRegexp`-routed
 service through Traefik with a certificate that actually validates under strict TLS
@@ -120,7 +120,50 @@ it: `kubectl logs -n kube-system -l app.kubernetes.io/name=traefik` grepped for
 `authentik` or TLS-cert-loading errors, and confirmation of which Traefik
 (image/chart/version) is actually running.
 
-## Root cause, confirmed by imac with the exact mechanism (`urb-agents#2046`)
+## Retraction: the `tls.domains` fix (PR #647) did not work, and the original mechanism claim was wrong
+
+imac re-tested PR #647 on `1.6.253`, with a **full Traefik restart** to rule out stale
+config/caching, and the IngressRoute carries exactly the shipped config (`tls.domains:
+[{main: authentik.localhost, sans: [...]}]`, confirmed), the cert-manager certificate's
+own SANs are confirmed correct, no conflicting `TLSStore`/IngressRoute exists — and both
+probes still return the identical wrong certificate, with the identical warning in
+Traefik's logs, completely unchanged.
+
+**The original mechanism claim below was wrong.** Read the actual Traefik source
+(`pkg/provider/kubernetes/crd/kubernetes_http.go`, tag `v3.7.4`) for the exact log line:
+
+```go
+// The server name (from a Host(SNI) rule) is the only parameter (available in HTTP
+// routing rules) on which we can map a TLS config, because it is the only one
+// accessible before decryption... Consequently, when it comes to deciding what TLS
+// config will be used, for a request that will match an HTTPS router with no Host
+// rule, the result will depend on the _others_ existing routers...
+if tlsOptionsName != traefiktls.DefaultTLSConfigName {
+    logger.Warn().Msgf("No domain found in rule %v, the TLS option %s cannot be applied", ...)
+```
+
+This warning is about **`tlsOptions` resolution** (which `TLSOption` CRD — cipher
+suites, minimum TLS version, client-cert requirements — applies to a given SNI), a
+completely different Traefik concept from **certificate selection**. It is unrelated to
+which certificate gets served. There is also an open upstream issue confirming
+`HostRegexp` genuinely doesn't support `TLSOptions` selection at all
+([traefik/traefik#11375](https://github.com/traefik/traefik/issues/11375)) — real, but a
+different limitation from this investigation's actual symptom.
+
+Read further (`pkg/tls/certificate_store.go`, `pkg/tls/tlsmanager.go`): certificate
+selection (`GetBestCertificate`) matches the client's SNI purely against domain keys in
+`CertificateStore.DynamicCerts` — a map built from loaded certificates' own content, not
+from any router's match rule. And the Kubernetes CRD provider's own certificate-loading
+path (`getTLSHTTP`/`getTLS` in `kubernetes_http.go`) keys purely on
+`namespace/secretName`, with no dependency on the router's rule shape or on
+`tls.domains` at all. On this reading, the real certificate *should* register correctly
+from its own SAN content regardless of `HostRegexp` — which means `tls.domains` was
+never the relevant mechanism, consistent with imac's observation that adding it changed
+nothing. **Why the real certificate still isn't being selected remains genuinely
+unexplained from source alone** — this needs live instrumentation (Traefik's own debug-
+level logs around certificate/secret loading, not more code reading) to resolve.
+
+## What was previously written here, before the retraction above (kept for history, not current)
 
 The host-side probe came back with the **identical** wrong certificate — ruling out
 hypothesis (b) entirely, this has nothing to do with being in-cluster. Traefik's own logs
@@ -144,36 +187,38 @@ validation finally exercised it. Traefik version confirmed: `rancher/mirrored-li
 traefik:3.7.4` (k3s's own bundled copy on Rancher Desktop, not this repo's Helm values —
 matching `003-setup-traefik.yml`'s own documented behavior).
 
-## Fix implemented, not yet live-verified
+## `tls.domains` (PR #647) — kept, but no longer believed to be the fix
 
-Traefik's own documented mechanism for exactly this case: `tls.domains` gives Traefik an
-explicit, literal domain list separate from the match rule itself — the match rule still
-decides which requests reach the router; `tls.domains` only tells Traefik which
-certificate to present for which SNI. Added to
-`manifests/076-authentik-ingressroute-tls.yaml.j2`, built from the same `domains` dict
-`076-authentik-server-tls-certificate.yaml.j2`'s own `dnsNames` already uses, so the two
-cannot drift out of step. Verified via render tests (both the no-extra-domain and
-multi-domain cases produce valid, sensible YAML with Ansible's real Jinja settings) and
-mutation-tested (removing the fix makes the new test fail, confirming it actually
-guards this). **Not yet confirmed against a live Traefik instance** — the one thing that
-would: re-run imac's own `openssl s_client -servername authentik.localhost` probe after
-this ships and confirm it now returns the real cert, not the default.
+Left in place (harmless, and `tls.domains` does feed into router-level `TLSOptions`
+resolution per source, even though that's not this symptom) but **not re-claimed as the
+fix** — see the retraction above. Render-tested and mutation-tested at the time it was
+written; that testing was real, the diagnosis behind it was wrong.
 
-## What's not decided here
+## What's actually needed next: live instrumentation, not another source-read
 
-- **Whether any other service in this repository needs the same `tls.domains` fix.**
-  The survey above found zero other `HostRegexp` routes with a `tls:` block at all, so
-  nothing else is currently *broken* by this — but anything that later adds strict TLS
-  to a `HostRegexp` route (as Dex did here) will hit the identical gap unless
-  `tls.domains` is part of the standard pattern documented for doing that. Not written
-  up as a pattern/convention anywhere yet.
-- **Live verification.** The fix is implemented and render-tested, not yet confirmed
-  against a real Traefik instance — see "Fix implemented" above for the exact
-  re-verification step.
-- **Scope beyond Rancher Desktop.** Not checked against Proxmox or any other platform
-  this repository targets — the root cause (Traefik's own SNI-cert-store mechanism) is
-  almost certainly identical everywhere Traefik runs, but not independently confirmed
-  outside Rancher Desktop.
+Source-reading alone cannot resolve this further — the certificate-loading and
+SNI-matching code paths read as if they should work regardless of router rule shape,
+and yet demonstrably don't, live, after a full restart. The next useful step is live
+data, specifically:
+
+- Confirm the actual `authentik-server-tls` Secret's `tls.crt` content/age matches
+  exactly what the `Certificate` resource's own status most recently reports as issued
+  (rules out a stale or mismatched Secret, independent of everything checked so far).
+- Traefik's own debug-level logs (`--log.level=DEBUG`, or equivalent via the k3s
+  HelmChart CR's values) around startup, grepped for the certificate/secret name —
+  Traefik logs its own TLS certificate loading and domain registration at debug level,
+  which would show directly whether `authentik.localhost` actually became a key in its
+  certificate store at all, rather than inferring it from source.
+- Whether Traefik's dashboard/API is reachable at all on this install
+  (`ingressRoute.dashboard.enabled` is `false` in this repo's own `003-traefik-config.yaml`,
+  though that file doesn't even apply on Rancher Desktop per k3s managing its own
+  Traefik — worth checking whether the k3s-bundled one has its API enabled, which would
+  let someone query `/api/http/routers`/certificates directly without a log-level
+  change at all).
+
+## Scope beyond Rancher Desktop
+
+Not checked against Proxmox or any other platform this repository targets.
 
 ## Honest limits of what's in this document
 
