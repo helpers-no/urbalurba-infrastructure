@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — found live, not yet designed; explicitly NOT specific to Epinio
+## Status: Root cause confirmed and fixed for Authentik (PR pending) — not yet live-verified
 
 **Goal**: figure out how an in-cluster workload reaches another `HostRegexp`-routed
 service through Traefik with a certificate that actually validates under strict TLS
@@ -120,26 +120,60 @@ it: `kubectl logs -n kube-system -l app.kubernetes.io/name=traefik` grepped for
 `authentik` or TLS-cert-loading errors, and confirmation of which Traefik
 (image/chart/version) is actually running.
 
+## Root cause, confirmed by imac with the exact mechanism (`urb-agents#2046`)
+
+The host-side probe came back with the **identical** wrong certificate — ruling out
+hypothesis (b) entirely, this has nothing to do with being in-cluster. Traefik's own logs
+name the exact mechanism directly:
+
+```
+WRN No domain found in rule HostRegexp(`authentik\..+`), the TLS options applied for
+    this router will depend on the SNI of each request
+```
+
+Traefik builds its SNI certificate store by extracting **literal domain names from each
+router's own match rule**. `HostRegexp()` is a pattern, not a name — there is nothing to
+extract — so `tls.secretName` on such a router is never actually associated with any SNI
+value at all. Every request falls through to the generic default cert, host-side and
+in-cluster, every time. This is hypothesis (a): confirmed, not inferred.
+
+A survey of every other `HostRegexp`-routed service in this install found **none of them
+declare a `tls:` block at all** — Authentik's own (bug #570) was the first and only place
+anyone tried this combination, silently broken since it shipped, until Dex's strict
+validation finally exercised it. Traefik version confirmed: `rancher/mirrored-library-
+traefik:3.7.4` (k3s's own bundled copy on Rancher Desktop, not this repo's Helm values —
+matching `003-setup-traefik.yml`'s own documented behavior).
+
+## Fix implemented, not yet live-verified
+
+Traefik's own documented mechanism for exactly this case: `tls.domains` gives Traefik an
+explicit, literal domain list separate from the match rule itself — the match rule still
+decides which requests reach the router; `tls.domains` only tells Traefik which
+certificate to present for which SNI. Added to
+`manifests/076-authentik-ingressroute-tls.yaml.j2`, built from the same `domains` dict
+`076-authentik-server-tls-certificate.yaml.j2`'s own `dnsNames` already uses, so the two
+cannot drift out of step. Verified via render tests (both the no-extra-domain and
+multi-domain cases produce valid, sensible YAML with Ansible's real Jinja settings) and
+mutation-tested (removing the fix makes the new test fail, confirming it actually
+guards this). **Not yet confirmed against a live Traefik instance** — the one thing that
+would: re-run imac's own `openssl s_client -servername authentik.localhost` probe after
+this ships and confirm it now returns the real cert, not the default.
+
 ## What's not decided here
 
-- **Why** Traefik's ClusterIP serves its own default cert instead of a `HostRegexp`-
-  matched route's real one for a direct TLS connection, when the identical Host header
-  routes correctly for plain HTTP and (presumably) for the external tunnel path. Whether
-  this is an SNI-vs-Host-header distinction in how Traefik's `websecure` entrypoint
-  selects a router, a certificate-store resolution order issue, or something about how
-  this platform's own IngressRoutes declare their TLS, is not established — needs reading
-  Traefik's own router-matching/TLS-SNI resolution logic for this version, not guessed.
-- **What the real fix looks like.** Candidates not evaluated here: giving Dex (or any
-  such in-cluster client) a path to the same address/port that host-side `*.localhost`
-  traffic actually uses (the LoadBalancer-assigned IP via Rancher Desktop's own port
-  forwarding) rather than the ClusterIP; a Traefik-side TLS/SNI configuration change so
-  the `websecure` entrypoint resolves the right certificate for ClusterIP-origin
-  connections too; or something else not yet considered. This is a design decision, not
-  a quick patch — explicitly not attempted by imac as tester, and not decided here.
+- **Whether any other service in this repository needs the same `tls.domains` fix.**
+  The survey above found zero other `HostRegexp` routes with a `tls:` block at all, so
+  nothing else is currently *broken* by this — but anything that later adds strict TLS
+  to a `HostRegexp` route (as Dex did here) will hit the identical gap unless
+  `tls.domains` is part of the standard pattern documented for doing that. Not written
+  up as a pattern/convention anywhere yet.
+- **Live verification.** The fix is implemented and render-tested, not yet confirmed
+  against a real Traefik instance — see "Fix implemented" above for the exact
+  re-verification step.
 - **Scope beyond Rancher Desktop.** Not checked against Proxmox or any other platform
-  this repository targets — the `.localhost` special-TLD half of the problem is
-  specific to the loopback-dev-domain convention, but the Traefik ClusterIP/cert-
-  resolution half may or may not be.
+  this repository targets — the root cause (Traefik's own SNI-cert-store mechanism) is
+  almost certainly identical everywhere Traefik runs, but not independently confirmed
+  outside Rancher Desktop.
 
 ## Honest limits of what's in this document
 
