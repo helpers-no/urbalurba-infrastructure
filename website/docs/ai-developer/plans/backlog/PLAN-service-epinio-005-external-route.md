@@ -4,7 +4,13 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Implemented (PR #641) — not yet live-tested, imac's turn
+## Status: Live-verified by imac (urb-agents#2044) — one real bug found and fixed
+
+**2026-10-27**: imac tested this live on Rancher Desktop, pushed a real app, exposed it,
+confirmed the external `HostRegexp` hostname reaches it through Traefik, confirmed the
+original `apps.localhost` route keeps working simultaneously, confirmed re-running with
+the same parameters updates rather than duplicates. One real bug found along the way,
+fixed in PR #644 — see "Bug found live" below.
 
 **Goal**: give an Epinio-pushed application a tunnel-reachable external route. Epinio's
 own auto-generated per-app Ingress only answers the LAN/nip.io case (it pins Epinio's own
@@ -53,14 +59,28 @@ reusable playbook invoked per app instead.
 - A short section added to `website/docs/services/management/epinio.md` documenting the
   invocation.
 
+## Bug found live, fixed in PR #644
+
+A port templated as a leaf nested inside `kubernetes.core.k8s`'s own `definition:` dict
+(`port: "{{ epinio_route_port | int }}"`) does not survive as an int — Ansible's non-
+native templating stringifies every leaf of a structure that gets walked/reconstructed
+that way, regardless of any filter on an individual leaf. Kubernetes' own API then 400s:
+`cannot unmarshal string into ... int32`, on every route, every time. Found and verified
+live by imac: building the whole `ports`/`services` substructure as one top-level Jinja
+expression (an actual list/dict literal evaluated by Jinja itself) and referencing it as
+a single value does preserve the native type — confirmed live against the real
+Kubernetes API, both tasks `changed`, no error. Ported that exact pattern into
+`626-epinio-external-route.yml`.
+
 ## Validation
 
-**Not yet run against a live cluster** — same caveat as every PLAN in this repository
-without one. What's actually checked here: `ansible-playbook --syntax-check`, the full
-static+unit suite, and the mutation-tested static test above.
-
-**Still needed, live** (imac's side, same division of labour as every other service in
-this repository): push a real app, run the script, confirm the external hostname actually
-reaches it through Traefik/the tunnel, confirm the original LAN/nip.io route is
-unaffected, and confirm re-running with the same parameters updates rather than
-duplicates.
+**Met, live, 2026-10-27 (`urb-agents#2044`)**: imac pushed a real app (a genuine
+buildpack build), exposed it, confirmed the external `HostRegexp` hostname reaches it
+through Traefik (an arbitrary `Host` header via the same local port Rancher Desktop
+already forwards `*.localhost` through), confirmed the original `apps.localhost` route
+keeps working simultaneously, and confirmed re-running with the same parameters updates
+(`ok`, not `changed`) rather than duplicating — exactly one Service and one IngressRoute
+both times. This was run against imac's own container-local patch for the bug above, not
+the code as it stood in the repo at the time; PR #644 ports that exact verified pattern
+into the shipped file, so the shipped code now matches what was actually tested, but has
+not been independently re-run against a live cluster since.

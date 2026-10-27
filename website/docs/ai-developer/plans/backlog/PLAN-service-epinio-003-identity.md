@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Implemented — not yet live-tested, imac's turn
+## Status: Partially live-tested by imac (urb-agents#2044) — GitHub connector verified short of browser login; Authentik/Okta blocked, now fixed
 
 **Goal**: wire Epinio's own bundled Dex to up to three identity providers (GitHub,
 Authentik, Okta), each mapping its own groups/teams to namespace roles, instead of
@@ -109,15 +109,45 @@ service — this would be its first real use, and routing Epinio's own already-p
 once instead of one. Worth revisiting as a future consolidation once that generic path
 has a real, tested consumer of its own.
 
+## Bug found live, fixed in PR #644: reflector collides with Epinio's own bundled copy
+
+Epinio's own upstream Helm chart already bundles `emberstack/reflector` as a subchart
+dependency (confirmed live: release `epinio`, chart `reflector-10.0.58`), including a
+cluster-scoped `ClusterRole` literally named `reflector`. The standalone `reflector`
+service (028-setup-reflector.yml, same upstream chart, pinned `9.1.9`) tried to create a
+`ClusterRole` with that same name under a different release, and Helm correctly refused
+it. This is not a corner case — it is the exact combination this whole plan exists for
+(anyone installing Epinio, then needing the Authentik connector's cross-namespace trust,
+hits this every time). Fixed by detecting any already-running reflector controller
+cluster-wide (its own design has no release-scoped RBAC — any controller watches
+annotated Secrets cluster-wide regardless of which release deployed it) and skipping the
+standalone install when one is already present. Found live by imac; not something they
+attempted to resolve themselves (a design call, correctly left for this repo).
+
 ## Validation
 
-**Not yet run against a live cluster.** What's actually checked here:
-`ansible-playbook --syntax-check` on both new playbooks, the full static+unit suite, and
-the Jinja templates independently rendered and verified for structural correctness
-across several connector-enable combinations with Ansible's real `trim_blocks`/
-`lstrip_blocks` settings (not a bare `jinja2.Environment()`).
+**GitHub connector, met live except the interactive sign-in itself, 2026-10-27
+(`urb-agents#2044`)**: imac used a real GitHub org/team, decoded the rendered `dex-config`
+Secret directly (clientID/org/teams/redirectURI all correct, `rolesMapping` pairs `user`
+unconditionally with the matched group's `admin:<ns>` role — gotcha 5's fix genuinely
+present), confirmed Dex actually restarted and its own logs show the connector loading.
+**Not verified**: an actual interactive sign-in through GitHub's consent screen — no
+browser-automation tool was available in that environment, flagged explicitly rather than
+claimed. The "no matching group → no roles" case is sound by construction (no catch-all
+entry in the rendered `rolesMapping`) but is inference from the rendered config, not an
+observed failed login.
 
-**Still needed, live** (imac's side): deploy `reflector`, then run this playbook with
-each connector enabled in turn and in combination, and sign in through each provider —
-confirm a user with a matching group lands with exactly the mapped roles, and a user
-with no matching group lands with none (not admin by accident).
+**Authentik connector: was entirely blocked** by the reflector/Epinio collision above —
+task 11 (confirming the mirrored Secret lands) is a hard fail with no standalone
+`reflector` release installable. Not yet re-tested against the fix.
+
+**Okta connector: not attempted** — no real Okta tenant available; shares the
+Authentik-identical `insecureEnableGroups`/`insecureSkipEmailVerified` code path already
+partially exercised by template inspection.
+
+**Still needed, live**: re-run the Authentik connector now that the reflector collision
+is fixed — deploy `reflector` (or confirm Epinio's bundled copy is detected and reused),
+run this playbook with the authentik connector enabled, confirm the mirrored Secret lands
+and sign in through it, then Okta with a real tenant. Confirm a user with no matching
+group lands with none (not admin by accident) — the one piece still only checked by
+inference, not an observed failed login.

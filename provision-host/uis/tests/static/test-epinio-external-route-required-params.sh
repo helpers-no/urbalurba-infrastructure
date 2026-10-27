@@ -60,6 +60,21 @@ else
     fail "wrapper exits non-zero on missing parameter" "a missing parameter might not actually stop the script"
 fi
 
+# 🔴 urb-agents#2044 (imac, live): a port templated as a leaf nested inside the Service/
+# IngressRoute `definition:` dict does not survive as an int, `| int` notwithstanding -
+# Ansible's non-native templating stringifies every leaf of a walked/reconstructed
+# structure, and Kubernetes' API then 400s. The fix is building the whole ports/services
+# substructure as ONE top-level Jinja expression and referencing it as a single value -
+# assert that shape is still there, not a regression back to per-leaf templating.
+if grep -qF 'ports: "{{ epinio_route_service_ports }}"' <<< "$pb" \
+    && grep -qF 'services: "{{ epinio_route_ingress_services }}"' <<< "$pb" \
+    && ! grep -qE '^\s*- port: "\{\{ epinio_route_port' <<< "$pb"; then
+    pass "ports/services are one top-level expression, not per-leaf templated"
+else
+    fail "ports/services built as one top-level expression" \
+        "found live by imac: the Kubernetes API 400s on every route when port is templated as a dict leaf instead of a single top-level expression"
+fi
+
 echo ""
 echo "  Passed: $PASS  Failed: $FAIL"
 [[ "$FAIL" -eq 0 ]]

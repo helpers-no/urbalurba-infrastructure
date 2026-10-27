@@ -50,6 +50,17 @@
     epinio_route_app_name: ""
     epinio_route_namespace: ""
     epinio_route_port: ""
+    # 🔴 FOUND LIVE BY imac (urb-agents#2044): a bare {{ epinio_route_port | int }} nested
+    # inside kubernetes.core.k8s's own definition: dict does NOT survive as an int - Ansible's
+    # non-native Jinja2 templating stringifies every leaf of a YAML-authored structure that
+    # gets walked/reconstructed that way, regardless of any filter on an individual leaf.
+    # Kubernetes' own API then 400s: "cannot unmarshal string into ... int32". Fix, verified
+    # live: build the WHOLE substructure as one top-level Jinja expression here (an actual
+    # Python list/dict literal evaluated by Jinja itself, not YAML structure with templated
+    # leaves), then reference it below as a single value, never re-nested inside more
+    # YAML-authored structure.
+    epinio_route_service_ports: "{{ [{'port': epinio_route_port | int, 'targetPort': epinio_route_port | int}] }}"
+    epinio_route_ingress_services: "{{ [{'name': epinio_route_app_name + '-external', 'port': epinio_route_port | int}] }}"
 
   tasks:
     - name: All three parameters must be supplied, never defaulted
@@ -101,9 +112,7 @@
             selector:
               app.kubernetes.io/name: "{{ epinio_route_app_name }}"
               app.kubernetes.io/part-of: "{{ epinio_route_namespace }}"
-            ports:
-              - port: "{{ epinio_route_port }}"
-                targetPort: "{{ epinio_route_port }}"
+            ports: "{{ epinio_route_service_ports }}"
 
     - name: IngressRoute, the same HostRegexp convention every other externally-exposed UIS service uses
       kubernetes.core.k8s:
@@ -120,9 +129,7 @@
             routes:
               - kind: Rule
                 match: "HostRegexp(`{{ epinio_route_app_name }}\\..+`)"
-                services:
-                  - name: "{{ epinio_route_app_name }}-external"
-                    port: "{{ epinio_route_port }}"
+                services: "{{ epinio_route_ingress_services }}"
 
     - name: Report
       ansible.builtin.debug:

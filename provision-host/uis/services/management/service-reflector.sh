@@ -16,7 +16,12 @@ SCRIPT_CATEGORY="MANAGEMENT"
 # === UIS-Specific (Optional) ===
 SCRIPT_PLAYBOOK="028-setup-reflector.yml"
 SCRIPT_MANIFEST=""
-SCRIPT_CHECK_COMMAND="kubectl get pods -n reflector -l app.kubernetes.io/name=reflector --no-headers 2>/dev/null | grep -q Running"
+# 🔴 CLUSTER-WIDE (-A), not scoped to the "reflector" namespace — found live (urb-agents#2044):
+# reflector has no release-scoped RBAC, and Epinio's own Helm chart already bundles the same
+# chart as a subchart dependency. 028-setup-reflector.yml detects that and skips installing a
+# second one; this check must agree, or `uis status`/`uis deploy` would report "not deployed"
+# even though the capability this service exists for is already satisfied.
+SCRIPT_CHECK_COMMAND="kubectl get pods -A -l app.kubernetes.io/name=reflector --no-headers 2>/dev/null | grep -q Running"
 SCRIPT_REMOVE_PLAYBOOK="028-remove-reflector.yml"
 SCRIPT_REQUIRES=""
 SCRIPT_PRIORITY="23"
