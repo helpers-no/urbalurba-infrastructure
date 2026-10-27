@@ -740,7 +740,7 @@
     ,"docs": "/docs/services/management/reflector"
     ,"playbook": "028-setup-reflector.yml"
     ,"priority": 23
-    ,"checkCommand": "kubectl get pods -n reflector -l app.kubernetes.io/name=reflector --no-headers 2>/dev/null | grep -q Running"
+    ,"checkCommand": "kubectl get pods -A -l app.kubernetes.io/name=reflector --no-headers 2>/dev/null | grep -q Running"
     ,"removePlaybook": "028-remove-reflector.yml"
     ,"helmChart": "emberstack/reflector"
     ,"namespace": "reflector"
