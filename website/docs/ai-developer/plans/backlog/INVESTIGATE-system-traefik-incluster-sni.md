@@ -65,6 +65,61 @@ verification of another in-cluster `HostRegexp`-routed service, from inside the 
 over its real hostname. Nothing before it needed this exact combination, which is why a
 26-day-old working route (`argocd.localhost`) never revealed the same underlying gap.
 
+## Correction to the original finding, and a sharper hypothesis
+
+The original report's "confirmed not new" evidence — the identical probe against
+`argocd.localhost` getting the same wrong cert — is **not actually corroborating
+evidence of a platform-wide bug**. Checked directly: `manifests/221-argocd-ingressroute.yaml`
+has exactly one `IngressRoute`, on the plain `web` entrypoint only — there is no
+`websecure`/TLS route for ArgoCD at all, so any HTTPS/SNI probe against it falling
+through to Traefik's default certificate is completely expected, not surprising. This
+doesn't mean the underlying finding is wrong — Authentik's own TLS route genuinely fails
+the same way, and that's the real data point — but the "26-day-old working route" framing
+overstated how much independent confirmation that comparison actually provides.
+
+**What Traefik's own documentation says, confirmed, not assumed:** TLS certificate
+selection happens purely by matching the client's SNI against Traefik's own certificate
+store — HTTP router rules (`Host`/`HostRegexp`) play no part in that step at all, since
+they're only evaluated after the TLS handshake completes. An SNI with no matching
+certificate in the store falls back to Traefik's generated default
+("TRAEFIK DEFAULT CERT"). Authentik's own certificate (`076-authentik-server-tls-
+certificate.yaml.j2`) has `authentik.localhost` as one of its `dnsNames` — so on this
+model, the SNI sent should match exactly, and the real cert should be selected
+regardless of which Service (ClusterIP or LoadBalancer) physically delivered the TCP
+connection to Traefik's listener — Traefik itself has no visibility into which Service
+was used; it only sees a port and a TLS ClientHello.
+
+This narrows the real question considerably: either (a) Traefik's cert store never
+actually registered `authentik-server-tls` for that SNI at all (in which case the
+in-cluster-vs-host-side distinction is a red herring too, and the real cert may never
+have been served correctly to **anyone**, discovered now only because Dex is the first
+client to validate strictly rather than click through a browser warning), or (b)
+something about the ClusterIP-origin connection path specifically prevents Traefik's SNI
+matching from working even though the same cert is correctly registered for connections
+arriving via the LoadBalancer path. These have different fixes and are not yet
+distinguished.
+
+**One more relevant fact, confirmed from this repo's own
+`ansible/playbooks/003-setup-traefik.yml`**: on Rancher Desktop (k3s), Traefik is **not**
+installed by this repository's own Helm values at all — "k3s already manages Traefik via
+a HelmChart CR. This playbook detects that and skips the helm install." `003-traefik-
+config.yaml`'s `ports.websecure.port: 8443` documents what k3s's bundled chart is
+expected to already match (for AKS parity), but is not itself applied on Rancher
+Desktop. Whatever Traefik is actually running there is whatever k3s's own default
+HelmChart CR currently ships — worth confirming directly rather than assumed identical.
+
+**The one diagnostic that would cleanly distinguish (a) from (b), not yet run**: does a
+plain host-side `curl`/`openssl s_client -servername authentik.localhost` (reaching
+Traefik via Rancher Desktop's own `*.localhost` port-forwarding to the LoadBalancer
+Service — the same path a real browser already uses successfully) get the *correct*
+certificate, or the same wrong default? If host-side also gets the wrong cert, this is
+(a) — a cert-store registration problem, nothing to do with being in-cluster at all. If
+host-side gets the right cert and only the in-cluster ClusterIP path gets the wrong one,
+this is (b) — something specific to that connection path. Also worth collecting while at
+it: `kubectl logs -n kube-system -l app.kubernetes.io/name=traefik` grepped for
+`authentik` or TLS-cert-loading errors, and confirmation of which Traefik
+(image/chart/version) is actually running.
+
 ## What's not decided here
 
 - **Why** Traefik's ClusterIP serves its own default cert instead of a `HostRegexp`-
