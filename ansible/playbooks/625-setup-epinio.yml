@@ -6,13 +6,14 @@
 # ArgoCD — see website/docs/ai-developer/plans/backlog/INVESTIGATE-service-epinio-deploy-path.md
 # for the decision record (urb-agents#1909/#1910/#1915).
 #
-# SCOPE OF THIS PLAYBOOK — PLAN-service-epinio-001 ONLY:
-# installs Epinio with its OWN bundled defaults for identity (basic auth, no Dex/OIDC yet),
-# object storage (bundled SeaweedFS) and container registry (bundled) — none of that is wired to
-# this platform's own identity providers or Garage object store here. That is deliberately
-# deferred to PLAN-service-epinio-003-identity (Dex/OIDC) and a later PLAN for Garage as the S3
-# backend — see the INVESTIGATE doc's "Next steps". This playbook's only job is: does Epinio
-# install and come up healthy against this platform's existing Traefik.
+# SCOPE OF THIS PLAYBOOK:
+# installs Epinio with its OWN bundled defaults for identity (basic auth, no Dex/OIDC yet) and
+# container registry (bundled) — neither is wired to this platform's own identity providers
+# here. That is deliberately deferred to PLAN-service-epinio-003-identity (Dex/OIDC) — see the
+# INVESTIGATE doc's "Next steps". Object storage is no longer deferred: this playbook wires
+# Epinio's S3 backend to this platform's own Garage install instead of the chart's bundled
+# SeaweedFS (PLAN-service-epinio-004-object-storage) — see that Helm-values task's own comment
+# below for why and how.
 #
 # 🔵 Chart repo URL/name and version (1.14.3) match what the Epinio PoC actually installed and
 # proved working live, 2026-10-19 (urb-agents#1909 gate 1, "verified live 2026-10-19 (helm search
@@ -46,6 +47,12 @@
     # DEFAULT_EPINIO_DOMAIN, forwarded automatically from
     # provision-host/uis/templates/secrets-templates/00-common-values.env.template.
     default_epinio_domain: "apps.localhost"
+    # Garage runs as a separate, shared platform service (047-setup-garage.yml) — this is
+    # its namespace, not epinio_namespace above. Same literal "default" that playbook
+    # itself uses, not derived, since nothing exposes it as a variable today.
+    epinio_garage_namespace: "default"
+    epinio_garage_bucket: "epinio"
+    epinio_garage_key_name: "epinio"
 
   tasks:
     - name: 1. Check if required variables are provided
@@ -110,6 +117,107 @@
         fail_msg: "FATAL: urbalurba-secrets not found in {{ epinio_namespace }} namespace. Secrets must be applied before deploying Epinio."
         success_msg: "urbalurba-secrets found in {{ epinio_namespace }} namespace"
 
+    # ── Garage as Epinio's S3 backend (PLAN-service-epinio-004-object-storage) ──────────────
+    # Replaces the chart's bundled SeaweedFS with this platform's own, already-running Garage
+    # install (047-setup-garage.yml) — one fewer object-store implementation to operate, and
+    # Epinio's app data lands in the same place everything else's does.
+    #
+    # 🔴 A DEDICATED KEY, NEVER GARAGE_ACCESS_KEY/SECRET_KEY. Those are the bootstrap/
+    # --default-bucket key, and 047-setup-garage.yml denies it create-bucket permission right
+    # after setup (urb-agents#1802) — by design, so no second consumer can mint itself a new
+    # bucket with it. EPINIO_GARAGE_ACCESS_KEY/SECRET_KEY (00-master-secrets.yml.template) are
+    # imported here as a NEW key, scoped to its own bucket only — same shape the bootstrap key
+    # originally had, before it was narrowed.
+    - name: 8c. Read Garage connection details and Epinio's dedicated key from urbalurba-secrets
+      ansible.builtin.set_fact:
+        epinio_garage_host: "{{ (epinio_secrets.resources[0].data.GARAGE_HOST | default('') | b64decode) }}"
+        epinio_garage_port: "{{ (epinio_secrets.resources[0].data.GARAGE_PORT | default('') | b64decode) }}"
+        epinio_garage_access_key: "{{ (epinio_secrets.resources[0].data.EPINIO_GARAGE_ACCESS_KEY | default('') | b64decode) }}"
+        epinio_garage_secret_key: "{{ (epinio_secrets.resources[0].data.EPINIO_GARAGE_SECRET_KEY | default('') | b64decode) }}"
+      no_log: true
+
+    - name: 8d. Fail early if the Garage credentials are missing
+      ansible.builtin.fail:
+        msg: |
+          EPINIO_GARAGE_ACCESS_KEY / EPINIO_GARAGE_SECRET_KEY / GARAGE_HOST / GARAGE_PORT not
+          found in urbalurba-secrets (namespace {{ epinio_namespace }}).
+
+          Fix:
+            ./uis secrets generate
+            ./uis secrets apply
+            ./uis deploy epinio
+      when: >
+        epinio_garage_host | length == 0 or epinio_garage_port | length == 0 or
+        epinio_garage_access_key | length == 0 or epinio_garage_secret_key | length == 0
+
+    - name: 8e. Find the Garage pod
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ epinio_garage_namespace }}"
+        label_selectors:
+          - "app=garage"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: epinio_garage_pods
+
+    - name: 8f. Fail if Garage is not deployed — it is a hard prerequisite for this step
+      ansible.builtin.assert:
+        that:
+          - epinio_garage_pods.resources | length > 0
+        fail_msg: "Garage pod not found in namespace {{ epinio_garage_namespace }}. Deploy it first: ./uis deploy garage"
+        quiet: true
+
+    - name: 8g. Check whether Epinio's dedicated key already exists (idempotency)
+      ansible.builtin.command: >
+        kubectl exec -n {{ epinio_garage_namespace }} {{ epinio_garage_pods.resources[0].metadata.name }}
+        -- /garage key list
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: epinio_garage_key_list
+      changed_when: false
+
+    # garage key import <key_id> <secret_key> -n <name> --yes — exact flags confirmed from
+    # Garage's own CLI source (src/garage/cli/structs.rs KeyImportOpt, tag v2.3.0), not guessed.
+    - name: 8h. Import Epinio's dedicated Garage key, if it doesn't exist yet
+      ansible.builtin.command: >
+        kubectl exec -n {{ epinio_garage_namespace }} {{ epinio_garage_pods.resources[0].metadata.name }}
+        -- /garage key import
+        {{ epinio_garage_access_key }} {{ epinio_garage_secret_key }}
+        -n {{ epinio_garage_key_name }} --yes
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: epinio_garage_key_name not in epinio_garage_key_list.stdout
+      changed_when: true
+      no_log: true
+
+    - name: 8i. Check whether Epinio's bucket already exists (idempotency)
+      ansible.builtin.command: >
+        kubectl exec -n {{ epinio_garage_namespace }} {{ epinio_garage_pods.resources[0].metadata.name }}
+        -- /garage bucket list
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: epinio_garage_bucket_list
+      changed_when: false
+
+    - name: 8j. Create Epinio's bucket, if it doesn't exist yet
+      ansible.builtin.command: >
+        kubectl exec -n {{ epinio_garage_namespace }} {{ epinio_garage_pods.resources[0].metadata.name }}
+        -- /garage bucket create {{ epinio_garage_bucket }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: epinio_garage_bucket not in epinio_garage_bucket_list.stdout
+      changed_when: true
+
+    # Idempotent by nature (setting a permission twice is a no-op) — always run, no existence
+    # check needed, matching 047-setup-garage.yml's own "deny --create-bucket" task shape.
+    - name: 8k. Grant the dedicated key read+write on Epinio's bucket, scoped to that bucket only
+      ansible.builtin.command: >
+        kubectl exec -n {{ epinio_garage_namespace }} {{ epinio_garage_pods.resources[0].metadata.name }}
+        -- /garage bucket allow
+        --key {{ epinio_garage_key_name }} --read --write {{ epinio_garage_bucket }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      changed_when: true
+
     # 🔴 WITHOUT global.customTlsIssuer, EPINIO ISSUES FROM ITS OWN BUNDLED CA, NOT uis-ca.
     #
     # `certManager.enabled: true` only tells the chart "cert-manager's controller/CRDs
@@ -131,12 +239,17 @@
     # the two `letsencrypt-*` ones on `global.tlsIssuer`) — harmless, dead resources once
     # redirected here, not a bug to chase.
     #
-    # ⚠️ Dex's own certificate (not relevant to THIS install — Dex/OIDC is PLAN-004-identity,
+    # ⚠️ Dex's own certificate (not relevant to THIS install — Dex/OIDC is PLAN-service-epinio-003-identity,
     # not enabled by this playbook) has its OWN gap worth recording before anyone builds
     # that PLAN blind: `templates/certificates/dex-certificate.yaml`'s fallback path (fired
     # when `ingress.tls.enabled` is false) hardcodes `issuerRef.name: epinio-ca` and does
     # NOT read `customTlsIssuer` at all — an upstream chart inconsistency between this
     # Certificate and Epinio's own, not something this setting fixes for Dex too.
+    # 🔴 seaweedfs.enabled: false removes the chart's bundled object store entirely; the s3:
+    # block below points Epinio at this platform's own Garage install instead, using the
+    # dedicated key imported/scoped above (8g-8k) — never the account-wide bootstrap key.
+    # region/useSSL match roles/garage's own convention (s3_region in its garage.toml, plain
+    # HTTP for every other in-cluster call this platform makes) — not AWS-meaningful.
     - name: 9. Write temporary Helm values
       ansible.builtin.copy:
         dest: /tmp/epinio-values.yaml
@@ -151,7 +264,17 @@
             ingressClassName: traefik
           ingress:
             ingressClassName: traefik
+          seaweedfs:
+            enabled: false
+          s3:
+            endpoint: "{{ epinio_garage_host }}:{{ epinio_garage_port }}"
+            bucket: "{{ epinio_garage_bucket }}"
+            region: "garage"
+            accessKeyID: "{{ epinio_garage_access_key }}"
+            secretAccessKey: "{{ epinio_garage_secret_key }}"
+            useSSL: false
         mode: '0600'
+      no_log: true
 
     - name: 10. Deploy Epinio using Helm
       ansible.builtin.command: >
@@ -231,8 +354,10 @@
           - "  (Epinio's own chart convention for its default admin credential — confirm the exact"
           - "  secret name/label against a real install; not verified live here.)"
           - ""
-          - "📦 Storage/registry: Epinio's own bundled defaults (SeaweedFS, bundled registry) —"
-          - "  NOT wired to this platform's Garage object store or Forgejo registry yet."
+          - "📦 Storage: wired to this platform's own Garage install (PLAN-service-epinio-004-"
+          - "  object-storage) — bucket '{{ epinio_garage_bucket }}', its own dedicated key, not"
+          - "  the chart's bundled SeaweedFS."
+          - "📦 Registry: still Epinio's own bundled default — NOT wired to Forgejo's registry yet."
           - ""
           - "🔧 Troubleshooting:"
           - "• Check pods: kubectl get pods -n {{ epinio_namespace }}"
