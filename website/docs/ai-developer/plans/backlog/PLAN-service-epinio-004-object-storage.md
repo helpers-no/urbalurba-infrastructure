@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Implemented — not yet live-tested, imac's turn
+## Status: Live-verified by imac (urb-agents#2044) — one real bug found and fixed
 
 **Goal**: replace the Epinio chart's bundled SeaweedFS object store with this platform's
 own Garage install — one fewer object-store implementation to operate, and Epinio's app
@@ -56,14 +56,29 @@ its own bucket only.
   restored both.
 - `website/docs/services/management/epinio.md` updated with a short Storage section.
 
+## Bug found live, fixed in PR #644
+
+The `epinio` namespace's own `urbalurba-secrets` block in
+`00-master-secrets.yml.template` was still a stale, never-updated empty `stringData: {}`
+placeholder — a leftover from before this plan existed, left unpopulated when this plan
+added `625-setup-epinio.yml`'s own read of `GARAGE_HOST`/`GARAGE_PORT`/
+`EPINIO_GARAGE_ACCESS_KEY`/`EPINIO_GARAGE_SECRET_KEY` from exactly this namespace's own
+copy of the secret (a separate object from the "default" namespace's copy of the same
+key names — confirmed by every other namespace block in that file carrying its own real
+`stringData`). `uis deploy epinio` failed outright before ever reaching Garage. Found
+live by imac, patched container-locally to continue testing, reported as a separate bug
+rather than silently worked around; populated for real in PR #644.
+
 ## Validation
 
-**Not yet run against a live cluster.** What's actually checked here:
-`ansible-playbook --syntax-check`, the full static+unit suite, and the two mutation tests
-above.
-
-**Still needed, live** (imac's side): deploy Garage then Epinio fresh, confirm the key
-import/bucket create/allow sequence actually succeeds against a real Garage pod (the
-exact CLI flags are confirmed from source, not from running them), push a real app, and
-confirm its data actually lands in the `epinio` bucket rather than silently falling back
-to a bundled store.
+**Met, live, 2026-10-27 (`urb-agents#2044`)**, once the bug above was worked around:
+`uis deploy epinio` ran the whole Garage sequence clean — imported Epinio's dedicated
+key, created the `epinio` bucket, granted read+write, all idempotently (a full re-deploy
+produced zero duplicate keys/buckets, confirmed directly via `garage key list`/`bucket
+list`, not just the playbook's own "changed" count). Pushed a real app — its bucket
+genuinely received real data (`garage bucket info epinio`: 0 B/0 objects before, 3.1
+kB/1 object after). Decoded `epinio-s3-connection-details` directly: real endpoint, real
+dedicated key, not the bootstrap one. This was run against imac's own container-local
+patch for the bug above, not the code as it stood in the repo at the time; PR #644 makes
+that same fix for real, so the shipped code now matches what was actually tested, but
+has not been independently re-run against a live cluster since.

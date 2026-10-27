@@ -55,15 +55,42 @@
       ansible.builtin.command: helm repo update
       changed_when: false
 
-    - name: 6. Create reflector namespace if it doesn't exist
+    # 🔴 FOUND LIVE BY imac (urb-agents#2044): Epinio's own upstream Helm chart already
+    # bundles emberstack/reflector as a subchart dependency (confirmed live: release
+    # "epinio", chart reflector-10.0.58), including a CLUSTER-SCOPED ClusterRole literally
+    # named "reflector". A standalone install of the SAME chart under a different release
+    # name tries to create a ClusterRole with that same name and Helm correctly refuses it
+    # ("invalid ownership metadata... must equal 'epinio'"). This is not a corner case - it
+    # is the exact combination this service exists for (Epinio + Dex/Authentik needing
+    # cross-namespace cert trust). reflector has no CRDs and no release-scoped RBAC of its
+    # own design - any running controller watches annotated Secrets CLUSTER-WIDE regardless
+    # of which release deployed it, so Epinio's own bundled instance already satisfies this
+    # service's whole purpose once Epinio is installed. Detecting it and skipping avoids the
+    # collision entirely rather than fighting over the resource name.
+    - name: 6. Check for a reflector controller already running anywhere in the cluster
+      ansible.builtin.command: >
+        kubectl get pods -A -l app.kubernetes.io/name=reflector
+        -o jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: existing_reflector_pods
+      changed_when: false
+
+    - name: 7. Record whether reflector is already provided
+      ansible.builtin.set_fact:
+        reflector_already_present: "{{ (existing_reflector_pods.stdout_lines | default([])) | length > 0 }}"
+        reflector_existing_pod: "{{ (existing_reflector_pods.stdout_lines | default(['']))[0] }}"
+
+    - name: 8. Create reflector namespace if it doesn't exist (only if not already provided)
       ansible.builtin.shell: kubectl create namespace {{ reflector_namespace }} --dry-run=client -o yaml | kubectl apply -f -
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: namespace_result
       changed_when: namespace_result.rc == 0
       failed_when: namespace_result.rc != 0
+      when: not reflector_already_present
 
-    - name: 7. Deploy kubernetes-reflector via Helm
+    - name: 9. Deploy kubernetes-reflector via Helm (only if not already provided)
       ansible.builtin.command: >
         helm upgrade --install reflector {{ reflector_chart }}
         --namespace {{ reflector_namespace }}
@@ -73,11 +100,11 @@
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: reflector_result
       changed_when: true
+      when: not reflector_already_present
 
-    - name: 8. Wait for the reflector controller to be ready
+    - name: 10. Wait for a reflector controller to be ready — the one just installed, or the one already there
       kubernetes.core.k8s_info:
         kind: Pod
-        namespace: "{{ reflector_namespace }}"
         label_selectors:
           - "app.kubernetes.io/name=reflector"
         kubeconfig: "{{ merged_kubeconf_file }}"
@@ -89,21 +116,20 @@
         reflector_pods.resources[0].status.phase == "Running" and
         reflector_pods.resources[0].status.containerStatuses[0].ready == true
 
-    - name: 9. Display final deployment status
+    - name: 11. Display final deployment status
       ansible.builtin.debug:
-        msg:
-          - "==============================================="
-          - "🪞 kubernetes-reflector Deployment Status"
-          - "==============================================="
-          - ""
-          - "✅ SUCCESS - kubernetes-reflector installed and ready"
-          - ""
-          - "Mirrors a Secret/ConfigMap once it carries:"
-          - "  reflector.v1.k8s.emberstack.com/reflection-allowed: \"true\""
-          - "  reflector.v1.k8s.emberstack.com/reflection-auto-enabled: \"true\""
-          - "  reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: \"<target-ns>\""
-          - ""
-          - "🔧 Troubleshooting:"
-          - "• Check pods: kubectl get pods -n {{ reflector_namespace }}"
-          - "• Check logs: kubectl logs -n {{ reflector_namespace }} -l app.kubernetes.io/name=reflector"
-          - "==============================================="
+        msg: >-
+          {% if reflector_already_present %}
+          ✅ Already provided — a reflector controller is already running at
+          {{ reflector_existing_pod }} (not this service's own release; most likely
+          Epinio's own bundled copy). Skipped installing a second one under the
+          "{{ reflector_namespace }}" release to avoid the ClusterRole collision found
+          live (urb-agents#2044) — reflector has no release-scoped RBAC, so the existing
+          controller already covers this service's whole purpose.
+          {% else %}
+          ✅ SUCCESS - kubernetes-reflector installed and ready. Mirrors a Secret/
+          ConfigMap once it carries reflector.v1.k8s.emberstack.com/reflection-allowed:
+          "true" (plus reflection-auto-enabled/reflection-auto-namespaces). Troubleshoot
+          with: kubectl get pods -n {{ reflector_namespace }} / kubectl logs -n
+          {{ reflector_namespace }} -l app.kubernetes.io/name=reflector
+          {% endif %}
