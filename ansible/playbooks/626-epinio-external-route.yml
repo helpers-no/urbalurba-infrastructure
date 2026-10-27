@@ -1,0 +1,135 @@
+# File: ansible/playbooks/626-epinio-external-route.yml
+#
+# Description:
+# Gives one Epinio-pushed application a stable, tunnel-reachable external route — the
+# generic form of a mechanism proven live on a lab test cluster (urb-agents#1909 gate 3,
+# migrated via urb-agents#2040). Epinio's own auto-generated per-app Ingress only answers
+# the LAN/nip.io case (it pins Epinio's own `global.domain` on the TLS `websecure`
+# entrypoint); this adds the same HostRegexp convention every other externally-exposed UIS
+# service already uses (grep any `manifests/*-ingressroute*.yaml` for `HostRegexp` to see
+# the pattern), as a SEPARATE resource alongside Epinio's own Ingress, not a replacement
+# for it - the LAN route keeps working exactly as it did before.
+#
+# Why this is a playbook invoked per app, not a manifest shipped with the image: every
+# other HostRegexp IngressRoute in this repo belongs to one fixed, known-at-build-time
+# service (neko, dagster, grafana, ...). An Epinio app's name is chosen by whoever runs
+# `epinio push`, at push time - there is no fixed name to bake into a shipped manifest.
+# This playbook is the reusable mechanism; `scripts/epinio/epinio-expose-route.sh` is the
+# documented way an operator actually runs it.
+#
+# Why this doesn't reference Epinio's own auto-created Service directly: that Service's
+# name carries a hash suffix that is not guaranteed stable across every future push of the
+# same app (proven live during the PoC: confirmed unstable risk, not worth hardcoding).
+# This creates its own stable Service instead, selecting the app's pods by Epinio's own
+# public identity labels (`app.kubernetes.io/name` / `app.kubernetes.io/part-of`) - the one
+# part of an Epinio app that has to stay constant for Epinio's own machinery to keep
+# working at all.
+#
+# Idempotent: re-running with the same three parameters updates the existing Service and
+# IngressRoute in place rather than creating duplicates (both are named directly from
+# `epinio_route_app_name`, not generated).
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/626-epinio-external-route.yml \
+#     -e epinio_route_app_name=<app> -e epinio_route_namespace=<org> -e epinio_route_port=<port>
+#
+# Prerequisites:
+# - The app must already exist (a prior `epinio push`) in epinio_route_namespace, carrying
+#   Epinio's own app.kubernetes.io/name and app.kubernetes.io/part-of labels.
+# - Traefik's plain `web` (port 80) entrypoint must already be reachable from wherever
+#   "external" means for this install (a Cloudflare tunnel pointed at
+#   http://traefik.kube-system.svc.cluster.local:80, same as every other HostRegexp route
+#   here) - this playbook does not configure the tunnel itself.
+
+- name: Epinio external route for one pushed app
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    epinio_route_app_name: ""
+    epinio_route_namespace: ""
+    epinio_route_port: ""
+
+  tasks:
+    - name: All three parameters must be supplied, never defaulted
+      ansible.builtin.assert:
+        that:
+          - epinio_route_app_name | length > 0
+          - epinio_route_namespace | length > 0
+          - epinio_route_port | string | length > 0
+        fail_msg: >-
+          epinio_route_app_name, epinio_route_namespace and epinio_route_port are all
+          required (-e on the command line, or via scripts/epinio/epinio-expose-route.sh).
+          There is no safe default for any of the three - an Epinio app's name, org/
+          namespace and listening port are all chosen by whoever pushed it, not by this
+          repository.
+        quiet: true
+
+    - name: Confirm the app actually exists with Epinio's own identity labels, before routing to it
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ epinio_route_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name={{ epinio_route_app_name }}"
+      register: epinio_route_pods
+
+    - name: Refuse if no matching pod exists yet
+      ansible.builtin.assert:
+        that:
+          - epinio_route_pods.resources | length > 0
+        fail_msg: >-
+          No pod in namespace '{{ epinio_route_namespace }}' carries the label
+          app.kubernetes.io/name={{ epinio_route_app_name }}. Push the app first
+          (`epinio push ...`) - this playbook routes to an app that already exists, it
+          does not create one.
+        quiet: true
+
+    - name: Stable Service, selecting the app's pods by Epinio's own identity labels (survives redeploys)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "{{ epinio_route_app_name }}-external"
+            namespace: "{{ epinio_route_namespace }}"
+            labels:
+              app.kubernetes.io/managed-by: ansible
+          spec:
+            selector:
+              app.kubernetes.io/name: "{{ epinio_route_app_name }}"
+              app.kubernetes.io/part-of: "{{ epinio_route_namespace }}"
+            ports:
+              - port: "{{ epinio_route_port }}"
+                targetPort: "{{ epinio_route_port }}"
+
+    - name: IngressRoute, the same HostRegexp convention every other externally-exposed UIS service uses
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: "{{ epinio_route_app_name }}-external"
+            namespace: "{{ epinio_route_namespace }}"
+          spec:
+            entryPoints:
+              - web
+            routes:
+              - kind: Rule
+                match: "HostRegexp(`{{ epinio_route_app_name }}\\..+`)"
+                services:
+                  - name: "{{ epinio_route_app_name }}-external"
+                    port: "{{ epinio_route_port }}"
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ epinio_route_app_name }} is now routed on any hostname matching
+          '{{ epinio_route_app_name }}.*' via Traefik's plain web entrypoint (port 80) -
+          reachable through whatever already forwards to Traefik externally (a Cloudflare
+          tunnel, same convention as every other HostRegexp route in this repository). The
+          app's original LAN/nip.io Ingress from Epinio itself is untouched and keeps
+          working as before.
