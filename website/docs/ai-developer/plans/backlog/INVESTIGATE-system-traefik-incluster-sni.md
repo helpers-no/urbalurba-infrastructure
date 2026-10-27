@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — the PR #647 fix did NOT resolve it; original root cause claim retracted
+## Status: Backlog — root cause narrowed precisely via live debug data, not yet found; likely needs upstream Traefik input or Terje
 
 **Goal**: figure out how an in-cluster workload reaches another `HostRegexp`-routed
 service through Traefik with a certificate that actually validates under strict TLS
@@ -194,27 +194,41 @@ resolution per source, even though that's not this symptom) but **not re-claimed
 fix** — see the retraction above. Render-tested and mutation-tested at the time it was
 written; that testing was real, the diagnosis behind it was wrong.
 
-## What's actually needed next: live instrumentation, not another source-read
+## Root cause narrowed precisely with live debug data (`urb-agents#2046`, round 2) — not yet found
 
-Source-reading alone cannot resolve this further — the certificate-loading and
-SNI-matching code paths read as if they should work regardless of router rule shape,
-and yet demonstrably don't, live, after a full restart. The next useful step is live
-data, specifically:
+imac bumped Traefik to `--log.level=DEBUG`, redeployed Authentik fresh, and captured and
+properly parsed (as real JSON, not substring-grepped) the `Configuration received` debug
+dump across multiple snapshots, including one with Authentik's `IngressRoute` live.
 
-- Confirm the actual `authentik-server-tls` Secret's `tls.crt` content/age matches
-  exactly what the `Certificate` resource's own status most recently reports as issued
-  (rules out a stale or mismatched Secret, independent of everything checked so far).
-- Traefik's own debug-level logs (`--log.level=DEBUG`, or equivalent via the k3s
-  HelmChart CR's values) around startup, grepped for the certificate/secret name —
-  Traefik logs its own TLS certificate loading and domain registration at debug level,
-  which would show directly whether `authentik.localhost` actually became a key in its
-  certificate store at all, rather than inferring it from source.
-- Whether Traefik's dashboard/API is reachable at all on this install
-  (`ingressRoute.dashboard.enabled` is `false` in this repo's own `003-traefik-config.yaml`,
-  though that file doesn't even apply on Rancher Desktop per k3s managing its own
-  Traefik — worth checking whether the k3s-bundled one has its API enabled, which would
-  let someone query `/api/http/routers`/certificates directly without a log-level
-  change at all).
+**Everything upstream of certificate loading is confirmed correct:**
+- The router itself is exactly right: `rule: HostRegexp(...)`, `tls.domains:
+  [{main: authentik.localhost, ...}]` present as configured.
+- The `Certificate` resource's status and the `authentik-server-tls` Secret's own
+  `creationTimestamp` are **identical** — not a stale or mismatched Secret.
+- Traefik's own `ClusterRole` has `get/list/watch` on `secrets` cluster-wide, and there
+  are zero RBAC/forbidden errors anywhere in the debug log.
+
+**And yet: the top-level `tls` section of Traefik's own dynamic configuration is a bare
+`{}` in every single captured snapshot — no `certificates` key at all, empty or
+otherwise, even with the IngressRoute live.** The API/dashboard route imac tried first
+(this doc's own earlier suggestion) wasn't actually reachable — `--api.insecure` isn't
+set and nothing routes to it — so the debug-log route was the only avenue, and it gave a
+direct, unambiguous answer: Traefik's Kubernetes CRD provider, in this cluster, never
+actually converts an `IngressRoute`'s `tls.secretName` into a loaded certificate — not
+for Authentik specifically, for *anything*, since this is the only route in the cluster
+that has ever tried to declare one. The step between "IngressRoute declares a
+secretName" and "Traefik's `tls.certificates` array gets an entry" simply doesn't
+happen, with no error logged about it anywhere.
+
+**Where this leaves it**: narrowed as far as is practical from inside the cluster or
+from reading Traefik's own source. This now looks like either a genuine bug/limitation
+specific to k3s's own bundled Traefik build (`rancher/mirrored-library-traefik:3.7.4`)
+or something about how k3s wires its CRD provider that differs from a standalone
+Traefik install — not something either imac or I can keep narrowing without either
+filing a precise upstream report (the finding above is specific and reproducible enough
+to be a real bug report, not a vague "TLS doesn't work") or getting input from someone
+with deeper Traefik/k3s internals experience. Flagging this rather than attempting a
+third guess-fix.
 
 ## Scope beyond Rancher Desktop
 
