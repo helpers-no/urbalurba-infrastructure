@@ -1,0 +1,109 @@
+---
+# file: ansible/playbooks/028-setup-reflector.yml
+# Description:
+# Install kubernetes-reflector - mirrors an annotated Secret/ConfigMap across namespaces,
+# re-synced automatically on every change. Kubernetes volumes cannot cross namespaces on
+# their own; this is what lets a workload in one namespace trust a certificate issued by
+# cert-manager in a different one.
+#
+# First consumer: Epinio's Dex connector (namespace: epinio) trusting Authentik's own TLS
+# certificate (namespace: authentik) - see 627-setup-epinio-identity.yml. Installed as a
+# separate, reusable service rather than bundled into that one playbook, since any future
+# cross-namespace trust need can depend on this the same way.
+#
+# Usage:
+# ansible-playbook playbooks/028-setup-reflector.yml -e target_host="rancher-desktop"
+
+- name: Install kubernetes-reflector
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    reflector_namespace: "reflector"
+    reflector_chart: "emberstack/reflector"
+    reflector_repo_url: "https://emberstack.github.io/helm-charts"
+    installation_timeout: 300
+    # Latest stable (non-"-develop") chart version confirmed live against the repo's own
+    # index.yaml 2026-10-27 - chart version and appVersion match 1:1 for this chart.
+    reflector_chart_version: "9.1.9"
+
+  tasks:
+    - name: 1. Check if required variables are provided
+      ansible.builtin.fail:
+        msg: "The variable 'target_host' is mandatory. Use -e target_host=your_host_name to specify it."
+      when: target_host is not defined
+
+    - name: 2. Print playbook description
+      ansible.builtin.debug:
+        msg: "Installing kubernetes-reflector on Kubernetes context: {{ target_host }}"
+
+    - name: 3. Check existing Helm repositories
+      ansible.builtin.command: helm repo list
+      register: helm_repo_list
+      changed_when: false
+
+    - name: 4. Add the emberstack Helm repository if needed
+      kubernetes.core.helm_repository:
+        name: "emberstack"
+        repo_url: "{{ reflector_repo_url }}"
+      when: "'emberstack' not in helm_repo_list.stdout"
+
+    # Plain `helm repo update` — no `--force-update` (that flag exists on `helm repo add`
+    # only; 026-setup-external-secrets.yml's own comment records the live-confirmed
+    # failure mode of assuming otherwise).
+    - name: 5. Update Helm repositories
+      ansible.builtin.command: helm repo update
+      changed_when: false
+
+    - name: 6. Create reflector namespace if it doesn't exist
+      ansible.builtin.shell: kubectl create namespace {{ reflector_namespace }} --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: namespace_result
+      changed_when: namespace_result.rc == 0
+      failed_when: namespace_result.rc != 0
+
+    - name: 7. Deploy kubernetes-reflector via Helm
+      ansible.builtin.command: >
+        helm upgrade --install reflector {{ reflector_chart }}
+        --namespace {{ reflector_namespace }}
+        --version {{ reflector_chart_version }}
+        --timeout {{ installation_timeout }}s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: reflector_result
+      changed_when: true
+
+    - name: 8. Wait for the reflector controller to be ready
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ reflector_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name=reflector"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: reflector_pods
+      retries: 30
+      delay: 10
+      until: >
+        reflector_pods.resources | length > 0 and
+        reflector_pods.resources[0].status.phase == "Running" and
+        reflector_pods.resources[0].status.containerStatuses[0].ready == true
+
+    - name: 9. Display final deployment status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🪞 kubernetes-reflector Deployment Status"
+          - "==============================================="
+          - ""
+          - "✅ SUCCESS - kubernetes-reflector installed and ready"
+          - ""
+          - "Mirrors a Secret/ConfigMap once it carries:"
+          - "  reflector.v1.k8s.emberstack.com/reflection-allowed: \"true\""
+          - "  reflector.v1.k8s.emberstack.com/reflection-auto-enabled: \"true\""
+          - "  reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: \"<target-ns>\""
+          - ""
+          - "🔧 Troubleshooting:"
+          - "• Check pods: kubectl get pods -n {{ reflector_namespace }}"
+          - "• Check logs: kubectl logs -n {{ reflector_namespace }} -l app.kubernetes.io/name=reflector"
+          - "==============================================="

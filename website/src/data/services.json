@@ -728,6 +728,26 @@
 ,
   {
     "@type": "SoftwareApplication",
+    "id": "reflector",
+    "name": "Reflector",
+    "description": "Mirrors a Secret/ConfigMap across namespaces, kept in sync automatically",
+    "category": "MANAGEMENT",
+    "tags": ["secrets", "cross-namespace", "kubernetes"],
+    "abstract": "Cross-namespace Secret/ConfigMap mirroring, kept in sync on every change",
+    "logo": "",
+    "website": "https://github.com/emberstack/kubernetes-reflector"
+    ,"summary": "Reflector watches Secrets/ConfigMaps annotated with reflector.v1.k8s.emberstack.com/reflection-allowed and mirrors them into other namespaces, re-syncing automatically on every change (a certificate renewal, a password rotation). Kubernetes volumes cannot cross namespaces on their own - a cert-manager Certificate issued once can still be trusted by a workload in a different namespace once that Secret is reflected into it."
+    ,"docs": "/docs/services/management/reflector"
+    ,"playbook": "028-setup-reflector.yml"
+    ,"priority": 23
+    ,"checkCommand": "kubectl get pods -n reflector -l app.kubernetes.io/name=reflector --no-headers 2>/dev/null | grep -q Running"
+    ,"removePlaybook": "028-remove-reflector.yml"
+    ,"helmChart": "emberstack/reflector"
+    ,"namespace": "reflector"
+  }
+,
+  {
+    "@type": "SoftwareApplication",
     "id": "semaphore",
     "name": "SemaphoreUI",
     "description": "Web UI and API for running Ansible, Terraform, OpenTofu and PowerShell",

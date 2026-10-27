@@ -90,8 +90,26 @@ key, which is denied bucket-creation rights by design — see
 
 ## Identity
 
-Still Epinio's own bundled basic-auth — Dex/OIDC wiring against this platform's identity
-providers is a separate, not-yet-built piece.
+Epinio's own bundled Dex can be wired to up to three identity providers — GitHub,
+Authentik, and Okta — each mapping its own groups/teams to namespace roles, instead of
+Epinio's default basic auth. Each provider is independently optional and off by default.
+
+```bash
+ansible-playbook ansible/playbooks/627-setup-epinio-identity.yml \
+  -e target_host="rancher-desktop" \
+  -e @epinio-identity-vars.yml \
+  -e @epinio-identity-secrets.yml
+```
+
+`epinio-identity-vars.yml` supplies each enabled connector's own structure (client ID,
+org/teams or groups, role mappings) — none of that is generic, so there is no default to
+copy from; see `627-setup-epinio-identity.yml`'s own header for the exact shape.
+`epinio-identity-secrets.yml` supplies the matching OAuth client secret(s)
+(`EPINIO_DEX_GITHUB_CLIENT_SECRET` etc. — built fresh per run, never committed).
+
+The Authentik connector additionally requires [reflector](./reflector.md) deployed first
+(`./uis deploy reflector`) — Dex needs to trust a TLS certificate issued in Authentik's
+own namespace, which cannot cross namespaces without it.
 
 ## Configuration
 

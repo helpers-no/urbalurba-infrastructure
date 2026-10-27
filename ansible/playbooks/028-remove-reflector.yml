@@ -1,0 +1,65 @@
+---
+# file: ansible/playbooks/028-remove-reflector.yml
+# Description: Remove kubernetes-reflector from Kubernetes
+# Usage:
+# ansible-playbook playbooks/028-remove-reflector.yml -e target_host="rancher-desktop"
+
+- name: Remove kubernetes-reflector from Kubernetes
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    reflector_namespace: "reflector"
+    reflector_helm_release: "reflector"
+    deletion_timeout: 180
+
+  tasks:
+    - name: 1. Check for any Secret still annotated for reflection
+      ansible.builtin.shell: >
+        kubectl get secrets -A -o jsonpath='{range .items[?(@.metadata.annotations.
+        "reflector.v1.k8s.emberstack.com/reflection-allowed"=="true")]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: reflected_secrets
+      changed_when: false
+      failed_when: false
+
+    # ⚠️ Same shape as external-secrets' own remove-playbook precedent
+    # (026-remove-external-secrets.yml): refuse rather than silently stop mirroring a
+    # Secret something else depends on.
+    - name: 2. Refuse if anything is still annotated for reflection
+      ansible.builtin.fail:
+        msg: >-
+          Refusing to remove kubernetes-reflector: these Secrets are still annotated for
+          reflection: {{ reflected_secrets.stdout_lines | join(', ') }}. Removing reflector
+          would leave whatever depends on the mirrored copy with a stale Secret that stops
+          updating. Remove that dependency first, or pass -e force=true to remove reflector
+          anyway.
+      when:
+        - (reflected_secrets.stdout_lines | default([]) | length) > 0
+        - force is not defined or not (force | bool)
+
+    - name: 3. Check for the reflector Helm release
+      ansible.builtin.shell: helm list -n {{ reflector_namespace }} | grep {{ reflector_helm_release }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: helm_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: 4. Uninstall the kubernetes-reflector Helm release
+      ansible.builtin.shell: |
+        helm uninstall {{ reflector_helm_release }} -n {{ reflector_namespace }} --timeout {{ deletion_timeout }}s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      when: helm_check.rc == 0
+
+    - name: 5. Display final removal status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🗑️  kubernetes-reflector Removal Status"
+          - "==============================================="
+          - "{{ '✅ SUCCESS - kubernetes-reflector removed' if helm_check.rc == 0 else '⚪ Not found (already removed)' }}"
+          - "⚠️  Any mirrored Secret will stop updating (the last-mirrored copy stays as-is)."
+          - "==============================================="
