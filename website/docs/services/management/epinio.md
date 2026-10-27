@@ -61,6 +61,23 @@ ways to push:
 See [PLAN-service-epinio-002-build-safety](../../ai-developer/plans/completed/PLAN-service-epinio-002-build-safety.md)
 for the full decision.
 
+## Exposing a pushed app outside the LAN
+
+Epinio's own auto-generated per-app Ingress only answers on its LAN/nip.io hostname. To
+give an already-pushed app a second, tunnel-reachable route (the same `HostRegexp`
+convention every other externally-exposed UIS service uses), run from the host:
+
+```bash
+EPINIO_APP_NAME=your-app \
+EPINIO_NAMESPACE=your-org \
+EPINIO_APP_PORT=8080 \
+./uis exec scripts/epinio/epinio-expose-route.sh
+```
+
+This is additive — the app's original LAN route keeps working unchanged. Safe to re-run
+with the same three values; it updates the existing route rather than creating a second
+one. See `ansible/playbooks/626-epinio-external-route.yml` for the mechanism itself.
+
 ## Configuration
 
 <!-- MANUAL: Service-specific configuration details -->
