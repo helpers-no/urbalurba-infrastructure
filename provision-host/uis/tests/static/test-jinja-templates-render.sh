@@ -617,4 +617,57 @@ else
     fail_test "expected ['user', 'admin:hq'], the bare 'user' role missing would 403 every API call (found live during the PoC)"
 fi
 
+# ---------------------------------------------------------------------------
+# 076-authentik-ingressroute-tls.yaml.j2: tls.domains (urb-agents#2046). Traefik builds
+# its SNI certificate store from literal domain names extracted from a router's own
+# match rule - HostRegexp() is a pattern, not a name, so secretName alone (no tls.domains)
+# never actually associates the cert with any SNI at all, confirmed live (host-side AND
+# in-cluster, both got Traefik's generic default cert instead).
+# ---------------------------------------------------------------------------
+
+start_test "076-authentik-ingressroute-tls.yaml.j2 renders and parses with only localhost enabled"
+OUT="$(python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/076-authentik-ingressroute-tls.yaml.j2').read())
+ctx = {'domains': {'localhost': {'enabled': True, 'protocol': 'http', 'base_domain': 'localhost'}}}
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+print(json.dumps(d['spec']['tls']))
+" 2>&1)"
+if echo "$OUT" | python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+sys.exit(0 if d.get("domains") == [{"main": "authentik.localhost"}] else 1)
+' 2>/dev/null; then
+    pass_test
+else
+    fail_test "expected tls.domains: [{main: authentik.localhost}] with no sans key when no extra domain is enabled: $OUT"
+fi
+
+start_test "...and includes an enabled extra domain as a san, excludes a disabled one"
+OUT="$(python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/076-authentik-ingressroute-tls.yaml.j2').read())
+ctx = {'domains': {
+    'localhost': {'enabled': True, 'protocol': 'http', 'base_domain': 'localhost'},
+    'tailscale': {'enabled': True, 'protocol': 'https', 'base_domain': 'example.ts.net'},
+    'cloudflare': {'enabled': False, 'protocol': 'https', 'base_domain': 'example.com'},
+}}
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+print(json.dumps(d['spec']['tls']))
+" 2>&1)"
+if echo "$OUT" | python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+sans = d.get("domains", [{}])[0].get("sans", [])
+sys.exit(0 if "authentik.example.ts.net" in sans and "authentik.example.com" not in sans else 1)
+' 2>/dev/null; then
+    pass_test
+else
+    fail_test "expected only the enabled extra domain as a san: $OUT"
+fi
+
 print_summary

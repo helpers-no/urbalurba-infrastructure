@@ -9,13 +9,31 @@
 # for `authentik.*`, instead of falling through to Traefik's ad-hoc per-connection default.
 #
 # Template Variables (from kubernetes-secrets.yml, same as the HTTP IngressRoute template):
-# - domains: Dictionary of domain configurations (unused directly here — the HostRegexp below
-#   already matches any authentik.<anything>, same pattern the HTTP route uses; kept as an
-#   argument for parity/future use, not because this file branches on it today).
+# - domains: Dictionary of domain configurations ({domain_type: {enabled, protocol, base_domain}})
 #
 # Dependencies:
 # - 076-authentik-server-tls-certificate.yaml (must be applied first — this references its
 #   Secret by name)
+#
+# 🔴 FOUND LIVE BY imac (urb-agents#2046), with the exact mechanism named in Traefik's own
+# logs: "No domain found in rule HostRegexp(`authentik\..+`), the TLS options applied for
+# this router will depend on the SNI of each request". Traefik builds its SNI certificate
+# store by extracting LITERAL domain names from each router's own match rule -
+# HostRegexp() is a pattern, not a name, so there is nothing to extract, and the
+# `tls.secretName` below was never actually associated with any SNI value at all. Every
+# request to this router silently fell through to Traefik's generic default cert
+# ("TRAEFIK DEFAULT CERT"), confirmed both host-side and in-cluster - this had nothing to
+# do with being in-cluster, and a survey of every OTHER HostRegexp route in this
+# repository found none of them declare a tls: block at all, so this was likely the
+# first and only place this combination was ever tried, silently broken since bug #570
+# shipped it, until Dex's strict validation finally exercised it.
+#
+# Fix, per Traefik's own documented mechanism for exactly this case: `tls.domains` gives
+# Traefik the literal domain list it cannot extract from a HostRegexp rule, SEPARATELY
+# from the match rule itself - the match rule still decides WHICH requests reach this
+# router, tls.domains only tells Traefik which certificate to present for which SNI.
+# Same domain list as 076-authentik-server-tls-certificate.yaml.j2's own dnsNames, built
+# from the SAME domains dict, so the two cannot drift out of step.
 
 ---
 apiVersion: traefik.io/v1alpha1
@@ -42,5 +60,19 @@ spec:
       middlewares:
         - name: authentik-csp-upgrade
           namespace: authentik
+{% set extra_domains = [] %}
+{% for domain_type in domains %}
+{% if domains[domain_type].enabled and domain_type != 'localhost' %}
+{% set _ = extra_domains.append(domains[domain_type].base_domain) %}
+{% endif %}
+{% endfor %}
   tls:
     secretName: authentik-server-tls
+    domains:
+      - main: authentik.localhost
+{% if extra_domains %}
+        sans:
+{% for base_domain in extra_domains %}
+          - authentik.{{ base_domain }}
+{% endfor %}
+{% endif %}
