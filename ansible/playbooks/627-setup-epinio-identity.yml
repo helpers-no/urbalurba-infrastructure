@@ -254,6 +254,45 @@
         state: absent
       changed_when: false
 
+    # 🔴 FOUND LIVE BY imac (urb-agents#2045): `.localhost` is a special-use TLD (RFC 6761)
+    # — it resolves straight to loopback inside Dex's own pod with no DNS lookup at all,
+    # the identical trap class as urb-agents#1928's original forgejo.localhost bug,
+    # recurring in this new connector. Same established pattern this repo already uses for
+    # it (640-setup-forgejo-runner.yml, 045-test-minio.yml, 070-setup-authentik.yml): look
+    # up Traefik's own ClusterIP and route the `.localhost` hostname at it via
+    # hostAliases. Only applies when Authentik's own hostname actually ends in
+    # `.localhost` — a real external domain is already real DNS, no workaround needed
+    # (same conditional forgejo-runner's own manifest uses for the identical case).
+    - name: 18b. Extract Authentik's hostname from its issuer URL
+      ansible.builtin.set_fact:
+        epinio_identity_authentik_hostname: "{{ epinio_identity_authentik.issuer | urlsplit('hostname') }}"
+      when: epinio_identity_authentik.enabled
+
+    - name: 18c. Get Traefik's ClusterIP, for the .localhost hostAliases workaround
+      ansible.builtin.command: kubectl get svc traefik -n kube-system -o jsonpath={.spec.clusterIP}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: epinio_identity_traefik_ip_result
+      changed_when: false
+      when:
+        - epinio_identity_authentik.enabled
+        - epinio_identity_authentik_hostname is defined
+        - epinio_identity_authentik_hostname is match('.*\.localhost$')
+
+    # Built as one top-level Jinja expression (an actual list/dict literal, not YAML
+    # structure with per-leaf templating) — same discipline 626-epinio-external-route.yml
+    # uses for its ports/services, after urb-agents#2044 found that a value templated as a
+    # leaf nested inside kubernetes.core.k8s's own definition: dict does not reliably
+    # survive. hostAliases' fields are plain strings (no int-coercion risk the port bug
+    # had), but conditionally including the whole block only when applicable is the same
+    # class of problem, resolved the same proven way.
+    - name: 18d. Build the hostAliases entry, empty when there is nothing to alias
+      ansible.builtin.set_fact:
+        epinio_identity_host_aliases: >-
+          {{ [{'ip': epinio_identity_traefik_ip_result.stdout, 'hostnames': [epinio_identity_authentik_hostname]}]
+             if (epinio_identity_traefik_ip_result.stdout | default('') | length > 0)
+             else [] }}
+
     # 🔴 FOUND LIVE during the PoC: the chart has no values-level way to add an extra
     # volume to the Dex Deployment - patched onto it post-Helm instead, same as
     # Authentik's own CA mount. Strategic merge (this module's default for a Deployment):
@@ -270,6 +309,7 @@
           spec:
             template:
               spec:
+                hostAliases: "{{ epinio_identity_host_aliases }}"
                 volumes:
                   - name: authentik-ca
                     secret:

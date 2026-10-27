@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Partially live-tested by imac (urb-agents#2044) — GitHub connector verified short of browser login; Authentik/Okta blocked, now fixed
+## Status: Partially live-tested by imac (`urb-agents#2044`/`#2045`) — GitHub connector verified short of browser login; Authentik connector still blocked, by a platform-level issue outside this plan's scope (tracked separately); Okta not yet attempted
 
 **Goal**: wire Epinio's own bundled Dex to up to three identity providers (GitHub,
 Authentik, Okta), each mapping its own groups/teams to namespace roles, instead of
@@ -137,17 +137,37 @@ claimed. The "no matching group → no roles" case is sound by construction (no 
 entry in the rendered `rolesMapping`) but is inference from the rendered config, not an
 observed failed login.
 
-**Authentik connector: was entirely blocked** by the reflector/Epinio collision above —
-task 11 (confirming the mirrored Secret lands) is a hard fail with no standalone
-`reflector` release installable. Not yet re-tested against the fix.
+**Authentik connector — re-tested 2026-10-27 (`urb-agents#2045`), two more bugs found and
+fixed, one bigger blocker found and NOT fixed here:**
+
+- The reflector/Epinio collision fix itself had a small bug in `028-setup-reflector.yml`'s
+  own detection task: an unquoted jsonpath value broke `ansible.builtin.command`'s own
+  argument splitting. Fixed. With that fixed, imac confirmed **the
+  detection-and-skip design is genuinely correct, not just plausible**: it found Epinio's
+  bundled reflector controller and skipped cleanly, and — the real open question from
+  before — decoding the actual mirrored Secret live confirmed Epinio's bundled instance
+  does satisfy this plan's cross-namespace mirroring need in practice.
+- Dex's Deployment had no `hostAliases` for a `.localhost` Authentik hostname — the
+  identical trap class as `urb-agents#1928`'s original `forgejo.localhost` bug,
+  recurring in this new connector. Fixed the same proven way
+  (`640-setup-forgejo-runner.yml`'s own pattern: look up Traefik's ClusterIP, alias the
+  hostname to it, only when that hostname actually ends in `.localhost`).
+- **Past both of those, the connector is still blocked** — not by anything in this plan's
+  own scope. Traefik's bare ClusterIP does not present the right certificate for a
+  direct in-cluster strict-TLS connection to a `HostRegexp`-routed service, confirmed
+  live as a pre-existing, platform-wide characteristic, not specific to Authentik or to
+  Epinio (the identical probe against `argocd`'s own 26-day-old working route gets the
+  same wrong certificate). Filed separately, per imac's own recommendation:
+  [INVESTIGATE-system-traefik-incluster-sni](./INVESTIGATE-system-traefik-incluster-sni.md).
+  **This plan's Authentik connector cannot be verified end-to-end until that's resolved.**
 
 **Okta connector: not attempted** — no real Okta tenant available; shares the
 Authentik-identical `insecureEnableGroups`/`insecureSkipEmailVerified` code path already
-partially exercised by template inspection.
+partially exercised by template inspection. Not expected to hit the Traefik/SNI blocker
+above — Okta is a real external IdP, not reached through this platform's own
+`HostRegexp` routing at all.
 
-**Still needed, live**: re-run the Authentik connector now that the reflector collision
-is fixed — deploy `reflector` (or confirm Epinio's bundled copy is detected and reused),
-run this playbook with the authentik connector enabled, confirm the mirrored Secret lands
-and sign in through it, then Okta with a real tenant. Confirm a user with no matching
-group lands with none (not admin by accident) — the one piece still only checked by
-inference, not an observed failed login.
+**Still needed, live**: confirm a user with no matching group lands with no roles (not
+admin by accident) — still only checked by inference, not an observed failed login; Okta
+with a real tenant; and the Authentik connector's own end-to-end sign-in, once
+`INVESTIGATE-system-traefik-incluster-sni.md` has an answer.
