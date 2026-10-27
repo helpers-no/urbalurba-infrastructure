@@ -78,6 +78,21 @@ This is additive — the app's original LAN route keeps working unchanged. Safe 
 with the same three values; it updates the existing route rather than creating a second
 one. See `ansible/playbooks/626-epinio-external-route.yml` for the mechanism itself.
 
+## Storage
+
+App data and buildpacks are stored in this platform's own Garage install, not the
+chart's bundled SeaweedFS — Epinio gets its own dedicated Garage key and `epinio` bucket
+(`EPINIO_GARAGE_ACCESS_KEY`/`EPINIO_GARAGE_SECRET_KEY`), imported and scoped read+write to
+that one bucket only. This is a separate key from Garage's own account-wide bootstrap
+key, which is denied bucket-creation rights by design — see
+[the Garage service docs](../storage/garage.md) for why. Requires Garage deployed first
+(`./uis deploy garage`).
+
+## Identity
+
+Still Epinio's own bundled basic-auth — Dex/OIDC wiring against this platform's identity
+providers is a separate, not-yet-built piece.
+
 ## Configuration
 
 <!-- MANUAL: Service-specific configuration details -->
