@@ -1,0 +1,329 @@
+# file: ansible/playbooks/627-setup-epinio-identity.yml
+# Description:
+# Wires Epinio's Dex connector against up to three identity providers (GitHub, Authentik,
+# Okta), each mapping its own groups/teams to namespace roles via Dex's own rolesMapping
+# mechanism. Migrated from a PoC proven live on a lab test cluster (urb-agents#1909/#1911
+# gates 17/18) into real UIS mechanisms (urb-agents#2040) - generalized from that PoC's one
+# hardcoded org/team/group setup into real, operator-supplied parameters; no lab-specific
+# name is committed here.
+#
+# Five Dex gotchas found live during the PoC, each baked into
+# manifests/627-epinio-identity-values.yaml.j2 rather than left to be rediscovered:
+#   1. dex.connectors[].config.scopes REPLACES the default set, not adds - profile/email
+#      must be listed explicitly alongside any custom scope, or Dex's callback fails on a
+#      missing "name" claim.
+#   2. A generic oidc connector needs insecureEnableGroups: true before ANY groups claim
+#      is parsed, even when the scope is granted and present.
+#   3. Dex only reads its connector config (a Secret, mounted as a volume) at startup - a
+#      Helm values change needs an explicit `kubectl rollout restart deployment/dex`
+#      after, every time (task below, unconditional).
+#   4. Okta: no email_verified claim at all by default - insecureSkipEmailVerified: true.
+#   5. admin:<namespace> alone is not enough on its own - Epinio's own API returns 403 on
+#      every call unless a bare "user" role is also granted alongside it.
+#
+# Prerequisites:
+# - Epinio already installed (625-setup-epinio.yml) and healthy.
+# - If the authentik connector is enabled: Authentik already installed, AND reflector
+#   already installed (./uis deploy reflector) - Dex (namespace epinio) needs to trust a
+#   certificate issued in the authentik namespace, and Kubernetes Secrets cannot cross
+#   namespaces on their own.
+#
+# Usage (at least one epinio_identity_* dict must have enabled: true - pass via
+# -e @vars-file.yml, not individual -e k=v pairs, given the nested structure):
+# ansible-playbook playbooks/627-setup-epinio-identity.yml -e target_host="rancher-desktop" \
+#   -e @epinio-identity-vars.yml -e @epinio-identity-secrets.yml
+
+- name: Wire Epinio's Dex connector to this platform's identity providers
+  hosts: localhost
+  gather_facts: false
+  vars:
+    merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
+    epinio_namespace: "epinio"
+    epinio_chart: "epinio/epinio"
+    epinio_chart_version: "1.14.3"
+    default_epinio_domain: "apps.localhost"
+    authentik_namespace: "authentik"
+    epinio_identity_blueprint_file: "{{ playbook_dir }}/../../manifests/627-epinio-authentik-blueprint.yaml.j2"
+    epinio_identity_values_file: "{{ playbook_dir }}/../../manifests/627-epinio-identity-values.yaml.j2"
+    # Nothing enabled by default - an operator supplies the real structure via -e @file.
+    epinio_identity_github:
+      enabled: false
+    epinio_identity_authentik:
+      enabled: false
+    epinio_identity_okta:
+      enabled: false
+    epinio_identity_github_client_secret: ""
+    epinio_identity_authentik_client_secret: ""
+    epinio_identity_okta_client_secret: ""
+
+  tasks:
+    - name: 1. Check if required variables are provided
+      ansible.builtin.fail:
+        msg: "The variable 'target_host' is mandatory. Use -e target_host=your_host_name to specify it."
+      when: target_host is not defined
+
+    - name: 2. Refuse if no connector is enabled — nothing for this playbook to do
+      ansible.builtin.assert:
+        that:
+          - epinio_identity_github.enabled or epinio_identity_authentik.enabled or epinio_identity_okta.enabled
+        fail_msg: >-
+          None of epinio_identity_github/authentik/okta has enabled: true. Pass at least
+          one, with its full structure, via -e @vars-file.yml.
+        quiet: true
+
+    - name: 3. GitHub connector — required fields and secret, only if enabled
+      ansible.builtin.assert:
+        that:
+          - epinio_identity_github.client_id | default('') | length > 0
+          - epinio_identity_github.org | default('') | length > 0
+          - epinio_identity_github.teams | default([]) | length > 0
+          - epinio_identity_github_client_secret | length > 0
+        fail_msg: >-
+          epinio_identity_github.enabled is true but client_id, org, teams (non-empty list)
+          or epinio_identity_github_client_secret is missing. None of these have a safe
+          default - they are this install's own GitHub org/teams, not generic.
+        quiet: true
+      when: epinio_identity_github.enabled
+
+    - name: 4. Authentik connector — required fields and secret, only if enabled
+      ansible.builtin.assert:
+        that:
+          - epinio_identity_authentik.issuer | default('') | length > 0
+          - epinio_identity_authentik.client_id | default('') | length > 0
+          - epinio_identity_authentik.groups | default([]) | length > 0
+          - epinio_identity_authentik_client_secret | length > 0
+        fail_msg: >-
+          epinio_identity_authentik.enabled is true but issuer, client_id, groups
+          (non-empty list) or epinio_identity_authentik_client_secret is missing.
+        quiet: true
+      when: epinio_identity_authentik.enabled
+
+    - name: 5. Okta connector — required fields and secret, only if enabled
+      ansible.builtin.assert:
+        that:
+          - epinio_identity_okta.issuer | default('') | length > 0
+          - epinio_identity_okta.client_id | default('') | length > 0
+          - epinio_identity_okta.groups | default([]) | length > 0
+          - epinio_identity_okta_client_secret | length > 0
+        fail_msg: >-
+          epinio_identity_okta.enabled is true but issuer, client_id, groups (non-empty
+          list) or epinio_identity_okta_client_secret is missing.
+        quiet: true
+      when: epinio_identity_okta.enabled
+
+    # ── Authentik-side wiring (gate 18) — only when that connector is enabled ──────────────
+    - name: 6. Read Authentik's existing TLS Certificate (to merge, not overwrite, its reflector annotations)
+      kubernetes.core.k8s_info:
+        api_version: cert-manager.io/v1
+        kind: Certificate
+        name: authentik-server-tls
+        namespace: "{{ authentik_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: epinio_identity_authentik_cert
+      when: epinio_identity_authentik.enabled
+
+    - name: 7. Fail if Authentik's own Certificate doesn't exist yet — hard prerequisite
+      ansible.builtin.assert:
+        that:
+          - epinio_identity_authentik_cert.resources | length > 0
+        fail_msg: >-
+          authentik-server-tls Certificate not found in namespace {{ authentik_namespace }}.
+          Deploy Authentik first (bug #570 already gives it a real certificate - this
+          playbook only adds reflector annotations on top of it, it does not create it).
+        quiet: true
+      when: epinio_identity_authentik.enabled
+
+    # 🔴 UNION, NOT OVERWRITE: reflection-auto-namespaces is a single comma-separated
+    # annotation value, not a list field Kubernetes can merge for us. A future second
+    # consumer of this same Certificate must not have its own namespace silently dropped
+    # by this playbook re-running. Same "read current state first, merge in" discipline
+    # already established by service-authentik-epinio-provider.yml's own app-slot1 task.
+    - name: 8. Add epinio to reflection-auto-namespaces, keeping any namespace already listed
+      ansible.builtin.set_fact:
+        epinio_identity_reflector_namespaces: >-
+          {{
+            (
+              epinio_identity_authentik_cert.resources[0].get('spec', {}).get('secretTemplate', {}).get('annotations', {})
+              .get('reflector.v1.k8s.emberstack.com/reflection-auto-namespaces', '')
+              .split(',') | reject('equalto', '') | list
+              + [epinio_namespace]
+            ) | unique | join(',')
+          }}
+      when: epinio_identity_authentik.enabled
+
+    - name: 9. Patch Authentik's Certificate with reflector annotations
+      kubernetes.core.k8s:
+        state: patched
+        api_version: cert-manager.io/v1
+        kind: Certificate
+        name: authentik-server-tls
+        namespace: "{{ authentik_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          spec:
+            secretTemplate:
+              annotations:
+                reflector.v1.k8s.emberstack.com/reflection-allowed: "true"
+                reflector.v1.k8s.emberstack.com/reflection-auto-enabled: "true"
+                reflector.v1.k8s.emberstack.com/reflection-auto-namespaces: "{{ epinio_identity_reflector_namespaces }}"
+      when: epinio_identity_authentik.enabled
+
+    - name: 10. Wait for the mirrored Secret to actually land in the epinio namespace
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: authentik-server-tls
+        namespace: "{{ epinio_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: epinio_identity_mirrored_secret
+      retries: 12
+      delay: 5
+      until: epinio_identity_mirrored_secret.resources | length > 0
+      when: epinio_identity_authentik.enabled
+
+    - name: 11. Fail if reflector never mirrored the Secret — likely means reflector isn't deployed
+      ansible.builtin.fail:
+        msg: >-
+          authentik-server-tls Secret never appeared in namespace {{ epinio_namespace }}.
+          Is reflector deployed? ./uis deploy reflector
+      when:
+        - epinio_identity_authentik.enabled
+        - epinio_identity_mirrored_secret.resources | default([]) | length == 0
+
+    - name: 12. Render Epinio's Authentik blueprint with the real client secret spliced in
+      ansible.builtin.set_fact:
+        epinio_identity_blueprint_rendered: "{{ lookup('template', epinio_identity_blueprint_file) }}"
+      no_log: true
+      when: epinio_identity_authentik.enabled
+
+    - name: 13. Read the Authentik app expansion slot's current state
+      kubernetes.core.k8s_info:
+        kind: ConfigMap
+        name: app-slot1-blueprint
+        namespace: "{{ authentik_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: epinio_identity_slot1_current
+      when: epinio_identity_authentik.enabled
+
+    - name: 14. Add Epinio's blueprint into the expansion slot (merges with what's already there)
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: app-slot1-blueprint
+            namespace: "{{ authentik_namespace }}"
+          data: "{{ epinio_identity_slot1_current.resources[0].data | combine({'epinio-oauth2-oidc.yaml': epinio_identity_blueprint_rendered}) }}"
+      no_log: true
+      when: epinio_identity_authentik.enabled
+
+    - name: 15. Give Authentik's blueprint controller a moment to pick it up
+      ansible.builtin.pause:
+        seconds: 10
+      when: epinio_identity_authentik.enabled
+
+    # ── Epinio/Dex-side wiring (gates 17/18, every enabled connector) ──────────────────────
+    - name: 16. Render Epinio's identity Helm values
+      ansible.builtin.template:
+        src: "{{ epinio_identity_values_file }}"
+        dest: /tmp/epinio-identity-values.yaml
+        mode: '0600'
+      no_log: true
+
+    # --reuse-values merges this file's keys on top of whatever the currently-deployed
+    # release already has (625-setup-epinio.yml's own domain/TLS/storage values) — new
+    # values take priority, nothing else from the running release is reset.
+    - name: 17. Apply Epinio's identity values on top of the existing install
+      ansible.builtin.command: >
+        helm upgrade --install epinio {{ epinio_chart }}
+        --namespace {{ epinio_namespace }}
+        --version {{ epinio_chart_version }}
+        --reuse-values
+        -f /tmp/epinio-identity-values.yaml
+        --timeout 600s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: epinio_identity_helm_result
+      changed_when: true
+      no_log: true
+
+    - name: 18. Clean up the temporary identity values file
+      ansible.builtin.file:
+        path: /tmp/epinio-identity-values.yaml
+        state: absent
+      changed_when: false
+
+    # 🔴 FOUND LIVE during the PoC: the chart has no values-level way to add an extra
+    # volume to the Dex Deployment - patched onto it post-Helm instead, same as
+    # Authentik's own CA mount. Strategic merge (this module's default for a Deployment):
+    # volumes[]/containers[] merge by their `name` key, so re-running this is a no-op
+    # update, not a second copy of the same volume/mount.
+    - name: 19. Mount the reflected Authentik CA into Dex's pod, so its rootCAs path resolves
+      kubernetes.core.k8s:
+        state: patched
+        kind: Deployment
+        name: dex
+        namespace: "{{ epinio_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+        definition:
+          spec:
+            template:
+              spec:
+                volumes:
+                  - name: authentik-ca
+                    secret:
+                      secretName: authentik-server-tls
+                      items:
+                        - key: ca.crt
+                          path: ca.crt
+                containers:
+                  - name: dex
+                    volumeMounts:
+                      - name: authentik-ca
+                        mountPath: /etc/dex-ca
+                        readOnly: true
+      when: epinio_identity_authentik.enabled
+
+    # 🔴 Gotcha 3 (see header): Dex only reads its connector config at startup. Secret
+    # volume updates do not trigger a restart on their own - confirmed live during the
+    # PoC (a brand-new connector was in the rendered Secret immediately after `helm
+    # upgrade`, but absent from Dex's own /auth page until this ran). Unconditional, not
+    # conditioned on "did the config actually change" - restarting an already-correct
+    # Dex is a no-op cost, and tracking that condition reliably is not worth it.
+    - name: 20. Restart Dex so it re-reads its connector config
+      ansible.builtin.command: kubectl rollout restart deployment/dex -n {{ epinio_namespace }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      changed_when: true
+
+    - name: 21. Wait for Dex's restart to finish
+      ansible.builtin.command: kubectl rollout status deployment/dex -n {{ epinio_namespace }} --timeout=90s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      changed_when: false
+
+    - name: 22. Verify Epinio still answers after the identity change
+      ansible.builtin.uri:
+        url: "https://epinio.{{ default_epinio_domain }}/"
+        validate_certs: false
+        status_code: 200
+      register: epinio_identity_check
+      retries: 10
+      delay: 5
+      until: epinio_identity_check.status | default(0) == 200
+
+    - name: 23. Display final status
+      ansible.builtin.debug:
+        msg:
+          - "==============================================="
+          - "🔐 Epinio Identity Wiring Status"
+          - "==============================================="
+          - ""
+          - "GitHub:    {{ 'enabled' if epinio_identity_github.enabled else 'not enabled' }}"
+          - "Authentik: {{ 'enabled' if epinio_identity_authentik.enabled else 'not enabled' }}"
+          - "Okta:      {{ 'enabled' if epinio_identity_okta.enabled else 'not enabled' }}"
+          - ""
+          - "Not verified here, needs a real sign-in per connector: that each provider's"
+          - "group/team actually maps to the namespace roles configured, and that a login"
+          - "without any matching group lands with no roles (not admin by accident)."

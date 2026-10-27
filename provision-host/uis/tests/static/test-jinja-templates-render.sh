@@ -546,4 +546,75 @@ else
     fail_test "expected no authentik.redis block and no AUTHENTIK_REDIS__PASSWORD env var"
 fi
 
+# ---------------------------------------------------------------------------
+# 627-epinio-identity-values.yaml.j2: dex.connectors/rolesMapping (urb-agents#2040).
+# Each connector is independently optional - render with each combination that
+# matters, not just "all enabled", since an if-block typo could easily pass a
+# single all-on render and still break the common single-provider case.
+# ---------------------------------------------------------------------------
+
+EPINIO_IDENTITY_BASE_CTX='{"default_epinio_domain":"apps.example.test","epinio_identity_github":{"enabled":false},"epinio_identity_authentik":{"enabled":false},"epinio_identity_okta":{"enabled":false},"epinio_identity_github_client_secret":"","epinio_identity_authentik_client_secret":"","epinio_identity_okta_client_secret":""}'
+
+start_test "627-epinio-identity-values.yaml.j2 renders and parses with only GitHub enabled"
+RAW="$(python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/627-epinio-identity-values.yaml.j2').read())
+ctx = json.loads('$EPINIO_IDENTITY_BASE_CTX')
+ctx['epinio_identity_github'] = {'enabled': True, 'client_id': 'gh', 'org': 'org1', 'teams': [{'name': 't1', 'roles': ['admin:t1']}]}
+ctx['epinio_identity_github_client_secret'] = 's1'
+out = tpl.render(**ctx)
+d = yaml.safe_load(out)
+print(json.dumps({'connectors': [c['type'] for c in d['dex']['connectors']], 'rolesMapping_connectors': [r['connectorId'] for r in d['dex']['rolesMapping']]}))
+" 2>&1)"
+if echo "$RAW" | python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+sys.exit(0 if d["connectors"] == ["github"] and d["rolesMapping_connectors"] == ["github"] else 1)
+' 2>/dev/null; then
+    pass_test
+else
+    fail_test "expected exactly one github connector and one github rolesMapping entry: $RAW"
+fi
+
+start_test "...and only the authentik connector carries rootCAs (github/okta must not)"
+if python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/627-epinio-identity-values.yaml.j2').read())
+ctx = json.loads('$EPINIO_IDENTITY_BASE_CTX')
+ctx['epinio_identity_authentik'] = {'enabled': True, 'issuer': 'https://a/', 'client_id': 'ak', 'groups': [{'name': 'HQ', 'roles': ['admin:hq']}]}
+ctx['epinio_identity_okta'] = {'enabled': True, 'issuer': 'https://o/', 'client_id': 'ok', 'groups': [{'name': 'HQ', 'roles': ['admin:hq']}]}
+ctx['epinio_identity_authentik_client_secret'] = 's2'
+ctx['epinio_identity_okta_client_secret'] = 's3'
+out = tpl.render(**ctx)
+d = yaml.safe_load(out)
+by_type = {c['id']: c for c in d['dex']['connectors']}
+import sys
+sys.exit(0 if 'rootCAs' in by_type['authentik']['config'] and 'rootCAs' not in by_type['okta']['config'] and by_type['okta']['config'].get('insecureSkipEmailVerified') is True else 1)
+" 2>/dev/null; then
+    pass_test
+else
+    fail_test "expected rootCAs only on the authentik connector, and insecureSkipEmailVerified only on okta"
+fi
+
+start_test "...and a group's roles always include a bare 'user' role alongside admin:<ns>"
+if python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/627-epinio-identity-values.yaml.j2').read())
+ctx = json.loads('$EPINIO_IDENTITY_BASE_CTX')
+ctx['epinio_identity_authentik'] = {'enabled': True, 'issuer': 'https://a/', 'client_id': 'ak', 'groups': [{'name': 'HQ', 'roles': ['admin:hq']}]}
+ctx['epinio_identity_authentik_client_secret'] = 's2'
+out = tpl.render(**ctx)
+d = yaml.safe_load(out)
+roles = d['dex']['rolesMapping'][0]['groups'][0]['roles']
+import sys
+sys.exit(0 if roles == ['user', 'admin:hq'] else 1)
+" 2>/dev/null; then
+    pass_test
+else
+    fail_test "expected ['user', 'admin:hq'], the bare 'user' role missing would 403 every API call (found live during the PoC)"
+fi
+
 print_summary

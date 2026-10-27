@@ -1,0 +1,144 @@
+# File: manifests/627-epinio-identity-values.yaml.j2
+#
+# Description:
+# Epinio's Dex/OIDC connector configuration - Helm values applied on top of the base
+# install (ansible/playbooks/625-setup-epinio.yml) via `helm upgrade --reuse-values`, so
+# this file only ever carries the identity-specific keys, never duplicating the base
+# install's own domain/TLS/storage values.
+#
+# Migrated from a PoC proven live on a lab test cluster (urb-agents#1909/#1911 gates
+# 17/18), generalized from that PoC's one hardcoded GitHub org/team/Authentik-group setup
+# into real parameters - see 627-setup-epinio-identity.yml's own header for the five Dex
+# gotchas this file's shape exists specifically to satisfy, each one found live during
+# that PoC, not assumed.
+#
+# Template Variables (all required only when that connector's own `enabled` is true -
+# see 627-setup-epinio-identity.yml's asserts):
+# - default_epinio_domain
+# - epinio_identity_github: {enabled, client_id, org, teams: [{name, roles}]}
+# - epinio_identity_authentik: {enabled, issuer, client_id, groups: [{name, roles}]}
+# - epinio_identity_okta: {enabled, issuer, client_id, groups: [{name, roles}]}
+# - epinio_identity_github_client_secret / _authentik_client_secret / _okta_client_secret
+#
+# 🔴 Secrets are rendered directly into this file via Ansible's own Jinja (no_log'd by the
+# task that writes it), not string-replaced after the fact the way the PoC did it - this
+# file is generated fresh per run from real variables, never committed with a value in it.
+#
+# Warning: plain if/endif blocks at column 0 throughout, no manual dash-trim markers -
+# Ansible's own Jinja environment already runs trim_blocks=True/lstrip_blocks=False;
+# combining a manual trim marker with a non-zero-indent closing tag broke a different
+# template's YAML this same session (urb-agents#2027) by merging surrounding lines.
+# Verified by rendering through jinja2.Environment(trim_blocks=True, lstrip_blocks=False)
+# - Ansible's actual defaults - not a bare jinja2.Environment().
+
+dex:
+  connectors:
+{% if epinio_identity_github.enabled %}
+    # GitHub org teams -> namespace roles. clientID is not secret (GitHub's own OAuth
+    # spec treats it as public) - only clientSecret is, and is never committed.
+    - type: github
+      id: github
+      name: GitHub
+      config:
+        clientID: "{{ epinio_identity_github.client_id }}"
+        clientSecret: "{{ epinio_identity_github_client_secret }}"
+        redirectURI: "https://auth.{{ default_epinio_domain }}/callback"
+        orgs:
+          - name: "{{ epinio_identity_github.org }}"
+            teams:
+{% for team in epinio_identity_github.teams %}
+              - "{{ team.name }}"
+{% endfor %}
+{% endif %}
+{% if epinio_identity_authentik.enabled %}
+    # 🔴 scopes: REPLACES Dex's default set (openid profile email), never adds to it -
+    # found live: listing only [groups] silently drops profile/email, and Dex's callback
+    # hard-requires the "name" claim that only profile carries. profile/email restored
+    # explicitly; groups added on top for rolesMapping below.
+    - type: oidc
+      id: authentik
+      name: Authentik
+      config:
+        issuer: "{{ epinio_identity_authentik.issuer }}"
+        clientID: "{{ epinio_identity_authentik.client_id }}"
+        clientSecret: "{{ epinio_identity_authentik_client_secret }}"
+        redirectURI: "https://auth.{{ default_epinio_domain }}/callback"
+        scopes:
+          - profile
+          - email
+          - groups
+        # 🔴 Dex does not parse ANY groups claim out of the upstream token unless told
+        # to, even when the scope is granted and present - found live, this is that
+        # opt-in.
+        insecureEnableGroups: true
+        # 🔴 Dex does full TLS verification and has no system trust for this platform's
+        # own uis-ca - needs the mounted CA path from 627-setup-epinio-identity.yml's own
+        # post-Helm Deployment patch (the chart has no values-level way to add an extra
+        # volume to Dex - checked `helm show values`, nothing there).
+        rootCAs:
+          - /etc/dex-ca/ca.crt
+{% endif %}
+{% if epinio_identity_okta.enabled %}
+    # Same two Dex/OIDC gotchas as the Authentik connector above (scopes replace, not
+    # add; insecureEnableGroups) plus one Okta-specific one: its default authorization
+    # server sends no email_verified claim at all, and Dex hard-requires it by default -
+    # insecureSkipEmailVerified is Dex's own documented opt-out for exactly this, a known
+    # common Dex/Okta interop gotcha, not specific to this install. No rootCAs needed
+    # here, unlike Authentik - Okta's own TLS is already in Dex's default system trust.
+    - type: oidc
+      id: okta
+      name: Okta
+      config:
+        issuer: "{{ epinio_identity_okta.issuer }}"
+        clientID: "{{ epinio_identity_okta.client_id }}"
+        clientSecret: "{{ epinio_identity_okta_client_secret }}"
+        redirectURI: "https://auth.{{ default_epinio_domain }}/callback"
+        scopes:
+          - profile
+          - email
+          - groups
+        insecureEnableGroups: true
+        insecureSkipEmailVerified: true
+{% endif %}
+  # 🔴 admin:<namespace> ALONE is not enough - found live: a bare admin:<ns> grant gets a
+  # consistent 403 on every API call, including a namespace list. Epinio's own
+  # chart-default example (values.yaml's api.users) always pairs a bare "user" role
+  # alongside admin:<ns> - "user" is the base grant that lets the API authenticate the
+  # caller at all. Added to every group below, not assumed obvious.
+  rolesMapping:
+{% if epinio_identity_github.enabled %}
+{% for team in epinio_identity_github.teams %}
+    - connectorId: github
+      groups:
+        - id: "{{ epinio_identity_github.org }}:{{ team.name }}"
+          roles:
+            - "user"
+{% for role in team.roles %}
+            - "{{ role }}"
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% if epinio_identity_authentik.enabled %}
+    - connectorId: authentik
+      groups:
+{% for group in epinio_identity_authentik.groups %}
+        - id: "{{ group.name }}"
+          roles:
+            - "user"
+{% for role in group.roles %}
+            - "{{ role }}"
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% if epinio_identity_okta.enabled %}
+    - connectorId: okta
+      groups:
+{% for group in epinio_identity_okta.groups %}
+        - id: "{{ group.name }}"
+          roles:
+            - "user"
+{% for role in group.roles %}
+            - "{{ role }}"
+{% endfor %}
+{% endfor %}
+{% endif %}
