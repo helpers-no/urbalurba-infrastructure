@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — root cause still not found upstream; a workaround (`TLSStore`, PR #650, published as `1.6.255`) shipped for imac to test live, unverified as of this edit
+## Status: Workaround confirmed working live (`urb-agents#2051`) — root cause itself still not found upstream, but the `TLSStore` CRD is a proven fix for this cluster's actual symptom
 
 **Goal**: figure out how an in-cluster workload reaches another `HostRegexp`-routed
 service through Traefik with a certificate that actually validates under strict TLS
@@ -263,18 +263,41 @@ upstream fixes `HostRegexp`-selection support, a per-service TLSStore-in-its-own
 once it's confirmed Traefik actually supports more than one at all, or something else) — not
 another default-store trick.
 
-⚠️ **Unverified against a real cluster as of this edit.** Merged and published as `1.6.255`
-(PR #650, commit `217684dd909558f005ba18783b04fb0f1162b3b8`, digest-verified multi-arch against
-ghcr.io). The retracted `tls.domains` attempt (PR #647) is the whole reason this document does
-not call anything "fixed" again until imac confirms it live — both the
-`openssl s_client -servername authentik.localhost` probe (host-side and in-cluster) returning
-`authentik-server-tls` instead of `TRAEFIK DEFAULT CERT`, and ideally the Authentik connector's
-actual end-to-end OIDC sign-in through Dex.
+✅ **Confirmed working live, `urb-agents#2051`, 2026-10-28.** imac deployed Authentik fresh on
+`1.6.255` and re-ran the exact same probe that found this bug in the first place:
 
-A separate, unrelated build failure (PR #651, `1.6.255` published only after this merged too):
-a transiently-unreachable external Helm repo (`helm.runix.net`) was failing the whole container
-build on `main` — fixed so one flaky external repo can't block a build again, noted here only
-because it's why publishing this workaround took two PRs instead of one.
+- Host-side `openssl s_client -servername authentik.localhost`: now returns the real cert —
+  issuer `CN=uis-ca`, serial `BB482464CBEF87D0421FCA6FC566F780`, matching `authentik-server-tls`'s
+  own bytes exactly (decoded straight from the Secret, not inferred).
+- In-cluster probe (a throwaway pod against Traefik's ClusterIP): identical cert, identical
+  serial/fingerprint — matches host-side exactly.
+- The documented single-slot caveat was also directly observed, not just theoretical: the same
+  probe with **no SNI at all** gets the identical cert too, confirming this is now genuinely the
+  cluster-wide default for any unmatched SNI on `websecure`.
+
+This is the exact opposite of every one of round 2's four debug snapshots (`tls: {}`, Traefik's
+own self-signed cert served, every time). The `TLSStore` path genuinely loads the certificate
+where the per-route `tls.secretName` path did not — on this cluster, with this Traefik build,
+today. The *why* `tls.secretName` itself never worked is still not found upstream (see the
+narrowing above) — this section records a working fix for the actual symptom, not a resolved
+root cause. Scope it accordingly: if this platform's Traefik/k3s pairing ever changes, this
+workaround's own assumptions (that `TLSStore` behaves per Traefik's own documented contract) would
+need re-checking too, same as anything else here.
+
+Merged and published as `1.6.255` (PR #650, commit `217684dd909558f005ba18783b04fb0f1162b3b8`,
+digest-verified multi-arch against ghcr.io). A separate, unrelated build failure (PR #651,
+also folded into `1.6.255`): a transiently-unreachable external Helm repo (`helm.runix.net`) was
+failing the whole container build on `main` — fixed so one flaky external repo can't block a
+build again, noted here only because it's why publishing this workaround took two PRs instead of
+one.
+
+## A second, separate bug found while re-testing (`urb-agents#2051`) — out of this doc's scope
+
+Going further than the cert probe, imac tried the Authentik connector's actual end-to-end OIDC
+wiring and found a second, unrelated blocker: Authentik's own OAuth2Provider blueprint was
+missing a field (`redirect_uris`) required on this Authentik version, so the provider/application
+never got created at all. Not a Traefik/SNI issue — fixed and tracked in
+[PLAN-service-epinio-003-identity.md](./PLAN-service-epinio-003-identity.md), not here.
 
 ## Scope beyond Rancher Desktop
 

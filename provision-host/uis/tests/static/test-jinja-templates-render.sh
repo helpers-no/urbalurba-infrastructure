@@ -618,6 +618,52 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 627-epinio-authentik-blueprint.yaml.j2: redirect_uris (urb-agents#2051). Without it,
+# Authentik (2025.10.3) refuses the blueprint apply outright - "redirect_uris: This
+# field is required." - before the provider or the application is ever created, found
+# live by imac. Uses a custom YAML loader for Authentik's own `!Find` blueprint tag,
+# which plain yaml.safe_load cannot parse at all.
+# ---------------------------------------------------------------------------
+
+start_test "627-epinio-authentik-blueprint.yaml.j2 renders and carries a required, correctly-shaped redirect_uris"
+OUT="$(python3 -c "
+import jinja2, yaml, json
+
+class _BlueprintLoader(yaml.SafeLoader):
+    pass
+_BlueprintLoader.add_multi_constructor('!', lambda loader, suffix, node: None)
+
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/627-epinio-authentik-blueprint.yaml.j2').read())
+ctx = {
+    'epinio_identity_authentik': {'client_id': 'ak'},
+    'epinio_identity_authentik_client_secret': 's2',
+    'default_epinio_domain': 'apps.example.test',
+}
+out = tpl.render(**ctx)
+docs = [d for d in yaml.load_all(out, Loader=_BlueprintLoader) if d is not None]
+provider = next(e for e in docs[0]['entries'] if e['model'] == 'authentik_providers_oauth2.oauth2provider')
+print(json.dumps(provider['attrs'].get('redirect_uris')))
+" 2>&1)"
+if echo "$OUT" | python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+sys.exit(0 if d == [{"matching_mode": "strict", "url": "https://auth.apps.example.test/callback"}] else 1)
+' 2>/dev/null; then
+    pass_test
+else
+    fail_test "expected redirect_uris: [{matching_mode: strict, url: https://auth.apps.example.test/callback}]: $OUT"
+fi
+
+start_test "...and that URL matches Dex's own redirectURI construction exactly, not a hand-duplicated copy"
+if grep -qF 'url: "https://auth.{{ default_epinio_domain }}/callback"' "$MANIFESTS/627-epinio-authentik-blueprint.yaml.j2" \
+   && grep -qF 'redirectURI: "https://auth.{{ default_epinio_domain }}/callback"' "$MANIFESTS/627-epinio-identity-values.yaml.j2"; then
+    pass_test
+else
+    fail_test "the blueprint's redirect_uris url and Dex's redirectURI must be built from the exact same Jinja expression, or they will silently drift apart"
+fi
+
+# ---------------------------------------------------------------------------
 # 076-authentik-ingressroute-tls.yaml.j2: tls.domains (urb-agents#2046). Traefik builds
 # its SNI certificate store from literal domain names extracted from a router's own
 # match rule - HostRegexp() is a pattern, not a name, so secretName alone (no tls.domains)
