@@ -71,13 +71,23 @@ install_helm_and_repos() {
         # `--force-update` is idempotent: it adds when absent and updates the URL
         # when present, and never fails on an existing name. Correct on a fresh
         # build and on a rebuild over a cached layer alike.
+        # 🔴 ONE FLAKY EXTERNAL REPO MUST NOT ABORT THIS SCRIPT (and so fail the whole
+        # container build) — found live 2026-10-28: helm.runix.net was transiently
+        # unreachable from GitHub's own runners, and under `set -e` (line 5) a single
+        # failed `helm repo add` killed this script immediately, before bitnami/
+        # graviteeio/minio/temporal below it, before `check_command_success`, before
+        # `verify_helm_installation`/`verify_helm_repos`/`print_summary` ever ran. Same
+        # class of defect as the --force-update fix noted above (1.6.55): a build-time
+        # convenience step had no tolerance for one repo misbehaving. Each `|| echo` below
+        # keeps `set -e` from treating a failed repo add as fatal, same as the matching
+        # `ignore_errors: true` added to 05-install-helm-repos.yml's own loop task.
         echo "Adding Helm repositories directly"
-        helm repo add --force-update bitnami    https://charts.bitnami.com/bitnami
-        helm repo add --force-update runix      https://helm.runix.net
-        helm repo add --force-update graviteeio https://helm.gravitee.io
-        helm repo add --force-update minio      https://charts.min.io/
-        helm repo add --force-update temporal   https://go.temporal.io/helm-charts
-        helm repo update
+        helm repo add --force-update bitnami    https://charts.bitnami.com/bitnami    || echo "WARNING: failed to add helm repo 'bitnami' (non-critical, continuing)"
+        helm repo add --force-update runix      https://helm.runix.net                || echo "WARNING: failed to add helm repo 'runix' (non-critical, continuing)"
+        helm repo add --force-update graviteeio https://helm.gravitee.io              || echo "WARNING: failed to add helm repo 'graviteeio' (non-critical, continuing)"
+        helm repo add --force-update minio      https://charts.min.io/                || echo "WARNING: failed to add helm repo 'minio' (non-critical, continuing)"
+        helm repo add --force-update temporal   https://go.temporal.io/helm-charts    || echo "WARNING: failed to add helm repo 'temporal' (non-critical, continuing)"
+        helm repo update || echo "WARNING: 'helm repo update' reported an issue (non-critical, continuing)"
         
         echo "Helm $(helm version --short) installed successfully"
     else

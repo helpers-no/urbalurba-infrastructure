@@ -8,6 +8,17 @@
   hosts: localhost
   gather_facts: true
   tasks:
+    # 🔴 ONE FLAKY EXTERNAL REPO MUST NOT FAIL THE WHOLE CONTAINER BUILD. Found live,
+    # 2026-10-28: helm.runix.net was transiently unreachable from GitHub's own runners
+    # (Azure's internal resolver failing on its CNAME chain), and because this task had no
+    # `ignore_errors`, the one failed loop item marked the whole task (and the play) failed,
+    # which aborted `ansible-playbook` with a nonzero exit, which failed the Docker build
+    # entirely — blocking every merge to main, not just whatever PR happened to trigger the
+    # next build. Pre-seeding these repos is a build-time convenience only: every service
+    # that actually needs one of them (e.g. pgadmin/runix in 641-adm-pgadmin.yml) re-adds its
+    # own repo at deploy time anyway, so one repo failing to pre-seed here is never load-
+    # bearing. `ignore_errors` keeps the play going; the task below still reports it loudly,
+    # it just doesn't fail the build over it.
     - name: Add Helm repositories
       kubernetes.core.helm_repository:
         name: "{{ item.name }}"
@@ -23,6 +34,17 @@
         - { name: 'temporal', url: 'https://go.temporal.io/helm-charts' }
         - { name: 'dagster', url: 'https://dagster-io.github.io/helm' }
       register: helm_repo_result
+      ignore_errors: true
+
+    - name: Warn, loudly, about any repo that failed to register (non-fatal, not silent)
+      ansible.builtin.debug:
+        msg: >-
+          ⚠️ Helm repo '{{ item.item.name }}' ({{ item.item.url }}) failed to register:
+          {{ item.msg | default('unknown error') }}. Continuing — this is a build-time
+          convenience only, not a hard dependency (see the note above).
+      loop: "{{ helm_repo_result.results | default([]) }}"
+      loop_control: { label: "{{ item.item.name }}" }
+      when: item is failed
 
     - name: 01. Print playbook description
       ansible.builtin.debug:
