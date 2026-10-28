@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — root cause still not found upstream; a workaround (`TLSStore`, PR pending) shipped for imac to test live, unverified as of this edit
+## Status: Backlog — root cause still not found upstream; a workaround (`TLSStore`, PR #650, published as `1.6.255`) shipped for imac to test live, unverified as of this edit
 
 **Goal**: figure out how an in-cluster workload reaches another `HostRegexp`-routed
 service through Traefik with a certificate that actually validates under strict TLS
@@ -263,11 +263,18 @@ upstream fixes `HostRegexp`-selection support, a per-service TLSStore-in-its-own
 once it's confirmed Traefik actually supports more than one at all, or something else) — not
 another default-store trick.
 
-⚠️ **Unverified against a real cluster as of this edit.** The retracted `tls.domains` attempt
-(PR #647) is the whole reason this document does not call anything "fixed" again until imac
-confirms it live — both the `openssl s_client -servername authentik.localhost` probe (host-side
-and in-cluster) returning `authentik-server-tls` instead of `TRAEFIK DEFAULT CERT`, and ideally
-the Authentik connector's actual end-to-end OIDC sign-in through Dex.
+⚠️ **Unverified against a real cluster as of this edit.** Merged and published as `1.6.255`
+(PR #650, commit `217684dd909558f005ba18783b04fb0f1162b3b8`, digest-verified multi-arch against
+ghcr.io). The retracted `tls.domains` attempt (PR #647) is the whole reason this document does
+not call anything "fixed" again until imac confirms it live — both the
+`openssl s_client -servername authentik.localhost` probe (host-side and in-cluster) returning
+`authentik-server-tls` instead of `TRAEFIK DEFAULT CERT`, and ideally the Authentik connector's
+actual end-to-end OIDC sign-in through Dex.
+
+A separate, unrelated build failure (PR #651, `1.6.255` published only after this merged too):
+a transiently-unreachable external Helm repo (`helm.runix.net`) was failing the whole container
+build on `main` — fixed so one flaky external repo can't block a build again, noted here only
+because it's why publishing this workaround took two PRs instead of one.
 
 ## Scope beyond Rancher Desktop
 
