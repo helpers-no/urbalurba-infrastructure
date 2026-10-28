@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Backlog — root cause narrowed precisely via live debug data, not yet found; likely needs upstream Traefik input or Terje
+## Status: Backlog — root cause still not found upstream; a workaround (`TLSStore`, PR pending) shipped for imac to test live, unverified as of this edit
 
 **Goal**: figure out how an in-cluster workload reaches another `HostRegexp`-routed
 service through Traefik with a certificate that actually validates under strict TLS
@@ -229,6 +229,45 @@ filing a precise upstream report (the finding above is specific and reproducible
 to be a real bug report, not a vague "TLS doesn't work") or getting input from someone
 with deeper Traefik/k3s internals experience. Flagging this rather than attempting a
 third guess-fix.
+
+## Workaround shipped: the `TLSStore` CRD (unverified live as of this edit)
+
+Told directly to get this actually working, not just tracked — rather than a third guess at
+the same broken per-route mechanism, this uses a **different, independently-source-verified**
+code path: `manifests/076-authentik-tlsstore.yaml`, a `TLSStore` named `default` in the
+`authentik` namespace, pointing `spec.defaultCertificate.secretName` at the same
+`authentik-server-tls` Secret.
+
+**Why this is a different code path, not another guess at the same one** (confirmed by reading
+`pkg/provider/kubernetes/crd/kubernetes.go`, tag `v3.7.4`, directly): `buildTLSStores()` fetches
+`spec.defaultCertificate.secretName` via `client.GetSecret()` and parses it with
+`getCertificateBlocks()` — it never calls `getTLSHTTP()`/`getTLS()`, the exact function pair
+that round 2's live debug capture proved silently fails to register a certificate for the
+per-route path. Whatever is broken in that path is not necessarily broken in this one, because
+it is different code.
+
+Wired into `070-setup-authentik.yml` (applied right after the certificate is confirmed Ready —
+`buildTLSStores()` fetches the Secret eagerly, so an unissued cert would fail it the same way)
+and `070-remove-authentik.yml`. Covered by a new mutation-tested static test,
+`test-authentik-tlsstore-workaround.sh`.
+
+🔴 **This is a cluster-wide default, not a per-route fix.** Traefik only ever honors the one
+`TLSStore` named `default` (its own documented rule — a second one in another namespace gets
+both silently dropped, confirmed from the same source read). This makes Authentik's certificate
+the fallback for *any* unmatched SNI on the `websecure` entrypoint, cluster-wide — safe today
+because imac's own survey (`urb-agents#2046`) found zero other `IngressRoute`s in this cluster
+declare a `tls:` block at all, so nothing else's behavior changes. It does **not** generalize:
+the day a second service needs its own real in-cluster certificate presented by SNI, this single
+global slot cannot serve both, and that will need a real decision (per-route TLSOptions once
+upstream fixes `HostRegexp`-selection support, a per-service TLSStore-in-its-own-namespace scheme
+once it's confirmed Traefik actually supports more than one at all, or something else) — not
+another default-store trick.
+
+⚠️ **Unverified against a real cluster as of this edit.** The retracted `tls.domains` attempt
+(PR #647) is the whole reason this document does not call anything "fixed" again until imac
+confirms it live — both the `openssl s_client -servername authentik.localhost` probe (host-side
+and in-cluster) returning `authentik-server-tls` instead of `TRAEFIK DEFAULT CERT`, and ideally
+the Authentik connector's actual end-to-end OIDC sign-in through Dex.
 
 ## Scope beyond Rancher Desktop
 

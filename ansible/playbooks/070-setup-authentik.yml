@@ -124,6 +124,7 @@
     # Certificate's dnsNames depend on which domains this install has enabled.
     authentik_server_tls_certificate_file: "{{ manifests_folder }}/076-authentik-server-tls-certificate.yaml"
     authentik_ingressroute_tls_file: "{{ manifests_folder }}/076-authentik-ingressroute-tls.yaml"
+    authentik_tlsstore_file: "{{ manifests_folder }}/076-authentik-tlsstore.yaml"
 
     # Auth10 configuration (loaded from Kubernetes secret)
 
@@ -734,6 +735,19 @@
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: authentik_ingressroute_tls_result
+      changed_when: true
+
+    # ── Traefik workaround for the still-unfixed in-cluster SNI bug ───────────────────────────
+    # See INVESTIGATE-system-traefik-incluster-sni.md: tls.secretName on the IngressRoute above
+    # never actually loads a certificate on this cluster (confirmed live, not inferred). The
+    # TLSStore CRD is a different, independently-verified code path — applied here, after the
+    # cert is confirmed Ready, same ordering as the IngressRoute above.
+    - name: "36.4. Deploy the default TLSStore (workaround for the in-cluster SNI bug, unverified live — see manifest header)"
+      ansible.builtin.command: >
+        kubectl apply -f {{ authentik_tlsstore_file }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: authentik_tlsstore_result
       changed_when: true
 
     - name: "37. Test Authentik UI accessibility via cluster"

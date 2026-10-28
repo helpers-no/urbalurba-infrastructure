@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Partially live-tested by imac (`urb-agents#2044`/`#2045`/`#2046`) — GitHub connector verified short of browser login; Authentik connector still blocked by a platform-level TLS/SNI issue (tracked separately, root cause not yet actually found — a first fix attempt was retracted after live re-testing disproved it); Okta not yet attempted
+## Status: Partially live-tested by imac (`urb-agents#2044`/`#2045`/`#2046`) — GitHub connector verified short of browser login; Authentik connector still blocked by a platform-level TLS/SNI issue (tracked separately; root cause itself not found upstream, but a workaround — a `TLSStore` CRD, a different code path than the retracted `tls.domains` attempt — has shipped and is awaiting imac's live verification); Okta not yet attempted
 
 **Goal**: wire Epinio's own bundled Dex to up to three identity providers (GitHub,
 Authentik, Okta), each mapping its own groups/teams to namespace roles, instead of
