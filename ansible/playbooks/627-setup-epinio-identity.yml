@@ -85,6 +85,27 @@
         quiet: true
       when: epinio_identity_github.enabled
 
+    # 🔴 THE SHAPE, NOT JUST THE LENGTH — urb-agents#2040 (ops, live-Proxmox pass). The check above
+    # only proved teams was a non-empty list, so the OLD PoC's flat list of strings sailed through
+    # and then died deep in the values template with a raw "'str object' has no attribute 'name'".
+    # Every entry must be {name: <string>, roles: [<non-empty list of strings>]}; a bare string
+    # is not a mapping, so select('mapping') drops it and the counts differ. Two traps, both hit
+    # while writing this: under Ansible a truthiness test on a MISSING attribute raises (the same
+    # raw "has no attribute 'name'" error this exists to replace), so every attribute is tested
+    # with `defined` before it is tested for truth; and it is kept inline (not looped over the
+    # three connectors) because a templated loop item would be stringified by Ansible.
+    - name: 3b. GitHub connector — every teams entry must be a {name, roles} mapping
+      ansible.builtin.assert:
+        that:
+          - (epinio_identity_github.teams | default([]) | select('mapping') | selectattr('name', 'defined') | selectattr('name') | selectattr('roles', 'defined') | selectattr('roles') | selectattr('roles', 'iterable') | rejectattr('roles', 'string') | list | length) == (epinio_identity_github.teams | default([]) | length)
+        fail_msg: >-
+          epinio_identity_github.teams must be a list of mappings, each with a non-empty
+          `name` and a non-empty `roles` list, e.g. - {name: HQ, roles: ["admin:workspace"]}
+          — a bare list of strings (the old PoC shape) is not accepted. Got:
+          {{ epinio_identity_github.teams }}
+        quiet: true
+      when: epinio_identity_github.enabled
+
     - name: 4. Authentik connector — required fields and secret, only if enabled
       ansible.builtin.assert:
         that:
@@ -98,6 +119,27 @@
         quiet: true
       when: epinio_identity_authentik.enabled
 
+    # 🔴 THE SHAPE, NOT JUST THE LENGTH — urb-agents#2040 (ops, live-Proxmox pass). The check above
+    # only proved groups was a non-empty list, so the OLD PoC's flat list of strings sailed through
+    # and then died deep in the values template with a raw "'str object' has no attribute 'name'".
+    # Every entry must be {name: <string>, roles: [<non-empty list of strings>]}; a bare string
+    # is not a mapping, so select('mapping') drops it and the counts differ. Two traps, both hit
+    # while writing this: under Ansible a truthiness test on a MISSING attribute raises (the same
+    # raw "has no attribute 'name'" error this exists to replace), so every attribute is tested
+    # with `defined` before it is tested for truth; and it is kept inline (not looped over the
+    # three connectors) because a templated loop item would be stringified by Ansible.
+    - name: 4b. Authentik connector — every groups entry must be a {name, roles} mapping
+      ansible.builtin.assert:
+        that:
+          - (epinio_identity_authentik.groups | default([]) | select('mapping') | selectattr('name', 'defined') | selectattr('name') | selectattr('roles', 'defined') | selectattr('roles') | selectattr('roles', 'iterable') | rejectattr('roles', 'string') | list | length) == (epinio_identity_authentik.groups | default([]) | length)
+        fail_msg: >-
+          epinio_identity_authentik.groups must be a list of mappings, each with a non-empty
+          `name` and a non-empty `roles` list, e.g. - {name: HQ, roles: ["admin:workspace"]}
+          — a bare list of strings (the old PoC shape) is not accepted. Got:
+          {{ epinio_identity_authentik.groups }}
+        quiet: true
+      when: epinio_identity_authentik.enabled
+
     - name: 5. Okta connector — required fields and secret, only if enabled
       ansible.builtin.assert:
         that:
@@ -108,6 +150,27 @@
         fail_msg: >-
           epinio_identity_okta.enabled is true but issuer, client_id, groups (non-empty
           list) or epinio_identity_okta_client_secret is missing.
+        quiet: true
+      when: epinio_identity_okta.enabled
+
+    # 🔴 THE SHAPE, NOT JUST THE LENGTH — urb-agents#2040 (ops, live-Proxmox pass). The check above
+    # only proved groups was a non-empty list, so the OLD PoC's flat list of strings sailed through
+    # and then died deep in the values template with a raw "'str object' has no attribute 'name'".
+    # Every entry must be {name: <string>, roles: [<non-empty list of strings>]}; a bare string
+    # is not a mapping, so select('mapping') drops it and the counts differ. Two traps, both hit
+    # while writing this: under Ansible a truthiness test on a MISSING attribute raises (the same
+    # raw "has no attribute 'name'" error this exists to replace), so every attribute is tested
+    # with `defined` before it is tested for truth; and it is kept inline (not looped over the
+    # three connectors) because a templated loop item would be stringified by Ansible.
+    - name: 5b. Okta connector — every groups entry must be a {name, roles} mapping
+      ansible.builtin.assert:
+        that:
+          - (epinio_identity_okta.groups | default([]) | select('mapping') | selectattr('name', 'defined') | selectattr('name') | selectattr('roles', 'defined') | selectattr('roles') | selectattr('roles', 'iterable') | rejectattr('roles', 'string') | list | length) == (epinio_identity_okta.groups | default([]) | length)
+        fail_msg: >-
+          epinio_identity_okta.groups must be a list of mappings, each with a non-empty
+          `name` and a non-empty `roles` list, e.g. - {name: HQ, roles: ["admin:workspace"]}
+          — a bare list of strings (the old PoC shape) is not accepted. Got:
+          {{ epinio_identity_okta.groups }}
         quiet: true
       when: epinio_identity_okta.enabled
 
