@@ -15,6 +15,23 @@
 # - github_runner_name
 # - github_runner_labels (comma-joined)
 # - github_runner_memory_request / github_runner_memory_limit
+# - github_runner_instance (may be empty — the default/unnamed instance)
+# - github_runner_resource_name (computed once by the setup playbook, task 1e — single source of
+#   truth for this Deployment's name and its Secret's name, never recomputed here)
+#
+# 🔴 MULTIPLE INSTANCES SHARE THIS ONE NAMESPACE (urb-agents#2053) — one Deployment per target
+# repo, distinguished by github_runner_resource_name and, for any NAMED instance, an `instance`
+# label folded into the selector itself (not just a name suffix) so two Deployments' selectors
+# can never overlap — Kubernetes selectors are immutable once set, so giving every named instance
+# its own from creation avoids ever needing to mutate one. The DEFAULT (unnamed) instance's
+# selector is deliberately left exactly as it always was — `{app: github-runner}`, no `instance`
+# key at all — so redeploying this template with github_runner_instance unset renders byte-for-
+# byte identical to every prior version, same bar ops proved for the memory-limit fix
+# (urb-agents#2032): zero diff, no forced redeploy of whatever is already running.
+#
+# ⚠️ SHARING A NAMESPACE IS NOT FULL ISOLATION. Every instance's `dind` sidecar below is still
+# `privileged: true` — stated plainly, not silently assumed safe: two repos' runners sharing this
+# namespace share the same RBAC/NetworkPolicy boundary that namespace provides, nothing stronger.
 #
 # 🔴 REGISTRATION HAPPENS IN THE MAIN CONTAINER'S OWN STARTUP COMMAND, NOT AN INIT
 # CONTAINER (ops, urb-agents#2030, found live): `ghcr.io/actions/actions-runner` resolves
@@ -41,10 +58,13 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: github-runner
+  name: {{ github_runner_resource_name }}
   namespace: {{ github_runner_namespace }}
   labels:
     app: github-runner
+{% if github_runner_instance %}
+    instance: {{ github_runner_instance }}
+{% endif %}
 spec:
   replicas: 1
   # Recreate, not RollingUpdate: two runner processes must never register under the
@@ -54,10 +74,16 @@ spec:
   selector:
     matchLabels:
       app: github-runner
+{% if github_runner_instance %}
+      instance: {{ github_runner_instance }}
+{% endif %}
   template:
     metadata:
       labels:
         app: github-runner
+{% if github_runner_instance %}
+        instance: {{ github_runner_instance }}
+{% endif %}
     spec:
       securityContext:
         supplementalGroups: [2375]
@@ -96,7 +122,7 @@ spec:
             - name: GITHUB_RUNNER_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: github-runner-token
+                  name: {{ github_runner_resource_name }}-token
                   key: TOKEN
           # 🔴 768Mi OOM-KILLED A REAL RELEASE BUILD (ops, urb-agents#2032, live on
           # production's own cli-release.yml: bun install/typecheck/test/5-platform-compile

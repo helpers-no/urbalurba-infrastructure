@@ -37,9 +37,22 @@
 # github.com and api.github.com are real, globally-resolvable public hostnames, reachable
 # the same way from any network namespace, including the dind sidecar's inner one.
 #
+# 🔴 MULTIPLE INSTANCES CAN COEXIST ON ONE CLUSTER, ONE PER TARGET REPO (urb-agents#2053 —
+# bifrost wanted a second runner on the same Proxmox cluster urb-agents' own already runs on).
+# Run this playbook again with a different -e github_runner_instance=<slug> for each additional
+# repo: every resource name/selector gets that slug folded in, so a second instance can never
+# collide with or silently overwrite the first (task 3b/3c refuses outright if it would). Leave
+# github_runner_instance unset for the ORIGINAL/default instance — its resource names are
+# unchanged from before this existed, so nothing already deployed needs to move.
+#
 # Usage:
 # ansible-playbook playbooks/645-setup-github-runner.yml -e target_host="rancher-desktop" \
 #   -e github_runner_repo="owner/repo" -e github_runner_pat="..."
+#
+# A second instance, same cluster:
+# ansible-playbook playbooks/645-setup-github-runner.yml -e target_host="rancher-desktop" \
+#   -e github_runner_repo="owner/other-repo" -e github_runner_pat="..." \
+#   -e github_runner_instance="other-repo"
 
 - name: Install a GitHub Actions self-hosted runner
   hosts: localhost
@@ -48,6 +61,16 @@
     merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
     manifests_dir: "/mnt/urbalurbadisk/manifests"
     github_runner_namespace: "github-runner"
+
+    # 🔴 EMPTY BY DEFAULT, ON PURPOSE — urb-agents#2053 (bifrost wanted a second runner on the
+    # same cluster, pointed at a different repo). Left empty, every resource name/label below
+    # renders EXACTLY as it always has — no rename, no selector change, nothing forces a redeploy
+    # of whatever is already running under the default (unnamed) instance. Set it
+    # (-e github_runner_instance=bifrost) to register a SECOND, fully independent instance
+    # alongside the first, in the same namespace. See 645-github-runner.yaml.j2's own header for
+    # why the namespace is shared but the selector never is.
+    github_runner_instance: ""
+    github_runner_force: false
 
     # 🔵 Pinned, same image ops already proved live building the hand-applied version
     # (urb-agents#2030). Re-verify against ghcr.io before bumping, same discipline every
@@ -105,11 +128,31 @@
         quiet: true
       no_log: true
 
+    - name: 1d. If an instance name is given, it must be a safe Kubernetes name fragment
+      ansible.builtin.assert:
+        that:
+          - github_runner_instance is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+        fail_msg: >-
+          github_runner_instance='{{ github_runner_instance }}' is not a valid Kubernetes name
+          fragment (lowercase alphanumeric and hyphens only, no leading/trailing hyphen). It is
+          folded directly into a Deployment/Secret name below.
+        quiet: true
+      when: github_runner_instance | length > 0
+
+    # 🔴 ONE COMPUTATION, REUSED EVERYWHERE BELOW — the Secret name, the Deployment name (via the
+    # template render), the collision check, and the pod/log lookups all read this SAME fact,
+    # rather than each re-deriving the suffix logic and risking one of them drifting out of step.
+    - name: 1e. Compute this instance's resource name
+      ansible.builtin.set_fact:
+        github_runner_resource_name: "github-runner{{ ('-' + github_runner_instance) if github_runner_instance | length > 0 else '' }}"
+
     - name: 2. Print playbook description
       ansible.builtin.debug:
         msg: >-
           Installing a GitHub Actions runner on Kubernetes context: {{ target_host }},
-          repo: {{ github_runner_repo }}, name: {{ github_runner_name }}
+          repo: {{ github_runner_repo }}, name: {{ github_runner_name }},
+          instance: {{ github_runner_instance if github_runner_instance | length > 0 else '(default)' }},
+          resource name: {{ github_runner_resource_name }}
 
     - name: 3. Create github-runner namespace if it doesn't exist
       ansible.builtin.shell: kubectl create namespace {{ github_runner_namespace }} --dry-run=client -o yaml | kubectl apply -f -
@@ -118,6 +161,42 @@
       register: namespace_result
       changed_when: namespace_result.rc == 0
       failed_when: namespace_result.rc != 0
+
+    # 🔴 REFUSE RATHER THAN SILENTLY REPOINT SOMEONE ELSE'S LIVE RUNNER — urb-agents#2053's own
+    # generalization ask. Without this, a second operator who happens to reuse an instance name
+    # (or the default, unnamed one) would have this playbook's own `state: present` quietly
+    # retarget an already-running Deployment at a DIFFERENT repo, mid-flight, no confirmation.
+    # Same "ask what is actually there before acting" precedent as 025-remove-cert-manager.yml.
+    - name: 3b. Does a Deployment with this resource name already exist
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: "{{ github_runner_resource_name }}"
+        namespace: "{{ github_runner_namespace }}"
+        kubeconfig: "{{ merged_kubeconf_file }}"
+      register: github_runner_existing
+
+    - name: 3c. If it does, it must already be serving the SAME repo, or -e github_runner_force=true
+      ansible.builtin.assert:
+        that:
+          - >-
+            existing_repo == github_runner_repo
+            or (github_runner_force | bool)
+        fail_msg: >-
+          A Deployment named '{{ github_runner_resource_name }}' already exists in namespace
+          '{{ github_runner_namespace }}', currently serving '{{ existing_repo }}' — not
+          '{{ github_runner_repo }}'. Refusing to silently repoint a live runner at a different
+          repository. Pick a different -e github_runner_instance=..., or pass
+          -e github_runner_force=true if retargeting this exact instance is actually intended.
+        quiet: true
+      vars:
+        existing_repo: >-
+          {{
+            github_runner_existing.resources[0].spec.template.spec.containers
+              | selectattr('name', 'equalto', 'runner') | map(attribute='env') | first
+              | selectattr('name', 'equalto', 'GITHUB_RUNNER_REPO') | map(attribute='value') | first
+              | default('(unknown — could not read its repo)')
+          }}
+      when: github_runner_existing.resources | default([]) | length > 0
 
     # 🔴 MINTED HERE, NEVER STORED — the whole point of this task. GitHub's own API:
     # POST /repos/{owner}/{repo}/actions/runners/registration-token, Bearer-authed with
@@ -157,7 +236,7 @@
           apiVersion: v1
           kind: Secret
           metadata:
-            name: github-runner-token
+            name: "{{ github_runner_resource_name }}-token"
             namespace: "{{ github_runner_namespace }}"
           type: Opaque
           stringData:
@@ -182,12 +261,16 @@
         state: absent
       changed_when: false
 
+    # 🔴 INSTANCE-SCOPED SELECTOR, NOT JUST 'app=github-runner' — with a second instance
+    # coexisting in this same namespace, a bare app=github-runner selector could return a
+    # DIFFERENT instance's pod (list ordering is not guaranteed), and this wait would report
+    # success without ever having looked at the instance actually just deployed.
     - name: 8. Wait for the runner pod to be ready
       kubernetes.core.k8s_info:
         kind: Pod
         namespace: "{{ github_runner_namespace }}"
         label_selectors:
-          - "app=github-runner"
+          - "app=github-runner{{ (',instance=' + github_runner_instance) if github_runner_instance | length > 0 else '' }}"
         kubeconfig: "{{ merged_kubeconf_file }}"
       register: github_runner_pods
       retries: 30
@@ -205,7 +288,7 @@
     # Ready but whose log does not confirm this gets reported honestly below, not assumed.
     - name: 9. Wait for the runner to report it is listening, not just that the pod started
       ansible.builtin.command: >-
-        kubectl logs -n {{ github_runner_namespace }} deploy/github-runner -c runner --tail=50
+        kubectl logs -n {{ github_runner_namespace }} deploy/{{ github_runner_resource_name }} -c runner --tail=50
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       register: github_runner_logs
@@ -230,6 +313,12 @@
           - "  (placeholder — revisit once a real .github/workflows/*.yml targets this"
           - "  runner, same caveat forgejo_runner_labels carried before it was exercised)"
           - ""
+          - "🧩 Instance: {{ github_runner_instance if github_runner_instance | length > 0 else '(default)' }}"
+          - "📛 Resource name: {{ github_runner_resource_name }}"
+          - "  (shares the '{{ github_runner_namespace }}' namespace with any other instance —"
+          - "  deploy this playbook again with a different -e github_runner_instance=... to"
+          - "  register a second, independent runner for a different repo on this same cluster)"
+          - ""
           - "🐳 Execution: a private docker:dind sidecar, not a real host Docker Engine"
           - "  (same choice forgejo-runner already made, same reasoning)"
           - ""
@@ -239,7 +328,7 @@
           - "  header for why that is the accepted tradeoff, not a gap."
           - ""
           - "🔧 Troubleshooting:"
-          - "• Check pods: kubectl get pods -n {{ github_runner_namespace }}"
-          - "• Runner logs: kubectl logs -n {{ github_runner_namespace }} deploy/github-runner -c runner"
-          - "• dind logs: kubectl logs -n {{ github_runner_namespace }} deploy/github-runner -c dind"
+          - "• Check pods: kubectl get pods -n {{ github_runner_namespace }} -l app=github-runner"
+          - "• Runner logs: kubectl logs -n {{ github_runner_namespace }} deploy/{{ github_runner_resource_name }} -c runner"
+          - "• dind logs: kubectl logs -n {{ github_runner_namespace }} deploy/{{ github_runner_resource_name }} -c dind"
           - "==============================================="

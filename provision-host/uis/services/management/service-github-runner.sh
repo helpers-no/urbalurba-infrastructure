@@ -25,6 +25,13 @@
 #   ansible-playbook playbooks/645-setup-github-runner.yml \
 #     -e target_host="rancher-desktop" -e github_runner_repo="owner/repo" \
 #     -e github_runner_pat="..."
+#
+# 🔴 MULTIPLE INSTANCES CAN NOW COEXIST ON ONE CLUSTER, ONE PER TARGET REPO (urb-agents#2053) —
+# add -e github_runner_instance="<slug>" to register a second, fully independent runner alongside
+# an existing one, without touching it (see 645-setup-github-runner.yml's own header for the full
+# story and the collision safety check). Known limitation, not fixed here: SCRIPT_CHECK_COMMAND
+# below and `uis status` only ever report "is ANY instance healthy", not a specific one — the
+# direct ansible-playbook invocation above remains the real per-instance interface.
 
 # === Service Metadata (Required) ===
 SCRIPT_ID="github-runner"
