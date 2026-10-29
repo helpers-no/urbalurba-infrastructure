@@ -55,18 +55,25 @@ grep -qF '/garage key import' <<< "$pb" \
     && pass_test \
     || fail_test "garage key import not found" "epinio_garage_secret_key would never actually reach Garage"
 
-start_test "key import is guarded by an existence check (idempotent — does not error on a second run)"
-if grep -qF 'when: epinio_garage_key_name not in epinio_garage_key_list.stdout' <<< "$pb"; then
+start_test "key import is guarded by an existence check on the key ID (idempotent, and correct after the ID rotates)"
+if grep -qF 'when: epinio_garage_access_key not in epinio_garage_key_list.stdout' <<< "$pb"; then
     pass_test
 else
-    fail_test "import not guarded" "re-running the playbook could fail trying to import an already-imported key"
+    fail_test "import not guarded by ID" "a name check skips importing a ROTATED key ID whenever an old key still carries the name, leaving the configured key unknown to Garage (urb-agents#2057)"
+fi
+
+start_test "...and the guard does NOT compare the key name"
+if grep -qF 'epinio_garage_key_name not in epinio_garage_key_list' <<< "$pb"; then
+    fail_test "name-based guard is back" "found live (urb-agents#2057): after an ID rotation the old key keeps the name, so the new ID is never imported and every push fails with a 403"
+else
+    pass_test
 fi
 
 start_test "the key is granted read+write on its OWN bucket only (--key + a bucket name, not account-wide)"
-if grep -qE '/garage bucket allow\s*$' <<< "$pb" && grep -qF -- '--key {{ epinio_garage_key_name }} --read --write {{ epinio_garage_bucket }}' <<< "$pb"; then
+if grep -qE '/garage bucket allow\s*$' <<< "$pb" && grep -qF -- '--key {{ epinio_garage_access_key }} --read --write {{ epinio_garage_bucket }}' <<< "$pb"; then
     pass_test
 else
-    fail_test "bucket allow not scoped correctly" "the key could end up with no access, or with account-wide rights"
+    fail_test "bucket allow not scoped correctly" "the key could end up with no access, or with account-wide rights — or, granted by name, hit the wrong key once two share it"
 fi
 
 print_summary

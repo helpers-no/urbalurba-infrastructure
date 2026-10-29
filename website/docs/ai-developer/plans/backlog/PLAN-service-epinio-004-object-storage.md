@@ -69,6 +69,22 @@ key names — confirmed by every other namespace block in that file carrying its
 live by imac, patched container-locally to continue testing, reported as a separate bug
 rather than silently worked around; populated for real in PR #644.
 
+## Bug found live, fixed: the key check compared the name, not the ID (`urb-agents#2057`)
+
+`625-setup-epinio.yml`'s task 8g decided whether to import Epinio's Garage key by checking whether
+the key's **name** ("epinio") appeared in `garage key list`. The name never changes, but the key ID
+does whenever `EPINIO_GARAGE_ACCESS_KEY` rotates, which Garage's key tombstoning forces
+periodically. With an old key still carrying the name, the new ID was never imported: the configured
+secret named a key Garage had never heard of, the bucket stayed granted only to the old one, and
+every `epinio push` failed with `HeadBucket ... 403`. Found by imac while pushing a real app.
+
+Fixed: the check compares the key **ID**, and the bucket grant uses the ID too, because after a
+rotation two keys can share the name. Confirmed against Garage's source (`src/api/admin/key.rs`,
+v2.3.0) that import is keyed by ID and names are not unique. The existing test had asserted the
+name-based check, so it encoded the bug; it now asserts the ID form and the absence of the name
+form. One limit that stays: if the new ID was already used and tombstoned, Garage refuses the import
+with `KeyAlreadyExists` and the playbook fails loudly with that message, which is the honest outcome.
+
 ## Validation
 
 **Met, live, 2026-10-27 (`urb-agents#2044`)**, once the bug above was worked around:
