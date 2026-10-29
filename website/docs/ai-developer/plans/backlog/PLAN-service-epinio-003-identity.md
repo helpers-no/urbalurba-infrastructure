@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Partially live-tested by imac (`urb-agents#2044`/`#2045`/`#2046`/`#2051`) — GitHub connector verified short of browser login; Authentik connector's platform-level TLS/SNI blocker is now confirmed fixed live (the `TLSStore` workaround, `1.6.255`), but a second, separate bug (Authentik's OAuth2Provider blueprint missing a required field) was found blocking it right behind that one, fixed, not yet re-verified live; Okta not yet attempted
+## Status: Partially live-tested by imac (`urb-agents#2044`/`#2045`/`#2046`/`#2051`/`#2054`) — GitHub connector verified short of browser login; Authentik connector: the TLS/SNI workaround and the blueprint `redirect_uris` fix are both confirmed live, and a third bug (the certificate's `dnsNames` rendering as one garbled SAN) is fixed but not yet re-verified live; Okta not yet attempted
 
 **Goal**: wire Epinio's own bundled Dex to up to three identity providers (GitHub,
 Authentik, Okta), each mapping its own groups/teams to namespace roles, instead of
@@ -178,8 +178,18 @@ fixed live, one more real bug found right behind it:**
   set it. Fixed, reusing the exact shape already proven elsewhere in this repo
   (`073-authentik-2-openwebui-blueprint.yaml.j2`) and Dex's own redirect URI (shared across every
   connector, not a hand-duplicated copy) — covered by two new mutation-tested render assertions.
-- **Not yet re-verified live** — both blockers should now be clear, but nobody has actually
-  reached a browser-driven OIDC sign-in through Dex yet. That's the next ask for imac.
+- **Re-verified live (`urb-agents#2054`, `1.6.256`)**: the blueprint now applies
+  (`BlueprintInstance` `status: successful`; `epinio-app` and `epinio-provider` exist with the
+  correct `redirect_uris`). Both fixes above work together.
+- **A third bug, right behind them**: pushing into the real sign-in, Dex still could not open the
+  connector — `x509: certificate is valid for authentik.localhost    - authentik.x    - authentik.y`.
+  `076-authentik-server-tls-certificate.yaml.j2` built `dnsNames` with manual `{%-` dash
+  whitespace control, which with Ansible's `trim_blocks` merged every list item into ONE garbled
+  SAN string, so no strict TLS client could ever match a hostname. Same bug class as
+  `635-forgejo.yaml.j2` (`urb-agents#2026`). Fixed with plain block tags, and three new render
+  assertions that check the parsed list (the template had none); a sweep found no other template
+  with the pattern. Not yet re-verified live — a browser-driven sign-in through Dex has still
+  never been reached.
 
 **Okta connector: not attempted** — no real Okta tenant available; shares the
 Authentik-identical `insecureEnableGroups`/`insecureSkipEmailVerified` code path already

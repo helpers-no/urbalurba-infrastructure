@@ -719,6 +719,41 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 076-authentik-server-tls-certificate.yaml.j2: dnsNames (urb-agents#2054). Found live by
+# imac: the manual {%- dash whitespace control, combined with Ansible's trim_blocks, merged
+# every "- item" line into ONE string, so the certificate carried a single garbled SAN
+# ("authentik.localhost    - authentik.x    - authentik.y") that no strict TLS client can
+# ever match against. Same bug class as 635-forgejo.yaml.j2 (urb-agents#2026). Each case
+# asserts on the parsed LIST, because a text match would pass on the merged string too.
+# ---------------------------------------------------------------------------
+
+_render_cert_dnsnames() {
+    python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/076-authentik-server-tls-certificate.yaml.j2').read())
+d = next(x for x in yaml.safe_load_all(tpl.render(domains=json.loads('$1'))) if x is not None)
+print(json.dumps(d['spec']['dnsNames']))
+" 2>&1
+}
+
+start_test "076-authentik-server-tls-certificate.yaml.j2: every enabled domain is its OWN dnsNames entry"
+OUT="$(_render_cert_dnsnames '{"localhost":{"enabled":true,"base_domain":"localhost"},"tailscale":{"enabled":true,"base_domain":"x.ts.net"},"cloudflare":{"enabled":true,"base_domain":"x.com"}}')"
+if [[ "$OUT" == '["authentik.localhost", "authentik.x.ts.net", "authentik.x.com"]' ]]; then
+    pass_test
+else
+    fail_test "expected three separate SANs, got: $OUT"
+fi
+
+start_test "...localhost alone renders exactly one SAN"
+OUT="$(_render_cert_dnsnames '{"localhost":{"enabled":true,"base_domain":"localhost"}}')"
+if [[ "$OUT" == '["authentik.localhost"]' ]]; then pass_test; else fail_test "got: $OUT"; fi
+
+start_test "...a disabled domain is left out"
+OUT="$(_render_cert_dnsnames '{"localhost":{"enabled":true,"base_domain":"localhost"},"tailscale":{"enabled":false,"base_domain":"x.ts.net"},"cloudflare":{"enabled":true,"base_domain":"x.com"}}')"
+if [[ "$OUT" == '["authentik.localhost", "authentik.x.com"]' ]]; then pass_test; else fail_test "got: $OUT"; fi
+
+# ---------------------------------------------------------------------------
 # 076-authentik-ingressroute-tls.yaml.j2: tls.domains (urb-agents#2046). Traefik builds
 # its SNI certificate store from literal domain names extracted from a router's own
 # match rule - HostRegexp() is a pattern, not a name, so secretName alone (no tls.domains)
