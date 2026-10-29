@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Partially live-tested by imac (`urb-agents#2044`/`#2045`/`#2046`) — GitHub connector verified short of browser login; Authentik connector still blocked by a platform-level TLS/SNI issue (tracked separately; root cause itself not found upstream, but a workaround — a `TLSStore` CRD, a different code path than the retracted `tls.domains` attempt — has shipped and is awaiting imac's live verification); Okta not yet attempted
+## Status: Partially live-tested by imac (`urb-agents#2044`/`#2045`/`#2046`/`#2051`) — GitHub connector verified short of browser login; Authentik connector's platform-level TLS/SNI blocker is now confirmed fixed live (the `TLSStore` workaround, `1.6.255`), but a second, separate bug (Authentik's OAuth2Provider blueprint missing a required field) was found blocking it right behind that one, fixed, not yet re-verified live; Okta not yet attempted
 
 **Goal**: wire Epinio's own bundled Dex to up to three identity providers (GitHub,
 Authentik, Okta), each mapping its own groups/teams to namespace roles, instead of
@@ -163,6 +163,24 @@ fixed, one bigger blocker found and NOT fixed here:**
   [INVESTIGATE-system-traefik-incluster-sni](./INVESTIGATE-system-traefik-incluster-sni.md)
   for the full retraction and what live instrumentation is actually needed next.
 
+**Authentik connector — re-tested again 2026-10-28 (`urb-agents#2051`), the TLS blocker confirmed
+fixed live, one more real bug found right behind it:**
+
+- The `TLSStore` workaround ([INVESTIGATE-system-traefik-incluster-sni.md](./INVESTIGATE-system-traefik-incluster-sni.md))
+  is **confirmed working**: fresh deploy on `1.6.255`, host-side and in-cluster SNI probes both
+  return the real `authentik-server-tls` certificate instead of Traefik's default — matching
+  serial/fingerprint exactly, not inferred.
+- Going further, with a real client_id/secret this time: `627-setup-epinio-identity.yml` itself
+  reports success (Dex restarts with the real connector config), but the Authentik-side blueprint
+  (`manifests/627-epinio-authentik-blueprint.yaml.j2`) silently never created the provider or
+  application — `BlueprintInstance` sat at `status: error`, `redirect_uris: This field is
+  required.` On this Authentik version (2025.10.3) that field is mandatory; the blueprint never
+  set it. Fixed, reusing the exact shape already proven elsewhere in this repo
+  (`073-authentik-2-openwebui-blueprint.yaml.j2`) and Dex's own redirect URI (shared across every
+  connector, not a hand-duplicated copy) — covered by two new mutation-tested render assertions.
+- **Not yet re-verified live** — both blockers should now be clear, but nobody has actually
+  reached a browser-driven OIDC sign-in through Dex yet. That's the next ask for imac.
+
 **Okta connector: not attempted** — no real Okta tenant available; shares the
 Authentik-identical `insecureEnableGroups`/`insecureSkipEmailVerified` code path already
 partially exercised by template inspection. Was never expected to hit the Traefik/SNI
@@ -171,5 +189,6 @@ issue above — Okta is a real external IdP, not reached through this platform's
 
 **Still needed, live**: confirm a user with no matching group lands with no roles (not
 admin by accident) — still only checked by inference, not an observed failed login; Okta
-with a real tenant; and the Authentik connector's own end-to-end sign-in, once
-`INVESTIGATE-system-traefik-incluster-sni.md`'s real root cause is actually found.
+with a real tenant; and the Authentik connector's own end-to-end sign-in, now that both known
+blockers (the TLS/SNI workaround, confirmed; the `redirect_uris` fix, not yet re-verified) should
+be clear.

@@ -31,6 +31,18 @@ entries:
       client_type: confidential
       client_id: {{ epinio_identity_authentik.client_id }}
       client_secret: {{ epinio_identity_authentik_client_secret }}
+      # 🔴 REQUIRED on this Authentik version (2025.10.3) — found live by imac
+      # (urb-agents#2051): without it, the blueprint apply fails validation
+      # ("redirect_uris: This field is required.") before the provider or the
+      # application is ever created, every time — not "untested", genuinely
+      # blocked. Same shape as the one other confidential OAuth2Provider in this
+      # repo that already works (manifests/073-authentik-2-openwebui-blueprint.yaml.j2).
+      # Dex's own redirect URI is the SAME for every connector (one Dex server, not
+      # one per upstream IdP) — 627-epinio-identity-values.yaml.j2 already builds the
+      # identical "https://auth.{{ default_epinio_domain }}/callback" for all three.
+      redirect_uris:
+        - matching_mode: strict
+          url: "https://auth.{{ default_epinio_domain }}/callback"
       access_code_validity: minutes=1
       access_token_validity: minutes=5
       refresh_token_validity: days=30
