@@ -166,6 +166,14 @@
         fail_msg: "Garage pod not found in namespace {{ epinio_garage_namespace }}. Deploy it first: ./uis deploy garage"
         quiet: true
 
+    # 🔴 CHECK BY KEY **ID**, NOT BY NAME — found live by imac (urb-agents#2057). The name
+    # ("epinio") never changes, but the key ID does whenever EPINIO_GARAGE_ACCESS_KEY rotates
+    # (Garage key tombstoning forces that periodically). With a name check, an OLD key still
+    # called "epinio" made this skip importing the NEW ID entirely: the configured secret
+    # named a key Garage had never heard of, and every push failed with a HeadBucket 403.
+    # Garage's key table is keyed by ID and names are not unique (confirmed against
+    # src/api/admin/key.rs, tag v2.3.0: import fails only when the ID already exists), so the
+    # ID is the one thing this check can safely compare.
     - name: 8g. Check whether Epinio's dedicated key already exists (idempotency)
       ansible.builtin.command: >
         kubectl exec -n {{ epinio_garage_namespace }} {{ epinio_garage_pods.resources[0].metadata.name }}
@@ -185,7 +193,7 @@
         -n {{ epinio_garage_key_name }} --yes
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
-      when: epinio_garage_key_name not in epinio_garage_key_list.stdout
+      when: epinio_garage_access_key not in epinio_garage_key_list.stdout
       changed_when: true
       no_log: true
 
@@ -209,11 +217,13 @@
 
     # Idempotent by nature (setting a permission twice is a no-op) — always run, no existence
     # check needed, matching 047-setup-garage.yml's own "deny --create-bucket" task shape.
+    # Granted by ID too: after a rotation two keys can share the name "epinio", and a name
+    # pattern could then grant the wrong one (the old key) or be ambiguous.
     - name: 8k. Grant the dedicated key read+write on Epinio's bucket, scoped to that bucket only
       ansible.builtin.command: >
         kubectl exec -n {{ epinio_garage_namespace }} {{ epinio_garage_pods.resources[0].metadata.name }}
         -- /garage bucket allow
-        --key {{ epinio_garage_key_name }} --read --write {{ epinio_garage_bucket }}
+        --key {{ epinio_garage_access_key }} --read --write {{ epinio_garage_bucket }}
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       changed_when: true

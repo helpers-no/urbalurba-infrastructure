@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Authentik connector verified live end to end (`urb-agents#2056`, `1.6.258`) — a real sign-in through Authentik and Dex, with Epinio accepting the identity and resolving roles; GitHub connector verified short of browser login; Okta not yet attempted; the no-matching-group case still unobserved
+## Status: Verified live end to end for the Authentik connector (`urb-agents#2056`, `#2057`, `1.6.258`): real sign-in, a real `epinio login` token exchange, push, deploy, expose, and a user outside any mapped group correctly walled off. Okta is out of scope for now (needs a real tenant). GitHub connector verified short of browser login.
 
 **Goal**: wire Epinio's own bundled Dex to up to three identity providers (GitHub,
 Authentik, Okta), each mapping its own groups/teams to namespace roles, instead of
@@ -205,12 +205,43 @@ partially exercised by template inspection. Was never expected to hit the Traefi
 issue above — Okta is a real external IdP, not reached through this platform's own
 `HostRegexp` routing at all.
 
-**Not yet proven, live**:
-- That the group-to-role mapping itself is what granted `admin`. imac could not separate it from
-  Epinio possibly auto-granting `admin` to whoever creates a namespace; a second test identity
-  that is NOT in the mapped group would settle it. The same test covers the long-standing open
-  question of a user with no matching group landing with no roles — still only checked by
-  inference from the rendered config, not an observed failed login.
-- The token's `groups` claim carried a duplicate entry (`["HQ","HQ"]`). Cosmetic as far as anyone
-  can tell, not investigated.
-- Okta, which needs a real tenant.
+**Verified live, the full workflow (`urb-agents#2057`, `1.6.258`)** — signing in, building and
+deploying as an Authentik user, plus the isolation case:
+
+- **Real `epinio login`**: the CLI performed its own PKCE token exchange and wrote real tokens
+  (audiences `epinio-api` and `epinio-cli`). It needs a browser or a person at a terminal, which is
+  inherent to OIDC and not something to fix; imac left the real CLI process running and drove only
+  the browser steps through Authentik's flow executor API.
+- **Push, deploy, expose**: `epinio push` built and stored a real app (Paketo Node buildpack, x86),
+  `scripts/epinio/epinio-expose-route.sh` exposed it, and it answered on both Epinio's own ingress
+  and the Traefik hostname route. The Garage `epinio` bucket grew after the push, so the data lands
+  where it should.
+- **A user in no mapped group**: only the default `user` role, no groups claim at all, a 403 on the
+  mapped namespace and its applications, and still able to create a namespace of their own. This
+  closes the long-open "no matching group lands with no roles" question with an observed result.
+
+### How the role mapping actually behaves — read this before configuring it
+
+Settled from Epinio's own source (`internal/auth/role.go`, v1.14.3), not inferred.
+`admin:workspace` is literal `role=admin, namespace=workspace` syntax, split on `:`. It grants
+admin on a namespace named exactly `workspace`, nothing else. It is not "admin of whatever
+namespace this group creates", and this static form cannot express that.
+
+- The default `user` role (everyone, mapped or not) has `namespace_write`, so anyone can create a
+  namespace, but not `app_write`. Creating your own namespace therefore does not let you deploy
+  into it. imac's first push, into a namespace they had created, got `403 user unauthorized` for
+  exactly this reason.
+- So with a mapping like `HQ -> admin:workspace`, HQ members can deploy only into the shared
+  `workspace` namespace. This also settles an earlier doubt: the `admin` role imac saw on a
+  namespace they created was Epinio granting it to the creator, not the group mapping, which only
+  ever applies to the namespace it names.
+- To give each team its own namespace, create those namespaces ahead of time and map each team's
+  group to `admin:<its-namespace>`. There is no way yet to say "admin of any namespace I create".
+
+**Not proven, and not blocking**:
+- The token's `groups` claim carried a duplicate entry (`["HQ","HQ"]`). imac cleared Authentik: the
+  user has exactly one membership and the mapping expression cannot duplicate. It is consistent with
+  Dex merging the ID token's claim with a second copy from userinfo, but that mechanism was not
+  confirmed in Dex's source. Cosmetic as far as anyone can tell.
+- Okta, which needs a real tenant. Out of scope for now.
+- Building on arm64 (ops' gate 16) is untested here; the verified build ran on x86.
