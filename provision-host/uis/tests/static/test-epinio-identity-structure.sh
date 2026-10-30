@@ -86,4 +86,31 @@ else
     fail_test "hostAliases wiring missing or not gated on .localhost" "Dex would get connection refused dialing authentik.localhost's own loopback resolution, found live during the PoC's own class of bug (#1928) recurring here"
 fi
 
+# 🔴 urb-agents#2058 (ops, live Proxmox pass): a `uis pull` container restart drops Helm's
+# repo list, and this playbook assumed 625-setup-epinio.yml had already registered Epinio's
+# repo earlier in the same container lifetime. `helm_repository` is idempotent, so this must
+# be unconditional (no `when` gating it on a prior check) to be correct either way.
+start_test "🔴 Epinio's own Helm repo is (re-)registered unconditionally before the identity helm upgrade"
+_repo_block="$(sed -n '/name: 15b\. Ensure Epinio.s own Helm repo/,/name: 16\. Render/p' "$PLAYBOOK")"
+if grep -qF 'kubernetes.core.helm_repository' <<< "$_repo_block" \
+    && grep -qF 'name: "{{ epinio_chart_repo_name }}"' <<< "$_repo_block" \
+    && ! grep -qE '^\s*when:' <<< "$_repo_block"; then
+    pass_test
+else
+    fail_test "repo registration missing, wrong module, or conditionally gated" "a container restart between 625 and 627 would make task 17's helm upgrade fail outright on a repo it can no longer find"
+fi
+
+# 🔴 urb-agents#2058 (ops, live Proxmox pass): this hard-failed every run against the default
+# .localhost domain even though Epinio was actually fine — the ansible controller has no route
+# to cluster ClusterIPs at all for that domain, so the check can never pass from here, not just
+# occasionally flake. 625-setup-epinio.yml's own equivalent check already treats this the same
+# way (ignore_errors), matched here for consistency.
+start_test "🔴 the post-identity-change Epinio check is advisory (ignore_errors), not a hard gate"
+_check_block="$(sed -n '/name: 22\. Verify Epinio still answers/,/name: 22b\./p' "$PLAYBOOK")"
+if grep -qE '^\s*ignore_errors:\s*true\s*$' <<< "$_check_block"; then
+    pass_test
+else
+    fail_test "ignore_errors missing" "this task would hard-fail the whole playbook on every .localhost deploy, exactly what ops hit — a check that can never pass from this vantage point must not gate the run"
+fi
+
 print_summary

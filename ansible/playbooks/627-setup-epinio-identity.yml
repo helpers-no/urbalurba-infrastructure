@@ -39,6 +39,8 @@
   vars:
     merged_kubeconf_file: "/mnt/urbalurbadisk/.uis.secrets/generated/kubeconfig/kubeconf-all"
     epinio_namespace: "epinio"
+    epinio_chart_repo_name: "epinio"
+    epinio_chart_repo_url: "https://epinio.github.io/helm-charts"
     epinio_chart: "epinio/epinio"
     epinio_chart_version: "1.14.3"
     default_epinio_domain: "apps.localhost"
@@ -287,6 +289,18 @@
       when: epinio_identity_authentik.enabled
 
     # ── Epinio/Dex-side wiring (gates 17/18, every enabled connector) ──────────────────────
+    # 🔴 FOUND LIVE by ops (urb-agents#2058, Proxmox pass): this playbook assumed Epinio's
+    # Helm repo was still registered from 625-setup-epinio.yml's own earlier run - true only
+    # within the same container lifetime. A `uis pull` container restart (needed to pick up
+    # a new version, exactly what ops did mid-pass) drops Helm's repo list along with it, and
+    # task 17 below then fails outright on a repo it can no longer find. `helm_repository` is
+    # itself idempotent (a no-op if already present), so this is unconditional on purpose -
+    # cheaper than a check-then-add, and correct whether or not 625 ran in this container.
+    - name: 15b. Ensure Epinio's own Helm repo is registered (a container restart can drop it)
+      kubernetes.core.helm_repository:
+        name: "{{ epinio_chart_repo_name }}"
+        repo_url: "{{ epinio_chart_repo_url }}"
+
     - name: 16. Render Epinio's identity Helm values
       ansible.builtin.template:
         src: "{{ epinio_identity_values_file }}"
@@ -406,6 +420,17 @@
         KUBECONFIG: "{{ merged_kubeconf_file }}"
       changed_when: false
 
+    # 🔴 FOUND LIVE by ops (urb-agents#2058, Proxmox pass): this hard-failed every run on the
+    # default `apps.localhost` domain, even though Epinio was fine - confirmed from a real
+    # vantage point (200, clean). Root cause is the exact same one 18b-18d above exist for:
+    # `.localhost` is a special-use TLD that resolves to loopback with no DNS lookup, and the
+    # ansible controller container (unlike the Dex pod patched above) has no hostAliases
+    # mechanism available to it and no route to cluster ClusterIPs at all - there is no
+    # vantage point this task could resolve the domain from, not just a missing alias to add.
+    # 625-setup-epinio.yml's own equivalent check (its task 13, same URL shape) already treats
+    # this as advisory for exactly this reason - matched here for consistency: ignore_errors
+    # and a clear debug message, not a silent swallow and not a hard gate on a check that can
+    # never pass from here for a .localhost domain.
     - name: 22. Verify Epinio still answers after the identity change
       ansible.builtin.uri:
         url: "https://epinio.{{ default_epinio_domain }}/"
@@ -415,6 +440,16 @@
       retries: 10
       delay: 5
       until: epinio_identity_check.status | default(0) == 200
+      ignore_errors: true
+
+    - name: 22b. Report the post-identity-change check's own outcome plainly
+      ansible.builtin.debug:
+        msg: >-
+          {{ '✅ Epinio responded 200 after the identity change.'
+             if (epinio_identity_check.status | default(0) == 200)
+             else '⚠️  Could not confirm Epinio from this host (expected for a .localhost domain
+             - the controller has no route to it). Check by hand: curl -sk -o /dev/null -w "%{http_code}\n" https://epinio.'
+             + default_epinio_domain + '/' }}
 
     - name: 23. Display final status
       ansible.builtin.debug:
