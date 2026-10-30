@@ -16,13 +16,14 @@ Investigations and plans waiting for implementation, sorted by last updated date
 | Document | Goal | Updated |
 |----------|------|---------|
 | [Plan: Epinio's Dex connector against this platform's identity providers](PLAN-service-epinio-003-identity.md) | wire Epinio's own bundled Dex to up to three identity providers (GitHub, | 2026-10-30 |
+| [---](INVESTIGATE-service-github-runner-scale-and-scheduling.md) | — | 2026-10-30 |
+| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-30 |
 | [Plan: Epinio's S3 backend is this platform's own Garage, not bundled SeaweedFS](PLAN-service-epinio-004-object-storage.md) | replace the Epinio chart's bundled SeaweedFS object store with this platform's | 2026-10-29 |
 | [Investigate: Traefik's ClusterIP doesn't present the right certificate for a direct in-cluster strict-TLS connection](INVESTIGATE-system-traefik-incluster-sni.md) | figure out how an in-cluster workload reaches another `HostRegexp`-routed | 2026-10-29 |
 | [Plan: a generic external route for a pushed Epinio app](PLAN-service-epinio-005-external-route.md) | give an Epinio-pushed application a tunnel-reachable external route. Epinio's | 2026-10-27 |
 | [Investigate: generic monitoring + patch/image-currency tracking for pod-based UIS services](INVESTIGATE-system-pod-service-health-and-currency.md) | Decide whether/how UIS should have a generic mechanism, analogous to | 2026-10-26 |
 | [Investigate: sitespeed.io for page-speed testing, user journeys, CI gating and monitoring](INVESTIGATE-service-sitespeedio.md) | answer whether sitespeed.io (engine: Browsertime) fits UIS for four related but | 2026-10-26 |
 | [Investigate: Epinio Deploy Path for UIS](INVESTIGATE-service-epinio-deploy-path.md) | Decide how UIS itself (CLI surface, service layout, docs) should incorporate | 2026-10-26 |
-| [INVESTIGATE backlog — priority view](1PRIORITY.md) | — | 2026-10-26 |
 | [Investigate: Registry cache — a UIS cluster cannot currently restart without the internet](INVESTIGATE-system-registry-cache.md) | Give UIS a pull-through registry cache so a cluster can restart, | 2026-10-20 |
 | [Plan: Registry cache — provision the cache itself (zot, not registry:2)](PLAN-system-registry-cache-001-provision.md) | Provision a single zot instance as UIS's pull-through registry cache — the | 2026-10-05 |
 | [Plan: this repository is public and names one installation's private network](PLAN-system-public-repo-internal-detail.md) | Decide what a public repository may say about the installation it was | 2026-10-05 |
