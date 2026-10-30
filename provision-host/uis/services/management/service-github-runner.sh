@@ -20,18 +20,24 @@
 # No persistence across pod restarts, DELIBERATELY — see 645-setup-github-runner.yml's own
 # header for why this is the right tradeoff here, not an oversight.
 #
-# Run the playbook directly (same `uis deploy <service> -- -e key=value` CLI gap as
-# forgejo-runner, urb-agents#1928 — not fixed here either):
-#   ansible-playbook playbooks/645-setup-github-runner.yml \
-#     -e target_host="rancher-desktop" -e github_runner_repo="owner/repo" \
-#     -e github_runner_pat="..."
+# 🔴 REGISTER/REMOVE/LIST A RUNNER INSTANCE THROUGH THE CLI, NOT `uis deploy` (urb-agents#1928's
+# CLI gap, closed for this service): `uis deploy github-runner` has no way to supply a target repo
+# or a token, and never did. Use the dedicated subcommand family instead — it mints the token from
+# the already-configured GITHUB_ACCESS_TOKEN secret, same convention `uis argocd register` uses:
+#   uis github-runner register <instance> <owner/repo>   # a new, independent instance
+#   uis github-runner remove <instance>                  # remove just that one
+#   uis github-runner list                                # every instance + the repo it serves
 #
-# 🔴 MULTIPLE INSTANCES CAN NOW COEXIST ON ONE CLUSTER, ONE PER TARGET REPO (urb-agents#2053) —
-# add -e github_runner_instance="<slug>" to register a second, fully independent runner alongside
-# an existing one, without touching it (see 645-setup-github-runner.yml's own header for the full
-# story and the collision safety check). Known limitation, not fixed here: SCRIPT_CHECK_COMMAND
-# below and `uis status` only ever report "is ANY instance healthy", not a specific one — the
-# direct ansible-playbook invocation above remains the real per-instance interface.
+# 🔴 MULTIPLE INSTANCES CAN COEXIST ON ONE CLUSTER, ONE PER TARGET REPO (urb-agents#2053) — each
+# `register` call adds a second, fully independent runner alongside any already running, without
+# touching it (see 645-setup-github-runner.yml's own header for the full story and the collision
+# safety check; `--force` on `register` to deliberately retarget an existing instance). Known
+# limitation, not fixed here: SCRIPT_CHECK_COMMAND below and `uis status` only ever report "is ANY
+# instance healthy", not a specific one — `uis github-runner list` is the per-instance view.
+#
+# The ORIGINAL/default (unnamed) instance predates all of this and is not managed through the new
+# subcommands — it still comes up via the direct ansible-playbook invocation with no
+# `github_runner_instance` set (see 645-setup-github-runner.yml's own header).
 
 # === Service Metadata (Required) ===
 SCRIPT_ID="github-runner"

@@ -156,6 +156,15 @@ ArgoCD:
   argocd list                   List registered ArgoCD applications
   argocd verify                 Run E2E health checks on ArgoCD server
 
+GitHub Runner:
+  github-runner register <instance> <owner/repo> [--force]
+                                 Register a new, independent self-hosted runner instance
+                                 (uses the configured GITHUB_ACCESS_TOKEN; --force retargets
+                                 an existing instance already serving a different repo)
+  github-runner remove <instance>
+                                 Remove one runner instance (never touches any other)
+  github-runner list             List every runner instance and which repo it serves
+
 Authentik:
   authentik verify               Verify application, provider and outpost configuration
 
@@ -245,6 +254,9 @@ Examples:
   uis argocd register my-app https://github.com/owner/repo  # Register repo
   uis argocd remove my-app     # Remove ArgoCD application
   uis argocd list              # List registered ArgoCD applications
+  uis github-runner register bifrost terchris/bifrost  # Register a second runner instance
+  uis github-runner remove bifrost                     # Remove that instance only
+  uis github-runner list                                # Show every instance + its repo
   uis test-all                                  # Run full integration test
   uis test-all --dry-run                        # Preview test plan
   uis test-all --clean                          # Clean cluster first, then test
@@ -2766,6 +2778,191 @@ cmd_argocd_verify() {
     run_verify_playbook "220-test-argocd.yml"
 }
 
+# ============================================================
+# GitHub Runner Commands
+# ============================================================
+#
+# 🔴 THE CLI GAP THIS CLOSES (urb-agents#1928-class, urb-agents#2053's own
+# follow-on ask): 645-setup-github-runner.yml/645-remove-github-runner.yml
+# already support any number of independent instances (urb-agents#2053, PR
+# #654) — but the ONLY documented way to use that was a raw `ansible-playbook
+# ... -e key=value` invocation, because `uis deploy <service>` has no general
+# mechanism for passing a service's own per-instance parameters through (the
+# `--app`/`_app_name` plumbing exists, but it is PostgREST's own
+# database/schema shape — configure-then-deploy against a persisted per-app
+# secret — not "register against a repo with a short-lived token", so forcing
+# github-runner through it would be translating a DIFFERENT service's design,
+# not reusing a proven one). `uis argocd register/remove/list` is the actual
+# proven reference for this shape — "operator names a target + we mint/read a
+# token and run one playbook" — so this mirrors that family directly, down to
+# reading the SAME already-configured GITHUB_ACCESS_TOKEN secret rather than
+# asking for a PAT on the command line every time.
+#
+# Deliberately does NOT manage the original/default (unnamed) instance — it
+# was already running in production before any of this existed, and
+# 645-setup-github-runner.yml's own header already documents "leave
+# github_runner_instance unset for that one". This closes the gap for every
+# ADDITIONAL instance, which is the actual, real ask (bifrost's second
+# registration on the same cluster).
+cmd_github_runner() {
+    local subcmd="${1:-}"
+    shift || true
+
+    case "$subcmd" in
+        register)
+            cmd_github_runner_register "$@"
+            ;;
+        remove)
+            cmd_github_runner_remove "$@"
+            ;;
+        list)
+            cmd_github_runner_list
+            ;;
+        *)
+            log_error "Usage: uis github-runner <command> [options]"
+            echo "" >&2
+            echo "Commands:" >&2
+            echo "  register <instance> <owner/repo> [--force]  Register a new runner instance" >&2
+            echo "  remove <instance>                           Remove one runner instance" >&2
+            echo "  list                                        List every runner instance" >&2
+            echo "" >&2
+            echo "Examples:" >&2
+            echo "  uis github-runner register bifrost terchris/bifrost" >&2
+            echo "  uis github-runner remove bifrost" >&2
+            echo "  uis github-runner list" >&2
+            exit "$EXIT_GENERAL_ERROR"
+            ;;
+    esac
+}
+
+# The one PAT slot already established for GitHub API access from UIS
+# (`uis argocd register`'s own convention) — reused here rather than
+# inventing a second place to configure a GitHub token. Unlike argocd
+# register's "optional, public repos still work", a runner registration has
+# no fallback: 645-setup-github-runner.yml's own task 1c hard-refuses without
+# one, so this refuses clearly up front instead of handing the playbook an
+# empty token and letting GitHub's API return a 401 three tasks in.
+_github_runner_pat() {
+    local token
+    token=$(kubectl get secret urbalurba-secrets -n default \
+        -o jsonpath='{.data.GITHUB_ACCESS_TOKEN}' \
+        --kubeconfig="$UIS_VERIFY_KUBECONFIG" 2>/dev/null | base64 -d 2>/dev/null) || true
+    if [[ -z "$token" || "$token" == "your-github-token-here" ]]; then
+        return 1
+    fi
+    echo "$token"
+}
+
+cmd_github_runner_register() {
+    local instance="" repo="" force="false"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force) force="true"; shift ;;
+            -*)      log_error "Unknown option: $1"; exit "$EXIT_GENERAL_ERROR" ;;
+            *)
+                if [[ -z "$instance" ]]; then instance="$1";
+                elif [[ -z "$repo" ]]; then repo="$1";
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$instance" || -z "$repo" ]]; then
+        log_error "Usage: uis github-runner register <instance> <owner/repo> [--force]"
+        echo "Example: uis github-runner register bifrost terchris/bifrost" >&2
+        exit "$EXIT_GENERAL_ERROR"
+    fi
+
+    # Same k8s-name-fragment rule as 645-setup-github-runner.yml's own task
+    # 1d — checked here too so a bad instance name fails fast, before minting
+    # a registration token that would then go unused.
+    if ! [[ "$instance" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+        log_error "Invalid instance name '$instance' — lowercase alphanumeric and hyphens only, no leading/trailing hyphen."
+        exit "$EXIT_GENERAL_ERROR"
+    fi
+
+    if ! [[ "$repo" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+        log_error "Invalid repository '$repo' — expected 'owner/repo' form (e.g. terchris/bifrost)."
+        exit "$EXIT_GENERAL_ERROR"
+    fi
+
+    local github_pat
+    if ! github_pat=$(_github_runner_pat); then
+        log_error "GITHUB_ACCESS_TOKEN is not configured."
+        echo "A runner registration needs a Personal Access Token with the 'Administration'" >&2
+        echo "repository permission (fine-grained) or classic 'repo' scope. Set it:" >&2
+        echo "  uis secrets edit" >&2
+        exit "$EXIT_GENERAL_ERROR"
+    fi
+
+    local target_host
+    target_host="$(uis_target_host)"
+
+    print_section "Registering github-runner instance '$instance' -> $repo"
+    echo "Target cluster: $target_host"
+    echo ""
+
+    local -a extra_args=()
+    [[ "$force" == "true" ]] && extra_args+=("-e" "github_runner_force=true")
+
+    ansible-playbook "$ANSIBLE_DIR/645-setup-github-runner.yml" \
+        -e "target_host=$target_host" \
+        -e "github_runner_repo=$repo" \
+        -e "github_runner_pat=$github_pat" \
+        -e "github_runner_instance=$instance" \
+        "${extra_args[@]}"
+}
+
+cmd_github_runner_remove() {
+    local instance=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -*) log_error "Unknown option: $1"; exit "$EXIT_GENERAL_ERROR" ;;
+            *)  [[ -z "$instance" ]] && instance="$1"; shift ;;
+        esac
+    done
+
+    if [[ -z "$instance" ]]; then
+        log_error "Usage: uis github-runner remove <instance>"
+        echo "Example: uis github-runner remove bifrost" >&2
+        exit "$EXIT_GENERAL_ERROR"
+    fi
+
+    local target_host
+    target_host="$(uis_target_host)"
+
+    print_section "Removing github-runner instance '$instance'"
+    ansible-playbook "$ANSIBLE_DIR/645-remove-github-runner.yml" \
+        -e "target_host=$target_host" \
+        -e "github_runner_instance=$instance"
+}
+
+# A plain kubectl listing, not another playbook — there is nothing here a
+# playbook's own idempotency or ordering guarantees would add over one read.
+cmd_github_runner_list() {
+    print_section "GitHub Runner instances"
+
+    local rows
+    rows=$(kubectl get deployment -n github-runner -l app=github-runner \
+        --kubeconfig="$UIS_VERIFY_KUBECONFIG" \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.instance}{"\t"}{range .spec.template.spec.containers[?(@.name=="runner")].env[?(@.name=="GITHUB_RUNNER_REPO")]}{.value}{end}{"\n"}{end}' \
+        2>/dev/null) || true
+
+    if [[ -z "$rows" ]]; then
+        echo "No github-runner instances deployed."
+        return 0
+    fi
+
+    printf "%-28s %-15s %s\n" "RESOURCE NAME" "INSTANCE" "REPOSITORY"
+    echo "─────────────────────────────────────────────────────────────"
+    while IFS=$'\t' read -r name instance repo; do
+        printf "%-28s %-15s %s\n" "$name" "${instance:-(default)}" "$repo"
+    done <<< "$rows"
+}
+
 # 070-verify-authentik.yml existed, unreachable from the CLI, since it was
 # written — nothing dispatched to it (freeverse, urb-agents#2013), and the
 # website/docs/services/identity/authentik.md Verify section documented a
@@ -3416,6 +3613,9 @@ main() {
             ;;
         argocd)
             cmd_argocd "$@"
+            ;;
+        github-runner)
+            cmd_github_runner "$@"
             ;;
         # `uis alloy verify` is the form VERIFY_SERVICES stores, so test-all
         # reaches the E2E tests through here - not through `uis verify alloy`.
