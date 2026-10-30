@@ -41,36 +41,42 @@ kubectl get pods -n github-runner -l app=github-runner
 ## Configuration
 
 <!-- MANUAL: Service-specific configuration details -->
-Required at deploy time, via `ansible-playbook playbooks/645-setup-github-runner.yml` directly
-(not `./uis deploy github-runner` — see the service script's own header for why):
+A GitHub Personal Access Token must be configured first — the `GITHUB_ACCESS_TOKEN` secret
+(`uis secrets edit`), the same one `uis argocd register` uses for private-repo access. It needs the
+`Administration` repository permission (fine-grained) or classic `repo` scope. Used once per
+registration, to mint a short-lived registration token via GitHub's own API; the PAT itself is
+never stored in the cluster.
 
-- `github_runner_repo` — target repository, `owner/repo` form.
-- `github_runner_pat` — a Personal Access Token with the `Administration` repository permission
-  (fine-grained) or classic `repo` scope. Used once, to mint a short-lived registration token;
-  never stored in the cluster.
+Register a runner instance against a target repository:
+
+```bash
+./uis github-runner register bifrost terchris/bifrost
+```
 
 ### Running more than one instance on the same cluster
 
-One cluster can run a separate, fully independent runner for each repo that needs one — add
-`-e github_runner_instance="<slug>"` (lowercase alphanumeric and hyphens only) to register a
-second (or third, ...) instance alongside any already running, without touching it:
+One cluster can run a separate, fully independent runner for each repo that needs one — pick a
+new `<instance>` slug (lowercase alphanumeric and hyphens only) to register a second (or third,
+...) instance alongside any already running, without touching it:
 
 ```bash
-ansible-playbook playbooks/645-setup-github-runner.yml \
-  -e target_host="rancher-desktop" -e github_runner_repo="owner/other-repo" \
-  -e github_runner_pat="..." -e github_runner_instance="other-repo"
+./uis github-runner register other-repo owner/other-repo
+./uis github-runner list      # every instance + the repo it serves
+./uis github-runner remove other-repo
 ```
 
-Leave `github_runner_instance` unset for the original/default instance — its resource names never
-change. Every instance shares the one `github-runner` namespace; the setup playbook refuses to
-apply if an instance name is already serving a *different* repo (pass
-`-e github_runner_force=true` only if retargeting that exact instance is actually intended).
-Removing one instance (`645-remove-github-runner.yml`, same `-e github_runner_instance=...`) never
-touches any other instance, and only deletes the namespace itself once none are left in it.
+Every instance shares the one `github-runner` namespace; `register` refuses to apply if that
+instance name is already serving a *different* repo (`--force` to deliberately retarget it).
+`remove` only removes the named instance — never any other — and only deletes the namespace itself
+once none are left in it.
 
 ⚠️ Sharing a namespace is not full isolation — every instance's `dind` sidecar is still
 `privileged: true`, and two repos' runners sharing this namespace share the same RBAC/
 NetworkPolicy boundary that namespace provides, nothing stronger.
+
+The original/default instance (urb-agents' own, predating this) isn't managed through these
+subcommands — see `ansible/playbooks/645-setup-github-runner.yml`'s own header if it ever needs to
+be redeployed directly.
 
 ## Undeploy
 
