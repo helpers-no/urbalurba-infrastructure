@@ -4,7 +4,7 @@
 > - [WORKFLOW.md](../../WORKFLOW.md) - The implementation process
 > - [PLANS.md](../../PLANS.md) - Plan structure and best practices
 
-## Status: Verified live end to end for the Authentik connector (`urb-agents#2056`, `#2057`, `1.6.258`): real sign-in, a real `epinio login` token exchange, push, deploy, expose, and a user outside any mapped group correctly walled off. Okta is out of scope for now (needs a real tenant). GitHub connector verified short of browser login.
+## Status: Verified live end to end for the Authentik connector on BOTH platforms — Rancher Desktop (`urb-agents#2056`, `#2057`, `1.6.258`) and Proxmox (`urb-agents#2058`, `1.6.260`): real sign-in, a real `epinio login` token exchange, push, deploy, expose, and a user outside any mapped group correctly walled off. Okta is out of scope for now (needs a real tenant). GitHub connector verified short of browser login.
 
 **Goal**: wire Epinio's own bundled Dex to up to three identity providers (GitHub,
 Authentik, Okta), each mapping its own groups/teams to namespace roles, instead of
@@ -219,6 +219,24 @@ deploying as an Authentik user, plus the isolation case:
 - **A user in no mapped group**: only the default `user` role, no groups claim at all, a 403 on the
   mapped namespace and its applications, and still able to create a namespace of their own. This
   closes the long-open "no matching group lands with no roles" question with an observed result.
+
+**Confirmed again on Proxmox (`urb-agents#2058`, `1.6.260`)** — the same chain, independently, on
+the other real deployment target this repo supports. Same result: login → push → expose → Garage
+worked for the mapped user, and the unmapped user was cleanly walled off. Two real bugs surfaced
+and fixed as part of closing this out, both in `627-setup-epinio-identity.yml`:
+- it assumed Epinio's own Helm repo was still registered from `625-setup-epinio.yml`'s earlier run
+  in the same container — true only until a `uis pull` container restart drops Helm's repo list.
+  Now registered unconditionally before the identity helm upgrade (the module is idempotent).
+- its own post-change "Epinio still answers" check hard-failed on every `.localhost` deploy, even
+  though Epinio was fine — the ansible controller has no route to cluster ClusterIPs at all for
+  that domain, so the check could never pass from there. Matched to `625-setup-epinio.yml`'s own
+  equivalent check: advisory (`ignore_errors`), not a gate.
+
+One operational note for whoever next automates a sign-in through Authentik's flow executor API
+for testing (both ops and imac have now separately driven this headless, each hitting a different
+part of it): the consent step's POST needs a `Referer` header, or Django's CSRF check rejects it
+with "Referer checking failed - no Referer" even with a valid `X-Authentik-CSRF` header and cookie.
+Invisible from a real browser, which always sends one.
 
 ### How the role mapping actually behaves — read this before configuring it
 
