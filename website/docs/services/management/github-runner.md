@@ -138,7 +138,28 @@ it never deletes it automatically.
 ## Troubleshooting
 
 <!-- MANUAL: Common issues and solutions -->
-_No troubleshooting documentation yet. Edit this section to add common issues and their solutions._
+
+### A job fails mid-build with "lost communication with the server"
+
+This looks like a network problem but is very often a **cgroup OOM kill**: the runner container
+hit its memory limit, the kernel killed it, and that looks exactly like a lost connection from
+GitHub's side. Confirm with a kernel-log check at the failure timestamp — an `oom-kill` /
+`Memory cgroup out of memory` entry is the tell.
+
+This has already come up twice for two different repos, at two different ceilings
+(`urb-agents#2032`: the template's own `768Mi` default was too small; `urb-agents#2090`: `2Gi` was
+too small for a monorepo's `yarn install`, raised to `4Gi` for that instance). There is no single
+default that fits every repo's build — a trivial repo needs far less than one with a large
+dependency tree — so treat a build this size hitting the limit as **expected**, not a bug to chase
+by raising the template default again. Raise `github_runner_memory_limit` for the specific
+instance instead:
+
+```bash
+-e '{"github_runner_memory_limit": "4Gi"}'
+```
+
+Re-run `register` for an existing instance once you've raised it, the same way
+`github_runner_node_preference` is picked up.
 
 ## Learn More
 
