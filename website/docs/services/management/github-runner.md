@@ -161,6 +161,36 @@ instance instead:
 Re-run `register` for an existing instance once you've raised it, the same way
 `github_runner_node_preference` is picked up.
 
+### The runner image is not `ubuntu-latest`
+
+The runner image is the minimal official `actions-runner` image, run as a **non-root** user. Workflows
+that assume GitHub-hosted `ubuntu-latest` can hit three differences (reported from a real
+monorepo migration, `urb-agents#2092`):
+
+**1. No native build tools.** An npm dependency that compiles a native module on install (e.g.
+`better-sqlite3`) fails with `gyp ERR! stack Error: not found: make`. `ubuntu-latest` ships
+`build-essential`; this image does not. Install it in the workflow before the dependency install —
+`sudo` is required, plain `apt-get` fails with `Permission denied`:
+
+```yaml
+- run: sudo apt-get install -y --no-install-recommends build-essential python3
+```
+
+**2. napi-rs native loaders (e.g. `@swc/core`) reject the runner's cache directory.** The loader
+fails with `ERR_SWC_NATIVE_CACHE — cache root has a parent writable by another user without trusted
+sticky protection`. This is a deliberate symlink-race guard in the loader, not a missing library
+(`ldd` on the `.node` binary resolves cleanly; a direct `require()` shows the real error, while
+wrappers often log only a generic "Failed to load native binding"). Workaround: point the cache
+outside `/home/runner/.cache`, e.g. `SWC_NATIVE_BINDING_CACHE=/tmp/swc-cache`. Whether the
+underlying permission on the image itself should be fixed instead is an open question — any
+napi-rs-based tool would hit the same guard.
+
+**3. Turborepo drops custom env vars.** Under Turborepo's default strict `envMode`, only variables
+listed in `turbo.json` (`globalEnv`/`env`/`passThroughEnv`) reach task processes — so a workflow-level
+`env:` such as the cache variable above is silently ignored by `turbo run`. Add it to
+`globalPassThroughEnv` (or per-task `passThroughEnv`) in `turbo.json`. Not a runner issue, but a trap
+for any Turborepo project adopting this runner.
+
 ## Learn More
 
 - [Official GitHub Runner documentation](https://docs.github.com/en/actions/hosting-your-own-runners)
