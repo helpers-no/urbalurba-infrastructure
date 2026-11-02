@@ -1,60 +1,70 @@
 ---
 # file: ansible/playbooks/645-setup-github-runner.yml
 # Description:
-# Install a GitHub Actions self-hosted runner as an in-cluster `uis deploy github-runner`
-# service — the same proven architecture as forgejo-runner (640-setup-forgejo-runner.yml):
-# a persistent Deployment, one container running the runner itself, one `docker:27-dind`
-# sidecar for job execution. Promoted from ops's own hand-applied, fleet-specific manifest
-# (urb-agents#2029/#2030), made generic: operator supplies the target repo and a PAT,
-# rather than one hardcoded repo for one purpose.
+# Install (or update) a GitHub Actions self-hosted runner INSTANCE via GitHub's own
+# **Actions Runner Controller (ARC)**, the `gha-runner-scale-set` Helm chart —
+# `urb-agents#2073`/`#2075` (Terje's direction, after live bifrost OOM/eviction debugging on
+# `#2067`/`#2071`/`#2072`): runners must scale to zero when idle, and the scheduler needs a
+# real way to prefer a capacity-heavy node. A static, always-on Deployment (what this
+# playbook did before — see git history, or `PLAN-service-github-runner-arc-migration.md`
+# for the full before/after) architecturally cannot do either. Full design rationale lives
+# there; this header covers only what an operator needs to run it.
 #
-# 🔴 A GITHUB RUNNER IS NOT A FORGEJO RUNNER WITH A DIFFERENT URL. They register against
-# incompatible protocols (urb-agents#1911 flagged this as an open question early on) — this
-# playbook is its own thing, not a parameterized copy, even though the Pod shape it
-# produces (runner + dind sidecar) is deliberately identical to forgejo-runner's.
+# 🔴 THE OPERATOR CONTRACT DID NOT CHANGE. Same variables, same validation order, same
+# `uis github-runner register/remove/list` CLI on top of this. What changed is entirely
+# internal: Helm releases instead of a bare Deployment, ephemeral runner pods instead of one
+# persistent pod, and the registration token is no longer minted by this playbook at all —
+# ARC's own listener mints its own JIT tokens, continuously, for as long as the release
+# exists.
 #
-# 🔵 NO PERSISTENT VOLUME FOR REGISTRATION STATE, DELIBERATELY. GitHub's registration
-# token is short-lived (1 hour) — unlike Forgejo's reusable shared secret, there is no
-# long-lived credential whose reuse a PVC would protect. This playbook mints a fresh
-# token at EVERY run (task 5 below) and the runner container registers fresh on every
-# container start (`config.sh --replace`, not gated on a `.runner` file existing) — so a
-# pod that is still running keeps working indefinitely (the token is only consumed at
-# registration, never needed again), and a pod that restarts for any reason needs a fresh
-# `uis deploy github-runner` run with a valid PAT to come back up. That is the accepted
-# tradeoff ops's own hand-applied version already made in production, not a gap introduced
-# here — see urb-agents#2030's own "don't over-design this" note. Revisit only if a real
-# restart-without-redeploy requirement ever surfaces.
+# 🔴 THE PAT NOW PERSISTS IN THE CLUSTER, UNLIKE BEFORE — stated plainly, not hidden. The
+# old design deliberately discarded the PAT after minting one short-lived token
+# (`urb-agents#2030`'s own "no PAT needs to live in the cluster long-term" finding). ARC
+# cannot work that way: its listener needs to keep minting tokens with no human in the
+# loop, for as long as the scale set exists, so the PAT becomes a persistent Secret
+# (`{{ github_runner_resource_name }}-token`, key `github_token`). Same narrow
+# 'Administration' repository permission as before — only its lifetime changed, and that
+# change is the cost of scale-to-zero working unattended.
 #
-# 🔴 INIT CONTAINERS DO NOT WORK FOR THIS IMAGE (ops, urb-agents#2030, found live building
-# the hand-applied version). `ghcr.io/actions/actions-runner` resolves `config.sh`/`run.sh`
-# against its own install directory (`/home/runner`, baked in at build time) with no
-# `--config`-style indirection the way Forgejo's runner binary has — registering in a
-# separate init container has zero effect on the daemon the main container actually runs
-# afterward. Registration, therefore, happens inline in the main container's own startup
-# command (the manifest template's `command:`), not as a separate step here or there.
+# 🔵 THE ARC CONTROLLER IS CLUSTER-WIDE, SHARED, AND NEVER REMOVED BY THE REMOVE PLAYBOOK.
+# One `gha-runner-scale-set-controller` release (namespace `arc-systems`) serves every
+# instance on this cluster; installing it is idempotent (`helm upgrade --install`, a no-op
+# once already current) so it is safe to run on every `register` call, first instance or
+# fifth. Deliberately never uninstalled when the last instance goes away — CRD
+# install/removal churn is a worse tradeoff than one small permanent controller pod.
 #
-# No `.localhost`-hostname problem here at all (unlike forgejo-runner, urb-agents#2028) —
-# github.com and api.github.com are real, globally-resolvable public hostnames, reachable
-# the same way from any network namespace, including the dind sidecar's inner one.
+# 🔴 MULTIPLE INSTANCES STILL COEXIST ON ONE CLUSTER, ONE PER TARGET REPO
+# (`urb-agents#2053`) — unchanged. Each instance is its own Helm release of the
+# `gha-runner-scale-set` chart, named `{{ github_runner_resource_name }}`, sharing the
+# `github-runner` namespace. The collision check below (task 5) still refuses to silently
+# repoint an existing instance at a different repo.
 #
-# 🔴 MULTIPLE INSTANCES CAN COEXIST ON ONE CLUSTER, ONE PER TARGET REPO (urb-agents#2053 —
-# bifrost wanted a second runner on the same Proxmox cluster urb-agents' own already runs on).
-# Run this playbook again with a different -e github_runner_instance=<slug> for each additional
-# repo: every resource name/selector gets that slug folded in, so a second instance can never
-# collide with or silently overwrite the first (task 3b/3c refuses outright if it would). Leave
-# github_runner_instance unset for the ORIGINAL/default instance — its resource names are
-# unchanged from before this existed, so nothing already deployed needs to move.
+# 🔴 MIGRATING AN INSTANCE THAT STILL HAS THE OLD STATIC DEPLOYMENT: task 6 below detects a
+# same-named Deployment left over from before this migration and WARNS loudly — it never
+# deletes it. Both would otherwise register two separate runners against the same repo
+# (harmless, just redundant) until an operator removes the old one by hand once the new
+# ARC-backed instance is confirmed listening. See `PLAN-service-github-runner-arc-
+# migration.md`'s own Rollout section for the exact command.
 #
-# Usage:
+# Usage (unchanged):
 # ansible-playbook playbooks/645-setup-github-runner.yml -e target_host="rancher-desktop" \
 #   -e github_runner_repo="owner/repo" -e github_runner_pat="..."
 #
-# A second instance, same cluster:
+# A second instance, same cluster (unchanged):
 # ansible-playbook playbooks/645-setup-github-runner.yml -e target_host="rancher-desktop" \
 #   -e github_runner_repo="owner/other-repo" -e github_runner_pat="..." \
 #   -e github_runner_instance="other-repo"
+#
+# Activating the capacity-aware node preference, once nodes actually carry the
+# `urbalurba.no/hypervisor` label (set declaratively at k3s provisioning time in the platform
+# repo's own IaC, not a hand-run kubectl label — see this service's own docs — inert otherwise,
+# by default). A RANKED list, not a single avoid rule — e.g. prefer frigg (most free memory
+# today) over tor (strongest CPU, less headroom), and both over odin (weakest, tightest):
+# ansible-playbook playbooks/645-setup-github-runner.yml -e target_host="rancher-desktop" \
+#   -e github_runner_repo="owner/repo" -e github_runner_pat="..." \
+#   -e '{"github_runner_node_preference": [{"hypervisor": "frigg", "weight": 100}, {"hypervisor": "tor", "weight": 50}]}'
 
-- name: Install a GitHub Actions self-hosted runner
+- name: Install a GitHub Actions self-hosted runner via Actions Runner Controller
   hosts: localhost
   gather_facts: false
   vars:
@@ -62,41 +72,47 @@
     manifests_dir: "/mnt/urbalurbadisk/manifests"
     github_runner_namespace: "github-runner"
 
-    # 🔴 EMPTY BY DEFAULT, ON PURPOSE — urb-agents#2053 (bifrost wanted a second runner on the
-    # same cluster, pointed at a different repo). Left empty, every resource name/label below
-    # renders EXACTLY as it always has — no rename, no selector change, nothing forces a redeploy
-    # of whatever is already running under the default (unnamed) instance. Set it
-    # (-e github_runner_instance=bifrost) to register a SECOND, fully independent instance
-    # alongside the first, in the same namespace. See 645-github-runner.yaml.j2's own header for
-    # why the namespace is shared but the selector never is.
+    # 🔵 PINNED — both ARC charts (controller + gha-runner-scale-set) release together
+    # under matching version numbers. Re-verify against the actions-runner-controller
+    # repository's own releases before bumping, same discipline every other pinned chart
+    # in this repository follows.
+    arc_chart_version: "0.15.1"
+    arc_controller_namespace: "arc-systems"
+    arc_controller_release: "arc"
+    arc_controller_chart: "oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller"
+    arc_scale_set_chart: "oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set"
+
+    # Empty by default — same reasoning as before (urb-agents#2053): every resource name
+    # renders exactly as the default/unnamed instance always has.
     github_runner_instance: ""
     github_runner_force: false
 
-    # 🔵 Pinned, same image ops already proved live building the hand-applied version
-    # (urb-agents#2030). Re-verify against ghcr.io before bumping, same discipline every
-    # other pinned image in this repo follows.
+    # 🔵 SAME IMAGE THIS SERVICE ALREADY PROVED LIVE (urb-agents#2030) — not the chart's
+    # own floating `:latest` default. Re-verify against ghcr.io before bumping.
     github_runner_image: "ghcr.io/actions/actions-runner:2.337.0"
-    github_runner_dind_image: "docker:27-dind"
 
-    # Derived from target_host, same reasoning forgejo_runner_name already uses
-    # (640-setup-forgejo-runner.yml) — distinct names so deploying this against the same
-    # repo from two different clusters never collides under one registration name.
     github_runner_name: "{{ target_host }}-github-runner"
-
-    # 🔵 DECIDED, urb-agents#2030: plain comma-separated labels — GitHub's own convention
-    # (`self-hosted,linux,x64,docker`), unlike Forgejo's `name:backend` pairs. This default
-    # is just a starting point — ops's own production use (urb-agents#2032) overrides it
-    # with `self-hosted,linux,uis` to match what cli-release.yml/cli.yml/
-    # enforcer-heartbeat.yml actually target.
     github_runner_labels: "self-hosted,linux,x64,docker"
 
-    # 🔴 768Mi OOM-KILLED A REAL RELEASE BUILD, urb-agents#2032 — see the manifest
-    # template's own comment for the full story. Proven live by ops: 2Gi limit / 1Gi
-    # request runs the real cli-release.yml workflow (bun install/typecheck/test/
-    # 5-platform-compile) clean, 768Mi did not. Configurable so a heavier workload can
-    # raise it without another PR, but the DEFAULT is what's actually proven, not a guess.
+    # 🔴 768Mi OOM-KILLED A REAL RELEASE BUILD, urb-agents#2032 — carried forward
+    # unchanged. 2Gi limit / 1Gi request is what's actually proven, not a guess.
     github_runner_memory_request: "1Gi"
     github_runner_memory_limit: "2Gi"
+
+    # How many ephemeral runners this instance may run at once. minRunners is NOT
+    # configurable here — it is always 0 (the entire point of this migration). A heavier
+    # workload than cli-release.yml wants more concurrency, not a warm pool.
+    github_runner_max_runners: 3
+
+    # 🔴 INERT BY DEFAULT — Decision 2 of PLAN-service-github-runner-arc-migration.md. Empty
+    # list until nodes actually carry the `urbalurba.no/hypervisor` label (declared in the
+    # platform repo's own k3s provisioning IaC, not a hand-run kubectl label), so this ships
+    # with ZERO behavior change anywhere that hasn't opted in yet. A RANKED preference, not a
+    # single avoid rule: each {hypervisor, weight} entry becomes its own soft nodeAffinity
+    # term, so e.g. frigg (most headroom today) can outrank tor (strongest CPU, less
+    # headroom), which can outrank odin (weakest) — a straight "avoid the tight node" can't
+    # express that ordering (urb-agents#2080).
+    github_runner_node_preference: []
 
   tasks:
     - name: 1. Check if required variables are provided
@@ -115,16 +131,18 @@
           — pass it: -e github_runner_repo="owner/repo".
         quiet: true
 
-    - name: 1c. The Personal Access Token must be supplied, never defaulted or stored
+    - name: 1c. The Personal Access Token must be supplied
       ansible.builtin.assert:
         that:
           - github_runner_pat is defined
           - github_runner_pat | length > 0
         fail_msg: >-
-          github_runner_pat is required and this playbook stores none — it is used once,
-          here, to mint a short-lived registration token via GitHub's own API, and
-          discarded. Needs the 'Administration' repository permission (fine-grained PAT)
-          or the classic 'repo' scope. Pass it: -e github_runner_pat=...
+          github_runner_pat is required. Needs the 'Administration' repository permission
+          (fine-grained PAT) or the classic 'repo' scope. Pass it: -e github_runner_pat=...
+          🔴 Unlike this playbook's old design, this PAT is now STORED in the cluster as a
+          Secret — ARC's listener needs to keep minting its own short-lived runner tokens
+          for as long as this instance exists, with no human in the loop. See this
+          playbook's own header for why.
         quiet: true
       no_log: true
 
@@ -133,15 +151,15 @@
         that:
           - github_runner_instance is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
         fail_msg: >-
-          github_runner_instance='{{ github_runner_instance }}' is not a valid Kubernetes name
-          fragment (lowercase alphanumeric and hyphens only, no leading/trailing hyphen). It is
-          folded directly into a Deployment/Secret name below.
+          github_runner_instance='{{ github_runner_instance }}' is not a valid Kubernetes
+          name fragment (lowercase alphanumeric and hyphens only, no leading/trailing
+          hyphen). It is folded directly into a Helm release name below.
         quiet: true
       when: github_runner_instance | length > 0
 
-    # 🔴 ONE COMPUTATION, REUSED EVERYWHERE BELOW — the Secret name, the Deployment name (via the
-    # template render), the collision check, and the pod/log lookups all read this SAME fact,
-    # rather than each re-deriving the suffix logic and risking one of them drifting out of step.
+    # 🔴 ONE COMPUTATION, REUSED EVERYWHERE — the Helm release name (= this instance's
+    # Secret name, with a suffix), the collision check, and the legacy-Deployment warning
+    # all read this SAME fact, same discipline the old design already established.
     - name: 1e. Compute this instance's resource name
       ansible.builtin.set_fact:
         github_runner_resource_name: "github-runner{{ ('-' + github_runner_instance) if github_runner_instance | length > 0 else '' }}"
@@ -149,9 +167,9 @@
     - name: 2. Print playbook description
       ansible.builtin.debug:
         msg: >-
-          Installing a GitHub Actions runner on Kubernetes context: {{ target_host }},
-          repo: {{ github_runner_repo }}, name: {{ github_runner_name }},
-          instance: {{ github_runner_instance if github_runner_instance | length > 0 else '(default)' }},
+          Installing a GitHub Actions runner (ARC) on Kubernetes context: {{ target_host }},
+          repo: {{ github_runner_repo }}, instance:
+          {{ github_runner_instance if github_runner_instance | length > 0 else '(default)' }},
           resource name: {{ github_runner_resource_name }}
 
     - name: 3. Create github-runner namespace if it doesn't exist
@@ -162,73 +180,82 @@
       changed_when: namespace_result.rc == 0
       failed_when: namespace_result.rc != 0
 
-    # 🔴 REFUSE RATHER THAN SILENTLY REPOINT SOMEONE ELSE'S LIVE RUNNER — urb-agents#2053's own
-    # generalization ask. Without this, a second operator who happens to reuse an instance name
-    # (or the default, unnamed one) would have this playbook's own `state: present` quietly
-    # retarget an already-running Deployment at a DIFFERENT repo, mid-flight, no confirmation.
-    # Same "ask what is actually there before acting" precedent as 025-remove-cert-manager.yml.
-    - name: 3b. Does a Deployment with this resource name already exist
+    # Idempotent and instance-independent — safe to run on every register call. Installs
+    # the CRDs + controller-manager once; a no-op upgrade every call after that.
+    - name: 4. Ensure the ARC controller is installed (shared, cluster-wide, one per cluster)
+      ansible.builtin.command: >
+        helm upgrade --install {{ arc_controller_release }} {{ arc_controller_chart }}
+        --version {{ arc_chart_version }}
+        --namespace {{ arc_controller_namespace }}
+        --create-namespace
+        --timeout 300s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: arc_controller_result
+      changed_when: true
+
+    # 🔴 REFUSE RATHER THAN SILENTLY REPOINT SOMEONE ELSE'S LIVE RUNNER — unchanged
+    # rationale from the old design (urb-agents#2053), re-expressed against a Helm release
+    # instead of a bare Deployment.
+    - name: 5. Does a Helm release with this resource name already exist
+      ansible.builtin.command: >
+        helm get values {{ github_runner_resource_name }}
+        --namespace {{ github_runner_namespace }}
+        -o json
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: github_runner_existing_release
+      changed_when: false
+      failed_when: false
+
+    - name: 5b. If it does, it must already be serving the SAME repo, or -e github_runner_force=true
+      ansible.builtin.assert:
+        that:
+          - >-
+            existing_repo == ('https://github.com/' + github_runner_repo)
+            or (github_runner_force | bool)
+        fail_msg: >-
+          A Helm release named '{{ github_runner_resource_name }}' already exists in
+          namespace '{{ github_runner_namespace }}', currently serving
+          '{{ existing_repo }}' — not '{{ github_runner_repo }}'. Refusing to silently
+          repoint a live runner at a different repository. Pick a different
+          -e github_runner_instance=..., or pass -e github_runner_force=true if retargeting
+          this exact instance is actually intended.
+        quiet: true
+      vars:
+        existing_repo: "{{ (github_runner_existing_release.stdout | from_json).githubConfigUrl | default('(unknown — could not read its repo)') }}"
+      when: github_runner_existing_release.rc == 0
+
+    # 🔴 NEVER AUTO-DELETED — PLAN-service-github-runner-arc-migration.md's own Rollout
+    # section. During migration, an old-style static Deployment under this same resource
+    # name would otherwise keep running ALONGSIDE the new ARC-backed instance, both
+    # registered against the same repo (redundant, not broken) until an operator removes
+    # the old one by hand.
+    - name: 6. Warn if an old-style static Deployment with this resource name still exists
       kubernetes.core.k8s_info:
         kind: Deployment
         name: "{{ github_runner_resource_name }}"
         namespace: "{{ github_runner_namespace }}"
         kubeconfig: "{{ merged_kubeconf_file }}"
-      register: github_runner_existing
+      register: github_runner_legacy_deployment
 
-    - name: 3c. If it does, it must already be serving the SAME repo, or -e github_runner_force=true
-      ansible.builtin.assert:
-        that:
-          - >-
-            existing_repo == github_runner_repo
-            or (github_runner_force | bool)
-        fail_msg: >-
-          A Deployment named '{{ github_runner_resource_name }}' already exists in namespace
-          '{{ github_runner_namespace }}', currently serving '{{ existing_repo }}' — not
-          '{{ github_runner_repo }}'. Refusing to silently repoint a live runner at a different
-          repository. Pick a different -e github_runner_instance=..., or pass
-          -e github_runner_force=true if retargeting this exact instance is actually intended.
-        quiet: true
-      vars:
-        existing_repo: >-
-          {{
-            github_runner_existing.resources[0].spec.template.spec.containers
-              | selectattr('name', 'equalto', 'runner') | map(attribute='env') | first
-              | selectattr('name', 'equalto', 'GITHUB_RUNNER_REPO') | map(attribute='value') | first
-              | default('(unknown — could not read its repo)')
-          }}
-      when: github_runner_existing.resources | default([]) | length > 0
+    - name: 6b. Display the migration warning, if found
+      ansible.builtin.debug:
+        msg:
+          - "⚠️  A pre-ARC Deployment named '{{ github_runner_resource_name }}' is still running"
+          - "  in namespace '{{ github_runner_namespace }}'. It will keep registering runners"
+          - "  against '{{ github_runner_repo }}' ALONGSIDE the ARC-backed instance this run"
+          - "  installs — redundant, not broken, but worth cleaning up once the new instance"
+          - "  is confirmed listening:"
+          - "    kubectl delete deployment {{ github_runner_resource_name }} -n {{ github_runner_namespace }}"
+          - "    kubectl delete secret {{ github_runner_resource_name }}-token -n {{ github_runner_namespace }}"
+      when: github_runner_legacy_deployment.resources | default([]) | length > 0
 
-    # 🔴 MINTED HERE, NEVER STORED — the whole point of this task. GitHub's own API:
-    # POST /repos/{owner}/{repo}/actions/runners/registration-token, Bearer-authed with
-    # the operator's PAT, returns a registration token valid for ~1 hour. Only THIS
-    # response's token reaches the cluster (task 5) — github_runner_pat itself never
-    # does, matching ops's own "no PAT needs to live in the cluster long-term" finding.
-    - name: 4. Mint a short-lived registration token from GitHub's API
-      ansible.builtin.uri:
-        url: "https://api.github.com/repos/{{ github_runner_repo }}/actions/runners/registration-token"
-        method: POST
-        headers:
-          Authorization: "Bearer {{ github_runner_pat }}"
-          Accept: "application/vnd.github+json"
-        status_code: [201]
-        body_format: json
-        body: {}
-      register: github_runner_token_result
-      no_log: true
-
-    - name: 4b. Confirm a token actually came back
-      ansible.builtin.assert:
-        that:
-          - github_runner_token_result.json.token is defined
-          - github_runner_token_result.json.token | length > 0
-        fail_msg: >-
-          GitHub's registration-token API did not return a token. Confirm
-          github_runner_repo is correct and github_runner_pat has the 'Administration'
-          repository permission (fine-grained) or 'repo' scope (classic).
-        quiet: true
-      no_log: true
-
-    - name: 5. Apply the registration token Secret
+    # 🔴 KEY NAME IS THIS CHART'S OWN CONVENTION, NOT CHOSEN HERE — confirmed against
+    # templates/githubsecret.yaml at the pinned chart version. githubConfigSecret below is
+    # passed as a STRING (the "pre-defined secret" form), so the chart expects this exact
+    # Secret to already exist with this exact key.
+    - name: 7. Apply (or update) this instance's PAT Secret
       kubernetes.core.k8s:
         state: present
         kubeconfig: "{{ merged_kubeconf_file }}"
@@ -240,95 +267,87 @@
             namespace: "{{ github_runner_namespace }}"
           type: Opaque
           stringData:
-            TOKEN: "{{ github_runner_token_result.json.token }}"
+            github_token: "{{ github_runner_pat }}"
       no_log: true
 
-    - name: 6. Render the Deployment manifest
+    - name: 8. Render this instance's Helm values
       ansible.builtin.template:
-        src: "{{ manifests_dir }}/645-github-runner.yaml.j2"
-        dest: /tmp/645-github-runner.yaml
+        src: "{{ manifests_dir }}/645-github-runner-values.yaml.j2"
+        dest: /tmp/645-github-runner-values.yaml
         mode: "0600"
+      no_log: true
 
-    - name: 7. Apply the Deployment
-      kubernetes.core.k8s:
-        state: present
-        src: /tmp/645-github-runner.yaml
-        kubeconfig: "{{ merged_kubeconf_file }}"
+    - name: 9. Install (or upgrade) this instance's runner scale set
+      ansible.builtin.command: >
+        helm upgrade --install {{ github_runner_resource_name }} {{ arc_scale_set_chart }}
+        --version {{ arc_chart_version }}
+        --namespace {{ github_runner_namespace }}
+        -f /tmp/645-github-runner-values.yaml
+        --timeout 300s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: github_runner_helm_result
+      changed_when: true
+      no_log: true
 
-    - name: 7b. Clean up the rendered manifest
+    - name: 9b. Clean up the rendered values file
       ansible.builtin.file:
-        path: /tmp/645-github-runner.yaml
+        path: /tmp/645-github-runner-values.yaml
         state: absent
       changed_when: false
 
-    # 🔴 INSTANCE-SCOPED SELECTOR, NOT JUST 'app=github-runner' — with a second instance
-    # coexisting in this same namespace, a bare app=github-runner selector could return a
-    # DIFFERENT instance's pod (list ordering is not guaranteed), and this wait would report
-    # success without ever having looked at the instance actually just deployed.
-    - name: 8. Wait for the runner pod to be ready
-      kubernetes.core.k8s_info:
-        kind: Pod
-        namespace: "{{ github_runner_namespace }}"
-        label_selectors:
-          - "app=github-runner{{ (',instance=' + github_runner_instance) if github_runner_instance | length > 0 else '' }}"
-        kubeconfig: "{{ merged_kubeconf_file }}"
-      register: github_runner_pods
-      retries: 30
-      delay: 10
-      until: >
-        github_runner_pods.resources | length > 0 and
-        github_runner_pods.resources[0].status.phase == "Running" and
-        (github_runner_pods.resources[0].status.containerStatuses | default([]) | selectattr('ready') | list | length) == (github_runner_pods.resources[0].status.containerStatuses | default([]) | length) and
-        (github_runner_pods.resources[0].status.containerStatuses | default([]) | length) > 0
-
-    # 🔵 "Listening for Jobs" / "Connected to GitHub" are the runner's own standard
-    # startup log lines (documented behavior, not independently verified against this
-    # exact pinned version from this environment — no live cluster here). Same
-    # ignore_errors resilience forgejo-runner's own equivalent wait uses: a pod that is
-    # Ready but whose log does not confirm this gets reported honestly below, not assumed.
-    - name: 9. Wait for the runner to report it is listening, not just that the pod started
-      ansible.builtin.command: >-
-        kubectl logs -n {{ github_runner_namespace }} deploy/{{ github_runner_resource_name }} -c runner --tail=50
+    # 🔵 THE LISTENER, NOT A RUNNER POD — ephemeral runners don't exist until a job is
+    # actually queued (the whole point of scale-to-zero), so there is nothing instance-
+    # specific to wait for except the listener itself coming up and connecting.
+    #
+    # 🔴 NAME-MATCHED, NOT LABEL-SELECTED — GitHub's own troubleshooting docs disagree with
+    # themselves on the listener pod's label keys (the documented labels section says
+    # `actions.github.com/scale-set-name`; the docs' own example `kubectl logs` command
+    # uses `auto-scaling-runner-set-name` instead, with no explanation of the mismatch —
+    # confirmed by reading that page directly, not assumed). Unverifiable here (no live
+    # cluster), so this matches on the pod NAME containing this instance's resource name
+    # and `-listener`, which every independent source agrees is how ARC names it,
+    # regardless of which label convention this chart version actually ships.
+    # ignore_errors, same resilience the old design's own "confirm startup" step used: a
+    # Helm install that succeeded but couldn't be confirmed here is reported honestly
+    # below, not assumed to have failed.
+    - name: 10. Wait for the AutoscalingRunnerSet's listener to be ready
+      ansible.builtin.shell: >
+        kubectl get pods -n {{ github_runner_namespace }} -o name
+        | grep -F "{{ github_runner_resource_name }}" | grep -F "listener"
       environment:
         KUBECONFIG: "{{ merged_kubeconf_file }}"
-      register: github_runner_logs
-      until: "'Listening for Jobs' in (github_runner_logs.stdout + github_runner_logs.stderr)"
-      retries: 15
-      delay: 5
+      register: github_runner_listener_pod
+      retries: 30
+      delay: 10
+      until: github_runner_listener_pod.rc == 0
       changed_when: false
       ignore_errors: true
 
-    - name: 10. Display final deployment status
+    - name: 11. Display final deployment status
       ansible.builtin.debug:
         msg:
           - "==============================================="
-          - "🚀 GitHub Runner Deployment Status"
+          - "🚀 GitHub Runner (ARC) Deployment Status"
           - "==============================================="
           - ""
-          - "{{ '✅ SUCCESS - runner is listening' if (github_runner_logs is defined and github_runner_logs.rc is defined and github_runner_logs.rc == 0 and 'Listening for Jobs' in (github_runner_logs.stdout + github_runner_logs.stderr)) else '⚠️ Pod is Ready, but the log did not confirm it is listening — check logs by hand' }}"
+          - "{{ '✅ SUCCESS - the listener is up' if (github_runner_listener_pod is defined and github_runner_listener_pod.rc is defined and github_runner_listener_pod.rc == 0) else '⚠️ Helm install reported success, but the listener pod could not be confirmed here — check by hand (see Troubleshooting below)' }}"
           - ""
           - "📦 Repository: {{ github_runner_repo }}"
-          - "🏷️  Name: {{ github_runner_name }}"
-          - "🏷️  Labels: {{ github_runner_labels }}"
-          - "  (placeholder — revisit once a real .github/workflows/*.yml targets this"
-          - "  runner, same caveat forgejo_runner_labels carried before it was exercised)"
-          - ""
           - "🧩 Instance: {{ github_runner_instance if github_runner_instance | length > 0 else '(default)' }}"
-          - "📛 Resource name: {{ github_runner_resource_name }}"
-          - "  (shares the '{{ github_runner_namespace }}' namespace with any other instance —"
-          - "  deploy this playbook again with a different -e github_runner_instance=... to"
-          - "  register a second, independent runner for a different repo on this same cluster)"
+          - "📛 Resource name / Helm release: {{ github_runner_resource_name }}"
+          - "⚡ Scale: 0 idle, up to {{ github_runner_max_runners }} ephemeral runner(s) per queued job"
           - ""
-          - "🐳 Execution: a private docker:dind sidecar, not a real host Docker Engine"
-          - "  (same choice forgejo-runner already made, same reasoning)"
+          - "🐳 Execution: a private docker:dind sidecar per ephemeral runner, same choice"
+          - "  the retired static Deployment already made — still 'privileged: true'."
           - ""
-          - "⚠️  No persistence: a pod restart needs a fresh 'uis deploy github-runner'"
-          - "  run with a valid PAT (the registration token used to bring this pod up has"
-          - "  likely expired by the time any restart happens). See this playbook's own"
-          - "  header for why that is the accepted tradeoff, not a gap."
+          - "🔑 This instance's PAT is now stored as a Secret ({{ github_runner_resource_name }}-token,"
+          - "  key github_token) — ARC's listener mints its own short-lived runner tokens from"
+          - "  it continuously. Unlike the old design, there is nothing to re-supply on a"
+          - "  pod restart."
           - ""
           - "🔧 Troubleshooting:"
-          - "• Check pods: kubectl get pods -n {{ github_runner_namespace }} -l app=github-runner"
-          - "• Runner logs: kubectl logs -n {{ github_runner_namespace }} deploy/{{ github_runner_resource_name }} -c runner"
-          - "• dind logs: kubectl logs -n {{ github_runner_namespace }} deploy/{{ github_runner_resource_name }} -c dind"
+          - "• List instances: kubectl get autoscalingrunnersets -n {{ github_runner_namespace }}"
+          - "• Find the listener pod: kubectl get pods -n {{ github_runner_namespace }} | grep {{ github_runner_resource_name }} | grep listener"
+          - "• Ephemeral runner pods (only while a job is running): kubectl get pods -n {{ github_runner_namespace }}"
           - "==============================================="

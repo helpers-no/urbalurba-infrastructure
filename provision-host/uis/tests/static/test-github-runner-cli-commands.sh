@@ -53,13 +53,14 @@ else
 fi
 
 # --- the instance name is validated BEFORE anything else happens ------------
-# 🔴 Order matters: validating after minting a token would waste a real
-# GitHub API call (and a 1-hour-lived token) on a name that was always invalid.
+# 🔴 Order matters: validating after reading the PAT and reaching the ARC controller
+# install/Helm release would waste real work (and, post-ARC-migration, a live Helm
+# install attempt) on a name that was always invalid.
 _before_pat="$(sed -n '1,/_github_runner_pat/p' <<<"$_register_fn")"
 if grep -qE "instance.*=~.*\^\[a-z0-9\]" <<<"$_before_pat"; then
-    pass "instance name is validated before minting a registration token"
+    pass "instance name is validated before the PAT is even read"
 else
-    fail "instance validated first" "an invalid instance name would only surface after a token was already minted and discarded"
+    fail "instance validated first" "an invalid instance name would only surface after real work had already been attempted"
 fi
 
 # --- the repo must be owner/repo shaped --------------------------------------
@@ -111,17 +112,18 @@ else
     fail "remove requires an instance" "a bare 'uis github-runner remove' could remove the wrong (or the default) instance"
 fi
 
-# --- list selects on the same label the setup/remove playbooks already use --
+# --- list reads the SAME resource kind the ARC-based setup/remove playbooks now manage --
+# urb-agents#2073/#2075 (ARC migration): each instance is a Helm release of an
+# AutoscalingRunnerSet CR, not a bare Deployment with a GITHUB_RUNNER_REPO env var — that
+# shape no longer exists after the migration, so list must read the new kind, or it would
+# silently show nothing for every real instance.
 _list_fn="$(sed -n '/^cmd_github_runner_list()/,/^}/p' "$CLI")"
 [[ -n "$_list_fn" ]] || { fail "cmd_github_runner_list exists" "function not found"; echo; echo "  Passed: $PASS  Failed: $FAIL"; exit 1; }
 
-# 🔴 Not a bare substring check — 'app=github-runner' is itself a substring of
-# 'app=github-runner-wrong', so a selector quietly pointed at the wrong label
-# would still pass a plain grep -F here.
-if grep -qE 'app=github-runner([^-a-zA-Z0-9]|$)' <<<"$_list_fn"; then
-    pass "list selects on 'app=github-runner' — the same label every instance carries"
+if grep -qF 'autoscalingrunnersets' <<<"$_list_fn" && grep -qF '.spec.githubConfigUrl' <<<"$_list_fn"; then
+    pass "list reads autoscalingrunnersets and each one's githubConfigUrl"
 else
-    fail "list selector matches" "list could silently miss instances the setup playbook actually created"
+    fail "list reads the ARC resource kind" "list could silently miss every instance the setup playbook actually created — the Deployment shape it used to read no longer exists"
 fi
 
 echo ""
