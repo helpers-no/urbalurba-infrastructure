@@ -425,96 +425,198 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 645-github-runner.yaml.j2 (urb-agents#2030): the GitHub-protocol counterpart to
-# forgejo-runner, added here from the start — not retrofitted after a regression shipped,
-# the way 635-forgejo.yaml.j2 was (urb-agents#2027).
+# 645-github-runner-values.yaml.j2 (urb-agents#2073/#2075): Helm values for the ARC
+# (Actions Runner Controller) gha-runner-scale-set chart, which replaced the old static,
+# always-on Deployment this service used (that Deployment's own template,
+# 645-github-runner.yaml.j2, is retired along with it — PLAN-service-github-runner-arc-
+# migration.md). This is Helm VALUES, not a rendered Kubernetes manifest, so it parses the
+# raw template directly (same approach the authentik values case below already uses) rather
+# than through render.py's Deployment-shaped parsing.
 # ---------------------------------------------------------------------------
 
-CTX='{"github_runner_namespace":"github-runner","github_runner_image":"ghcr.io/actions/actions-runner:2.337.0","github_runner_dind_image":"docker:27-dind","github_runner_repo":"owner/repo","github_runner_name":"rancher-desktop-github-runner","github_runner_labels":"self-hosted,linux,x64,docker","github_runner_memory_request":"1Gi","github_runner_memory_limit":"2Gi","github_runner_instance":"","github_runner_resource_name":"github-runner"}'
+GHRUNNER_CTX='{"github_runner_repo":"owner/repo","github_runner_resource_name":"github-runner","github_runner_image":"ghcr.io/actions/actions-runner:2.337.0","github_runner_labels":"self-hosted,linux,x64,docker","github_runner_memory_request":"1Gi","github_runner_memory_limit":"2Gi","github_runner_max_runners":3,"github_runner_node_preference":[]}'
 
-start_test "645-github-runner.yaml.j2 renders and parses"
-OUT="$(_render 645-github-runner.yaml.j2 "$CTX")"
-if [[ "$OUT" == \{* ]]; then pass_test; else fail_test "$OUT"; fi
-
-start_test "...and the github-runner Deployment carries all four registration env vars"
-if python3 -c '
-import json, sys
-d = json.loads(sys.argv[1])
-dep = next((x for x in d["deployments"] if x["name"] == "github-runner"), None)
-sys.exit(0 if dep and set(["GITHUB_RUNNER_REPO","GITHUB_RUNNER_NAME","GITHUB_RUNNER_LABELS","GITHUB_RUNNER_TOKEN"]) <= set(dep["envNames"]) else 1)
-' "$OUT" 2>/dev/null; then
-    pass_test
-else
-    fail_test "expected all four GITHUB_RUNNER_* env vars on the github-runner Deployment: $OUT"
-fi
-
-start_test "🔴 urb-agents#2032: the runner container's memory limit is not the 768Mi that OOM-killed a real build"
-if python3 -c '
-import json, sys
-d = json.loads(sys.argv[1])
-dep = next((x for x in d["deployments"] if x["name"] == "github-runner"), None)
-runner = next((c for c in (dep or {}).get("containers", []) if c["name"] == "runner"), None)
-limit = (runner or {}).get("resources", {}).get("limits", {}).get("memory")
-sys.exit(0 if limit and limit != "768Mi" else 1)
-' "$OUT" 2>/dev/null; then
-    pass_test
-else
-    fail_test "runner container memory limit is missing or back to the proven-too-low 768Mi: $OUT"
-fi
-
-# ---------------------------------------------------------------------------
-# 645-github-runner.yaml.j2, multi-instance (urb-agents#2053): a second runner must be able to
-# coexist with the default one on the same cluster, without ever sharing a selector. render.py's
-# shared parsing does not expose the Secret's referenced NAME or the full label set (only
-# envNames/podLabel["app"]), so these two cases parse the template directly instead.
-# ---------------------------------------------------------------------------
-
-start_test "645-github-runner.yaml.j2: the DEFAULT instance carries no 'instance' label anywhere (backward compatibility)"
+start_test "645-github-runner-values.yaml.j2 renders and parses"
 if python3 -c "
 import jinja2, yaml, json
 env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
-tpl = env.from_string(open('$MANIFESTS/645-github-runner.yaml.j2').read())
-ctx = json.loads('$CTX')
+tpl = env.from_string(open('$MANIFESTS/645-github-runner-values.yaml.j2').read())
+ctx = json.loads('$GHRUNNER_CTX')
 out = tpl.render(**ctx)
 d = next(x for x in yaml.safe_load_all(out) if x is not None)
-name_ok = d['metadata']['name'] == 'github-runner'
-no_instance_label = (
-    'instance' not in d['metadata']['labels']
-    and 'instance' not in d['spec']['selector']['matchLabels']
-    and 'instance' not in d['spec']['template']['metadata']['labels']
+import sys
+sys.exit(0 if isinstance(d, dict) else 1)
+" 2>&1; then
+    pass_test
+else
+    fail_test "template failed to render or parse as YAML"
+fi
+
+start_test "...githubConfigUrl/githubConfigSecret point at the right repo and this instance's own pre-created Secret"
+if python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/645-github-runner-values.yaml.j2').read())
+ctx = json.loads('$GHRUNNER_CTX')
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+import sys
+sys.exit(0 if (d['githubConfigUrl'] == 'https://github.com/owner/repo' and d['githubConfigSecret'] == 'github-runner-token') else 1)
+" 2>&1; then
+    pass_test
+else
+    fail_test "githubConfigUrl/githubConfigSecret did not match the instance's own repo/Secret"
+fi
+
+start_test "scaleSetLabels splits the comma-joined string into a real list, trimmed"
+if python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/645-github-runner-values.yaml.j2').read())
+ctx = json.loads('$GHRUNNER_CTX')
+ctx['github_runner_labels'] = 'self-hosted, linux, x64, docker'
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+import sys
+sys.exit(0 if d['scaleSetLabels'] == ['self-hosted', 'linux', 'x64', 'docker'] else 1)
+" 2>&1; then
+    pass_test
+else
+    fail_test "scaleSetLabels did not split/trim the comma-joined labels string into a clean list"
+fi
+
+start_test "🔴 scale-to-zero: minRunners is always 0, regardless of maxRunners"
+if python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/645-github-runner-values.yaml.j2').read())
+ctx = json.loads('$GHRUNNER_CTX')
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+import sys
+sys.exit(0 if (d['minRunners'] == 0 and d['maxRunners'] == 3) else 1)
+" 2>&1; then
+    pass_test
+else
+    fail_test "the whole point of moving to ARC is scale-to-zero — minRunners must be 0, not carried over from a 'keep one warm' assumption"
+fi
+
+start_test "containerMode is dind — parity with the retired static Deployment's privileged dind sidecar, not a redesign"
+if python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/645-github-runner-values.yaml.j2').read())
+ctx = json.loads('$GHRUNNER_CTX')
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+import sys
+sys.exit(0 if d['containerMode']['type'] == 'dind' else 1)
+" 2>&1; then
+    pass_test
+else
+    fail_test "containerMode.type must stay 'dind' until the kubernetes-mode follow-on is actually done, not slipped in here unannounced"
+fi
+
+start_test "🔴 urb-agents#2032 carries forward: the runner container's memory limit is not the 768Mi that OOM-killed a real build"
+if python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/645-github-runner-values.yaml.j2').read())
+ctx = json.loads('$GHRUNNER_CTX')
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+runner = next(c for c in d['template']['spec']['containers'] if c['name'] == 'runner')
+limit = runner.get('resources', {}).get('limits', {}).get('memory')
+import sys
+sys.exit(0 if (limit and limit != '768Mi') else 1)
+" 2>&1; then
+    pass_test
+else
+    fail_test "runner container memory limit is missing or back to the proven-too-low 768Mi"
+fi
+
+start_test "🔴 node-preference affinity is absent by default (ships with ZERO behavior change until node_preference is set)"
+if python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/645-github-runner-values.yaml.j2').read())
+ctx = json.loads('$GHRUNNER_CTX')
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+import sys
+sys.exit(0 if 'affinity' not in d['template']['spec'] else 1)
+" 2>&1; then
+    pass_test
+else
+    fail_test "an affinity block rendered even though github_runner_node_preference was an empty list — this breaks the 'inert until configured' guarantee"
+fi
+
+start_test "...and renders a RANKED SOFT (preferred, never required) nodeAffinity, one term per {hypervisor, weight} entry, in order"
+if python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/645-github-runner-values.yaml.j2').read())
+ctx = json.loads('$GHRUNNER_CTX')
+ctx['github_runner_node_preference'] = [
+    {'hypervisor': 'frigg', 'weight': 100},
+    {'hypervisor': 'tor', 'weight': 50},
+]
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+aff = d['template']['spec']['affinity']['nodeAffinity']
+import sys
+# required* must be absent — a required rule would leave the pod Pending forever if the only
+# available node were the least-preferred one, instead of degrading to 'schedule anywhere'.
+has_required = 'requiredDuringSchedulingIgnoredDuringExecution' in aff
+terms = aff['preferredDuringSchedulingIgnoredDuringExecution']
+shape_ok = (
+    len(terms) == 2
+    and terms[0]['weight'] == 100
+    and terms[0]['preference']['matchExpressions'][0] == {'key': 'urbalurba.no/hypervisor', 'operator': 'In', 'values': ['frigg']}
+    and terms[1]['weight'] == 50
+    and terms[1]['preference']['matchExpressions'][0] == {'key': 'urbalurba.no/hypervisor', 'operator': 'In', 'values': ['tor']}
 )
-secret_ok = d['spec']['template']['spec']['containers'][0]['env'][-1]['valueFrom']['secretKeyRef']['name'] == 'github-runner-token'
-import sys
-sys.exit(0 if (name_ok and no_instance_label and secret_ok) else 1)
+sys.exit(0 if (not has_required and shape_ok) else 1)
 " 2>&1; then
     pass_test
 else
-    fail_test "the default/unnamed instance must render EXACTLY as it always has — any 'instance' label here, or a renamed Deployment/Secret, would force a redeploy of whatever is already running"
+    fail_test "node preference did not render as an ordered list of soft In-preference terms matching github_runner_node_preference"
 fi
 
-start_test "645-github-runner.yaml.j2: a NAMED instance gets a suffixed name and an 'instance' label in the selector itself"
+start_test "...and a SINGLE-entry preference renders exactly one term (not a leftover list-handling artifact)"
 if python3 -c "
 import jinja2, yaml, json
 env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
-tpl = env.from_string(open('$MANIFESTS/645-github-runner.yaml.j2').read())
-ctx = json.loads('$CTX')
-ctx['github_runner_instance'] = 'bifrost'
-ctx['github_runner_resource_name'] = 'github-runner-bifrost'
+tpl = env.from_string(open('$MANIFESTS/645-github-runner-values.yaml.j2').read())
+ctx = json.loads('$GHRUNNER_CTX')
+ctx['github_runner_node_preference'] = [{'hypervisor': 'odin', 'weight': 1}]
 out = tpl.render(**ctx)
 d = next(x for x in yaml.safe_load_all(out) if x is not None)
-name_ok = d['metadata']['name'] == 'github-runner-bifrost'
-# The selector is what Kubernetes actually enforces uniqueness on — a label present only on
-# metadata, with the selector still bare 'app=github-runner', is the exact collision this
-# whole mechanism exists to prevent, so check the SELECTOR specifically, not just any label.
-selector_ok = d['spec']['selector']['matchLabels'] == {'app': 'github-runner', 'instance': 'bifrost'}
-pod_label_ok = d['spec']['template']['metadata']['labels'] == {'app': 'github-runner', 'instance': 'bifrost'}
-secret_ok = d['spec']['template']['spec']['containers'][0]['env'][-1]['valueFrom']['secretKeyRef']['name'] == 'github-runner-bifrost-token'
+terms = d['template']['spec']['affinity']['nodeAffinity']['preferredDuringSchedulingIgnoredDuringExecution']
 import sys
-sys.exit(0 if (name_ok and selector_ok and pod_label_ok and secret_ok) else 1)
+sys.exit(0 if len(terms) == 1 and terms[0]['weight'] == 1 else 1)
 " 2>&1; then
     pass_test
 else
-    fail_test "a named instance must get its own uniquely-selectored Deployment and its own Secret name — sharing a selector with the default instance is the exact collision this mechanism exists to prevent"
+    fail_test "a single-entry github_runner_node_preference did not render exactly one soft affinity term"
+fi
+
+start_test "a NAMED instance's values point at its own Secret, not the default instance's"
+if python3 -c "
+import jinja2, yaml, json
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False, undefined=jinja2.StrictUndefined)
+tpl = env.from_string(open('$MANIFESTS/645-github-runner-values.yaml.j2').read())
+ctx = json.loads('$GHRUNNER_CTX')
+ctx['github_runner_resource_name'] = 'github-runner-bifrost'
+ctx['github_runner_repo'] = 'terchris/bifrost'
+out = tpl.render(**ctx)
+d = next(x for x in yaml.safe_load_all(out) if x is not None)
+import sys
+sys.exit(0 if (d['githubConfigSecret'] == 'github-runner-bifrost-token' and d['githubConfigUrl'] == 'https://github.com/terchris/bifrost') else 1)
+" 2>&1; then
+    pass_test
+else
+    fail_test "a named instance must resolve to its OWN Secret name — sharing one with the default instance would hand it the wrong credential"
 fi
 
 # ---------------------------------------------------------------------------

@@ -1,20 +1,22 @@
 ---
 # file: ansible/playbooks/645-remove-github-runner.yml
-# Description: Remove one GitHub Actions runner INSTANCE from Kubernetes.
+# Description: Remove one GitHub Actions runner INSTANCE (an ARC Helm release) from
+# Kubernetes — `urb-agents#2073`/`#2075`'s ARC migration counterpart to
+# 645-setup-github-runner.yml. See that playbook's own header, and
+# `PLAN-service-github-runner-arc-migration.md`, for the full before/after.
 #
-# 🔴 INSTANCE-SCOPED, NOT NAMESPACE-WIDE — urb-agents#2053 (the namespace can hold more than one
-# instance now, see 645-setup-github-runner.yml's own header). Deleting the whole
-# `github-runner` namespace, which this playbook used to do unconditionally, would remove EVERY
-# instance in it, not just the one being asked for — including, for example, urb-agents' own
-# already-running production registration, if a second instance's removal ever ran on the same
-# cluster. This deletes only the named instance's own Deployment + Secret, then removes the
-# namespace itself ONLY if no other instance is left in it.
+# 🔴 INSTANCE-SCOPED, NOT NAMESPACE-WIDE — unchanged rationale from the old design
+# (urb-agents#2053): the namespace can hold more than one instance, so this removes only
+# the named instance's own Helm release, then removes the namespace itself ONLY if no
+# other `AutoscalingRunnerSet` is left in it.
 #
-# Does NOT remove the runner's own registration from GitHub itself — GitHub still lists
-# it (as offline) until an admin removes it by hand via the repository's Settings →
-# Actions → Runners page, or the API. Same "this playbook owns the Kubernetes side only"
-# boundary as every other uis deploy removal playbook in this repository, including
-# forgejo-runner's own 640-remove-forgejo-runner.yml.
+# 🔵 THE SHARED ARC CONTROLLER (namespace `arc-systems`) IS NEVER TOUCHED HERE — see
+# 645-setup-github-runner.yml's own header for why (CRD install/removal churn is a worse
+# tradeoff than one small permanent controller pod; it stays installed even if every
+# instance is removed).
+#
+# Does NOT remove the runner's own registration from GitHub itself — same "this playbook
+# owns the Kubernetes side only" boundary every other UIS removal playbook follows.
 #
 # Usage (the default/unnamed instance, same as always):
 # ansible-playbook playbooks/645-remove-github-runner.yml -e target_host="rancher-desktop"
@@ -23,7 +25,7 @@
 # ansible-playbook playbooks/645-remove-github-runner.yml -e target_host="rancher-desktop" \
 #   -e github_runner_instance="bifrost"
 
-- name: Remove one GitHub Actions runner instance from Kubernetes
+- name: Remove one GitHub Actions runner instance (ARC Helm release) from Kubernetes
   hosts: localhost
   gather_facts: false
   vars:
@@ -32,32 +34,32 @@
     github_runner_instance: ""
 
   tasks:
-    # Same computation as 645-setup-github-runner.yml's own task 1e — must stay in step with it,
-    # or remove would delete a different instance than setup would have created.
+    # Same computation as 645-setup-github-runner.yml's own task 1e — must stay in step
+    # with it, or remove would target a different instance than setup would have created.
     - name: 1. Compute this instance's resource name
       ansible.builtin.set_fact:
         github_runner_resource_name: "github-runner{{ ('-' + github_runner_instance) if github_runner_instance | length > 0 else '' }}"
 
-    - name: 2. Does this instance's Deployment exist
-      kubernetes.core.k8s_info:
-        kind: Deployment
-        name: "{{ github_runner_resource_name }}"
-        namespace: "{{ github_runner_namespace }}"
-        kubeconfig: "{{ merged_kubeconf_file }}"
-      register: github_runner_deployment_check
+    - name: 2. Does this instance's Helm release exist
+      ansible.builtin.command: >
+        helm status {{ github_runner_resource_name }} --namespace {{ github_runner_namespace }}
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: github_runner_release_check
+      changed_when: false
+      failed_when: false
 
-    - name: 3. Delete this instance's Deployment
-      kubernetes.core.k8s:
-        state: absent
-        kind: Deployment
-        name: "{{ github_runner_resource_name }}"
-        namespace: "{{ github_runner_namespace }}"
-        kubeconfig: "{{ merged_kubeconf_file }}"
-        wait: true
-        wait_timeout: 120
-      when: github_runner_deployment_check.resources | default([]) | length > 0
+    - name: 3. Uninstall this instance's Helm release
+      ansible.builtin.command: >
+        helm uninstall {{ github_runner_resource_name }} --namespace {{ github_runner_namespace }}
+        --wait --timeout 120s
+      environment:
+        KUBECONFIG: "{{ merged_kubeconf_file }}"
+      register: github_runner_uninstall_result
+      changed_when: true
+      when: github_runner_release_check.rc == 0
 
-    - name: 4. Delete this instance's registration token Secret
+    - name: 4. Delete this instance's PAT Secret (helm uninstall doesn't own it — this playbook applied it directly)
       kubernetes.core.k8s:
         state: absent
         kind: Secret
@@ -65,18 +67,16 @@
         namespace: "{{ github_runner_namespace }}"
         kubeconfig: "{{ merged_kubeconf_file }}"
 
-    # 🔴 ONLY REMOVE THE NAMESPACE IF NOTHING ELSE IS LEFT IN IT — the whole reason this playbook
-    # no longer does an unconditional namespace delete. A bare 'app=github-runner' selector finds
-    # every instance, named or default, so this check is correct regardless of how many instances
-    # ever existed or which one was just removed above.
+    # 🔴 ONLY REMOVE THE NAMESPACE IF NO OTHER INSTANCE IS LEFT IN IT — unchanged rationale,
+    # re-expressed against AutoscalingRunnerSet CRs instead of Deployments.
     - name: 5. Are any OTHER github-runner instances still in this namespace
       kubernetes.core.k8s_info:
-        kind: Deployment
+        api_version: actions.github.com/v1alpha1
+        kind: AutoscalingRunnerSet
         namespace: "{{ github_runner_namespace }}"
-        label_selectors:
-          - "app=github-runner"
         kubeconfig: "{{ merged_kubeconf_file }}"
       register: github_runner_remaining
+      failed_when: false
 
     - name: 6. Delete the github-runner namespace, only if it is now empty of instances
       kubernetes.core.k8s:
@@ -95,8 +95,10 @@
           - "🗑️  GitHub Runner Removal Status"
           - "==============================================="
           - "Instance: {{ github_runner_instance if github_runner_instance | length > 0 else '(default)' }} ({{ github_runner_resource_name }})"
-          - "{{ '✅ SUCCESS - this instance removed' if (github_runner_deployment_check.resources | default([]) | length > 0) else '⚪ Not found (already removed)' }}"
+          - "{{ '✅ SUCCESS - this instance removed' if github_runner_release_check.rc == 0 else '⚪ Not found (already removed)' }}"
           - "{{ ('🗑️  Namespace \"' + github_runner_namespace + '\" removed too — no other instance was left in it.') if (github_runner_remaining.resources | default([]) | length == 0) else ('📦 Namespace \"' + github_runner_namespace + '\" left in place — ' + (github_runner_remaining.resources | default([]) | length | string) + ' other instance(s) still running there.') }}"
+          - "⚠️  The shared ARC controller (namespace arc-systems) is never touched by this"
+          - "  playbook — see its own setup playbook header for why."
           - "⚠️  GitHub itself still lists this runner as offline until an admin removes"
           - "  it by hand (repository Settings → Actions → Runners)."
           - "==============================================="

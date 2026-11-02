@@ -2876,8 +2876,8 @@ cmd_github_runner_register() {
     fi
 
     # Same k8s-name-fragment rule as 645-setup-github-runner.yml's own task
-    # 1d — checked here too so a bad instance name fails fast, before minting
-    # a registration token that would then go unused.
+    # 1d — checked here too so a bad instance name fails fast, before the ARC
+    # controller install or the Helm release is ever attempted.
     if ! [[ "$instance" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
         log_error "Invalid instance name '$instance' — lowercase alphanumeric and hyphens only, no leading/trailing hyphen."
         exit "$EXIT_GENERAL_ERROR"
@@ -2942,13 +2942,21 @@ cmd_github_runner_remove() {
 
 # A plain kubectl listing, not another playbook — there is nothing here a
 # playbook's own idempotency or ordering guarantees would add over one read.
+#
+# 🔴 READS AutoscalingRunnerSet CRs, NOT Deployments — urb-agents#2073/#2075's ARC
+# migration. Each instance is now a Helm release of that CR (plural
+# 'autoscalingrunnersets', confirmed against the chart's own CRD at the pinned version,
+# not guessed), not a bare Deployment with a GITHUB_RUNNER_REPO env var — that shape no
+# longer exists. The instance name is derived from the resource name itself (this
+# service's own release-naming convention: 'github-runner' for the default instance,
+# 'github-runner-<instance>' for a named one), not a separate label — there isn't one.
 cmd_github_runner_list() {
     print_section "GitHub Runner instances"
 
     local rows
-    rows=$(kubectl get deployment -n github-runner -l app=github-runner \
+    rows=$(kubectl get autoscalingrunnersets -n github-runner \
         --kubeconfig="$UIS_VERIFY_KUBECONFIG" \
-        -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.labels.instance}{"\t"}{range .spec.template.spec.containers[?(@.name=="runner")].env[?(@.name=="GITHUB_RUNNER_REPO")]}{.value}{end}{"\n"}{end}' \
+        -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.githubConfigUrl}{"\n"}{end}' \
         2>/dev/null) || true
 
     if [[ -z "$rows" ]]; then
@@ -2958,7 +2966,10 @@ cmd_github_runner_list() {
 
     printf "%-28s %-15s %s\n" "RESOURCE NAME" "INSTANCE" "REPOSITORY"
     echo "─────────────────────────────────────────────────────────────"
-    while IFS=$'\t' read -r name instance repo; do
+    while IFS=$'\t' read -r name url; do
+        local instance="${name#github-runner}"
+        instance="${instance#-}"
+        local repo="${url#https://github.com/}"
         printf "%-28s %-15s %s\n" "$name" "${instance:-(default)}" "$repo"
     done <<< "$rows"
 }

@@ -1,0 +1,99 @@
+# File: manifests/645-github-runner-values.yaml.j2
+#
+# Description:
+# Helm values for one GitHub Actions self-hosted runner INSTANCE, via the official
+# `gha-runner-scale-set` chart (Actions Runner Controller, ARC) — replaces the static,
+# always-on Deployment this service used before (`urb-agents#2073`/`#2075`: scale-to-zero
+# + capacity-aware scheduling, Terje's direction). One release per instance, same shared
+# `github-runner` namespace, same `github_runner_resource_name` as the release name — see
+# 645-setup-github-runner.yml's own header for the full story.
+#
+# Template Variables (from the setup playbook):
+# - github_runner_repo ('owner/repo')
+# - github_runner_resource_name (this instance's release name — also names its Secret)
+# - github_runner_image (pinned, SAME image the old static Deployment used)
+# - github_runner_labels (comma-joined, GitHub's own convention)
+# - github_runner_memory_request / github_runner_memory_limit (SAME vars, SAME defaults
+#   as before — the urb-agents#2032 memory fix carries forward unchanged)
+# - github_runner_max_runners
+# - github_runner_node_preference (a list of {hypervisor, weight} dicts; may be empty —
+#   see below)
+#
+# 🔴 SCALE-TO-ZERO: minRunners is always 0. There is no "keep one warm" instance of this
+# service today, and ARC's listener (not a runner pod) is the thing that stays up between
+# jobs — see the setup playbook's own task for what "ready" means now (the listener, not a
+# runner pod: ephemeral runners don't exist until a job is actually queued).
+#
+# 🔴 containerMode: dind, NOT kubernetes — parity with the static-Deployment architecture
+# this replaces (a private docker:dind sidecar per runner pod), not a redesign. ARC's
+# `kubernetes` containerMode would drop the privileged dind sidecar entirely, which is a
+# real future improvement — deliberately not bundled into this migration (PLAN-service-
+# github-runner-arc-migration.md explicitly scopes it out) so the isolation characteristics
+# stay identical to what was already running, and only the scale-to-zero/scheduling
+# mechanics change.
+#
+# 🔵 githubConfigSecret IS A STRING (the "pre-defined secret" form), not an inline map —
+# the setup playbook creates/owns this Secret itself (kubernetes.core.k8s, same as every
+# other UIS-managed secret), keyed `github_token` (this chart's own required key name for
+# PAT auth — confirmed against templates/githubsecret.yaml at the pinned chart version,
+# not guessed). 🔴 UNLIKE THE OLD DESIGN, THIS PAT IS NOW PERSISTED, not minted-once-and-
+# discarded — ARC's listener needs to keep minting its own short-lived runner tokens for
+# as long as this release exists, with no human in the loop, so there is no "discard after
+# one use" option here. Same PAT, same narrow 'Administration' permission as before; only
+# its lifetime changed. Stated plainly in the setup playbook's own header and in this
+# service's docs — not hidden.
+#
+# 🔴 THE NODE PREFERENCE BLOCK IS A RANKED LIST OF SOFT (preferred) AFFINITY TERMS, NEVER
+# A HARD REQUIREMENT — urb-agents#2073/#2075/#2080's capacity-aware scheduling ask. A
+# `required` rule would leave every runner pod Pending forever if the only available node
+# happened to be the least-preferred one; `preferredDuringSchedulingIgnoredDuringExecution`
+# degrades to "schedule anywhere" instead of refusing to run at all. It's a RANKING, not a
+# single avoid/allow rule, because "most powerful host" and "most free headroom right now"
+# are not the same node (urb-agents#2080 asked to prefer tor for its CPU; the live capacity
+# numbers instead showed frigg with the most free memory) — a binary avoid-one-node rule
+# can't express "prefer frigg, then tor, over odin," only "avoid the one labelled node."
+# Each node is expected to carry a `urbalurba.no/hypervisor` label (odin/tor/frigg) set
+# declaratively at k3s provisioning time in the platform repo's own IaC — never a hand-run
+# `kubectl label`, so a cluster rebuild reproduces it automatically. Empty by convention
+# (`github_runner_node_preference: []`) until that label exists and an operator opts in, so
+# this ships with ZERO behavior change for every cluster that hasn't set it up yet.
+---
+githubConfigUrl: "https://github.com/{{ github_runner_repo }}"
+githubConfigSecret: "{{ github_runner_resource_name }}-token"
+
+minRunners: 0
+maxRunners: {{ github_runner_max_runners }}
+
+scaleSetLabels:
+{% for _label in github_runner_labels.split(',') %}
+  - "{{ _label.strip() }}"
+{% endfor %}
+
+containerMode:
+  type: "dind"
+
+template:
+  spec:
+    containers:
+      - name: runner
+        image: "{{ github_runner_image }}"
+        command: ["/home/runner/run.sh"]
+        resources:
+          requests:
+            memory: "{{ github_runner_memory_request }}"
+          limits:
+            memory: "{{ github_runner_memory_limit }}"
+{% if github_runner_node_preference | length > 0 %}
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+{% for _pref in github_runner_node_preference %}
+          - weight: {{ _pref.weight }}
+            preference:
+              matchExpressions:
+                - key: "urbalurba.no/hypervisor"
+                  operator: In
+                  values:
+                    - "{{ _pref.hypervisor }}"
+{% endfor %}
+{% endif %}
