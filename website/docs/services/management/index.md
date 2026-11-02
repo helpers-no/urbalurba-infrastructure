@@ -20,6 +20,7 @@ Admin tools, GitOps, and utility services for managing the UIS platform.
 | [Whoami](./whoami.md) | HTTP request test service | `./uis deploy whoami` |
 | [External Secrets](./external-secrets.md) | Syncs Secrets from an external store | `./uis deploy external-secrets` |
 | [OpenBao](./bao.md) | Secrets management (KV v2, kubernetes auth) | `./uis deploy bao` |
+| [GitHub Runner](./github-runner.md) | In-cluster GitHub Actions self-hosted runner (CI for GitHub-hosted repos) | `./uis deploy github-runner` |
 
 ## Overview
 
@@ -30,3 +31,4 @@ Admin tools, GitOps, and utility services for managing the UIS platform.
 - **Whoami** is a diagnostic tool for testing ingress and authentication
 - **External Secrets** reads `ExternalSecret` resources and syncs them from an external secret store (e.g. OpenBao) into ordinary Kubernetes Secrets
 - **OpenBao** is a real in-cluster secrets store (KV v2, `kubernetes` auth), the same interface production's own OpenBao answers
+- **GitHub Runner** registers an in-cluster, scale-to-zero self-hosted Actions runner via GitHub's Actions Runner Controller (ARC) against an operator-supplied repository
