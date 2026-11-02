@@ -118,6 +118,7 @@ Welcome to the complete documentation for **Urbalurba Infrastructure** — a zer
 | [RedisInsight](../services/management/redisinsight.md) | Redis administration UI |
 | [Nginx](../services/management/nginx.md) | Web server |
 | [Whoami](../services/management/whoami.md) | Test/debug service |
+| [GitHub Runner](../services/management/github-runner.md) | In-cluster GitHub Actions self-hosted runner (CI for GitHub-hosted repos) |
 | [Dev Templates](../developing/dev-templates.md) | Development templates and project setup |
 
 ### Services — Integration
