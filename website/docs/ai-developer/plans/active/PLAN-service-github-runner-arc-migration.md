@@ -233,35 +233,55 @@ already is.
 
 ## Rollout — ops's half, not self-executed here
 
-1. **Node labeling (ops, Proxmox/platform side) — declared in IaC, not run by
-   hand.** `platform` (terchris/home) already has the right convention for
-   this: each k3s VM is declared in its own `ansible/vars/vms/<host>-k3s[-test].yml`
-   (vmid, cores, memory, ip, a `k3s:` dict), consumed by
-   `ansible/playbooks/k3s-ensure.yml` → `ansible/roles/k3s/`. Today that role
-   passes no `--node-label` to the k3s install command, and the *only*
-   existing labeling path is `platform/how-to-add-k3s-node.md`'s manual,
-   human-run `kubectl label node ... --overwrite` — exactly the non-reproducible
-   pattern to avoid here, not a template to follow. The fix: add an optional
-   `k3s.labels` (or `node_labels`) key to **every** `vars/vms/<host>-k3s[-test].yml`
-   (e.g. `urbalurba.no/hypervisor: odin` / `tor` / `frigg` — one value per
-   physical host, on both its prod and test node), read it into
+1. **Node sizing (ops/Terje, Proxmox side) — the primary, lead fix, not an
+   afterthought.** Size the test k3s VMs unevenly to actually reflect real
+   hypervisor headroom (ops's own capacity-reporting numbers already say how:
+   odin tight, frigg roomy), rather than leaving all three identically sized
+   regardless of the host underneath. This is the more durable fix because
+   Kubernetes' **default scheduler already does live, dynamic bin-packing** —
+   at every scheduling decision it compares each node's actual remaining
+   allocatable memory against what's already running there and favors the
+   less-loaded one, automatically, for every workload on the cluster, not
+   just this one service. It only fails to help today because there's
+   nothing real for it to compare (identically-sized VMs). Fix the sizing and
+   the default scheduler starts solving this on its own, continuously, with
+   no custom affinity config to maintain. **Caveat, stated plainly**: this is
+   dynamic *within* each VM's fixed ceiling, not infinitely dynamic — if a
+   host's real contention changes later (e.g. another CT lands on odin), the
+   VM's advertised capacity doesn't auto-shrink; a human still has to notice
+   and resize it again. While sizing this, also worth a look: on `odin`
+   specifically, the production node (`odin-k3s`, 3072MB alloc) is sized
+   *smaller* than its own test node (`odin-k3s-test`, 4096MB alloc) on the
+   same host — backwards from "production gets priority for resources,"
+   though `odin-k3s-test` is also currently using more memory right now
+   (1616MB vs 948MB), so this may reflect real current load rather than pure
+   misconfiguration. Ops's/Terje's call, not assumed here as a bug.
+2. **Node labeling (ops, Proxmox/platform side) — a cheap, complementary
+   layer, declared in IaC, not run by hand.** Decision 2's ranked
+   `urbalurba.no/hypervisor` preference costs nothing while unconfigured, and
+   adds one thing VM memory sizing alone can't express: **CPU strength is a
+   separate axis from memory headroom** — a host could in principle have fine
+   memory and a weak CPU, and bursty CI builds (yarn install + docker-in-
+   docker) care about both. Worth keeping even once sizing is fixed, not a
+   substitute for it. `platform` (terchris/home) already has the right
+   convention for this: each k3s VM is declared in its own
+   `ansible/vars/vms/<host>-k3s[-test].yml` (vmid, cores, memory, ip, a
+   `k3s:` dict), consumed by `ansible/playbooks/k3s-ensure.yml` →
+   `ansible/roles/k3s/`. Today that role passes no `--node-label` to the k3s
+   install command, and the *only* existing labeling path is
+   `platform/how-to-add-k3s-node.md`'s manual, human-run `kubectl label node
+   ... --overwrite` — exactly the non-reproducible pattern to avoid here, not
+   a template to follow. The fix: add an optional `k3s.labels` (or
+   `node_labels`) key to **every** `vars/vms/<host>-k3s[-test].yml` (e.g.
+   `urbalurba.no/hypervisor: odin` / `tor` / `frigg` — one value per physical
+   host, on both its prod and test node), read it into
    `roles/k3s/defaults/main.yml` as `k3s_node_labels`, and append a
    `--node-label` argument where the role already builds other optional
    server args (`roles/k3s/tasks/main.yml`). Once declared this way, every
    rebuild of that node reproduces the label automatically — no human step,
-   no drift, no silent loss of the scheduling preference on a rebuild. Until
-   this lands, Decision 2's affinity preference is inert everywhere — safe to
-   ship code ahead of this step.
-2. **Node sizing (ops, separate, not gated on this PR)**: whether to size the
-   test k3s VMs unevenly to reflect real hypervisor headroom, or add RAM to
-   the constrained hypervisor — Terje's/ops's call, outside this repo. While
-   checking this, also worth a look: on `odin` specifically, the production
-   node (`odin-k3s`, 3072MB alloc) is sized *smaller* than its own test node
-   (`odin-k3s-test`, 4096MB alloc) on the same host — backwards from
-   "production gets priority for resources," though `odin-k3s-test` is also
-   currently using more memory right now (1616MB vs 948MB), so this may
-   reflect real current load rather than pure misconfiguration. Ops's/Terje's
-   call, not assumed here as a bug.
+   no drift, no silent loss of the preference on a rebuild. Until this lands,
+   Decision 2's affinity preference is inert everywhere — safe to ship code
+   ahead of this step, and independent of whether/when sizing (above) lands.
 3. **Migrate each existing instance, one at a time, live**: re-run `./uis
    github-runner register <instance> <repo>` for urb-agents' own (default)
    instance and for bifrost's — this installs the ARC controller (first call
